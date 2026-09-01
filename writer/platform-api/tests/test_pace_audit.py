@@ -544,3 +544,46 @@ def test_run_revert_sweep_marks_reverted(monkeypatch):
     assert result["reverted"] == 1
     assert updates and updates[0]["revert_detail"]["kind"] == "reverted"
     assert "reverted_at" in updates[0]
+
+
+def test_run_revert_sweep_ignores_override(monkeypatch):
+    """A field changed to a THIRD value (normal forward progression / a later
+    PACE action) is NOT marked — only exact reverts count."""
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_enabled", True)
+    updates: list = []
+
+    class _Chain:
+        def __init__(self, kind):
+            self._kind = kind
+        def __getattr__(self, _name):
+            return lambda *a, **k: self
+        @property
+        def not_(self):
+            return self
+        def update(self, patch):
+            self._kind = "update"
+            self._patch = patch
+            return self
+        def execute(self):
+            if self._kind == "update":
+                updates.append(self._patch)
+                return type("R", (), {"data": [{}]})()
+            if self._kind == "tasks":
+                # current status is a THIRD value (forward progression) → override.
+                return type("R", (), {"data": [
+                    {"id": "t1", "assignee_name": "Ivy", "status_key": "sent_to_client",
+                     "assignee_id": None, "due_date": None, "category": None,
+                     "est_hours": None, "completed": False, "name": "A"}]})()
+            return type("R", (), {"data": [
+                {"id": "row1", "target_id": "t1",
+                 "before": {"status_key": "in_progress"},
+                 "after": {"status_key": "in_qa"}}]})()
+
+    class _FakeSupa:
+        def table(self, name):
+            return _Chain("tasks" if name == "tasks" else "log")
+
+    monkeypatch.setattr(pace_audit, "get_supabase", lambda: _FakeSupa())
+    result = pace_audit.run_revert_sweep()
+    assert result["reverted"] == 0
+    assert updates == []  # nothing marked

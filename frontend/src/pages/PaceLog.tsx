@@ -208,7 +208,7 @@ export function PaceLog() {
         </select>
         <select value={reverted} onChange={(e) => { setReverted(e.target.value); resetOffset() }} style={selectStyle}>
           <option value="">Reverted &amp; standing</option>
-          <option value="true">Reverted / overridden only</option>
+          <option value="true">Reverted only</option>
           <option value="false">Still standing only</option>
         </select>
       </div>
@@ -252,7 +252,7 @@ export function PaceLog() {
                       <Badge text={r.outcome} color={OUTCOME_COLOR[r.outcome] || '#64748b'} />
                       {r.reverted_at && (
                         <span style={{ marginLeft: 4 }}>
-                          <Badge text={r.revert_detail?.kind === 'overridden' ? 'overridden' : 'reverted'} color="#b91c1c" />
+                          <Badge text="reverted" color="#b91c1c" />
                         </span>
                       )}
                     </td>
@@ -269,8 +269,8 @@ export function PaceLog() {
                         {r.modifications && <Line k="Modifications" v={JSON.stringify(r.modifications)} />}
                         {r.result && <Line k="Result" v={r.result} />}
                         {r.reverted_at && r.revert_detail && (
-                          <Line k={r.revert_detail.kind === 'overridden' ? 'Overridden' : 'Reverted'}
-                                v={`${r.revert_detail.field}: PACE set ${String(r.revert_detail.from_pace ?? '—')} → now ${String(r.revert_detail.to_current ?? '—')} (${r.reverted_at.replace('T', ' ').slice(0, 16)})`}
+                          <Line k="Reverted"
+                                v={`${r.revert_detail.field}: PACE set ${String(r.revert_detail.from_pace ?? '—')} → back to ${String(r.revert_detail.to_current ?? '—')} (${r.reverted_at.replace('T', ' ').slice(0, 16)})`}
                                 color="#b91c1c" />
                         )}
                         {r.error && <Line k="Error" v={r.error} color="#dc2626" />}

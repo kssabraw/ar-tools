@@ -312,7 +312,7 @@ def record_decision(*, action: str, origin: str, decision: str, outcome: str,
 # ---------------------------------------------------------------------------
 def _attach_actor_names(rows: list[dict]) -> list[dict]:
     """Best-effort: fold ``actor_name`` onto each row from profiles."""
-    ids = sorted({r.get("actor_profile_id") for r in rows if r.get("actor_profile_id")})
+    ids = sorted({str(r["actor_profile_id"]) for r in rows if r.get("actor_profile_id")})
     if not ids:
         return rows
     try:
@@ -443,11 +443,11 @@ def run_revert_sweep(today: Optional[Any] = None) -> dict:
     """Mark executed, task-targeted actions whose change was undone/overridden
     since PACE made it. Read-only w.r.t. tasks — reads their current state and
     writes only pace_action_log. Self-gated on pace_audit_enabled; best-effort.
-    Returns {checked, reverted, overridden}."""
+    Returns {checked, reverted}."""
     from datetime import datetime, timedelta, timezone
 
     if not settings.pace_audit_enabled:
-        return {"checked": 0, "reverted": 0, "overridden": 0, "reason": "disabled"}
+        return {"checked": 0, "reverted": 0, "reason": "disabled"}
     since = (datetime.now(timezone.utc)
              - timedelta(days=settings.pace_audit_revert_window_days)).isoformat()
     try:
@@ -458,10 +458,10 @@ def run_revert_sweep(today: Optional[Any] = None) -> dict:
                 .not_.is_("after", "null").limit(2000).execute()).data or []
     except Exception as exc:
         logger.warning("pace_audit_revert_query_failed", extra={"error": str(exc)})
-        return {"checked": 0, "reverted": 0, "overridden": 0, "reason": "error"}
+        return {"checked": 0, "reverted": 0, "reason": "error"}
     task_ids = sorted({r["target_id"] for r in rows if r.get("target_id")})
     if not task_ids:
-        return {"checked": 0, "reverted": 0, "overridden": 0}
+        return {"checked": 0, "reverted": 0}
     current: dict[str, dict] = {}
     try:
         # Chunk the id list so a big backlog stays under URL/row limits.
@@ -474,15 +474,21 @@ def run_revert_sweep(today: Optional[Any] = None) -> dict:
                 current[t["id"]] = t
     except Exception as exc:
         logger.warning("pace_audit_revert_read_failed", extra={"error": str(exc)})
-        return {"checked": 0, "reverted": 0, "overridden": 0, "reason": "error"}
-    reverted = overridden = 0
+        return {"checked": 0, "reverted": 0, "reason": "error"}
+    reverted = 0
     now = datetime.now(timezone.utc).isoformat()
     for r in rows:
         cur = current.get(r.get("target_id"))
         if cur is None:  # task gone/deleted — leave the row unmarked
             continue
         detail = classify_revert(r.get("before"), r.get("after"), cur)
-        if not detail:
+        # Record TRUE reverts only (a field back to its exact pre-PACE value).
+        # An "overridden" field (changed to a THIRD value) is deliberately NOT
+        # marked: normal forward workflow progression (in_qa → sent_to_client) is
+        # exactly that shape, so counting it would swamp the learning signal with
+        # successful progress. Overrides are left unmarked (re-checked next sweep
+        # until they age out of the window, or become a true revert).
+        if not detail or detail.get("kind") != "reverted":
             continue
         try:
             (get_supabase().table("pace_action_log")
@@ -491,11 +497,8 @@ def run_revert_sweep(today: Optional[Any] = None) -> dict:
         except Exception as exc:
             logger.warning("pace_audit_revert_mark_failed", extra={"id": r["id"], "error": str(exc)})
             continue
-        if detail["kind"] == "reverted":
-            reverted += 1
-        else:
-            overridden += 1
-    return {"checked": len(rows), "reverted": reverted, "overridden": overridden}
+        reverted += 1
+    return {"checked": len(rows), "reverted": reverted}
 
 
 # ---------------------------------------------------------------------------
