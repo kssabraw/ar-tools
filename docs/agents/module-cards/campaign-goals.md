@@ -32,9 +32,12 @@ first-achieved timestamp) is stored. Six values: `achieved` / `on_track` /
 - `progress_pct` is percent of the **baseline→target span** covered, not
   percent of the target's raw value — position 15 → target 3, now at 9,
   reads `progress_pct: 50`, not "ranked 9th."
-- `on_track`/`behind` is a **projected-pace** read (progress ÷ elapsed within
-  15% of plan), not "any positive movement." Below 10% elapsed the goal
-  always reads `on_track` regardless of actual movement.
+- `on_track`/`behind` uses a **projected-pace** rule (progress ÷ elapsed
+  within 15% of the required pace; below 10% elapsed always reads
+  `on_track`, too early to judge) **only when the goal has a due date with a
+  usable start**. A goal with **no due date** falls back to a plain "moved
+  at all" rule — any nonzero progress reads `on_track`, zero reads `behind`
+  — so two goals both labeled `on_track` can mean very different things.
 - `overdue` fires purely on `today > due_date` — 95% progress one day past
   due still reads `overdue`.
 - `maps_pack_presence` reads only the latest **scheduled** geo-grid scan — a
@@ -46,7 +49,14 @@ first-achieved timestamp) is stored. Six values: `achieved` / `on_track` /
 
 **Known blind spots:** the baseline is captured once at creation and never
 auto-recaptured — a goal created right after a big loss looks easier to
-"win" than the client's real history suggests.
+"win" than the client's real history suggests. If that creation-time
+measurement fails or comes back empty (a keyword goal created before the
+keyword is tracked, a clicks goal created before GSC is verified),
+`baseline_value` stores permanently `null` and the goal reads `behind`
+forever with `progress_pct: null` — **not** `no_data` — because progress
+can never compute without a baseline, even once the underlying metric
+starts resolving fine. A stuck `behind` with a null `progress_pct` is this
+failure, not confirmed zero movement.
 
 **Worked misreading:** "This AI-visibility goal has read `no_data` for three
 months — the scan must be broken." Check `target_mode` first: a

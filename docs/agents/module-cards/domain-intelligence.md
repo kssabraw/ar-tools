@@ -28,7 +28,11 @@ gap row = pursue first.
 - A gap set is scoped to whichever competitors were queried that run (an
   explicit list, or the client's active registry) — not automatically every
   known competitor. Check who fed the run before reading "N gaps" as the
-  whole picture. Both sides cap at position 100 in the fetch.
+  whole picture.
+- Both sides cap at position 100 in the fetch — a client that genuinely
+  ranks for a gap keyword, just past position 100, reads `gap_type: missing`
+  identically to a keyword the client has no page for at all. `missing`
+  means "not found within the fetch depth," not "nothing targets this."
 - `captured_at` can be stale — snapshots serve from cache and refresh
   on-demand or via the weekly scheduled job; a daily paid-call budget cap
   silently skips a scheduled refresh, which looks identical to "nothing
