@@ -1933,6 +1933,14 @@ class Settings(BaseSettings):
     # Lookback window for the rework signal (QA fails / reopens).
     pace_efficiency_window_days: int = 30
 
+    # --- Agent coordination bus (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS3: explicit agent-to-agent handoffs/blockers/notices so DORA can measure
+    # coordination health. Ships dark (default False); posting is additive +
+    # best-effort. An open actionable message (handoff/request/blocker) older than
+    # this many hours reads as a stalled handoff.
+    agent_bus_enabled: bool = False
+    agent_bus_stale_hours: int = 48
+
     # --- SerMaStr Action Log (docs: SerMaStr Action Log — audit + learning ledger) ---
     # Best-effort audit + learning ledger of every STRATEGIST proposal + the human
     # decision on it (approved / dismissed / pending / senior-required) + the reused

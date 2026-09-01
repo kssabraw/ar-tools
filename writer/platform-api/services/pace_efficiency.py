@@ -250,6 +250,22 @@ def _persist(findings: list[dict]) -> dict:
             upserted = len(rows)
         except Exception as exc:
             logger.warning("pace_efficiency_upsert_failed", extra={"error": str(exc)})
+        # Coordination bus (WS3): breadcrumb each finding to DORA as a notice,
+        # idempotent per finding_key. Gated + best-effort inside agent_bus.post
+        # (no-op when the bus is off). DORA also reads the findings table directly.
+        try:
+            from services import agent_bus
+
+            for f in findings:
+                agent_bus.post(
+                    from_agent="pace", to_agent="dora", kind="notice",
+                    client_id=f.get("client_id"), subject=f.get("title"),
+                    body=f.get("recommendation"), ref=f["finding_key"],
+                    dedupe_key=f"finding:{f['finding_key']}",
+                    payload={"category": f.get("category"), "severity": f.get("severity")},
+                )
+        except Exception as exc:
+            logger.warning("pace_efficiency_bus_notice_failed", extra={"error": str(exc)})
     resolved = 0
     try:
         open_rows = (sb.table("pace_efficiency_findings").select("id, finding_key")
