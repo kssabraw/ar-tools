@@ -157,7 +157,10 @@ def test_summarize_shapes():
     s = ph.summarize({"action_plan": {"status": "ok", "created": 2, "existing": 1, "placed": 2, "held": 1},
                       "proposals": {"status": "ok", "approved": 1, "skipped_senior": 1}})
     assert "3 Action Plan task(s)" in s and "2 assigned" in s and "1 held" in s
-    assert "1 proposal(s) approved" in s and "senior" in s
+    # Proposals report "approved + task created", NOT "assigned" — placement isn't
+    # tracked back through the approve path, so the summary must not claim it.
+    assert "1 proposal(s) approved + task created" in s and "senior" in s
+    assert "approved + assigned" not in s
 
 
 def test_confirm_phrase_pluralizes():

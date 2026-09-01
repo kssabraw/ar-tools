@@ -214,7 +214,10 @@ def summarize(result: dict) -> str:
         parts.append("no Action Plan items to push")
     pr = result.get("proposals")
     if pr and pr.get("status") == "ok":
-        seg = f"{pr.get('approved', 0)} proposal(s) approved + assigned"
+        # "approved + task created" is always true; placement (assign vs hold at
+        # capacity) isn't tracked back through the approve path, so don't claim
+        # "assigned" — PACE places each the same as an Action Plan task.
+        seg = f"{pr.get('approved', 0)} proposal(s) approved + task created"
         if pr.get("skipped_senior"):
             seg += f", {pr['skipped_senior']} left for admin sign-off (senior)"
         parts.append(seg)
