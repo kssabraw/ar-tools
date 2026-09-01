@@ -367,4 +367,9 @@ app.include_router(fanout_reoptimize.router, prefix=_FANOUT_PREFIX)
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    # commit / commit_short report the deployed Railway commit
+    # (RAILWAY_GIT_COMMIT_SHA), so a deploy can be verified without the
+    # dashboard; both are None when the var is unset (local / other hosts).
+    from services.deployment import deployment_info
+
+    return {"status": "ok", **deployment_info()}
