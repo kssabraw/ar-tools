@@ -33,6 +33,7 @@ from services.director import read_model
 logger = logging.getLogger(__name__)
 
 _TITLES = {
+    "strategist_proposal_pending": "SerMaStr proposal is waiting on an approve/dismiss decision",
     "strategist_approved_unplaced": "SerMaStr proposal approved but not yet placed on the board",
     "autonomy_proposed_unactioned": "Autonomy proposed an action nobody has picked up",
     "content_shipped_degraded": "Content shipped without full brand context",

@@ -36,7 +36,7 @@ from models.asana import (
     GenerateMonthRequest,
     GenerateMonthResponse,
 )
-from services import asana_monthly, asana_service, asana_workload, task_service
+from services import asana_monthly, asana_service, asana_workload, pace_auth, task_service
 
 router = APIRouter(tags=["asana"])
 logger = logging.getLogger(__name__)
@@ -419,7 +419,12 @@ async def generate_month(
     auth: dict = Depends(require_auth),
 ) -> GenerateMonthResponse:
     """Create the target month's section + tasks now (idempotent). Synchronous —
-    one client, a handful of Asana calls."""
+    one client, a handful of Asana calls.
+
+    Manual monthly generation is a PACE PM operation (owner ruling 2026-09-01):
+    a named PM or an admin, not any staff."""
+    if not pace_auth.is_pace_pm(pace_auth.context_from_auth(auth)):
+        raise HTTPException(status_code=403, detail="not_pace_pm")
     try:
         target = _parse_target_month(body.month)
     except ValueError as exc:

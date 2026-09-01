@@ -188,7 +188,14 @@ def create_comment(task: dict, author_id: str, body: str) -> dict:
                 title=f"{author} commented on '{task.get('name')}'",
                 summary=body[:300],
                 severity="info",
-                payload={"link": link, "task_id": task["id"], "watchers": other_watchers},
+                payload={
+                    "link": link,
+                    "task_id": task["id"],
+                    "watchers": other_watchers,
+                    # DM these watchers directly (notifications.dm_recipient_ids)
+                    # instead of posting the comment to the shared #pace channel.
+                    "dm_profile_ids": other_watchers,
+                },
             )
         except Exception as exc:
             logger.warning("task_comment_notify_failed", extra={"task_id": task["id"], "error": str(exc)})

@@ -10,6 +10,9 @@ interface AuthContextValue {
   profile: Profile | null
   role: UserRole | null
   isAdmin: boolean
+  // PACE PM (admin, or a profile flagged is_pace_pm) — may approve the daily
+  // Chase Plan and manually generate a client's monthly board.
+  isPacePm: boolean
   // Senior operator (staff or admin) — everything except user/team management.
   isStaff: boolean
   // External read-only viewer.
@@ -36,7 +39,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const { data } = await supabase
         .from('profiles')
-        .select('id, role, full_name')
+        .select('id, role, full_name, is_pace_pm')
         .eq('id', s.user.id)
         .single()
       setProfile((data as Profile) ?? null)
@@ -65,6 +68,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const role = profile?.role ?? null
   const isAdmin = role === 'admin'
+  const isPacePm = role === 'admin' || profile?.is_pace_pm === true
   const isStaff = role === 'admin' || role === 'staff'
   const isClient = role === 'client'
   const isInternal = role != null && role !== 'client'
@@ -77,6 +81,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         role,
         isAdmin,
+        isPacePm,
         isStaff,
         isClient,
         isInternal,

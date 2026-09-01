@@ -562,6 +562,9 @@ export interface Profile {
   id: string
   role: UserRole
   full_name: string | null
+  // PACE PM: may approve the daily Chase Plan and manually generate monthly
+  // boards. Admins are implicitly PMs regardless of this flag.
+  is_pace_pm?: boolean
 }
 
 
