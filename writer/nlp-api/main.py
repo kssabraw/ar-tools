@@ -838,6 +838,8 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
 <section id="local">
   <h2>[City + service in heading]</h2>
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
+  NAP — REQUIRED: state the business Name, full Address, and Phone number verbatim from the business data in this section's body text (a short "Visit us" / "Find us" line is ideal). Use the exact values provided — never invent or alter an address or phone number. If the address or phone is not in the business data, include only what IS provided and record the missing part in the Content Gaps report.
+  NOTE — do NOT hand-write a Google Map embed, a "driving directions" link, or a contact form here. A canonical NAP block, an address-keyed map embed, a directions link, and a contact form are appended to the page automatically after generation; writing your own would duplicate them.
 </section>
 
 Section 11 — (removed) There are exactly TWO CTA blocks on the page — §4 (value/offer-led) and §8 (proof/risk-reversal). Do NOT add a third CTA block; repeated calls-to-action pad the page without adding value. (Section numbers below are unchanged.)
@@ -1329,6 +1331,130 @@ def _linkify_phones(html: str, phone: Optional[str] = None) -> str:
         else:
             result.append(_PHONE_RE.sub(_replace, part))
     return "".join(result)
+
+
+# Sentinel id for the deterministic Contact / Find-Us block so injection is
+# idempotent (a reoptimize re-run or a double-call never stacks two blocks).
+_CONTACT_BLOCK_ID = "contact-find-us"
+
+
+def _build_contact_block(
+    business_name: str,
+    address: Optional[str],
+    phone: Optional[str] = None,
+) -> str:
+    """Build the deterministic Contact & Find Us block for a local landing page.
+
+    Carries the four local-landing elements that must be exact rather than
+    LLM-authored (so they can never be hallucinated or malformed):
+      • NAP — the canonical Name / Address / Phone, machine-consistent.
+      • GBP map embed — an address-keyed Google Maps iframe (the generate-page
+        request carries no place_id, so the embed is keyed on name + address).
+      • Driving directions — a Google Maps directions deep link (recommended;
+        rendered only when an address is available).
+      • Form fill — a basic contact form (recommended; always rendered).
+
+    The map embed + directions link require an address; when none is provided
+    they are omitted and the block degrades to NAP + the contact form. Returns
+    an empty string only when there is no business name to anchor the block.
+    """
+    import html as _html
+    import urllib.parse as _up
+
+    name = (business_name or "").strip()
+    if not name:
+        return ""
+    addr = (address or "").strip()
+    tel = (phone or "").strip()
+
+    esc = _html.escape
+
+    # ── NAP (Name / Address / Phone) ──────────────────────────────────────────
+    nap_lines = [f'<p class="nap-name"><strong>{esc(name)}</strong></p>']
+    if addr:
+        nap_lines.append(
+            f'<p class="nap-address">{esc(addr)}</p>'
+        )
+    if tel:
+        tel_digits = re.sub(r"\D", "", tel)
+        if len(tel_digits) == 11 and tel_digits.startswith("1"):
+            tel_digits = tel_digits[1:]
+        nap_lines.append(
+            f'<p class="nap-phone">Call us: '
+            f'<a href="tel:{tel_digits}">{esc(tel)}</a></p>'
+        )
+    nap_html = (
+        '<div class="nap">\n    '
+        + "\n    ".join(nap_lines)
+        + "\n  </div>"
+    )
+
+    # ── GBP map embed + driving directions (require an address) ────────────────
+    map_html = ""
+    if addr:
+        map_query = _up.quote_plus(", ".join(p for p in (name, addr) if p))
+        dir_dest = _up.quote_plus(", ".join(p for p in (name, addr) if p))
+        map_html = (
+            '\n  <div class="gbp-map">\n'
+            f'    <iframe title="Map of {esc(name)}" '
+            f'src="https://www.google.com/maps?q={map_query}&output=embed" '
+            'width="100%" height="450" style="border:0;" allowfullscreen '
+            'loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>\n'
+            '  </div>\n'
+            '  <p class="directions">'
+            f'<a href="https://www.google.com/maps/dir/?api=1&destination={dir_dest}" '
+            'target="_blank" rel="noopener">Get driving directions</a></p>'
+        )
+
+    # ── Contact form (always rendered; static markup — no action wired) ────────
+    form_html = (
+        '\n  <form class="contact-form" method="post" action="#">\n'
+        '    <p><label>Name<br><input type="text" name="name" '
+        'autocomplete="name" required></label></p>\n'
+        '    <p><label>Phone<br><input type="tel" name="phone" '
+        'autocomplete="tel"></label></p>\n'
+        '    <p><label>Email<br><input type="email" name="email" '
+        'autocomplete="email" required></label></p>\n'
+        '    <p><label>How can we help?<br>'
+        '<textarea name="message" rows="4" required></textarea></label></p>\n'
+        '    <p><button type="submit">Request a Quote</button></p>\n'
+        '  </form>'
+    )
+
+    return (
+        f'<section id="{_CONTACT_BLOCK_ID}">\n'
+        f'  <h2>Contact {esc(name)}</h2>\n'
+        f'  {nap_html}{map_html}{form_html}\n'
+        f'</section>'
+    )
+
+
+def _inject_contact_block(
+    content_html: str,
+    business_name: str,
+    address: Optional[str],
+    phone: Optional[str] = None,
+) -> str:
+    """Append the deterministic Contact & Find-Us block to a generated page.
+
+    Idempotent: if a block with the sentinel id already exists (a reoptimize
+    re-run, or a double call) the page is returned unchanged. The block is
+    inserted just inside the closing </article> when present, otherwise
+    appended. Runs AFTER all rewrite/scoring passes so those passes can't
+    mangle the iframe/form and the block isn't scored.
+    """
+    if not content_html:
+        return content_html
+    if f'id="{_CONTACT_BLOCK_ID}"' in content_html:
+        return content_html  # already present — don't stack
+    block = _build_contact_block(business_name, address, phone)
+    if not block:
+        return content_html
+    # Insert before the LAST </article> if the page is wrapped in one.
+    idx = content_html.rfind("</article>")
+    if idx != -1:
+        return content_html[:idx] + "  " + block + "\n" + content_html[idx:]
+    return content_html.rstrip() + "\n" + block
 
 
 _RDFA_TYPE_MAP: Dict[str, str] = {
@@ -5845,6 +5971,12 @@ async def _build_seo_checklist(
         f'  • Business name + service type + "{city}" must co-occur in ≥3 separate sections',
     ]
 
+    # NAP (Name / Address / Phone) — a required local-landing element. State the
+    # business name, address, and phone verbatim in the page body (a "Find us" /
+    # "Visit us" line in the geographic section is ideal). The canonical NAP
+    # block, map embed, directions link, and contact form are also appended
+    # deterministically after generation, so do NOT hand-write those.
+    lines.append('  • NAP: state the business Name, Address, and Phone (verbatim) in the page body')
     if phone:
         lines.append(f'  • NAP: include phone {phone} in the page')
     if address:
@@ -7889,6 +8021,18 @@ Full location: {body.location}
                     MAX_VOICE_CORRECTION_PASSES, body.keyword,
                     (voice_scorecard or {}).get("score"), inline_score,
                 )
+
+        # ── Deterministic Contact / Find-Us block ────────────────────────────
+        # NAP + address-keyed GBP map embed + driving-directions link + a
+        # contact form. Injected here — AFTER every rewrite/scoring/voice pass —
+        # so those passes can't strip or malform the iframe/form and the block
+        # is never scored. Idempotent, best-effort: a failure keeps the page.
+        try:
+            content_html = _inject_contact_block(
+                content_html, body.business_name, body.address, body.phone
+            )
+        except Exception as _cbe:
+            logger.warning(f"generate-page: contact block injection failed (keeping page): {_cbe}")
 
         # Build combined cost breakdown
         ac = (serp_analysis_dict or {}).get("analysis_cost", {})
