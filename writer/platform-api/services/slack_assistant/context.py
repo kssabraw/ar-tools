@@ -1851,28 +1851,58 @@ def _ctx_memories(supabase, client_id: str, today: date) -> Optional[dict]:
 
 
 def _ctx_director(supabase, client_id: str, today: date) -> Optional[dict]:
-    """Director of Operations — the cross-agent seam flags for THIS client
+    """Director of Operations — the cross-agent state for THIS client
     (build spec §7): where a SerMaStr proposal sits unplaced, an autonomy
     candidate nobody actioned, content that shipped degraded, or two agents
-    acting on the same target. Read-only insight, never an action of its own —
-    SerMaStr may *offer* to open a task or raise a proposal to PACE from what
-    it sees here, but never silently acts on delivery."""
+    acting on the same target — plus two rollups the same read model already
+    computes but the seam flags alone don't surface: whether past interventions
+    (goal-linked link-building/reoptimization) actually worked, and what the
+    dark autonomy loop has proposed/executed/escalated. All read-only insight
+    from one deterministic read, never an action of its own — SerMaStr may
+    *offer* to open a task or raise a proposal to PACE from what it sees here,
+    but never silently acts on delivery."""
     from services.director.read_model import build_read_model
 
     model = build_read_model(client_id, today)
     flags = (model.get("flow") or {}).get("flags") or []
-    if not flags:
+    interventions = model.get("interventions") or {}
+    autonomy = model.get("autonomy") or {}
+    if not flags and not interventions and not autonomy:
         return None
-    return {
-        "seam_flags": [
+    out: dict = {}
+    if flags:
+        out["seam_flags"] = [
             {
                 "seam": f["seam"],
                 "evidence": f.get("evidence"),
                 "since": f.get("since"),
             }
             for f in flags
-        ],
-    }
+        ]
+    if interventions:
+        out["intervention_outcomes"] = {
+            "by_verdict": interventions.get("by_verdict") or {},
+            "enrolled": interventions.get("enrolled"),
+            "open_count": len(interventions.get("open") or []),
+            "note": (
+                "worked/partial/no_effect verdicts on past goal-linked "
+                "link-building/reoptimization tactics — cite this rather than "
+                "guessing whether a past recommendation actually moved anything."
+            ),
+        }
+    if autonomy:
+        out["autonomy_loop"] = {
+            "executed": autonomy.get("executed"),
+            "proposed": autonomy.get("proposed"),
+            "escalated": autonomy.get("escalated"),
+            "unactioned_count": len(autonomy.get("proposed_unactioned") or []),
+            "note": (
+                "the dark/gated autonomous executor's recent decisions for this "
+                "client — 'proposed' candidates sit unactioned until a human "
+                "approves them; this is status, not something you can turn on."
+            ),
+        }
+    return out or None
 
 
 # Registry — append a provider here to give SerMastr a new module (see build_context).

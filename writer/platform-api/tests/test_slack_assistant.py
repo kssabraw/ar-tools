@@ -2411,6 +2411,79 @@ def test_memory_context_is_absent_when_there_is_nothing_remembered():
     assert _memories_ctx([]) is None
 
 
+def test_ctx_director_surfaces_seam_flags_interventions_and_autonomy(monkeypatch):
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    from services.director import read_model as director_read_model
+
+    monkeypatch.setattr(
+        director_read_model,
+        "build_read_model",
+        lambda client_id, today: {
+            "flow": {"flags": [
+                {"seam": "qa_idle", "evidence": "no tasks reached In QA in 9 days", "since": "2026-07-01"},
+            ]},
+            "interventions": {
+                "by_verdict": {"worked": 3, "partial": 1, "no_effect": 1},
+                "enrolled": 5,
+                "open": [{"id": "i1"}],
+            },
+            "autonomy": {
+                "executed": 2,
+                "proposed": 4,
+                "escalated": 0,
+                "proposed_unactioned": [{"action": "reoptimize_page", "keyword": "roof repair"}],
+            },
+        },
+    )
+    out = sa_context._ctx_director(MagicMock(), "c1", date(2026, 7, 7))
+    assert out["seam_flags"] == [
+        {"seam": "qa_idle", "evidence": "no tasks reached In QA in 9 days", "since": "2026-07-01"}
+    ]
+    assert out["intervention_outcomes"]["by_verdict"] == {"worked": 3, "partial": 1, "no_effect": 1}
+    assert out["intervention_outcomes"]["enrolled"] == 5
+    assert out["intervention_outcomes"]["open_count"] == 1
+    assert out["autonomy_loop"]["executed"] == 2
+    assert out["autonomy_loop"]["proposed"] == 4
+    assert out["autonomy_loop"]["unactioned_count"] == 1
+
+
+def test_ctx_director_surfaces_interventions_even_with_no_seam_flags(monkeypatch):
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    from services.director import read_model as director_read_model
+
+    monkeypatch.setattr(
+        director_read_model,
+        "build_read_model",
+        lambda client_id, today: {
+            "flow": {"flags": []},
+            "interventions": {"by_verdict": {"worked": 1}, "enrolled": 1, "open": []},
+            "autonomy": {},
+        },
+    )
+    out = sa_context._ctx_director(MagicMock(), "c1", date(2026, 7, 7))
+    assert "seam_flags" not in out
+    assert out["intervention_outcomes"]["by_verdict"] == {"worked": 1}
+    assert "autonomy_loop" not in out
+
+
+def test_ctx_director_empty_is_none(monkeypatch):
+    from datetime import date
+    from unittest.mock import MagicMock
+
+    from services.director import read_model as director_read_model
+
+    monkeypatch.setattr(
+        director_read_model,
+        "build_read_model",
+        lambda client_id, today: {"flow": {"flags": []}, "interventions": {}, "autonomy": {}},
+    )
+    assert sa_context._ctx_director(MagicMock(), "c1", date(2026, 7, 7)) is None
+
+
 def test_a_named_topic_beats_the_generic_ranking_floor():
     # "show up" matches the generic ranking floor AND the question names
     # ChatGPT. The specific match must lead, or the Maps playbook is funded
