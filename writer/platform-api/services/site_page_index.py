@@ -103,6 +103,121 @@ def match_site_location_page(place_name: str, index: dict[str, str]) -> Optional
     return index.get(slugify_place(place_name))
 
 
+# ── keyword ↔ live-page matching (content-word-set equality) ──────────────────
+#
+# `match_site_location_page` above only catches a *generic* location page
+# (``/melbourne/``). But a local business usually publishes service+city landing
+# pages (``/roof-restoration-melbourne/``), and the silo planner offers those same
+# "<service> <city>" targets — so without a keyword-level match a page that already
+# exists gets offered for creation again (a false "missing"). These helpers match a
+# planned keyword against a live URL by comparing content-word *sets*, so word order
+# and generic wrapper words ("services", "areas") don't matter, while a genuinely
+# more-specific page (``/emergency-roof-restoration-melbourne/``) stays distinct.
+#
+# This mirrors the proven matcher in ``services.service_page_plan`` (national service
+# pages); it lives here — the shared home for "does the client's site already have
+# this page" — because the local silo planner needs the same test.
+
+# Generic tokens that don't distinguish a page: connectors, the "service(s)"
+# wrapper, structural area/location directory words, and file extensions. Stripped
+# from every token set so ``/service-areas/inner-west/`` and ``inner west`` match.
+_GENERIC_TOKENS = {
+    "the", "a", "an", "and", "or", "for", "of", "in", "on", "to", "your", "our",
+    "near", "me", "service", "services", "page", "pages", "index", "html", "htm",
+    "php", "aspx", "area", "areas", "location", "locations", "region", "regions",
+    "serving",
+}
+
+# A URL carrying any of these path segments is content/taxonomy/store — it may
+# *mention* a service without being its landing page (``/blog/why-roof-restoration/``),
+# so it must never suppress a candidate. Matches the whole URL, not one segment.
+_NON_PAGE_SEGMENTS = {
+    "blog", "blogs", "post", "posts", "article", "articles", "news", "story",
+    "stories", "tag", "tags", "category", "categories", "topic", "topics",
+    "author", "authors", "product", "products", "shop", "store", "cart",
+    "checkout", "account", "feed", "rss", "search", "privacy", "terms",
+    "cookie", "cookies", "sitemap", "wp-content", "wp-json", "wp-admin",
+}
+
+
+def content_tokens(text: str) -> frozenset[str]:
+    """Distinguishing content words of a string: lowercase alphanumerics with the
+    generic/connector words and 1-char noise dropped.
+
+    "Roof Restoration Melbourne" → {"roof","restoration","melbourne"};
+    "drain-cleaning-services" → {"drain","cleaning"}."""
+    return frozenset(
+        tok
+        for tok in re.split(r"[^a-z0-9]+", (text or "").lower())
+        if len(tok) > 1 and tok not in _GENERIC_TOKENS
+    )
+
+
+def page_match_keys(url: str) -> list[frozenset[str]]:
+    """Content-word-set keys a live URL can be matched on, or ``[]`` when the URL is
+    content/store (a non-page segment) or has no usable slug.
+
+    Two keys, so both flat and nested site layouts match a "<service> <city>"
+    keyword:
+      1. the **final path segment** — ``/roof-restoration-melbourne/`` →
+         {"roof","restoration","melbourne"}; and
+      2. the **union of all non-generic segments** — ``/service-areas/roof-restoration/
+         melbourne/`` → {"roof","restoration","melbourne"} after the generic
+         "service"/"areas" directory drops out.
+
+    Both use the same content-word set, so word order and generic wrapper words never
+    matter, while an extra distinguishing word ("emergency", "commercial", "cbd")
+    keeps a more-specific page a distinct target rather than a false match."""
+    try:
+        path = urlparse(url or "").path or ""
+    except ValueError:
+        return []
+    segments = [seg for seg in path.split("/") if seg.strip()]
+    if not segments:
+        return []
+    if any(slugify_place(seg) in _NON_PAGE_SEGMENTS for seg in segments):
+        return []
+    keys: list[frozenset[str]] = []
+    final = content_tokens(segments[-1])
+    if final:
+        keys.append(final)
+    union: set[str] = set()
+    for seg in segments:
+        union |= content_tokens(seg)
+    union_key = frozenset(union)
+    if union_key and union_key not in keys:
+        keys.append(union_key)
+    return keys
+
+
+def build_page_token_index(urls: list[str]) -> dict[frozenset[str], str]:
+    """Map each URL's content-word-set key(s) → the first URL carrying it, for O(1)
+    keyword lookup. First URL wins (sitemaps list canonical/top-level pages first)."""
+    index: dict[frozenset[str], str] = {}
+    for url in urls:
+        for key in page_match_keys(url):
+            index.setdefault(key, url)
+    return index
+
+
+def match_site_page_for_keyword(
+    keyword: str, index: dict[frozenset[str], str]
+) -> Optional[str]:
+    """Return the live URL whose page slug is the *same* topic as `keyword` (exact
+    content-word-set equality), else None.
+
+    "roof restoration melbourne" matches ``/roof-restoration-melbourne/`` and
+    ``/melbourne-roof-restoration/`` but NOT ``/emergency-roof-restoration-melbourne/``
+    (a distinct, more-specific page). A keyword whose content words are all generic
+    (empty set) never matches."""
+    if not index:
+        return None
+    key = content_tokens(keyword)
+    if not key:
+        return None
+    return index.get(key)
+
+
 def parse_robots_sitemaps(text: str) -> list[str]:
     """Extract ``Sitemap:`` directive URLs from a robots.txt body."""
     out: list[str] = []

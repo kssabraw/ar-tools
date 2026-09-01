@@ -72,6 +72,120 @@ def test_index_first_url_wins():
 
 
 # ---------------------------------------------------------------------------
+# content_tokens
+# ---------------------------------------------------------------------------
+def test_content_tokens_drops_generic_and_short():
+    assert spi.content_tokens("Roof Restoration Melbourne") == {
+        "roof",
+        "restoration",
+        "melbourne",
+    }
+    # "services"/"areas" wrappers and 1-char noise dropped.
+    assert spi.content_tokens("drain-cleaning-services") == {"drain", "cleaning"}
+    assert spi.content_tokens("service-areas") == set()
+    assert spi.content_tokens("") == set()
+
+
+# ---------------------------------------------------------------------------
+# page_match_keys
+# ---------------------------------------------------------------------------
+def test_page_match_keys_flat_slug():
+    keys = spi.page_match_keys("https://fcr.com/roof-restoration-melbourne/")
+    assert frozenset({"roof", "restoration", "melbourne"}) in keys
+
+
+def test_page_match_keys_nested_union_drops_generic_dirs():
+    # A nested "<service>/<city>" under a generic directory still yields the full
+    # content-word set via the non-generic union.
+    keys = spi.page_match_keys(
+        "https://fcr.com/service-areas/roof-restoration/melbourne/"
+    )
+    assert frozenset({"roof", "restoration", "melbourne"}) in keys
+
+
+def test_page_match_keys_excludes_content_urls():
+    # A blog/product/etc. URL that merely mentions the service is not a landing page.
+    assert spi.page_match_keys("https://fcr.com/blog/why-roof-restoration-melbourne/") == []
+    assert spi.page_match_keys("https://fcr.com/product/roof-tiles/") == []
+    assert spi.page_match_keys("https://fcr.com/") == []
+
+
+# ---------------------------------------------------------------------------
+# build_page_token_index + match_site_page_for_keyword
+# ---------------------------------------------------------------------------
+def test_match_keyword_flat_service_city_page():
+    # The reported bug: a published "<service> <city>" page must be detected.
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration-melbourne/"])
+    assert (
+        spi.match_site_page_for_keyword("roof restoration melbourne", index)
+        == "https://fcr.com/roof-restoration-melbourne/"
+    )
+
+
+def test_match_keyword_is_word_order_insensitive():
+    index = spi.build_page_token_index(["https://fcr.com/melbourne-roof-restoration/"])
+    assert (
+        spi.match_site_page_for_keyword("roof restoration melbourne", index)
+        == "https://fcr.com/melbourne-roof-restoration/"
+    )
+
+
+def test_match_keyword_more_specific_page_is_distinct():
+    # An emergency/commercial/sub-area variation must NOT satisfy the base page —
+    # the extra distinguishing word keeps it a separate target.
+    index = spi.build_page_token_index(
+        [
+            "https://fcr.com/emergency-roof-restoration-melbourne/",
+            "https://fcr.com/roof-restoration-melbourne-cbd/",
+        ]
+    )
+    assert spi.match_site_page_for_keyword("roof restoration melbourne", index) is None
+    # But the specific variation matches its own keyword.
+    assert (
+        spi.match_site_page_for_keyword("emergency roof restoration melbourne", index)
+        == "https://fcr.com/emergency-roof-restoration-melbourne/"
+    )
+
+
+def test_match_keyword_nested_service_city():
+    index = spi.build_page_token_index(
+        ["https://fcr.com/services/roof-restoration/melbourne/"]
+    )
+    assert (
+        spi.match_site_page_for_keyword("roof restoration melbourne", index)
+        == "https://fcr.com/services/roof-restoration/melbourne/"
+    )
+
+
+def test_match_keyword_ignores_generic_wrapper_words():
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration-services/"])
+    assert (
+        spi.match_site_page_for_keyword("roof restoration", index)
+        == "https://fcr.com/roof-restoration-services/"
+    )
+
+
+def test_match_keyword_empty_or_no_match():
+    index = spi.build_page_token_index(["https://fcr.com/roof-restoration-melbourne/"])
+    assert spi.match_site_page_for_keyword("gutter cleaning sydney", index) is None
+    assert spi.match_site_page_for_keyword("services", index) is None  # all-generic
+    assert spi.match_site_page_for_keyword("anything", {}) is None
+
+
+def test_match_keyword_first_url_wins():
+    index = spi.build_page_token_index(
+        [
+            "https://fcr.com/roof-restoration-melbourne/",
+            "https://fcr.com/vic/roof-restoration-melbourne/",
+        ]
+    )
+    assert (
+        spi.match_site_page_for_keyword("roof restoration melbourne", index)
+        == "https://fcr.com/roof-restoration-melbourne/"
+    )
+
+
+# ---------------------------------------------------------------------------
 # parse_robots_sitemaps
 # ---------------------------------------------------------------------------
 def test_parse_robots_sitemaps():
