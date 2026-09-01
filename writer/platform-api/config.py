@@ -2384,6 +2384,23 @@ class Settings(BaseSettings):
     director_content_degraded_lookback_days: int = 14      # how far back to scan for degraded ships
     director_autonomy_ledger_lookback_runs: int = 8        # per-client autonomy_runs rows to read
     director_audit_window_days: int = 90                   # window for the PACE/SerMaStr track-record read-model blocks
+    # Audit-log health monitoring (owner ask 2026-09-01) — DORA checks the
+    # SerMaStr + PACE action logs daily (ops_seam alerts on a newly-tripped
+    # signal) and weekly (an "Agent process health" section in the ops digest,
+    # plus an opt-in LLM narrative review) to confirm the propose→decide→outcome
+    # pipeline is running efficiently. All gated under director_enabled; this
+    # sub-flag lets it be turned off independently. Thresholds are suggested
+    # defaults, tunable without a code change once real rates are observed.
+    director_audit_health_enabled: bool = True
+    director_audit_dismiss_threshold: float = 0.6          # dismiss_rate (SerMaStr) / reject_rate (PACE) → high-dismiss finding
+    director_audit_ineffective_threshold: float = 0.5      # no_effect / graded (SerMaStr) → low-effectiveness finding
+    director_audit_min_samples: int = 4                    # min decided/graded per kind before a rate finding fires
+    director_audit_stale_pending_min: int = 5              # min undecided-past-dwell proposals before the agency stale alert fires
+    # The opt-in weekly LLM narrative review (the "scheduled narrative review" —
+    # the analytical layer on top of the deterministic checks). Default OFF so it
+    # adds no surprise LLM cost; when on, one DORA-narrated process review posts
+    # to #dora on director_digest_weekday.
+    director_audit_narrative_enabled: bool = False
     # DORA — the Director of Operations conversational persona + its own surfaces
     # (the /director web chat page + a dedicated Slack channel). Owner ruling
     # 2026-08-29 reverses the earlier "surfaced through SerMaStr, not a fifth

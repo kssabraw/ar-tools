@@ -74,6 +74,12 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         # scoped. Each reuses the ledger's own tested stats_window rollup.
         "pace_audit": _isolate("pace_audit", providers.prov_pace_audit, client_id, today),
         "sermastr_audit": _isolate("sermastr_audit", providers.prov_sermastr_audit, client_id, today),
+        # Audit-log PROCESS health (owner ask 2026-09-01) — is the SerMaStr/PACE
+        # propose→decide→outcome pipeline running efficiently (stale decisions /
+        # low effectiveness / high dismiss / coverage gaps). Deliberately NOT a
+        # flow.flags seam (it opens no board task): the daily reconcile alerts on
+        # its findings via ops_seam and the weekly digest renders them.
+        "audit_health": _isolate("audit_health", providers.prov_audit_health, supabase, client_id, today),
     }
 
     thresholds = {

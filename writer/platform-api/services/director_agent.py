@@ -20,7 +20,7 @@ Gated on ``settings.director_enabled`` at the router; while off, ``/director/*``
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional
 
 from config import settings
@@ -64,7 +64,17 @@ _DORA_SYSTEM = (
     "window. Read those two as reliability signals — which agent's work reliably "
     "gets accepted and (for SerMaStr) actually moves the metric — not as seams; "
     "they open no task, so cite them when asked how an agent is doing or why a "
-    "kind of work keeps getting rejected.\n\n"
+    "kind of work keeps getting rejected. The `audit_health` block is the "
+    "PROCESS-health read over those same logs: its `findings` list names where "
+    "the propose → decide → outcome pipeline is running inefficiently — a stale "
+    "decision queue (`stale_pending`), a proposal/action kind getting dismissed "
+    "or reverted (`high_dismiss`), a tactic kind that doesn't move the metric "
+    "(`low_effectiveness`), or an agent producing nothing / behind-goal clients "
+    "with no proposal (`coverage_gap`). Each finding carries the agent, kind, a "
+    "plain-English `label`, and the numbers in `detail`. Lead with these when "
+    "asked whether the agents' processes are working efficiently, where the "
+    "pipeline is snagging, or what to fix — they are process-tuning signals, not "
+    "board-task seams.\n\n"
     "ENUMERATE, DON'T SUMMARIZE. When asked what's snagged / where the bottleneck "
     "is / where two agents overlap / how the operation is flowing, LIST the actual "
     "seams and rows from the read model — name the client, the seam, and the "
@@ -179,9 +189,68 @@ def opening_brief_text() -> str:
         logger.warning("director_brief_failed", extra={"error": str(exc)})
         return ""
     flags = ((model.get("flow") or {}).get("flags")) or []
+    health = (model.get("audit_health") or {}).get("summary") or ""
     if not flags:
-        return "All clear across the agents — no open cross-agent seam flags right now."
-    return _render_flags(flags)
+        base = "All clear across the agents — no open cross-agent seam flags right now."
+        return f"{base}\n\n*{health}*" if health else base
+    rendered = _render_flags(flags)
+    return f"{rendered}\n\n*{health}*" if health else rendered
+
+
+# ---------------------------------------------------------------------------
+# Weekly audit-log process-health narrative review (opt-in — owner ask
+# 2026-09-01). The analytical layer ON TOP of the deterministic ops_seam
+# alerts + the ops-digest health section: DORA reasons over the SerMaStr/PACE
+# action-log signals and recommends the process fixes that would help most.
+# ---------------------------------------------------------------------------
+async def run_audit_narrative(today: Optional[date] = None) -> dict:
+    """Post one DORA-narrated agent-process-health review to #dora. Double-gated
+    on ``director_enabled`` + ``director_audit_narrative_enabled`` (default off,
+    so no surprise LLM cost); deduped per ISO week. Best-effort — never raises
+    into the scheduler tick. Called from the weekly ops-digest scheduler block."""
+    today = today or date.today()
+    if not (settings.director_enabled and settings.director_audit_narrative_enabled):
+        return {"emitted": False, "reason": "disabled"}
+    try:
+        from fastapi.concurrency import run_in_threadpool
+
+        from services import notifications
+
+        model = await run_in_threadpool(build_context, None)
+        health = model.get("audit_health") or {}
+        findings = health.get("findings") or []
+        logged = (health.get("sermastr") or {}).get("total", 0) + (health.get("pace") or {}).get("total", 0)
+        # Nothing logged and nothing flagged → nothing to review (no weekly noise).
+        if not findings and not logged:
+            return {"emitted": False, "reason": "nothing_to_review"}
+        question = (
+            "Weekly agent PROCESS-HEALTH review. Using the read model's "
+            "`audit_health` block (SerMaStr + PACE action-log signals) and the "
+            "`pace_audit`/`sermastr_audit` track records, assess whether the "
+            "propose → decide → outcome pipeline is running efficiently. Call out "
+            "any stale decision queue, proposal kinds getting dismissed or not "
+            "moving the metric, PACE actions being reverted, and coverage gaps — "
+            "with the specific agent, kind, and numbers. Then recommend the one or "
+            "two process fixes that would help most, naming whose call each is "
+            "(SerMaStr's, PACE's, or a human reviewer's). If everything looks "
+            "healthy, say so briefly."
+        )
+        reply = await interpret_dora(
+            question, model, None, "slack", None,
+            "Scope: the whole agency — agent process health over the action logs.")
+        iso_year, iso_week, _ = today.isocalendar()
+        monday = today - timedelta(days=today.weekday())
+        notification_id = notifications.emit(
+            client_id=None, kind="ops_digest",
+            title=f"DORA process review · week of {monday.isoformat()}",
+            summary=reply, severity="info",
+            payload={"link": "/director"},  # no slack_channel override → #dora via DIRECTOR_CHANNEL_KINDS
+            dedupe_key=f"ops_narrative:{iso_year}-W{iso_week:02d}",
+        )
+        return {"emitted": notification_id is not None, "findings": len(findings)}
+    except Exception as exc:  # noqa: BLE001 — never break the scheduler tick
+        logger.warning("director_audit_narrative_failed", extra={"error": str(exc)})
+        return {"emitted": False, "reason": "error"}
 
 
 def _fallback_text(model: Optional[dict]) -> str:
