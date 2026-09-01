@@ -66,6 +66,14 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         "qa": _isolate("qa", providers.prov_qa, supabase, today),
         "content": _isolate("content", providers.prov_content, supabase, client_ids, today),
         "duplicates": _isolate("duplicates", providers.prov_duplicates, supabase, client_ids, today),
+        # Agent track records (read-only insight, no seam) — PACE's and SerMaStr's
+        # OWN action logs, so DORA can report how reliably each agent's work gets
+        # accepted and (for SerMaStr) actually moves the metric. Scoped to the
+        # model's client (scalar) or agency-wide (None) — the ledgers keep rows
+        # after a client is deleted, so this is a true track record, not board-
+        # scoped. Each reuses the ledger's own tested stats_window rollup.
+        "pace_audit": _isolate("pace_audit", providers.prov_pace_audit, client_id, today),
+        "sermastr_audit": _isolate("sermastr_audit", providers.prov_sermastr_audit, client_id, today),
     }
 
     thresholds = {

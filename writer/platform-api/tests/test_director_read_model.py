@@ -28,6 +28,8 @@ def test_build_read_model_degrades_on_provider_failure_not_crash():
         patch.object(providers, "prov_qa", return_value=None),
         patch.object(providers, "prov_content", return_value=None),
         patch.object(providers, "prov_duplicates", return_value=None),
+        patch.object(providers, "prov_pace_audit", return_value=None),
+        patch.object(providers, "prov_sermastr_audit", return_value=None),
     ):
         model = read_model.build_read_model(None, TODAY)
 
@@ -54,10 +56,16 @@ def test_build_read_model_assembles_a_healthy_model():
         patch.object(providers, "prov_qa", return_value=None),
         patch.object(providers, "prov_content", return_value=None),
         patch.object(providers, "prov_duplicates", return_value=None),
+        patch.object(providers, "prov_pace_audit",
+                     return_value={"decisions": {"total": 3, "approved": 2}}),
+        patch.object(providers, "prov_sermastr_audit", return_value=None),
     ):
         model = read_model.build_read_model(None, TODAY)
 
     assert model["portfolio"] is True
+    # The agent track-record blocks are wired into the model (scalar client_id).
+    assert model["pace_audit"] == {"decisions": {"total": 3, "approved": 2}}
+    assert "sermastr_audit" in model
     assert model["delivery"] == {"clients": board["clients"]}
     assert model["producers"]["open_by_source"] == {"manual": 1}
     assert model["flow"] == {"flags": [], "count": 0}

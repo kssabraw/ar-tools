@@ -433,6 +433,77 @@ def prov_content(supabase, client_ids: Optional[list[str]], today: date) -> Opti
 
 
 # ---------------------------------------------------------------------------
+# agent track records — PACE + SerMaStr action logs (read-only insight, no seam)
+# ---------------------------------------------------------------------------
+def _top_buckets(buckets: Optional[dict], n: int = 5) -> dict:
+    """The n busiest sub-buckets (by ``total``) of a decision-stats rollup, so
+    the read-model payload stays bounded on a large agency. Pure."""
+    if not buckets:
+        return {}
+    ranked = sorted(buckets.items(), key=lambda kv: -(kv[1] or {}).get("total", 0))
+    return {k: v for k, v in ranked[:n]}
+
+
+def prov_pace_audit(client_id: Optional[str], today: date) -> Optional[dict]:
+    """PACE's OWN action track record over the audit window — approve / deny /
+    modify / revert rates, overall and per action kind. Read-only insight (NOT a
+    seam), reusing the tested ``pace_audit.stats_window`` rollup rather than
+    re-querying. ``client_id`` set → that client; None → the whole agency. Gated
+    on ``pace_audit_enabled``; None when nothing was logged in the window."""
+    from services import pace_audit
+
+    if not settings.pace_audit_enabled:
+        return None
+    since = (today - timedelta(days=settings.director_audit_window_days)).isoformat()
+    stats = pace_audit.stats_window(client_id=client_id, since=since)
+    overall = stats.get("overall") or {}
+    if not overall.get("total"):
+        return None
+    return {
+        "window_days": settings.director_audit_window_days,
+        "decisions": overall,
+        "by_action": _top_buckets(stats.get("by_action")),
+        "note": (
+            "PACE's own action track record: how humans dispositioned PACE's "
+            "client-campaign actions (approved / approved_with_modifications / "
+            "denied / deferred / cancelled) and how many executed actions a human "
+            "later reverted. Read it as a reliability signal on PACE's execution — "
+            "a high denied/reverted rate on an action kind is worth surfacing."
+        ),
+    }
+
+
+def prov_sermastr_audit(client_id: Optional[str], today: date) -> Optional[dict]:
+    """SerMaStr's OWN proposal track record over the audit window — approve /
+    dismiss / still-pending counts plus the reused intervention outcome mix
+    (worked / partial / no_effect), overall and per proposal kind. Read-only
+    insight (NOT a seam), reusing the tested ``sermastr_audit.stats_window``
+    rollup. ``client_id`` set → that client; None → the whole agency. Gated on
+    ``sermastr_audit_enabled``; None when nothing was logged in the window."""
+    from services import sermastr_audit
+
+    if not settings.sermastr_audit_enabled:
+        return None
+    since = (today - timedelta(days=settings.director_audit_window_days)).isoformat()
+    stats = sermastr_audit.stats_window(client_id=client_id, since=since)
+    overall = stats.get("overall") or {}
+    if not overall.get("total"):
+        return None
+    return {
+        "window_days": settings.director_audit_window_days,
+        "decisions": overall,
+        "by_kind": _top_buckets(stats.get("by_kind")),
+        "note": (
+            "SerMaStr's own proposal track record: how humans decided its "
+            "strategy proposals (approved / dismissed / still pending) and, for "
+            "approved goal-linked link-building/reoptimization, whether the tactic "
+            "worked/partial/no_effect at its 6-week mark. Read it as which kinds of "
+            "strategy advice actually get accepted and move the metric."
+        ),
+    }
+
+
+# ---------------------------------------------------------------------------
 # duplicates — two different-source live items on one target (§9, flag-only)
 # ---------------------------------------------------------------------------
 def prov_duplicates(supabase, client_ids: Optional[list[str]], today: date) -> Optional[dict]:
