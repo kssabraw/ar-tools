@@ -41,7 +41,8 @@ Open the client → **Content Syndication**.
 - **"Auto-scan daily for new content"** — the on/off switch. The helper text under it shows the
   last scan date and reminds you: *"never publishes on its own."*
 - **Content types to include** — checkboxes for **Blog posts**, **Pages**, **Products** (all on by
-  default).
+  default). This only controls what a *future* scan adds — unchecking one after a type's already
+  been discovered doesn't hide or remove those existing rows.
 - **"Publish to:"** — choose **Google Docs + Sheets**, **Google Docs only**, or **Google Sheets
   only**.
 - **"Sharing:"** — choose **"Anyone can find & view (discoverable)"** (fully public/indexable) or
@@ -57,7 +58,9 @@ Click **Scan now** at any point (button shows **"Starting…"** briefly), or jus
 auto-scan handle it if it's enabled. A scan reads the client's sitemap (falling back to a live
 search-index lookup if the sitemap isn't usable), sorts pages into blog post / page / product, and
 adds anything genuinely new as a **discovered** item. A **"Scanning…"** indicator shows near the
-page title while it works.
+page title while it works — note it's a fixed ~45-second timer, not tied to the scan actually
+finishing, so on a large site the indicator can disappear before the job is really done; "Last
+scan" only updates once it truly completes. The items table paginates at 50 rows.
 
 ---
 

@@ -18,11 +18,12 @@ No code, no terminal — everything here happens in the dashboard.
   auto-generated version; if you don't set one, the app generates one for you.
 - **Five runs at a time, per the whole suite.** Only 5 generation jobs can be in flight
   simultaneously. If you hit the cap, wait a minute — it clears fast. Bulk jobs and
-  "reoptimize existing article" runs deliberately skip this cap and run at background priority
-  instead, so a big batch elsewhere won't actually block you, it'll just queue behind it.
-- **A frozen client can't generate or publish content.** If a client is under a Freeze (manual
-  action / deindexing), every run/reoptimize/publish action is blocked with a clear "This client
-  is frozen" message. Only an admin lifts a freeze.
+  "reoptimize existing article" runs deliberately skip this cap — they don't count against your
+  5, they just process sequentially in the background, one at a time.
+- **A frozen client can't generate or publish content.** Publish, Score, and Reoptimize all show a
+  clear "This client is frozen" explanation when blocked. The **New Run** form itself is blunter —
+  it just prints the raw `client_frozen` error as plain text — so the real tell to check first is
+  the red freeze banner on the client's workspace page. Only an admin lifts a freeze.
 - **Keyword and notes have length limits.** Keyword: 150 characters. Notes for the writer: 4,000
   characters.
 
@@ -92,14 +93,22 @@ waiting its turn:
 | Sources Cited | Embedding inline citations and assembling the references section | ~5–15s |
 
 You don't have to babysit this page — it polls itself and reconnects if you navigate away and
-come back.
+come back. While it's running, a **Cancel** button lets you stop it (confirms first — "in-progress
+modules will finish, but no further stages will run").
 
 **If a step fails:** an amber box with "Auto-retry" text means it's automatically retrying, not
 broken — leave it. A genuine failure shows "Failed at the \<stage\> stage" plus an expandable
 **error accordion** ("What to do" / "Hide") — expand it for a plain-English explanation, numbered
-fix steps, and (when there is one) a one-click fix button. If a run truly dies, use **Resume**
-(picks up from the last completed module, reusing everything already done) rather than starting
-over.
+fix steps, and (when there is one) a one-click fix button. From here you have three different
+buttons, and they're not interchangeable:
+
+- **Resume** — picks up from the last completed module, reusing everything already done. Use this
+  first; it's the cheapest option.
+- **Restart** (failed/cancelled runs) / **Rerun** (complete runs) — both spawn a **brand-new run**
+  rather than continuing this one, and both default to regenerating the brief and SIE from
+  scratch rather than reusing the cache (you still get the usual cache-decision dialog first).
+  Reach for these when Resume isn't enough — something about the keyword's brief itself needs to
+  change, not just the run.
 
 ---
 
@@ -129,10 +138,12 @@ Three destinations, each its own button on the article card:
   On success the button becomes **Open Doc**.
 - **Publish to WP** — pick **Draft** or **Publish** from the dropdown first, then click. Draft
   saves to WordPress unpublished; Publish goes live immediately.
-- **Publish to GitHub** — commits the markdown plus generated hero/body images into the client's
-  repo. This one runs in the background (image generation takes a moment) — you'll see "Queued"
-  then "Generating hero + body images and committing…"; you can leave the page and it finishes on
-  its own.
+- **Publish to GitHub** — commits the markdown into the client's repo. If hero/body-image
+  generation is configured for this client, it runs as a background job — the button shows
+  "Generating images…" and a status line ("Queued — N job(s) ahead of this publish…" or
+  "Generating hero + body images and committing to GitHub… you can leave this page…") — and
+  you'll get a notification when it's live. If image generation isn't configured, it just commits
+  the markdown synchronously with no images, no background job.
 
 **A run has to be Complete before any publish button works.**
 
@@ -159,6 +170,9 @@ none ticked to fix everything) and click **Reoptimize** — it rewrites the arti
 those issues, then re-scores automatically. This runs in the background too, so a page refresh or
 a server update mid-rewrite won't lose your work.
 
+Both the Score and Reoptimize panels also carry an **Entity engine** selector (TextRazor by
+default, or Google NLP) — leave it on the default unless a lead tells you otherwise.
+
 ---
 
 ## Step 6 — Score or reoptimize a URL that isn't a suite run
@@ -167,13 +181,15 @@ Sometimes you want to check (or rewrite) a piece of content that didn't come fro
 an old post, something published years ago, or a competitor's article for comparison. On the
 **Runs** page (not inside a specific run) there are two toggle buttons:
 
-- **Score an article** — point at a live URL or paste content in directly. Nothing gets rewritten
-  — you just get the composite score, per-engine breakdown, and entity coverage/gaps.
-- **Reoptimize an article** — same input (URL or paste), plus a keyword and optional writer notes.
-  Unlike scoring, this **spawns a genuine new run** — full brief → research → writer pipeline —
-  that you review and publish like any other run. (To rewrite an article that's *already* a suite
-  run, use Step 5 instead — reoptimizing there is much cheaper since it reuses the cached
-  brief/research.)
+- **Score an article** — point at a live URL or paste content in directly, plus a **keyword**
+  (required for both Score and Reoptimize — the rubric needs something to measure relevance
+  against). Nothing gets rewritten — you just get the composite score, per-engine breakdown, and
+  entity coverage/gaps.
+- **Reoptimize an article** — same inputs, plus optional writer notes. Accepts either a single URL
+  or a **pasted list of multiple URLs** to reoptimize as a batch. Unlike scoring, this **spawns a
+  genuine new run** — full brief → research → writer pipeline — that you review and publish like
+  any other run. (To rewrite an article that's *already* a suite run, use Step 5 instead —
+  reoptimizing there is much cheaper since it reuses the cached brief/research.)
 
 ---
 
@@ -184,8 +200,9 @@ topic clusters it noticed recurring across your briefs, without you tagging anyt
 **Silos** page (sidebar) periodically:
 
 - A banner flags topics that have shown up across many briefs and are worth a real look.
-- Each candidate can be **Approved**, **Rejected**, or **Promoted** (approve + immediately dispatch
-  a full run for it) — individually or in bulk via the toolbar.
+- Each candidate row has icon buttons (hover for the tooltip) to **Approve**, **Reject**, or
+  approve-and-immediately-dispatch a full run for it. The bulk toolbar has the same three actions
+  as buttons: **"Approve & generate,"** **"Approve only,"** and **"Reject."**
 - Silos tied to a specific run also show up right on that run's card under "Content Silos," with a
   link back to the full Silos page.
 

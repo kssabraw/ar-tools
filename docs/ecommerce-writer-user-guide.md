@@ -18,9 +18,12 @@ Tools. No code, no terminal — everything here happens in the dashboard.
   section structure — adapting the copy to each product rather than reusing generic boilerplate.
   Collections don't use a house template.
 - **Public specs get auto-researched — verify them anyway.** For genuinely public, invariant facts
-  (a compound's molecular formula, standard specs, that sort of thing), the writer researches and
-  cites sources rather than leaving a gap. Always double-check the cited source before publishing;
-  it's flagged for exactly that reason.
+  — identity and handling specs (CAS number, molecular formula/weight, solubility, standard
+  reconstitution/storage) and receptor-pharmacology facts (binding targets, in-vitro EC50/Kd) —
+  the writer researches and cites sources rather than leaving a gap. It deliberately does **not**
+  research clinical efficacy, dosing/administration, therapeutic claims, or regulatory/FDA status —
+  those stay gaps rather than invented facts, on purpose. Always double-check the cited source
+  before publishing; it's flagged for exactly that reason.
 - **A frozen client can't generate or reoptimize.**
 
 ---
@@ -73,26 +76,34 @@ verify"** panel appears on the generated page: each fact with its value, unit, a
 review counts, which are never auto-researched) — but always click through and confirm the source
 actually says what the page claims before shipping.
 
-Right below it, a **"How to reach 100/100"** card lists any remaining content gaps — facts that
-would raise the score but weren't verified — each tagged High/Medium/Low impact with a note on
-why it matters and how to add it.
+The same page also shows a **Search coverage** panel (entity/keyword/bolded-term coverage) and the
+**brand voice** panel (see the Local SEO Writer guide for how to read it — it's the identical
+component), plus a **"How to reach 100/100"** card listing any remaining content gaps — facts that
+would raise the score but weren't verified — each tagged High/Medium/Low impact with a note on why
+it matters and how to add it. The page itself has **Preview / HTML / JSON-LD Schema** view tabs,
+plus a featured-image picker at the bottom.
 
 ---
 
 ## Step 3 — Score and reoptimize
 
-Two entry points:
+Three entry points:
 
 - **Score tab** — check a page's composite score and per-engine breakdown without rewriting
-  anything.
-- **Reoptimize tab** — either **paste URLs** directly (single or bulk, `URL | keyword` per line
-  for bulk), or click **Discover product pages / Discover collection pages** to have the tool crawl
-  the client's own sitemap and classify what it finds by URL pattern, so you don't have to hunt
-  down URLs by hand.
+  anything. A freshly-generated page also has a one-click **"Score & Improve"** button that jumps
+  straight in here with the page pre-filled.
+- **Reoptimize tab** — a **"Page URLs — one per line"** box (there's no separate single-vs-bulk
+  toggle; pasting just one URL works fine). Each line can optionally carry `URL | keyword | area`
+  to pin the keyword/area for that page. To find URLs instead of typing them, switch the mode
+  pills to **"Discover from site"** and click **Discover product pages / Discover collection
+  pages** — it crawls the client's own sitemap and classifies what it finds by URL pattern.
+- Both Score and Reoptimize carry an **Entity engine** selector (TextRazor by default, or Google
+  NLP).
 
-Same threshold behavior as Local SEO: pages score first, and **only those below 75/100 get
-rewritten** — stronger pages are skipped with a note (add your own notes to force a rewrite
-regardless). Under the hood it runs up to 3 rewrite-and-rescore passes, keeping the best result,
+Same threshold behavior as Local SEO: pages score first, and a page gets rewritten when it's below
+**75/100 on SEO, or fails its brand-voice bar** — a page clearing both is skipped with a note (add
+your own notes to force a rewrite regardless — unlike Local SEO, Ecommerce reoptimize does have a
+notes field). Under the hood it runs up to 3 rewrite-and-rescore passes, keeping the best result,
 not just the last one.
 
 Results show **Queued / Working… / Skipped / Failed / Reoptimized**, with a before → after score
@@ -115,8 +126,8 @@ controls.
 ## Step 5 — Publishing
 
 From a page's detail view: **Publish to Google Doc** (the client's Drive folder) and **Publish to
-WordPress** (Draft or Publish). Re-publishing updates the same destination rather than creating a
-duplicate.
+WordPress** (Draft or Publish). **Re-publishing creates a new Doc/post each time** — it does not
+update the previous one, so avoid clicking Publish repeatedly on the same page once it's live.
 
 Blocked by a brand-guide violation? Same rule as everywhere else — a forbidden word is a hard,
 provable block; fix the wording or click **Publish anyway** to override deliberately. The
@@ -162,8 +173,9 @@ Give it a **Source URL** to scrape or paste real details into **Product details*
 the writer has less to ground the copy in beyond public-spec research.
 
 **Why didn't Reoptimize touch this page?**
-It only rewrites pages under 75/100 by default. If you want it rewritten regardless, add a note
-before running it.
+It only rewrites a page that's under 75/100 on SEO **or** failing its brand-voice bar — a page
+clearing both is skipped on purpose. Add a note before running it if you want it rewritten
+regardless of score.
 
 **Can I set a house template per-generation instead of a client default?**
 Not from this form today — only the persistent client default is exposed in the UI. The
