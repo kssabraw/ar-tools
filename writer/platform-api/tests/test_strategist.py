@@ -545,6 +545,68 @@ def test_opportunity_sweep_disabled_and_no_quiet(monkeypatch):
     supabase.table.assert_called_once_with("clients")
 
 
+class TestClientsWithBehindGoals:
+    """A behind/overdue campaign goal (with a real baseline) is an active signal
+    that summons the weekly review; a null-baseline 'behind' artifact is not."""
+
+    @staticmethod
+    def _sb(client_ids, monkeypatch):
+        from unittest.mock import MagicMock
+
+        supabase = MagicMock()
+        chain = supabase.table.return_value
+        chain.select.return_value.eq.return_value.execute.return_value.data = [
+            {"client_id": cid} for cid in client_ids
+        ]
+        monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+        return supabase
+
+    def test_disabled_by_flag(self, monkeypatch):
+        from config import settings
+
+        monkeypatch.setattr(settings, "strategist_goal_trigger_enabled", False)
+        # returns immediately, never touches the DB
+        supabase_calls: list = []
+        monkeypatch.setattr(
+            strategist, "get_supabase",
+            lambda: supabase_calls.append(1) or (_ for _ in ()).throw(AssertionError("db touched")),
+        )
+        assert strategist.clients_with_behind_goals() == set()
+        assert supabase_calls == []
+
+    def test_behind_with_baseline_included_artifact_excluded(self, monkeypatch):
+        from config import settings
+        from services import campaign_goals
+
+        monkeypatch.setattr(settings, "strategist_goal_trigger_enabled", True)
+        self._sb(["a", "b", "c", "d"], monkeypatch)
+
+        assessed = {
+            "a": [{"status": "behind", "baseline_value": 20.0}],       # real behind
+            "b": [{"status": "overdue", "baseline_value": 5.0}],       # real overdue
+            "c": [{"status": "behind", "baseline_value": None}],       # null-baseline artifact
+            "d": [{"status": "on_track", "baseline_value": 3.0},
+                  {"status": "manual", "baseline_value": None}],       # nothing behind
+        }
+        monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, **kw: assessed[cid])
+        assert strategist.clients_with_behind_goals() == {"a", "b"}
+
+    def test_one_client_measure_failure_never_drops_the_rest(self, monkeypatch):
+        from config import settings
+        from services import campaign_goals
+
+        monkeypatch.setattr(settings, "strategist_goal_trigger_enabled", True)
+        self._sb(["a", "boom"], monkeypatch)
+
+        def fake_assess(cid, **kw):
+            if cid == "boom":
+                raise RuntimeError("measure blew up")
+            return [{"status": "overdue", "baseline_value": 1.0}]
+
+        monkeypatch.setattr(campaign_goals, "assess_goals", fake_assess)
+        assert strategist.clients_with_behind_goals() == {"a"}
+
+
 class TestStrategistExcluded:
     """A website property (clients.strategist_enabled=false) opts out of the
     automated strategist; the check fails open so a read blip never silences a
