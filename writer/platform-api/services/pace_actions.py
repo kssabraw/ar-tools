@@ -431,7 +431,9 @@ async def run_write_pulse(context: ActionContext, client_id: str, args: dict) ->
 # generate_client_month
 # ---------------------------------------------------------------------------
 def stage_generate_month(context: ActionContext, client_id: str, args: dict) -> tuple[str, dict | str]:
-    ok, reason = pace_auth.require(context, "generate_client_month")
+    # Monthly generation is a PACE PM operation (owner ruling 2026-09-01): a
+    # named PM (Minda) or an admin (Kyle/Ryan), not "any staff".
+    ok, reason = pace_auth.require_pace_pm(context)
     if not ok:
         return "reply", reason
     from services.asana_service import month_label

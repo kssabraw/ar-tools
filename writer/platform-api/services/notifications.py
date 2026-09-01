@@ -187,6 +187,35 @@ CLIENT_SCOPED_PACE_KINDS = frozenset({
     "pace_intervention", "pace_intervention_result",
 })
 
+# Per-event task alerts that concern ONE person and ONE client. Owner ruling
+# (2026-09-01): these must never flood the shared master PACE channel. When
+# ``pace_quiet_task_alerts`` is on they are delivered to the concerned person's
+# DM (``DM_RECIPIENT_KINDS`` below) and to the client's own Slack channel where
+# one is configured — but never the master #pace channel (and never the default
+# strategy channel): resolve_slack_channel excludes them from the master-PACE
+# fallback, and dispatch suppresses the shared-channel copy entirely when the
+# client has no channel. The in-app bell + client feed always carry them.
+# A subset of CLIENT_SCOPED_PACE_KINDS (so the client-channel post still works);
+# ``task_month_generated`` is deliberately NOT here — it is a batched once-per-run
+# digest, low-volume, and stays on the master fallback.
+CLIENT_ONLY_PACE_KINDS = frozenset({
+    "task_assigned", "task_mention", "task_comment", "task_nudge",
+})
+
+# The CLIENT_ONLY kinds whose DM copy is sent by the dispatch job (from the
+# notification's ``recipient_profile_id`` + any ``payload.dm_profile_ids``).
+# ``task_nudge`` is excluded — it already DMs the assignee at its own call site
+# (services/pace_actions.py::run_nudge), so dispatching a second DM would double it.
+DM_RECIPIENT_KINDS = frozenset({"task_assigned", "task_mention", "task_comment"})
+
+# Slack error codes that mean "the app can't DM" (the bot lacks ``im:write``, or a
+# token/auth problem) — distinct from a transient failure. On one of these the
+# dispatch stops attempting DMs for the rest of this process (``_dm_scope_broken``)
+# so a missing scope doesn't spam retries; grant ``im:write`` + reinstall to enable.
+_DM_SCOPE_ERRORS = ("missing_scope", "not_allowed_token_type", "invalid_auth")
+_dm_scope_broken = False
+
+
 # Director of Operations (DORA) kinds. These are still PACE kinds (so they keep
 # their current fallback to the PACE channel when no DORA channel is configured),
 # but when ``director_slack_channel`` is set they route to DORA's own #dora
@@ -200,14 +229,19 @@ DIRECTOR_CHANNEL_KINDS = frozenset({"ops_digest", "ops_seam"})
 def resolve_slack_channel(
     kind: Optional[str], payload: Optional[dict], pace_channel: Optional[str],
     client_channel: Optional[str] = None, director_channel: Optional[str] = None,
+    quiet_task_alerts: bool = False,
 ) -> Optional[str]:
     """Pick the Slack channel for one notification. Precedence:
     1. an explicit ``payload.slack_channel`` (a producer targeting a channel),
     2. the client's own channel for a client-scoped PACE ``kind`` when that client
        has ``client_channel`` configured (per-client PACE delivery),
     3. DORA's own channel for a Director ``kind`` when ``director_channel`` is set,
-    4. the master PACE channel for any PM/PACE ``kind`` when ``pace_channel`` is set,
-    5. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
+    4. when ``quiet_task_alerts`` is set, a per-event task alert
+       (``CLIENT_ONLY_PACE_KINDS``) with no client channel resolves to ``None``
+       (the DM + in-app bell carry it) — it is NOT posted to the master PACE
+       channel, keeping #pace a portfolio-summary surface,
+    5. the master PACE channel for any PM/PACE ``kind`` when ``pace_channel`` is set,
+    6. otherwise ``None`` → the sender falls back to ``slack_default_channel``.
     Pure — unit-tested."""
     override = (payload or {}).get("slack_channel")
     if override:
@@ -216,9 +250,37 @@ def resolve_slack_channel(
         return client_channel
     if director_channel and kind in DIRECTOR_CHANNEL_KINDS:
         return director_channel
+    if quiet_task_alerts and kind in CLIENT_ONLY_PACE_KINDS:
+        # DM + in-app carry it; never the shared master (or default) channel.
+        return None
     if pace_channel and kind in PACE_CHANNEL_KINDS:
         return pace_channel
     return None
+
+
+def dm_recipient_ids(
+    kind: Optional[str], payload: Optional[dict],
+    recipient_profile_id: Optional[str], quiet_task_alerts: bool,
+) -> list[str]:
+    """Profile ids to direct-DM for one notification, in stable de-duplicated
+    order. Only per-event task alerts in ``DM_RECIPIENT_KINDS`` get a DM, and only
+    when ``quiet_task_alerts`` is on — so flipping the flag off restores the old
+    channel-only behaviour (no DMs). Targets are the notification's
+    ``recipient_profile_id`` (assignee / mentioned person) plus any
+    ``payload.dm_profile_ids`` (comment watchers). Pure — unit-tested."""
+    if not quiet_task_alerts or kind not in DM_RECIPIENT_KINDS:
+        return []
+    ids: list[str] = []
+    if recipient_profile_id:
+        ids.append(recipient_profile_id)
+    ids.extend((payload or {}).get("dm_profile_ids") or [])
+    seen: set[str] = set()
+    out: list[str] = []
+    for pid in ids:
+        if pid and pid not in seen:
+            seen.add(pid)
+            out.append(pid)
+    return out
 
 
 def pace_bot_token() -> str:
@@ -414,6 +476,56 @@ async def _send_slack(text: str, channel: Optional[str] = None, token: Optional[
         raise RuntimeError(f"slack_error: {body.get('error')}")
 
 
+async def _dm_recipients(
+    profile_ids: list[str], text: str, supabase,
+) -> str:
+    """Direct-DM ``text`` to each linked profile (its ``slack_user_id``), under the
+    PACE bot token. Best-effort: returns a channels_sent outcome —
+    ``"ok"`` (at least one delivered, none failed), ``"skipped"`` (nobody has a
+    Slack link, or DM scope is unavailable), or ``"failed"`` (a DM raised). A Slack
+    scope error trips ``_dm_scope_broken`` so the rest of this process stops trying
+    DMs. Never raises into the caller."""
+    global _dm_scope_broken
+    from services.slack_assistant import post_message
+
+    if _dm_scope_broken:
+        return "skipped"
+    try:
+        rows = (
+            supabase.table("profiles")
+            .select("id, slack_user_id")
+            .in_("id", profile_ids)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("notification_dm_lookup_failed", extra={"error": str(exc)})
+        return "failed"
+    slack_ids = [r.get("slack_user_id") for r in rows if r.get("slack_user_id")]
+    if not slack_ids:
+        return "skipped"  # linked person(s) without a Slack id → in-app carries it
+    token = pace_bot_token()
+    sent = 0
+    failed = False
+    for slack_id in slack_ids:
+        try:
+            await post_message(slack_id, text, token=token)
+            sent += 1
+        except Exception as exc:
+            msg = str(exc)
+            if any(code in msg for code in _DM_SCOPE_ERRORS):
+                _dm_scope_broken = True
+                logger.warning("notification_dm_scope_unavailable",
+                               extra={"error": msg, "hint": "grant im:write + reinstall"})
+                break  # no point trying more DMs this process
+            failed = True
+            logger.warning("notification_dm_failed", extra={"error": msg})
+    if sent and not failed:
+        return "ok"
+    if sent:
+        return "failed"  # partial — a requeue retries (rare; low-harm re-DM)
+    return "skipped" if _dm_scope_broken else "failed"
+
+
 async def run_notification_dispatch_job(job: dict) -> None:
     """async_jobs handler for job_type='notification_dispatch' — send the email +
     Slack copies of one notification, best-effort per channel."""
@@ -486,12 +598,19 @@ async def run_notification_dispatch_job(job: dict) -> None:
         # payload.slack_channel still wins; else the default channel. Post under the
         # PACE app's bot token for any PACE kind (so a separate PACE bot owns
         # delivery in both the master and per-client channels).
+        quiet = settings.pace_quiet_task_alerts
         channel = resolve_slack_channel(
             n.get("kind"), n.get("payload"), settings.pace_slack_channel,
             client_channel=client_channel,
             director_channel=settings.director_slack_channel,
+            quiet_task_alerts=quiet,
         )
-        if not has_slack_target(channel, settings.slack_default_channel):
+        client_only = quiet and n.get("kind") in CLIENT_ONLY_PACE_KINDS
+        if client_only and not channel:
+            # A per-event task alert with no client channel: the DM (below) + the
+            # in-app bell carry it — keep the shared #pace/strategy channel quiet.
+            channels["slack"] = "skipped"
+        elif not has_slack_target(channel, settings.slack_default_channel):
             # PACE-only deployment (no default channel) + a non-PACE kind → there
             # is nowhere to post it; skip rather than posting to an empty channel.
             channels["slack"] = "skipped"
@@ -507,8 +626,11 @@ async def run_notification_dispatch_job(job: dict) -> None:
             # If we routed to a client's OWN channel or DORA's #dora channel and
             # that send fails (bot not invited / bad or renamed id / archived),
             # retry on the master channel so the message still reaches the team
-            # instead of being dropped.
-            fallback = master_fallback_channel(
+            # instead of being dropped. A per-event task alert is the exception:
+            # it must never reach the shared #pace channel (owner ruling), so its
+            # client-channel copy is dropped on failure — the DM + in-app already
+            # delivered it.
+            fallback = None if client_only else master_fallback_channel(
                 channel, client_channel, settings.pace_slack_channel,
                 settings.slack_default_channel,
                 director_channel=settings.director_slack_channel,
@@ -545,6 +667,25 @@ async def run_notification_dispatch_job(job: dict) -> None:
                                    extra={"id": notification_id, "error": str(exc)})
     else:
         channels["slack"] = "skipped"
+
+    # Direct-DM the concerned person(s) for per-event task alerts (owner ruling:
+    # assignee / mentioned / comment-watchers reach their own DM, not the shared
+    # #pace channel). Independent of the channel post above — the DM fires whether
+    # or not the client has a channel. Recorded under channels_sent["dm"] so a
+    # reaper requeue doesn't re-DM an already-delivered alert.
+    dm_ids = dm_recipient_ids(
+        n.get("kind"), n.get("payload"), n.get("recipient_profile_id"),
+        settings.pace_quiet_task_alerts,
+    )
+    if channels.get("dm") in _DELIVERED:
+        pass  # already delivered on an earlier attempt
+    elif not dm_ids:
+        pass  # not a DM'd kind, or the feature is off — no "dm" outcome recorded
+    elif slack_configured():
+        dm_text = format_slack(n["title"], n.get("summary"), client_name, link, n["severity"])
+        channels["dm"] = await _dm_recipients(dm_ids, dm_text, supabase)
+    else:
+        channels["dm"] = "skipped"
 
     supabase.table("notifications").update({"channels_sent": channels}).eq("id", notification_id).execute()
     supabase.table("async_jobs").update(

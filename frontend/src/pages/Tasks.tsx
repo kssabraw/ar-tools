@@ -72,7 +72,7 @@ function dueLabel(t: TaskItem): string | null {
 export function Tasks() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
-  const { isAdmin } = useAuth()
+  const { isAdmin, isPacePm } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
   const [view, setView] = useState<ViewMode>('board')
@@ -558,9 +558,11 @@ export function Tasks() {
             <UserPlus size={14} /> {autoplaceMut.isPending ? 'Assigning…' : 'Auto-assign unassigned'}
           </button>
         )}
-        <button onClick={() => generateMut.mutate()} disabled={generateMut.isPending} style={{ ...toolbarBtn(false), background: '#6366f1', color: '#fff', border: 'none' }}>
-          <CalendarPlus size={14} /> {generateMut.isPending ? 'Generating…' : 'Generate this month'}
-        </button>
+        {isPacePm && (
+          <button onClick={() => generateMut.mutate()} disabled={generateMut.isPending} style={{ ...toolbarBtn(false), background: '#6366f1', color: '#fff', border: 'none' }}>
+            <CalendarPlus size={14} /> {generateMut.isPending ? 'Generating…' : 'Generate this month'}
+          </button>
+        )}
       </div>
 
       {genResult && (

@@ -38,7 +38,7 @@ from models.tasks import (
     TaskUpdateRequest,
     TaskViewRequest,
 )
-from services import pm_assign, task_collab, task_monthly, task_service, task_workload
+from services import pace_auth, pm_assign, task_collab, task_monthly, task_service, task_workload
 
 logger = logging.getLogger(__name__)
 
@@ -267,7 +267,13 @@ async def generate_month(
     auth: dict = Depends(require_auth),
 ) -> TaskGenerateMonthResponse:
     """Create the target month's native section + tasks now (idempotent per
-    task — a re-run fills gaps only). Synchronous: one client, DB inserts."""
+    task — a re-run fills gaps only). Synchronous: one client, DB inserts.
+
+    Manual monthly generation is a PACE PM operation (owner ruling 2026-09-01):
+    a named PM (Minda) or an admin (Kyle/Ryan), not any staff. The automatic
+    once-a-month generation on the scheduler is unaffected (it runs system-side)."""
+    if not pace_auth.is_pace_pm(pace_auth.context_from_auth(auth)):
+        raise HTTPException(status_code=403, detail="not_pace_pm")
     try:
         target = _parse_target_month(body.month)
     except ValueError as exc:

@@ -387,18 +387,47 @@ seat:
   way; nothing SerMaStr proposes ships onto the board without someone
   saying yes to it first.
 
-### The admin-only floor, all three of them together
+### The PACE PM role — who approves plans and generates months
 
-Guide 2 already named one of these (generating a month **via chat** needs
-admin, even though the board's own button doesn't). Here are all three in
-one place, since they share a theme — anything **bulk**, **irreversible**,
-or that can create a lot of work at once sits behind the admin role:
+Two board-level operations are limited to the team's **PACE PMs** — the
+named few who run delivery, not "any staff":
+
+- **Approving the daily Chase Plan** in `#pace` — reply `yes` / `yes 1,3`
+  *in the plan's own thread* (a fresh channel message won't be tied to it).
+- **Manually generating a client's monthly board** — the **Generate this
+  month** button *and* asking PACE to do it in chat. (The button is simply
+  hidden if you're not a PM.)
+
+Today the PMs are **Minda, Kyle, and Ryan**. Admins (Kyle, Ryan) are PMs
+automatically; a non-admin becomes one via the `is_pace_pm` flag on their
+profile, which an admin sets — that's how Minda, who's staff, is a PM. It's a
+per-person flag rather than a role, so a staff VA never silently gains these
+powers, and handing the PM hat to someone else later is just moving the
+flag — no role change, no redeploy.
+
+Two things this does **not** touch:
+
+- **The automatic month-start run.** Every client's board still builds
+  itself on the 1st, system-side, no matter who's a PM — being a PM only
+  governs generating a month *by hand* (a mid-month gap-fill, or catching up
+  a newly-set-up client).
+- **On-demand actions you ask PACE for.** Nudging, reassigning, unblocking,
+  or triaging a single task still follow the ordinary role rules and are
+  bound to whoever asked — the PM gate is specifically the daily plan and
+  monthly generation.
+
+If a teammate needs to approve plans or generate months and can't, an admin
+grants them PM on the Team page — you don't have to make them a full admin.
+
+### The admin-only floor — the two bulk/irreversible tools
+
+Two actions still sit behind the full **admin** role (separate from the PM
+role above), because each is **bulk** or **irreversible**:
 
 | Action | Where | Why it's admin-only |
 |---|---|---|
 | **Auto-assign unassigned** (bulk-place a whole client's unassigned tasks) | Tasks page button, or `POST /clients/{id}/tasks/autoplace-unassigned` | One click distributes potentially dozens of tasks at once — worth a second-tier check before that much of the board moves in one go. |
 | **Delete forever** from Trash | Client Tasks → Trash toolbar | Genuinely irreversible — Restore only works while it's still in the trash. |
-| **Generate this month, via chat** ("PACE, generate August for Acme") | `#pace` / `/pace` | The button-vs-chat gotcha from guide 2 — clicking the board's own **Generate this month** button is open to anyone, but *asking PACE to do the same thing in words* currently needs admin. If PACE tells you it needs an admin here, use the button instead. |
 
 If you're not an admin and need one of these, that's the message to relay —
 "needs an admin" isn't a dead end, it's PACE telling you exactly what to ask
@@ -422,7 +451,9 @@ for.
 | Reset an episode's clock | Touch the task — status, comment, reassignment, anything |
 | Escalate a delivery problem that's really a strategy problem | Ask PACE for `run_strategy_review`, or ask SerMaStr directly |
 | Delete something from Trash permanently | Trash toolbar → **Delete forever** (admin) |
-| Generate a month by asking in chat | Needs admin — use the board's own button if you're not one |
+| Approve the daily Chase Plan | Reply `yes` / `yes 1,3` in the plan's thread — a **PACE PM** (Minda/Kyle/Ryan) only |
+| Generate a month by hand (button or chat) | A **PACE PM** only; the automatic 1st-of-month run happens regardless |
+| Let someone else approve plans / generate months | An admin grants them **PM** on the Team page (no full-admin needed) |
 
 ---
 

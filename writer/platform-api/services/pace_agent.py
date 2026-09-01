@@ -743,11 +743,19 @@ async def maybe_handle_slack(event: dict, context: ActionContext, *, force: bool
         selection = pace_proposals.parse_plan_reply(question, len(pending["items"]))
         if selection is not None:
             _pace_pending.pop(pend_key, None)
-            # On-demand batches are actor-bound (a Chase Plan has no requester and
-            # authorizes each item by role at confirm time instead).
-            if pending.get("requester") and not pace_auth.confirm_actor_ok(pending["requester"], context):
-                await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
-                return True
+            if pending.get("requester"):
+                # On-demand batch → actor-bound (only the staff member who staged
+                # it may confirm; an admin may take over).
+                if not pace_auth.confirm_actor_ok(pending["requester"], context):
+                    await _post(channel, "Only the person who requested this can confirm it.", thread_ts)
+                    return True
+            else:
+                # The scheduled daily Chase Plan → only a PACE PM may approve it
+                # (owner ruling 2026-09-01: Minda / Kyle / Ryan, not any staff).
+                # Per-item role checks in execute_plan_selection still apply.
+                if not pace_auth.is_pace_pm(context):
+                    await _post(channel, "Only a PACE PM can approve the daily plan.", thread_ts)
+                    return True
             reply = await pace_proposals.execute_plan_selection(pending["items"], selection, context)
             await _post(channel, reply, thread_ts)
             return True

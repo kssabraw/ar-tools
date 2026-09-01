@@ -1812,6 +1812,15 @@ class Settings(BaseSettings):
     pace_brief_max_lines_per_bucket: int = 25
     # Suppress the daily digest on weekends (Sat/Sun) — VA-facing, workdays only.
     pace_digest_weekday_only: bool = True
+    # Quiet the shared PACE channel (owner ruling 2026-09-01): the per-event task
+    # alerts (task_assigned / task_mention / task_comment / task_nudge) used to post
+    # one message each into the master #pace channel, flooding it. When True they are
+    # instead delivered to the concerned person's DM AND the client's own Slack
+    # channel where one is configured — never the shared #pace channel — so #pace
+    # stays a portfolio-summary surface (the daily digest, Chase Plan, escalations).
+    # In-app bells + the client feed always carry them regardless. Set False to
+    # restore the previous shared-channel behaviour without a code change.
+    pace_quiet_task_alerts: bool = True
     # Permission matrix — the two "via policy" cells (PRD §3.2). Defaults:
     # any internal user can read a board (internal-tool norm); month generation
     # is admin-only (loosen to "staff" to let leads generate).
