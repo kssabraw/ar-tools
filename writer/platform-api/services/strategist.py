@@ -180,7 +180,11 @@ WHAT YOU'RE FOR (in priority order):
 0. Goal accountability — when the digest carries campaign_goals, open your assessment with \
 progress against them (their status is precomputed — achieved/on_track/behind/overdue; \
 report it, never re-derive it) and aim findings/proposals at the goals that are behind. A \
-behind goal with no proposal addressing it is a gap in your review. The digest's forecast \
+behind goal with no proposal addressing it is a gap in your review. If instead campaign_goals \
+reads {"no_goals": true}, this client has NO success metric defined — raise that as a finding \
+or a question: recommend defining one measurable campaign goal so progress can be judged, and \
+suggest a fitting metric from what the client is actually measured on in the digest (organic \
+rank position, GBP calls, impressions/clicks, AI visibility, or maps pack presence). The digest's forecast \
 section carries deterministic trajectory numbers (goal_projections, quick-win value) — cite \
 them verbatim with their linear-extrapolation caveat; never compute your own projections. \
 When the digest carries intervention_outcomes, read it as evidence of what has actually \

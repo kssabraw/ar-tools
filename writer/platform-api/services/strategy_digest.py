@@ -735,7 +735,13 @@ def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -
 
     assessed = campaign_goals.assess_goals(client_id, today=today)
     if not assessed:
-        return None
+        # A client with NO active success metric is outside the whole
+        # goal-accountability machinery (finding #5) — a null section would just
+        # omit priority-0 silently. Emit a lightweight sentinel instead so the
+        # strategist can flag the missing yardstick. Carries no `goals` key, so
+        # every "goals exist → lead with them" reader (here + the prompt) is
+        # untouched.
+        return {"no_goals": True}
     return {
         "goals": [
             {
