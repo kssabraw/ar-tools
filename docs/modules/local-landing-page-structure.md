@@ -65,7 +65,41 @@ Graceful degradation: no address → the map embed + directions are omitted, NAP
 
 ## Content Gaps report
 
-After the schema, the writer emits a JSON list of high-impact facts it could **not**
-include because they weren't in the business data (e.g. specific response time,
-service area, certifications) — with why each matters and how to add it. These are
-surfaced to the team, not shown on the page.
+A structured list of facts the writer *wanted* on the page (they'd improve the
+SEO/AEO score or conversions) but **couldn't** include because they weren't in the
+business data — paired with why each matters and how to supply it.
+
+**Why it exists:** the generator has a hard factual-accuracy rule — it must never
+invent a phone number, address, response time, certification, price, or a service
+the business doesn't offer. So when a high-value fact is missing, instead of
+fabricating it or silently dropping it, the writer records it as a gap.
+
+**Where it comes from:** the model emits it after the JSON-LD, wrapped in
+`CONTENT_GAPS_REPORT_START` / `CONTENT_GAPS_REPORT_END` markers. The generator
+parses it into the response's `content_gaps` array, platform-api persists it, and
+the UI shows it as a "How to reach 100/100" panel. It is **not** rendered on the page.
+
+**Shape** — each gap is an object:
+
+```json
+{
+  "category": "Response Time",
+  "missing": "Specific arrival window (e.g. 'within 2 hours')",
+  "score_impact": "high",
+  "why_important": "The nearme_intent scoring engine rewards explicit timeframes; without one the page can't score 90+.",
+  "how_to_add": "Add your typical response time to your website (home/about/services), then regenerate the page."
+}
+```
+
+**Always checked** (the common sub-90 culprits):
+
+1. **Response time** — a specific arrival/response window (high impact).
+2. **Service area / neighborhoods** — explicit coverage areas (medium).
+3. **Certifications / licences** — when the GBP category implies them (plumber,
+   electrician, HVAC, contractor) but none were stated (medium). Never assumed from
+   the category alone — they're a trust signal that must be verifiable.
+
+**Not the same as `deficiencies`:** the response also carries per-engine
+`deficiencies` — scoring-rubric misses in the *generated copy*, fixable by a
+rewrite. Content gaps are missing *business facts* that no rewrite can conjure; they
+need the team to add the fact to the client's GBP/website, then regenerate.
