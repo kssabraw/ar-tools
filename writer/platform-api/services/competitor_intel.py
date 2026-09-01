@@ -485,6 +485,47 @@ def load_target_places(client_id: str) -> list[str]:
         return []
 
 
+def load_existing_page_places(client_id: str) -> list[dict]:
+    """The places the client ALREADY has a Local SEO location page for
+    (``local_seo_pages``, non-deleted) → ``[{"place": bare_city, "url":
+    published_url|None}]``, deduped by bare city (a published page wins the
+    url slot). A competitor publishing a page for one of these is a
+    head-to-head contest — the client has a real asset to defend, so the
+    response is to reoptimize the existing page, not create a new one.
+    Best-effort → []."""
+    try:
+        supabase = get_supabase()
+        rows = (
+            supabase.table("local_seo_pages")
+            .select("location, published_url, created_at")
+            .eq("client_id", client_id)
+            .is_("deleted_at", "null")
+            .not_.is_("location", "null")
+            .order("created_at", desc=True)
+            .limit(500)
+            .execute()
+        ).data or []
+        by_bare: dict[str, dict] = {}
+        for r in rows:
+            loc = (r.get("location") or "").strip()
+            if not loc:
+                continue
+            bare = loc.split(",")[0].strip()
+            key = bare.casefold()
+            if not key:
+                continue
+            entry = by_bare.get(key)
+            url = r.get("published_url")
+            if entry is None:
+                by_bare[key] = {"place": bare, "url": url}
+            elif not entry.get("url") and url:
+                entry["url"] = url  # prefer a published URL if a later row has one
+        return list(by_bare.values())
+    except Exception as exc:
+        logger.warning("competitor_intel.existing_page_places_failed", extra={"client_id": client_id, "error": str(exc)})
+        return []
+
+
 # ---------------------------------------------------------------------------
 # Profile assembly (deterministic, stored data only)
 # ---------------------------------------------------------------------------

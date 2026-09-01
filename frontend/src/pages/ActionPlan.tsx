@@ -388,13 +388,13 @@ function kindGuide(kind: string): { why: string; needed: string[]; source: strin
       }
     case 'maps_competitor_land_grab':
       return {
-        why: 'A competitor just published a page targeting a place you care about — either one of your weak coverage areas, or a suburb you actively target (an ICP area). A fresh, on-topic competitor page there compounds quickly if unanswered, especially where you’re already weak.',
+        why: 'A competitor just published a page targeting a place you care about — one of your weak coverage areas, a suburb you actively target (an ICP area), or a place you already have a page for (head-to-head). A fresh, on-topic competitor page there compounds quickly if unanswered, especially where you’re already weak.',
         needed: [
-          'Build or strengthen a location page targeting this area now, before they bank the local-pack position.',
+          'If you already have a page there, reoptimize and strengthen it to defend the ranking; otherwise build one now, before they bank the local-pack position.',
           'Use your authority advantage (reviews, domain strength) — match their targeting and out-quality the page.',
           'Reinforce GBP service-area signals and area-relevant reviews.',
         ],
-        source: 'Maps geo-grid / target service areas × competitor content watch — a rival’s new page in a place you’re contesting.',
+        source: 'Maps geo-grid / target service areas / your existing pages × competitor content watch — a rival’s new page in a place you’re contesting.',
       }
     case 'gbp_gap':
       return {

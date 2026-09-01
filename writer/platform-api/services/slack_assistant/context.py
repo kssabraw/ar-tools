@@ -1029,6 +1029,7 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
         places = competitor_page_intel.dedupe_places(
             competitor_intel.load_priority_places(client_id)
             + competitor_intel.load_target_places(client_id)
+            + [e["place"] for e in competitor_intel.load_existing_page_places(client_id)]
         )
         targeting = competitor_page_intel.summarize_targeting(profiles, places)
         if targeting.get("competitor_targets") or targeting.get("contested"):
@@ -1037,9 +1038,10 @@ def _ctx_competitors(supabase, client_id: str, today: date) -> Optional[dict]:
                     "Deterministic read of competitors' newly published pages. "
                     "competitor_targets = what each rival is building (page-target "
                     "labels from their URLs). contested = a rival has published a "
-                    "page targeting a place YOU care about — a weak grid zone or a "
-                    "service area you target (an ICP suburb) — a land grab to answer "
-                    "with a location page before they bank the pack position. "
+                    "page targeting a place YOU care about — a weak grid zone, a "
+                    "service area you target (an ICP suburb), or a place you already "
+                    "have a page for (head-to-head) — a land grab to answer (create "
+                    "or reoptimize a page) before they bank the pack position. "
                     "open_places = places you care about no rival has built in yet."
                 ),
                 "competitor_targets": targeting["competitor_targets"],
