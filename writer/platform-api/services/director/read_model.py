@@ -70,6 +70,7 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
 
     thresholds = {
         "approved_unplaced_days": settings.director_seam_approved_unplaced_days,
+        "proposal_pending_days": settings.director_seam_proposal_pending_days,
         "qa_idle_days": settings.director_seam_qa_idle_days,
         "autonomy_unactioned_days": settings.director_seam_autonomy_unactioned_days,
     }
