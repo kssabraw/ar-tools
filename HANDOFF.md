@@ -1,6 +1,15 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-01 · **SerMaStr action log — audit + self-learning ledger MERGED (PR [#937](https://github.com/kssabraw/ar-tools/pull/937), squash `4219874`)** (latest)
+## ⏩ Update — 2026-09-01 · **DORA sees the agent track records — PACE + SerMaStr action logs wired into the Director read model MERGED (PR [#939](https://github.com/kssabraw/ar-tools/pull/939), squash `1859db9`)** (latest)
+
+Follow-up to #937: DORA's cross-agent read model surfaced seam flags, interventions and the autonomy ledger but NOT the two agents' OWN action logs, so it couldn't say how reliably each agent's work gets accepted (or, for SerMaStr, whether it moved the metric). Added as **read-only insight** — no new seam, no reconcile task, no change to reconcile/veto/digest. CI-green (pytest 4842 / ruff / mypy / Netlify), full suite verified locally.
+
+- **`services/director/providers.py`** — `prov_pace_audit` + `prov_sermastr_audit` reuse the ledgers' own tested rollups (`pace_audit.stats_window` / `sermastr_audit.stats_window`) over `director_audit_window_days` (90); scoped to the model's client (scalar) or agency-wide (`None`; the ledgers keep rows after client deletion → a true track record, not board-scoped); gated on each ledger's `*_audit_enabled`; None when nothing logged; pure `_top_buckets` bounds the payload.
+- **`services/director/read_model.py`** — two new keys (`pace_audit`, `sermastr_audit`), each `_isolate`-wrapped like every other provider.
+- **`services/director_agent.py`** — `_DORA_SYSTEM` describes the two blocks as reliability signals (PACE approve/modify/deny/defer/cancel + revert; SerMaStr approve/dismiss/pending + worked/partial/no_effect), explicitly NOT seams. The read model is handed to DORA as JSON, so the blocks flow straight into its answers — ask "how's PACE doing / why does this kind of proposal keep getting rejected".
+- **Config** `director_audit_window_days` (90). Tests: `test_director_providers.py` (reuse + `since` math + gating + `_top_buckets`) and `test_director_read_model.py` (wiring).
+
+## ⏩ Update — 2026-09-01 · **SerMaStr action log — audit + self-learning ledger MERGED (PR [#937](https://github.com/kssabraw/ar-tools/pull/937), squash `4219874`)**
 
 The strategist analogue of the PACE Action Log (#935): a best-effort, agent-attributed audit stream at SerMaStr's OWN seams + a dark learning loop, **reusing** `strategy_reviews` (proposal content) + `interventions` (outcome) rather than rebuilding them. CI-green (pytest 4837 / ruff / mypy / Netlify), full suite verified locally before the PR, migration applied live + verified (table + 5 indexes + unique constraint). Owner scope decisions confirmed up front via `AskUserQuestion`: **dedicated ledger table** (not reuse strategy_reviews) + **prompt-steering-only** auto-adjust (no hard proposal filter).
 
