@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="Field guides for the AR Tools suite — Everhour, SerMaStr, Task Manager, PACE & QA, and Website Builder.">
+<title>AR Tools Field Guides</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#F0EEE7; --paper-raised:#FFFFFF; --ink:#1C2321; --ink-soft:#56605B; --ink-faint:#8A9089;
+    --line:#D9D4C6; --line-strong:#C3BDA9; --teal:#1F6F72; --teal-ink:#0F4547; --teal-soft:#E1EEED;
+    --brass:#A8752A; --brass-ink:#7A551D; --brass-soft:#F3E7D2;
+    --shadow: 0 1px 2px rgba(28,35,33,0.06), 0 8px 24px rgba(28,35,33,0.05); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+      --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+      --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  h1,h2{ font-family:"Fraunces", Georgia, "Times New Roman", serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:inherit; text-decoration:none; }
+  a:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; }
+  .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+
+  .page{ max-width:900px; margin:0 auto; padding: 4rem 1.5rem 5rem; }
+  .eyebrow{ font-family:"IBM Plex Mono", monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--brass-ink, var(--brass)); margin:0 0 0.7rem; }
+  h1{ font-size:clamp(1.9rem, 1.5rem + 1.8vw, 2.7rem); line-height:1.08; }
+  .dek{ margin:1rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:36rem; }
+
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill, minmax(15rem,1fr)); gap:1.1rem; margin-top:2.75rem; }
+  .card{ display:flex; flex-direction:column; gap:0.9rem; border:1px solid var(--line-strong); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); padding:1.4rem 1.4rem 1.5rem; transition:transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
+  .card:hover{ transform:translateY(-2px); border-color:var(--teal); box-shadow:0 4px 8px rgba(28,35,33,0.08), 0 16px 32px rgba(28,35,33,0.08); }
+  .card-mark{ width:40px; height:40px; }
+  .card-mark svg{ width:100%; height:100%; display:block; }
+  .card h2{ font-size:1.12rem; }
+  .card p{ margin:0; color:var(--ink-soft); font-size:0.87rem; line-height:1.55; flex:1; }
+  .card-go{ font-family:"IBM Plex Mono", monospace; font-size:0.7rem; letter-spacing:.06em; text-transform:uppercase; color:var(--teal-ink,var(--teal)); display:flex; align-items:center; gap:0.35rem; }
+
+  .colophon{ margin-top:3.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:640px){ .page{ padding-top:2.75rem; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <p class="eyebrow">AR&nbsp;Tools · Internal Reference</p>
+  <h1>Field Guides</h1>
+  <p class="dek">New-hire, start-to-proficient walkthroughs for the tools and agents behind the
+    suite. No code, no terminal — just what to click, and why it matters.</p>
+
+  <div class="grid">
+
+    <a class="card" href="./sermastr.html">
+      <div class="card-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <path d="M32 6 L37 27 L58 32 L37 37 L32 58 L27 37 L6 32 L27 27 Z" fill="var(--brass)" stroke="var(--ink)" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M50 10 L52.5 17 L60 19.5 L52.5 22 L50 29 L47.5 22 L40 19.5 L47.5 17 Z" fill="var(--teal)" stroke="var(--ink)" stroke-width="1" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h2>SerMaStr</h2>
+      <p>The agency's AI Director of SEO — what it can see, what it can do, its limits, and how
+        it fits with PACE, QA, and DORA.</p>
+      <span class="card-go">Read the guide →</span>
+    </a>
+
+    <a class="card" href="./task-manager.html">
+      <div class="card-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="6" y="8" width="15" height="48" rx="2" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="24.5" y="8" width="15" height="48" rx="2" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="43" y="8" width="15" height="48" rx="2" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="8.5" y="12" width="10.5" height="9" rx="1.5" fill="var(--brass)"/>
+          <rect x="8.5" y="24" width="10.5" height="9" rx="1.5" fill="var(--teal)"/>
+          <rect x="27" y="12" width="10.5" height="9" rx="1.5" fill="var(--teal)"/>
+          <rect x="45.5" y="12" width="10.5" height="9" rx="1.5" fill="var(--brass)"/>
+        </svg>
+      </div>
+      <h2>Task Manager</h2>
+      <p>The native delivery board — the in-house Asana replacement: boards, views, the status
+        pipeline, and the Task Library.</p>
+      <span class="card-go">Read the guide →</span>
+    </a>
+
+    <a class="card" href="./pace-qa.html">
+      <div class="card-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle cx="23" cy="30" r="17" fill="none" stroke="var(--teal)" stroke-width="2.4" stroke-dasharray="86 20" transform="rotate(-90 23 30)"/>
+          <path d="M23 11 L29.5 17.5 L23 17.5 Z" fill="var(--teal)"/>
+          <circle cx="45" cy="45" r="14" fill="var(--brass)"/>
+          <path d="M38.5 45 L43.5 50 L51.5 40" fill="none" stroke="var(--paper-raised)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <h2>PACE &amp; QA</h2>
+      <p>The two agents watching the task board — PACE keeps delivery moving, QA judges whether
+        finished work is actually good.</p>
+      <span class="card-go">Read the guide →</span>
+    </a>
+
+    <a class="card" href="./website-builder.html">
+      <div class="card-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="6" y="10" width="52" height="44" rx="3" fill="var(--paper-raised)" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="6" y="10" width="52" height="11" rx="3" fill="var(--teal-soft)" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <circle cx="13" cy="15.5" r="1.6" fill="var(--brass)"/>
+          <circle cx="18.5" cy="15.5" r="1.6" fill="var(--teal)"/>
+          <rect x="13" y="28" width="38" height="4.5" rx="1.2" fill="var(--brass)"/>
+          <rect x="13" y="37" width="26" height="4.5" rx="1.2" fill="var(--line-strong)"/>
+          <rect x="13" y="46" width="16" height="4.5" rx="1.2" fill="var(--teal)"/>
+        </svg>
+      </div>
+      <h2>Website Builder</h2>
+      <p>Design, provision, plan, generate, and publish a whole client website — straight into
+        its own repo.</p>
+      <span class="card-go">Read the guide →</span>
+    </a>
+
+    <a class="card" href="./everhour-time.html">
+      <div class="card-mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="24" fill="var(--paper-raised)" stroke="var(--line-strong)" stroke-width="1.5"/>
+          <line x1="32" y1="14" x2="32" y2="19" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <line x1="32" y1="45" x2="32" y2="50" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <line x1="14" y1="32" x2="19" y2="32" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <line x1="45" y1="32" x2="50" y2="32" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <line x1="32" y1="32" x2="32" y2="20" stroke="var(--ink-soft)" stroke-width="2" stroke-linecap="round"/>
+          <line x1="32" y1="32" x2="43" y2="38" stroke="var(--brass)" stroke-width="1.8" stroke-linecap="round"/>
+          <circle cx="32" cy="32" r="1.8" fill="var(--brass)"/>
+        </svg>
+      </div>
+      <h2>Everhour Time Tracking</h2>
+      <p>The daily habit of logging time correctly — and why it feeds client margin and team
+        capacity planning.</p>
+      <span class="card-go">Read the guide →</span>
+    </a>
+
+  </div>
+
+  <p class="colophon">Internal reference for the AR Tools team. Not indexed by search engines.
+    Ask your PM or admin if a link here looks broken.</p>
+</div>
+</body>
+</html>

@@ -1,0 +1,646 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A step-by-step walkthrough for the native Task Manager, the in-house Asana replacement.">
+<title>Task Manager Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#F0EEE7; --paper-raised:#FFFFFF; --ink:#1C2321; --ink-soft:#56605B; --ink-faint:#8A9089;
+    --line:#D9D4C6; --line-strong:#C3BDA9; --teal:#1F6F72; --teal-ink:#0F4547; --teal-soft:#E1EEED;
+    --brass:#A8752A; --brass-ink:#7A551D; --brass-soft:#F3E7D2; --rust:#AE4D38; --rust-soft:#F5E4DE;
+    --shadow: 0 1px 2px rgba(28,35,33,0.06), 0 8px 24px rgba(28,35,33,0.05); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+      --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+      --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+    --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+    --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+  }
+  *{ box-sizing:border-box; }
+  body{ background:var(--paper); color:var(--ink); font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Fraunces", Georgia, "Times New Roman", serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--teal-ink, var(--teal)); }
+  a:focus-visible, button:focus-visible, summary:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; }
+  code, .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding: 0 1.5rem 6rem; }
+
+  .masthead{ padding: 3.25rem 0 2.25rem; border-bottom: 1px solid var(--line); display:flex; flex-direction:column; gap:1.75rem; }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:64px; height:64px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"IBM Plex Mono", monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--brass-ink, var(--brass)); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem, 1.4rem + 1.8vw, 2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Fraunces", serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  .layout{ display:grid; grid-template-columns: 240px minmax(0,1fr); gap: 3rem; margin-top:2.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.82rem; padding:0.32rem 0 0.32rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; transition:color .15s ease, border-color .15s ease; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--teal-ink,var(--teal)); border-left-color:var(--teal); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding: 2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"IBM Plex Mono", monospace; font-size:0.85rem; color:var(--brass-ink,var(--brass)); letter-spacing:0.03em; flex:none; }
+  .block h2{ font-size:1.45rem; }
+  .block h3{ font-size:1.05rem; margin-top:1.9rem; margin-bottom:0.6rem; font-weight:600; }
+  .block p{ margin:0.9rem 0; color:var(--ink); max-width:40rem; }
+  .block p.lede{ font-size:1.06rem; }
+  .block ul, .block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.4rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .why{ background:var(--brass-soft); border-left:3px solid var(--brass); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .why-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--brass-ink,var(--brass)); margin:0 0 0.3rem; font-weight:600; }
+  .why p{ margin:0 0 0.5rem; color:var(--ink); }
+  .why p:last-child{ margin-bottom:0; }
+  .note{ background:var(--teal-soft); border-left:3px solid var(--teal); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .note p{ margin:0; }
+  .note strong{ color:var(--teal-ink,var(--teal)); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.9rem; }
+  thead th{ text-align:left; font-family:"IBM Plex Mono", monospace; font-size:0.66rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); font-weight:600; }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink); }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; color:var(--ink); }
+
+  /* Status pipeline diagram */
+  .pipeline{ background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); padding:1.8rem 1.4rem; margin:1.4rem 0; box-shadow:var(--shadow); }
+  .pl-row{ display:flex; align-items:center; justify-content:center; gap:0.6rem; flex-wrap:wrap; }
+  .pl-box{ border:1px solid var(--line-strong); background:var(--paper); border-radius:var(--radius); padding:0.7rem 0.9rem; text-align:center; min-width:7.4rem; }
+  .pl-box.hub{ border-color:var(--teal); background:var(--teal-soft); }
+  .pl-box .pl-title{ font-weight:600; font-size:0.84rem; }
+  .pl-arrow{ font-family:"IBM Plex Mono", monospace; font-size:1.1rem; color:var(--teal); flex:none; }
+  .pl-pause-row{ display:flex; gap:1rem; justify-content:center; margin-top:1.5rem; flex-wrap:wrap; }
+  .pl-pause-box{ border:1px dashed var(--line-strong); border-radius:var(--radius); padding:0.65rem 1.1rem; text-align:center; min-width:9rem; }
+  .pl-pause-box .pl-title{ font-weight:600; font-size:0.88rem; }
+  .pl-pause-box .pl-sub{ font-size:0.76rem; color:var(--ink-faint); margin-top:0.2rem; }
+  .pl-pause-note{ text-align:center; font-family:"IBM Plex Mono",monospace; font-size:0.7rem; color:var(--ink-faint); margin-top:0.7rem; text-transform:uppercase; letter-spacing:.05em; }
+
+  /* Mini task card */
+  .taskcard{ border:1px solid var(--line-strong); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); padding:1.1rem 1.3rem; margin:1.2rem 0; max-width:27rem; }
+  .taskcard .tc-name{ font-weight:600; font-size:0.98rem; margin-bottom:0.5rem; }
+  .taskcard .tc-chip{ display:inline-block; font-family:"IBM Plex Mono",monospace; font-size:0.64rem; text-transform:uppercase; letter-spacing:.05em; padding:0.18rem 0.55rem; border-radius:999px; background:var(--teal-soft); color:var(--teal-ink,var(--teal)); margin-right:0.4rem; }
+  .taskcard .tc-meta{ font-size:0.82rem; color:var(--ink-soft); margin-top:0.5rem; }
+  .taskcard .tc-checklist{ margin-top:0.8rem; padding-top:0.7rem; border-top:1px dashed var(--line); list-style:none; padding-left:0; }
+  .taskcard .tc-checklist li{ font-size:0.86rem; padding-left:1.5rem; position:relative; margin:0.35rem 0; color:var(--ink-soft); }
+  .taskcard .tc-checklist li::before{ content:"\2610"; position:absolute; left:0; color:var(--ink-faint); font-family:"IBM Plex Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--brass); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .refcard h3{ margin-top:0; font-size:1rem; }
+
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.86rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-title{ margin-bottom:0.5rem; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--teal-soft); border-color:var(--teal); }
+  }
+  @media (max-width:640px){ .masthead-inner{ gap:1rem; } .mark{ width:48px; height:48px; } .masthead{ padding-top:2rem; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="6" y="8" width="15" height="48" rx="2" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="24.5" y="8" width="15" height="48" rx="2" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="43" y="8" width="15" height="48" rx="2" fill="none" stroke="var(--ink-faint)" stroke-width="1.5"/>
+          <rect x="8.5" y="12" width="10.5" height="9" rx="1.5" fill="var(--brass)"/>
+          <rect x="8.5" y="24" width="10.5" height="9" rx="1.5" fill="var(--teal)"/>
+          <rect x="27" y="12" width="10.5" height="9" rx="1.5" fill="var(--teal)"/>
+          <rect x="45.5" y="12" width="10.5" height="9" rx="1.5" fill="var(--brass)"/>
+          <rect x="45.5" y="24" width="10.5" height="9" rx="1.5" fill="var(--ink-faint)" opacity="0.55"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Delivery Board</p>
+        <h1>Task Manager, start to finish</h1>
+        <p class="dek">The in-house delivery board — the replacement for Asana. One board per
+          client, one queue across every client, and a status pipeline that mostly takes care of
+          itself once you learn to trust it.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">9</span><span class="meta-label">Steps</span></div>
+      <div class="meta-item"><span class="meta-num tnum">6</span><span class="meta-label">Pipeline stages</span></div>
+      <div class="meta-item"><span class="meta-num tnum">3</span><span class="meta-label">Board views</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Code required</span></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Terms you'll see</a></li>
+        <li><a href="#s2" data-target="s2">02 · Before you start</a></li>
+        <li><a href="#s3" data-target="s3">03 · Where your day starts</a></li>
+        <li><a href="#s4" data-target="s4">04 · The big picture</a></li>
+        <li><a href="#s5" data-target="s5">05 · Step 1 — Open a board</a></li>
+        <li><a href="#s6" data-target="s6">06 · Step 2 — Start the month</a></li>
+        <li><a href="#s7" data-target="s7">07 · Step 3 — Pick a view</a></li>
+        <li><a href="#s8" data-target="s8">08 · Step 4 — Filter &amp; save</a></li>
+        <li><a href="#s9" data-target="s9">09 · Step 5 — Work a task</a></li>
+        <li><a href="#s10" data-target="s10">10 · Step 6 — My Tasks</a></li>
+        <li><a href="#s11" data-target="s11">11 · Step 7 — Task Library</a></li>
+        <li><a href="#s12" data-target="s12">12 · Step 8 — Trash</a></li>
+        <li><a href="#s13" data-target="s13">13 · Step 9 — Custom sections</a></li>
+        <li><a href="#s14" data-target="s14">14 · A day, start to finish</a></li>
+        <li><a href="#s15" data-target="s15">15 · On your phone</a></li>
+        <li><a href="#s16" data-target="s16">16 · Quick reference</a></li>
+      </ol>
+    </nav>
+
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Terms you'll see</h2></div>
+        <p>Skim this once — the rest of the guide uses these words precisely.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:26%">Term</th><th>What it means here</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Board</td><td>One client's whole delivery plan — every task for that client, in one place. Each client has their own; there's no single company-wide board.</td></tr>
+              <tr><td class="term">Section</td><td>A group of tasks within a board. Almost always a calendar month ("August 2026"), auto-created for you.</td></tr>
+              <tr><td class="term">Task</td><td>One piece of work — e.g. this month's GBP posts for a client, or a batch of citations.</td></tr>
+              <tr><td class="term">Subtask / checklist item</td><td>A single step inside a task. A task's "checklist" is its list of subtasks.</td></tr>
+              <tr><td class="term">Status</td><td>Where a task is in the delivery pipeline — Not Started, In Progress, etc. One task has exactly one status at a time.</td></tr>
+              <tr><td class="term">Category (Service type)</td><td>What kind of work the task is — Content, Link Building, GBP Authority, or Strategy. Used for filtering and reporting.</td></tr>
+              <tr><td class="term">Assignee</td><td>Who's doing the task. Picked from the shared team roster, not your login.</td></tr>
+              <tr><td class="term">Watcher</td><td>Anyone who gets notified about a task's activity, whether or not they're the assignee.</td></tr>
+              <tr><td class="term">View</td><td>A way of looking at a board — Board (columns), List (grouped rows), or Calendar (by due date). Same tasks, different layout.</td></tr>
+              <tr><td class="term">My Tasks</td><td>Your own queue — every task assigned to you, from every client, in one place.</td></tr>
+              <tr><td class="term">Task Library</td><td>The master list of standard recurring task names, and what each one defaults to (hours, category, checklist).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Before you start</h2></div>
+        <ul>
+          <li><strong>Where it lives.</strong> There's no single global "Tasks" page — each client
+            has their own board. Open a client, then click the <strong>Tasks</strong> card. Two
+            things <em>are</em> global, in the left sidebar: <strong>My Tasks</strong> (everything
+            assigned to you, across every client) and <strong>Task Library</strong> (the
+            standard-task templates admins maintain).</li>
+          <li><strong>Assignees are your team profile, not your login.</strong> When you pick who's
+            on a task, you're picking from the shared team-member roster — the same list used on
+            the Workload page — not AR Tools user accounts. If you don't see your own name in an
+            assignee dropdown, ask an admin to link you on the <strong>Team</strong> page.</li>
+          <li><strong>A few buttons are admin-only.</strong> Auto-assigning a batch of unassigned
+            tasks, and permanently deleting something from the trash, both require an admin.
+            Creating tasks, dragging cards, commenting, checking things off — all open to anyone
+            with access to the client.</li>
+        </ul>
+        <div class="why">
+          <p class="why-label">Why these two specifically</p>
+          <p>Each can move or remove a lot of the board in one click — auto-assign can staff
+            dozens of tasks at once, and a permanent delete can't be undone the way Trash can.
+            Everything else you'll do day to day only ever touches one task at a time.</p>
+        </div>
+        <p><strong>Frozen clients pause task creation.</strong> If a client is under a Freeze
+          (manual action / deindexing), you can still work existing tasks, but the automated
+          paths that create new tasks are paused until the freeze lifts.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Where your day starts</h2></div>
+        <p>Two ways in, depending on what you're doing:</p>
+        <ul>
+          <li><strong>Checking everything on your plate, across every client</strong> → click
+            <strong>My Tasks</strong> in the sidebar. This is usually where your day should start
+            (§10).</li>
+          <li><strong>Working a specific client's whole plan</strong> → from the sidebar, or from
+            the <strong>Home</strong> page's grid of client tiles, open the client, then click
+            their <strong>Tasks</strong> card.</li>
+        </ul>
+        <p><strong>The bell icon</strong> at the top of the sidebar is your notification center —
+          it badges with an unread count whenever you're assigned a task, @mentioned in a comment,
+          or nudged by someone. Click it for a dropdown list; clicking a notification jumps
+          straight to the task it's about and marks it read.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>The big picture</h2></div>
+        <p>Each client's board is organized into <strong>sections</strong> (almost always calendar
+          months, plus any custom sections you add), and each section holds <strong>tasks</strong>.
+          A task can have <strong>subtasks</strong> (a checklist), and carries an assignee, due
+          date, status, category, notes, comments, attachments, and a running activity log.</p>
+        <p>You can look at the same board three ways — <strong>Board</strong>, <strong>List</strong>,
+          or <strong>Calendar</strong> — and slice it with filters or a saved view. Nothing about
+          the underlying data changes based on which view you're in; they're just different
+          lenses on the same tasks.</p>
+
+        <h3>The pipeline a task moves through</h3>
+        <div class="pipeline">
+          <div class="pl-row">
+            <div class="pl-box"><span class="pl-title">Not Started</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">In Progress</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box hub"><span class="pl-title">In QA</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Sent to Client</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Client Approved</span></div>
+            <span class="pl-arrow">→</span>
+            <div class="pl-box"><span class="pl-title">Completed</span></div>
+          </div>
+          <div class="pl-pause-row">
+            <div class="pl-pause-box"><span class="pl-title">Blocked</span><span class="pl-sub">waiting on something outside your control</span></div>
+            <div class="pl-pause-box"><span class="pl-title">In Review</span><span class="pl-sub">sent back for changes</span></div>
+          </div>
+          <p class="pl-pause-note">Enter / exit from any status in the row above — not a step in the order</p>
+        </div>
+        <div class="why">
+          <p class="why-label">Why Blocked and In Review sit apart</p>
+          <p>Everything else in the pipeline moves in a predictable order — the system can tell
+            "In QA" is a step forward from "In Progress." Blocked and In Review aren't steps in
+            that order at all; they're a <em>pause</em>, and pausing can happen from wherever the
+            task already was. Folding them into the main row would force a fake position on them
+            that doesn't mean anything.</p>
+          <p><strong>What to do:</strong> use them for exactly what they say — something outside
+            your control, or a client's changes request — not as a general "not sure what to do
+            with this" bucket. Move a task <em>out</em> of one by hand once the blocker clears;
+            the checklist auto-advance (§9) deliberately never touches these two.</p>
+        </div>
+        <p>You set a task's status by dragging its card between columns, or by hand in the task
+          drawer's <strong>Status</strong> dropdown (§7 and §9).</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Step 1 — Open a client's board</h2></div>
+        <p>From the client's workspace, click the <strong>Tasks</strong> card. You land on the
+          Board view. The subhead under the page title is a good one-line reminder of the whole
+          idea:</p>
+        <div class="note"><p><em>"{Client}'s delivery board — native tasks, organized by month.
+          Drag cards between status columns; click a card for details &amp; checklist."</em></p></div>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Step 2 — Start the month</h2></div>
+        <p>Most recurring work doesn't need to be typed in by hand every month. Click the solid
+          indigo <strong>Generate this month</strong> button (top right):</p>
+        <ul>
+          <li>It creates (or fills in) a section named for the current calendar month — e.g.
+            <strong>August 2026</strong> — and populates it from the client's <strong>monthly
+            template</strong> (a set number of citations, a round of GBP posts, this month's blog
+            posts, …).</li>
+          <li>Each generated task picks up its default estimated hours, category, and starter
+            checklist from the <strong>Task Library</strong> (§11) — so if a task's checklist
+            looks wrong, fix it in the Library, not on the task itself.</li>
+          <li><strong>It's safe to click more than once.</strong> Re-running it only fills gaps —
+            it never duplicates tasks that already exist for the month.</li>
+          <li>A banner tells you what happened: how many tasks were created, that the month was
+            already fully generated, or that the client has no monthly template set up yet.</li>
+        </ul>
+        <div class="why">
+          <p class="why-label">Why it's safe to click twice</p>
+          <p>Each task it would create is keyed to its own client + month + template row, not to
+            "this run." A second click checks that same key again and only fills in what's still
+            missing — it isn't re-running a bulk import that could double up.</p>
+          <p><strong>What to do:</strong> if you're ever unsure whether this month's tasks already
+            exist, just click it — there's no "check first" step. Don't work around a missing task
+            by deleting and re-generating the whole month; that throws away anything already in
+            progress on the tasks that <em>did</em> exist. Trash the one task you don't want and
+            leave the rest.</p>
+        </div>
+        <p>If you're an admin, there's a second button, <strong>Auto-assign unassigned</strong>,
+          that distributes any newly generated, unassigned tasks across the eligible team by skill
+          and current workload. Tasks it can't place are left unassigned and named in the result
+          banner — that's a capacity signal, not an error.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Step 3 — Pick a view</h2></div>
+        <p>Three toggle buttons, top left: <strong>Board</strong>, <strong>List</strong>,
+          <strong>Calendar</strong>.</p>
+        <h3>Board</h3>
+        <p>The Kanban layout — one column per status, in pipeline order (§4). Each card shows the
+          task name, a colored category chip, checklist progress ("☑ 2/5"), estimated hours, due
+          date (red if overdue), and the assignee's name.</p>
+        <p><strong>Drag a card to a different column to change its status.</strong> Two special
+          cases happen automatically: drop it in <strong>Completed</strong> and the task is
+          marked complete; drag a completed card back into any earlier column and it reopens,
+          then moves to that column. Each column has a quick "Add a task…" field at the bottom.</p>
+        <h3>List</h3>
+        <p>Grouped by section (newest month first), each group showing a "{done}/{total}" count.
+          Click the circle next to a task to complete/reopen it right from the list.</p>
+        <h3>Calendar</h3>
+        <p>A standard month grid. Tasks show as small chips on their due date — indigo for
+          upcoming, red for overdue, green (strikethrough) for completed. Click any chip to open
+          that task. A day with more than four tasks shows "+N more" — switch to List or Board to
+          see the rest.</p>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Step 4 — Filter, or save a view</h2></div>
+        <p>The filter bar (Board and List) gives you <strong>Search</strong> (task name/description),
+          <strong>Assignee</strong>, <strong>Service type</strong>, and <strong>Section</strong>.</p>
+        <p>There's also a <strong>Views…</strong> dropdown with three always-available presets —
+          <strong>Overdue</strong>, <strong>Due this week</strong>, <strong>Unassigned</strong> —
+          and, below a divider, any saved views your team has created (shared views show a
+          "(team)" tag).</p>
+        <p><strong>To save your own combination:</strong> set up search/assignee/category/section
+          the way you want, then pick <strong>"＋ Save current view…"</strong> at the bottom of
+          the dropdown. Name it, choose to share it or keep it private. Delete your own private
+          views any time; deleting a shared one needs an admin.</p>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Step 5 — Work a task</h2></div>
+        <p class="lede">Click any card, row, or calendar chip to open the <strong>task
+          drawer</strong> on the right. Everything here saves as you go — there's no separate Save
+          button for most fields.</p>
+
+        <h3>The basics</h3>
+        <ul>
+          <li><strong>Name</strong> — click and edit directly at the top.</li>
+          <li><strong>Status</strong> — dropdown; see the pipeline (§4).</li>
+          <li><strong>Assignee</strong> — dropdown, from the shared team roster.</li>
+        </ul>
+        <p><strong>Service type</strong> — which category this task belongs to. If it isn't
+          obvious from the task name:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:20%">Category</th><th style="width:36%">What goes here</th><th>Real examples</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Content</td><td>Writing and publishing on the client's own site or blog</td><td>Blog Post Title, Blog Post Scheduling, Website Pages Posted, Service Silo</td></tr>
+              <tr><td class="term">Link Building</td><td>Anything that earns a mention or link elsewhere</td><td>(Number) Citations, Guest Posts, Niche Edits, Press Release, Map Embeds</td></tr>
+              <tr><td class="term">GBP Authority</td><td>Google Business Profile activity</td><td>GBP Posts, GBP Blast, HyperLocal GBP Blast</td></tr>
+              <tr><td class="term">Strategy</td><td>Planning and account-level decisions, not a deliverable itself</td><td>—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="why">
+          <p class="why-label">Why it's worth getting right even when it "doesn't matter yet"</p>
+          <p>The category is also what the team's skill/competency system reads once it's in use
+            — it's how a task ends up routed to someone who can actually do that kind of work, not
+            just whoever's free. Picking the wrong category on a one-off task is invisible today;
+            it stops being invisible the moment that routing turns on.</p>
+        </div>
+        <p><strong>Est. hours</strong> — a number; if the team logs time in Everhour, an "Actual:
+          Xh" line appears underneath once real hours have been logged, colored green or red
+          against your estimate.</p>
+        <div class="why">
+          <p class="why-label">Why an empty estimate isn't "neutral"</p>
+          <p>The Workload page's whole read of who's over capacity is built by summing this field
+            across everyone's open tasks — and a blank one doesn't count as zero, it counts as the
+            platform's default (currently 1h). A task that's really a 6-hour job but never got an
+            estimate quietly understates that person's load by 5 hours, every day it sits open.</p>
+          <p><strong>What to do:</strong> for a task generated from the Library, leaving the
+            default is fine. For anything hand-created, or a task running longer than usual, put
+            in your best real number rather than leaving it blank "for now."</p>
+        </div>
+        <p><strong>Due date / Start date</strong> — date pickers. <strong>Description</strong> —
+          internal notes, links, acceptance criteria, never shown to the client.
+          <strong>Client note</strong> — a separate, explicitly client-facing field (can surface in
+          the client-facing Weekly Pulse). You usually don't need to fill this in — a standard task
+          from the Task Library already has a good plain-language blurb defined centrally. Only
+          write your own when this specific instance needs something different.</p>
+
+        <h3>Checklist</h3>
+        <p>Add, check off, or remove subtasks under <strong>Checklist</strong> — this is what "☑
+          2/5" on the card is counting. A task from the Task Library already comes with its
+          standard checklist, e.g. a <strong>GBP Posts</strong> task starts with:</p>
+        <ul class="taskcard-list">
+          <li>GBP Posts generated</li>
+          <li>GBP Posts added to deliverables sheet</li>
+          <li>GBP Posts sent to client for approval</li>
+          <li>GBP Posts scheduled</li>
+        </ul>
+        <div class="why">
+          <p class="why-label">Why there's no hours field on a subtask</p>
+          <p>The parent task's Est. hours is meant to cover the whole checklist, not just the
+            top-level task name. If subtasks had their own separate estimates too, a
+            well-checklisted task would get double-counted in the Workload page's math.</p>
+          <p><strong>What to do:</strong> put your realistic total on the parent task, not spread
+            thin across steps — a long, detailed checklist under one honest hour estimate is
+            exactly how it's supposed to work.</p>
+        </div>
+        <div class="note">
+          <p><strong>Heads up — some status changes happen on their own.</strong> Touching a
+            checklist item (checking it, commenting, attaching a file) on a "Not Started" task
+            moves it to "In Progress" automatically. Checking off the <strong>last</strong> item
+            moves the task to "In QA" automatically. This is intentional — it keeps the board
+            honest without you having to remember to drag the card yourself. It never happens in
+            reverse, and it never touches "Blocked" or "In Review."</p>
+        </div>
+
+        <h3>Attachments, Comments, Activity</h3>
+        <p><strong>Attachments</strong> — click Attach file to upload. If your work produces a
+          link rather than a file (a deliverables sheet, a live page, a citation URL), put it in a
+          comment or checklist item instead. <strong>Comments</strong> — type below the thread,
+          @Name to mention a teammate; you can edit/delete your own, admins can moderate anyone's.
+          <strong>Activity</strong> — a running, timestamped log of everything that's happened to
+          the task, useful for reconstructing what happened without asking around.</p>
+
+        <h3>Header buttons</h3>
+        <p><strong>Complete / Reopen</strong> (toggle) · <strong>Watch bell</strong> (get notified
+          even if you're not the assignee) · <strong>Duplicate</strong> (copies the task,
+          including its checklist) · <strong>Trash</strong> (recoverable — §12) ·
+          <strong>For QA</strong> — on a finished task, moves it straight to "In QA" and kicks off
+          an automatic quality check. Normally you don't need to click this yourself — checking
+          off the last checklist item does it for you — but it's here for when you want to push
+          something into review early. A <strong>fail</strong> bounces the task back to "In
+          Progress" with new checklist items telling you exactly what to fix; checking them off
+          re-queues it for QA automatically.</p>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Step 6 — My Tasks (your own queue, every client)</h2></div>
+        <p class="lede">Click <strong>My Tasks</strong> in the sidebar for everything assigned to
+          you, from every client, in one list — no need to check board after board. This is the
+          fastest way to answer "what should I be working on right now?"</p>
+        <ul>
+          <li><strong>Viewing as</strong> — a dropdown listing every tracked team member, with
+            "(you)" next to whichever one is linked to your login. Switching it lets you check
+            someone else's queue (useful for a PM doing a coverage check).</li>
+          <li>Tasks are grouped into buckets: <strong>Overdue</strong>, <strong>Due today</strong>,
+            <strong>This week</strong>, <strong>Later</strong>, <strong>No due date</strong> — only
+            non-empty buckets show. If everything's clear, you'll get a plain "All clear — nothing
+            open."</li>
+          <li>Click the circle to complete a task right from the list, or click anywhere else on
+            the row to open the full drawer. The client-name pill on each row links straight to
+            that client's board.</li>
+        </ul>
+        <p>A reasonable daily habit: open My Tasks, work down from <strong>Overdue</strong>, then
+          <strong>Due today</strong>, checking things off as you go and opening the drawer
+          whenever you need the checklist or context.</p>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Step 7 — Task Library (admins: keep the templates current)</h2></div>
+        <p><strong>Task Library</strong>, in the sidebar, is the master list of standard recurring
+          task names — the source of truth <strong>Generate this month</strong> reads from. For
+          each task name it stores <strong>Default hrs</strong>, <strong>Default category</strong>,
+          a <strong>Client blurb</strong> (used in the Weekly Pulse), and an <strong>Active</strong>
+          flag (untick to retire a name without deleting its history).</p>
+        <p>Click <strong>Add task</strong> for a new row, edit inline, then <strong>Save
+          library</strong>. Renaming a task and saving <strong>detaches its checklist from the old
+          name</strong> — if you rename something, re-add its checklist under the new name.</p>
+        <div class="why">
+          <p class="why-label">Why renaming does that</p>
+          <p>The Library doesn't track a task type by some hidden ID — it matches on the
+            <strong>name itself</strong>. Rename "GBP Blast" to "GBP Blast v2" and, as far as the
+            Library's concerned, that's a different, brand-new task name with no checklist on file
+            yet; the old "GBP Blast" checklist stays exactly where it was.</p>
+          <p><strong>What to do — a real example:</strong> say a client has two open "GBP Blast"
+            tasks in the same month and you want to tell them apart on the live board. Renaming
+            the leftover one to "GBP Blast — carryover from July" makes it addressable by name
+            again — but also detaches it from the "GBP Blast" checklist template. If it still
+            needs that checklist, re-add it by hand under the new name (or copy it before
+            renaming); if it's mostly done already, this usually doesn't matter enough to bother.</p>
+        </div>
+        <p><strong>Default checklist per task</strong> — expand "Checklist · N items" under any
+          saved row to edit the starter subtasks copied onto every task of that name when the
+          month is generated. Add steps, reorder (up-arrow), or remove them, then <strong>Save
+          checklist</strong> (this saves independently of the main table).</p>
+      </section>
+
+      <section id="s12" class="block">
+        <div class="block-head"><span class="block-num">12</span><h2>Step 8 — Trash and recovery</h2></div>
+        <p>Click the <strong>Trash</strong> icon in a client's Tasks toolbar to see everything
+          that's been trashed for that client (subtasks are labeled "(subtask)").
+          <strong>Restore</strong> — anyone can bring a task back. <strong>Delete forever</strong>
+          — admin-only, asks for confirmation, cannot be undone.</p>
+      </section>
+
+      <section id="s13" class="block">
+        <div class="block-head"><span class="block-num">13</span><h2>Step 9 — Custom sections</h2></div>
+        <p>Need a bucket that isn't a calendar month — a backlog, a one-off project? Click the
+          <strong>Section</strong> button (plus icon) in the toolbar, name it, and it appears
+          alongside the month sections in List view and the Section filter. Add tasks to it the
+          same way as any other section.</p>
+      </section>
+
+      <section id="s14" class="block">
+        <div class="block-head"><span class="block-num">14</span><h2>A day, start to finish</h2></div>
+        <p class="lede">To tie it together, here's a realistic single task from open to done.</p>
+        <p>You open <strong>My Tasks</strong> and see <strong>GBP Posts — Acme Roofing</strong> in
+          your <strong>Due this week</strong> bucket. You click it. The drawer opens on:</p>
+        <div class="taskcard">
+          <div class="tc-name">GBP Posts — Acme Roofing</div>
+          <span class="tc-chip">GBP Authority</span>
+          <div class="tc-meta">Status: Not Started · Assignee: you</div>
+          <ul class="tc-checklist">
+            <li>GBP Posts generated</li>
+            <li>GBP Posts added to deliverables sheet</li>
+            <li>GBP Posts sent to client for approval</li>
+            <li>GBP Posts scheduled</li>
+          </ul>
+        </div>
+        <p><strong>Client note:</strong> blank — the Task Library's standard blurb already covers
+          this in the Weekly Pulse, so you leave it alone.</p>
+        <p>You draft this month's posts and check off <strong>"GBP Posts generated."</strong> The
+          task quietly flips from <strong>Not Started</strong> to <strong>In Progress</strong> —
+          you didn't have to touch the Status dropdown or drag anything. You drop the posts into
+          the deliverables sheet and check off item 2, send them to the client for approval and
+          check off item 3. Once they're approved and scheduled, you check off the last item,
+          <strong>"GBP Posts scheduled."</strong></p>
+        <div class="note">
+          <p>Checking that last box automatically moves the task to <strong>In QA</strong> and
+            kicks off an automatic quality check — no action needed from you. If it comes back
+            clean, the task sits in In QA until someone sends it on to the client. If the check
+            finds something wrong, the task bounces back to <strong>In Progress</strong> with a
+            new checklist item spelling out exactly what to fix — you fix it, check it off, and it
+            re-queues for QA on its own.</p>
+        </div>
+        <p>That's the whole loop: open from My Tasks, work the checklist, let status take care of
+          itself, done.</p>
+      </section>
+
+      <section id="s15" class="block">
+        <div class="block-head"><span class="block-num">15</span><h2>On your phone</h2></div>
+        <p>The dashboard is installable as a mobile app (add it to your home screen from your
+          phone's browser). On a small screen the sidebar becomes a slide-over menu — tap the
+          hamburger icon top-left to open it, tap anywhere outside it to close.</p>
+      </section>
+
+      <section id="s16" class="block">
+        <div class="block-head"><span class="block-num">16</span><h2>Quick reference</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:46%">I want to…</th><th>Where</th></tr></thead>
+            <tbody>
+              <tr><td>See everything assigned to me, across clients</td><td><strong>My Tasks</strong> (sidebar)</td></tr>
+              <tr><td>See one client's whole delivery plan</td><td>Client → <strong>Tasks</strong> card</td></tr>
+              <tr><td>Get notified about mentions/assignments</td><td>Bell icon, top of the sidebar</td></tr>
+              <tr><td>Start this month's recurring work</td><td><strong>Generate this month</strong> button</td></tr>
+              <tr><td>Change a task's status fast</td><td>Drag its card between Board columns</td></tr>
+              <tr><td>Change a task's status by hand</td><td>Open it → <strong>Status</strong> dropdown</td></tr>
+              <tr><td>Check something off a task</td><td>Open it → <strong>Checklist</strong></td></tr>
+              <tr><td>Leave a note for a teammate</td><td>Open it → <strong>Comments</strong>, @mention them</td></tr>
+              <tr><td>Write something the client will see</td><td>Open it → <strong>Client note</strong> field</td></tr>
+              <tr><td>Send a task for quality review</td><td>Open it → <strong>For QA</strong> button</td></tr>
+              <tr><td>Get a task back after deleting it</td><td>Toolbar → <strong>Trash</strong> → <strong>Restore</strong></td></tr>
+              <tr><td>Filter down to overdue / unassigned</td><td><strong>Views…</strong> dropdown → built-in presets</td></tr>
+              <tr><td>Save my own filter combo for reuse</td><td>Set filters → <strong>Views…</strong> → <strong>＋ Save current view…</strong></td></tr>
+              <tr><td>Fix a recurring task's default hours/checklist</td><td><strong>Task Library</strong> (sidebar)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="colophon">This guide is scoped to the task board itself. See also the PACE &amp;
+        QA Field Guide for the two agents that watch this board — PACE (delivery) and QA
+        (quality) — plus <span class="mono">docs/pm-operations-addendum.md</span> for the
+        judgment calls behind capacity, duplicate task names, and Chase Plan triage.</p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+  if(!('IntersectionObserver' in window)) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      var link = document.querySelector('.rail-list a[data-target="'+entry.target.id+'"]');
+      if(!link) return;
+      if(entry.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(function(s){ if(s) io.observe(s); });
+})();
+</script>
+
+</body>
+</html>

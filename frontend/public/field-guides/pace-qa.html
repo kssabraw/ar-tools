@@ -1,0 +1,801 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A walkthrough for PACE (delivery) and QA (quality) -- the two agents watching the task board.">
+<title>PACE &amp; QA Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#F0EEE7; --paper-raised:#FFFFFF; --ink:#1C2321; --ink-soft:#56605B; --ink-faint:#8A9089;
+    --line:#D9D4C6; --line-strong:#C3BDA9; --teal:#1F6F72; --teal-ink:#0F4547; --teal-soft:#E1EEED;
+    --brass:#A8752A; --brass-ink:#7A551D; --brass-soft:#F3E7D2; --rust:#AE4D38; --rust-soft:#F5E4DE;
+    --shadow: 0 1px 2px rgba(28,35,33,0.06), 0 8px 24px rgba(28,35,33,0.05); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+      --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+      --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+    --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+    --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+  }
+  *{ box-sizing:border-box; }
+  body{ background:var(--paper); color:var(--ink); font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Fraunces", Georgia, "Times New Roman", serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--teal-ink, var(--teal)); }
+  a:focus-visible, button:focus-visible, summary:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; }
+  code, .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding: 0 1.5rem 6rem; }
+
+  .masthead{ padding: 3.25rem 0 2.25rem; border-bottom: 1px solid var(--line); display:flex; flex-direction:column; gap:1.75rem; }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:64px; height:64px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"IBM Plex Mono", monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--brass-ink, var(--brass)); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem, 1.4rem + 1.8vw, 2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Fraunces", serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  .layout{ display:grid; grid-template-columns: 240px minmax(0,1fr); gap: 3rem; margin-top:2.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-part{ font-family:"IBM Plex Mono", monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0.9rem 0 0.2rem 0.9rem; }
+  .rail-part:first-of-type{ margin-top:0; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.02rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.8rem; padding:0.3rem 0 0.3rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; transition:color .15s ease, border-color .15s ease; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--teal-ink,var(--teal)); border-left-color:var(--teal); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding: 2.4rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"IBM Plex Mono", monospace; font-size:0.82rem; color:var(--brass-ink,var(--brass)); letter-spacing:0.03em; flex:none; }
+  .block h2{ font-size:1.4rem; }
+  .block h3{ font-size:1.03rem; margin-top:1.8rem; margin-bottom:0.55rem; font-weight:600; }
+  .block p{ margin:0.85rem 0; color:var(--ink); max-width:40rem; }
+  .block p.lede{ font-size:1.04rem; }
+  .block ul, .block ol{ margin:0.85rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.35rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .why{ background:var(--brass-soft); border-left:3px solid var(--brass); border-radius:0 var(--radius) var(--radius) 0; padding:0.9rem 1.15rem; margin:1.1rem 0; }
+  .why-label{ font-family:"IBM Plex Mono", monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--brass-ink,var(--brass)); margin:0 0 0.3rem; font-weight:600; }
+  .why p{ margin:0 0 0.5rem; color:var(--ink); }
+  .why p:last-child{ margin-bottom:0; }
+  .note{ background:var(--teal-soft); border-left:3px solid var(--teal); border-radius:0 var(--radius) var(--radius) 0; padding:0.9rem 1.15rem; margin:1.1rem 0; }
+  .note p{ margin:0; }
+  .note strong{ color:var(--teal-ink,var(--teal)); }
+
+  .table-wrap{ overflow-x:auto; margin:1.05rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.88rem; }
+  thead th{ text-align:left; font-family:"IBM Plex Mono", monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.85rem 0.5rem 0; border-bottom:1px solid var(--line-strong); font-weight:600; }
+  tbody td{ padding:0.65rem 0.85rem 0.65rem 0; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink); }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; color:var(--ink); }
+
+  /* Part divider */
+  .part-divider{ margin:0 0 2rem; padding:1.6rem 0 0; border-top:2px solid var(--ink); display:flex; align-items:baseline; gap:1rem; }
+  .part-divider .pd-num{ font-family:"IBM Plex Mono",monospace; font-size:0.78rem; color:var(--brass-ink,var(--brass)); letter-spacing:.05em; text-transform:uppercase; }
+  .part-divider h2{ font-size:1.85rem; font-style:italic; font-weight:500; }
+
+  /* Broadcast (digest/chase-plan/escalation samples) */
+  .broadcast{ border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); padding:1rem 1.2rem; margin:1.1rem 0; }
+  .broadcast .bc-head{ font-weight:600; margin-bottom:0.55rem; color:var(--ink); }
+  .broadcast ul, .broadcast ol{ margin:0; padding-left:1.15rem; }
+  .broadcast li{ margin:0.4rem 0; font-size:0.88rem; }
+  .broadcast .bc-more{ color:var(--ink-faint); font-size:0.84rem; margin-top:0.5rem; }
+
+  /* Verdict pills */
+  .verdict{ display:inline-flex; align-items:center; gap:0.3rem; font-family:"IBM Plex Mono",monospace; font-size:0.68rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em; padding:0.22rem 0.55rem; border-radius:999px; white-space:nowrap; }
+  .verdict.pass{ background:var(--teal-soft); color:var(--teal-ink,var(--teal)); }
+  .verdict.fail{ background:var(--rust-soft); color:var(--rust); }
+  .verdict.human{ background:var(--brass-soft); color:var(--brass-ink,var(--brass)); }
+  .verdict.skip{ background:var(--line); color:var(--ink-faint); }
+
+  /* QA verdict card */
+  .qacard{ border:1px solid var(--line-strong); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); padding:1.1rem 1.3rem; margin:1.2rem 0; }
+  .qacard .qc-checks{ list-style:none; padding-left:0; margin:0.8rem 0; }
+  .qacard .qc-checks li{ padding-left:1.5rem; position:relative; margin:0.4rem 0; font-size:0.88rem; }
+  .qacard .qc-checks li.ok::before{ content:"\2713"; position:absolute; left:0; color:var(--teal); font-weight:700; }
+  .qacard .qc-checks li.bad::before{ content:"\2717"; position:absolute; left:0; color:var(--rust); font-weight:700; }
+  .qacard .qc-checks li.adv::before{ content:"\00b7"; position:absolute; left:0.2rem; color:var(--ink-faint); font-weight:700; }
+  .qacard .qc-explain{ font-size:0.86rem; color:var(--ink-soft); font-style:italic; border-top:1px dashed var(--line); padding-top:0.65rem; margin-top:0.65rem; }
+
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.86rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-title{ margin-bottom:0.5rem; }
+    .rail-part{ margin-left:0; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.32rem 0.8rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--teal-soft); border-color:var(--teal); }
+  }
+  @media (max-width:640px){ .masthead-inner{ gap:1rem; } .mark{ width:48px; height:48px; } .masthead{ padding-top:2rem; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle cx="23" cy="30" r="17" fill="none" stroke="var(--teal)" stroke-width="2.4" stroke-dasharray="86 20" transform="rotate(-90 23 30)"/>
+          <path d="M23 11 L29.5 17.5 L23 17.5 Z" fill="var(--teal)"/>
+          <circle cx="45" cy="45" r="14" fill="var(--brass)"/>
+          <path d="M38.5 45 L43.5 50 L51.5 40" fill="none" stroke="var(--paper-raised)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Delivery + Review Agents</p>
+        <h1>PACE &amp; QA, start to finish</h1>
+        <p class="dek">Two agents that sit on top of the task board: <strong>PACE</strong> keeps
+          delivery moving — nudging, reassigning, chasing stalled work — and <strong>QA</strong>
+          checks a finished deliverable before it reaches a client. Neither decides what work
+          should exist; that's SerMaStr.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">Agents</span></div>
+      <div class="meta-item"><span class="meta-num tnum">4</span><span class="meta-label">QA verdicts</span></div>
+      <div class="meta-item"><span class="meta-num tnum">8</span><span class="meta-label">QA rubrics</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Code required</span></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Terms you'll see</a></li>
+        <li><a href="#s2" data-target="s2">02 · Before you start</a></li>
+      </ol>
+      <p class="rail-part">Part 1 — PACE</p>
+      <ol class="rail-list">
+        <li><a href="#s3" data-target="s3">03 · What it does</a></li>
+        <li><a href="#s4" data-target="s4">04 · Where to find it</a></li>
+        <li><a href="#s5" data-target="s5">05 · The daily digest</a></li>
+        <li><a href="#s6" data-target="s6">06 · The Chase Plan</a></li>
+        <li><a href="#s7" data-target="s7">07 · Follow-through</a></li>
+        <li><a href="#s8" data-target="s8">08 · Nudges &amp; DMs</a></li>
+        <li><a href="#s9" data-target="s9">09 · Morning briefs</a></li>
+        <li><a href="#s10" data-target="s10">10 · What you can ask it</a></li>
+        <li><a href="#s11" data-target="s11">11 · Who can ask what</a></li>
+        <li><a href="#s12" data-target="s12">12 · The Activity log</a></li>
+      </ol>
+      <p class="rail-part">Part 2 — QA</p>
+      <ol class="rail-list">
+        <li><a href="#s13" data-target="s13">13 · What it does</a></li>
+        <li><a href="#s14" data-target="s14">14 · Triggering a review</a></li>
+        <li><a href="#s15" data-target="s15">15 · The QA panel</a></li>
+        <li><a href="#s16" data-target="s16">16 · Reading a verdict</a></li>
+        <li><a href="#s17" data-target="s17">17 · The rubrics</a></li>
+        <li><a href="#s18" data-target="s18">18 · Deliverable links</a></li>
+        <li><a href="#s19" data-target="s19">19 · Talking to QA</a></li>
+        <li><a href="#s20" data-target="s20">20 · Where results show up</a></li>
+        <li><a href="#s21" data-target="s21">21 · Who owns what</a></li>
+        <li><a href="#s22" data-target="s22">22 · Quick reference</a></li>
+      </ol>
+    </nav>
+
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Terms you'll see</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:26%">Term</th><th>What it means here</th></tr></thead>
+            <tbody>
+              <tr><td class="term">PACE</td><td>The delivery agent. Watches every board, nudges people, proposes fixes, and can act on your behalf when you ask (or when you confirm one of its own proposals).</td></tr>
+              <tr><td class="term">QA</td><td>The quality agent. When a task's deliverable is finished, QA checks it against a fixed checklist and passes it, bounces it, or flags it for a human.</td></tr>
+              <tr><td class="term">Verdict</td><td>QA's outcome for one review: Passed, Failed, Needs a human, or Not QA-checked.</td></tr>
+              <tr><td class="term">Rubric</td><td>Which checklist QA grades a task against (GBP Posts, Citations, Website Pages Posted, …) — picked from the task's name, or set explicitly.</td></tr>
+              <tr><td class="term">Deliverable</td><td>The actual thing QA is checking — a live page, a GBP post's copy, a citation listing, a guest post.</td></tr>
+              <tr><td class="term">Digest</td><td>PACE's once-a-day read-only summary of what's overdue, stuck, or unassigned across every board.</td></tr>
+              <tr><td class="term">Chase Plan</td><td>PACE's once-a-day proposal — a numbered list of fixes it wants to make, that you approve with a reply.</td></tr>
+              <tr><td class="term">Episode</td><td>The clock PACE keeps on one flagged problem (one task, one issue) from when it's first noticed until it's fixed.</td></tr>
+              <tr><td class="term">Confirm-gated</td><td>An action PACE (or QA) won't run until a person replies to approve it — nothing writes to the board without that reply.</td></tr>
+              <tr><td class="term">Actor-bound</td><td>Only the person who asked for a confirm-gated action (or an admin) can approve it — someone else replying "yes" in the same thread doesn't count.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Before you start</h2></div>
+        <ul>
+          <li><strong>Two separate places to talk to PACE:</strong> the dedicated
+            <span class="mono">#pace</span> Slack channel, and the <strong>PACE</strong> page in
+            the dashboard sidebar (<span class="mono">/pace</span>). Both run the same brain and
+            can do the same things.</li>
+          <li><strong>QA mostly runs itself</strong>, inside the task drawer. There's also a
+            dedicated <strong>QA</strong> chat (sidebar, <span class="mono">/qa</span>) for asking
+            questions or QA-ing a page on demand — it's live for the whole team.</li>
+          <li><strong>Everything either agent writes to the board is confirm-gated</strong>,
+            except a few pure reads (a digest, a report, "what should I work on today"). PACE
+            never reassigns, nudges, or changes a due date without a "yes" from a person; QA's
+            automatic reviews run and post their result the moment a task reaches In QA, because
+            reviewing isn't a board write anyone needs to approve in advance.</li>
+          <li><strong>All of it is live today</strong> — PACE (including its daily Chase Plan),
+            QA's automatic reviewer, and the <span class="mono">/qa</span> chat are all switched
+            on for the whole team.</li>
+        </ul>
+        <p>This guide assumes you already know what a task, a section, and a status are — see the
+          <strong>Task Manager Field Guide</strong> first if you haven't.</p>
+      </section>
+
+      <div class="part-divider"><span class="pd-num">Part 1</span><h2>PACE</h2></div>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>What PACE actually does for you</h2></div>
+        <p class="lede">Think of PACE as the PM who's read every board before you have. Day to
+          day, that's three things:</p>
+        <ol>
+          <li>It tells you (and the team) what's falling behind, once a day, without being asked.</li>
+          <li>It proposes fixes for those problems, once a day, and does them the moment you say yes.</li>
+          <li>It answers questions and takes one-off requests whenever you ask, in plain English,
+            in <span class="mono">#pace</span> or on the <span class="mono">/pace</span> page.</li>
+        </ol>
+        <p>It does <strong>not</strong> decide what work should exist — that's SerMaStr. It does
+          <strong>not</strong> judge whether finished work is good — that's QA. PACE's whole job
+          is <em>keeping things moving</em>.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Where to find it</h2></div>
+        <ul>
+          <li><strong><span class="mono">#pace</span> in Slack.</strong> PACE has its own bot
+            identity here (not the SerMaStr bot). It jumps into a <strong>new</strong> question
+            only when you @-mention it — but if it's already asked you to confirm something, your
+            reply doesn't need a mention.</li>
+          <li><strong>The <span class="mono">/pace</span> page</strong> (sidebar → PACE). Same
+            brain, web chat instead of Slack — answers every message, no @-mention needed.</li>
+          <li><strong>DMs.</strong> If PACE nudges you directly (§8), that's a real Slack DM — you
+            can reply to it like any other message.</li>
+        </ul>
+        <p>You don't need to name a client to talk to PACE. Say a client's name and it scopes to
+          that board; say a person's name ("what does Ivy have overdue?") and it scopes to that
+          person across every client; say neither and it reads the whole agency.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>The daily digest</h2></div>
+        <p class="lede">Once each workday, PACE posts a <strong>read-only</strong> summary — no
+          confirm, nothing to approve — of what needs a human's attention across every board:
+          tasks stuck past their normal time in a status, overdue tasks, and tasks a producer
+          created (a rank-drop alert, a completed content run, …) that nobody has touched yet.
+          It's silent on a genuinely clean day.</p>
+        <div class="broadcast">
+          <p class="bc-head">PACE daily · 74 items need a human</p>
+          <ul>
+            <li><em>First Class Roofing</em> — "Map Embeds" blocked 48d (Ivy Gervacio) → <span class="mono">@PACE unblock Map Embeds on First Class Roofing</span></li>
+            <li><em>EML Calibration</em> — "4x DAS" in_progress 48d (Minda) → <span class="mono">@PACE unblock 4x DAS on EML Calibration</span></li>
+            <li><em>ZDSCS</em> — "Press Release" in_progress 48d (Kyle Sabraw) → <span class="mono">@PACE unblock Press Release on ZDSCS</span></li>
+          </ul>
+          <p class="bc-more">… +66 more</p>
+        </div>
+        <p>Each line already gives you the exact thing to say back to PACE if you want it handled
+          right there.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>The daily Chase Plan (PACE's own proposals)</h2></div>
+        <p class="lede">Once a day, PACE also posts a <strong>numbered list of fixes it wants to
+          make</strong> — nudges, auto-placements for unassigned work, due-date suggestions —
+          built from the same problems the digest reports. Nothing in it runs until you reply.</p>
+        <div class="broadcast">
+          <p class="bc-head">PACE chase plan — 3 proposed actions <span style="font-weight:400;color:var(--ink-faint);font-size:0.8rem;">(reply "yes" for all, or "yes 1,3" to pick)</span></p>
+          <ol>
+            <li>Nudge Minda — "Citations Audit" overdue — remind Minda — <em>Henson Architect</em></li>
+            <li>Nudge Minda — "Cloud Stack" overdue — remind Minda — <em>Parallel Accounting</em></li>
+            <li>Nudge Kyle Sabraw — "Press Release" overdue — remind Kyle Sabraw — <em>ZDSCS</em></li>
+          </ol>
+        </div>
+        <ul>
+          <li>Reply <strong>yes</strong> to run every item, or <strong>yes 1,3</strong> (or
+            "yes 1-3", "approve 2") to run only some. Anything you don't select is dropped for
+            today — if it's still a real problem tomorrow, it reappears in tomorrow's plan.</li>
+          <li><strong>Whoever confirms authorizes it.</strong> A junior teammate can approve a
+            nudge; a reassignment needs a <em>staff</em> role or higher — if you're not
+            authorized, PACE tells you which item and why instead of silently skipping it.</li>
+          <li>An unconfirmed plan is never run late — it's simply replaced by the next day's plan.</li>
+          <li><strong>A flag line means PACE couldn't safely stage something on its own.</strong>
+            The most common one is an ambiguous task name — several tasks on the same client
+            share a name (three separate "GBP Blast" tasks across different months) — and PACE
+            won't guess which one you mean. It lists them and waits for you to be specific.</li>
+        </ul>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Follow-through: PACE doesn't forget</h2></div>
+        <p class="lede">Every problem PACE flags gets a clock, not just a one-time mention:</p>
+        <ul>
+          <li>While a problem is open, PACE proposes a fix for it in <strong>every</strong> day's
+            Chase Plan — an unaddressed nudge keeps coming back, it doesn't quietly drop off.</li>
+          <li>If <strong>3 business days</strong> pass with genuinely no movement (no status
+            change, no comment, no reassignment — anything counts, even something unrelated to
+            the fix PACE proposed), PACE posts <strong>one public escalation</strong>, naming the
+            task, the assignee, the client, and how long it's been stuck. It never escalates the
+            same problem twice.</li>
+        </ul>
+        <div class="broadcast">
+          <p class="bc-head">PACE escalation — 2 items stuck ≥3 business days with nobody acting</p>
+          <ul>
+            <li>"Review &amp; publish: what is a public adjuster" (BSA Claims) — Ryan Maizis, stale with no movement for 3 business days</li>
+            <li>"Review &amp; publish: What does a third party claims administrator do?" (BSA Claims) — Ivy Gervacio, stale with no movement for 3 business days</li>
+          </ul>
+        </div>
+        <p>The lesson here isn't "you got called out" — it's a nudge that a task has been
+          genuinely idle. Touching it (even just leaving a comment) resets the clock.</p>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Nudges &amp; DMs</h2></div>
+        <p>You can ask PACE to nudge someone ("nudge Ivy about the roof-repair GBP post"), or it'll
+          propose a nudge itself in the Chase Plan or as part of following through on an episode.
+          Either way, once confirmed:</p>
+        <ol>
+          <li>PACE tries a <strong>direct Slack DM</strong> to that person first.</li>
+          <li>If they're not linked to Slack, or DMs aren't working, it <strong>@-mentions</strong>
+            them in the channel instead.</li>
+          <li>If neither is possible, it still writes an <strong>in-app notification</strong> to
+            their bell — nothing about a nudge is ever silently lost.</li>
+        </ol>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Per-person morning briefs</h2></div>
+        <p>Each linked team member can also get their own overdue/today/this-week list pushed to
+          them as a Slack DM every workday morning — the same content as asking PACE "what should
+          I work on today?", just delivered without asking. Unlinked members are skipped and
+          named in a summary ("3 unreachable — link them on the Team page") rather than silently
+          missed:</p>
+        <div class="broadcast"><p class="bc-head" style="margin:0;">Morning briefs — 1 member briefed, 3 unreachable.</p></div>
+        <p>If you're not getting yours, ask an admin to link your Slack account on the Team page.</p>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>What you can ask PACE to do</h2></div>
+        <p class="lede">Anything you'd ask a PM. A few real examples:</p>
+        <ul>
+          <li><strong>Status questions</strong> — "what's overdue for Acme?", "what does Ivy have
+            on her plate?", "are we behind pace this month?", "why is the GBP post stuck?" (PACE
+            pulls the task's full history — subtasks, comments, activity — before answering that
+            last one).</li>
+          <li><strong>"What should I work on today?"</strong> — answers from <em>your own</em>
+            linked queue, no client needed.</li>
+          <li><strong>One-off actions</strong> — reassign a task, set or bump a due date, move a
+            task forward or back through the workflow (including reopening something completed),
+            unblock a task, nudge someone, fill in a task's missing due date/category/estimate
+            ("triage"), generate this month's tasks, kick off a QA review, or write this week's
+            client-update email. Every one of these is confirm-gated.</li>
+          <li><strong>Batches</strong> — "nudge all of Ivy's overdue tasks", "bump every overdue
+            due date on Acme by a week", "reassign the unassigned ones to Marcus" — PACE resolves
+            the whole matching set from the board data and stages it as <strong>one</strong>
+            confirm covering all of them.</li>
+        </ul>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Who can ask PACE to do what</h2></div>
+        <p>PACE reuses the same four roles the rest of the suite does: <strong>client &lt;
+          team_member &lt; staff &lt; admin</strong>. If you're below the floor for something,
+          PACE tells you the role it needs rather than pretending it can't find the action.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Action</th><th style="width:26%">Minimum role</th></tr></thead>
+            <tbody>
+              <tr><td>Read any board / ask "what's overdue"</td><td class="mono">team_member</td></tr>
+              <tr><td>Move or set a due date on <strong>your own</strong> task</td><td class="mono">team_member</td></tr>
+              <tr><td>Nudge <strong>yourself</strong> about a task</td><td class="mono">team_member</td></tr>
+              <tr><td>Run a QA review on a task</td><td class="mono">team_member</td></tr>
+              <tr><td>Nudge <strong>someone else</strong></td><td class="mono">staff</td></tr>
+              <tr><td>Reassign a task, or auto-assign an unassigned one</td><td class="mono">staff</td></tr>
+              <tr><td>Move or set a due date on <strong>someone else's</strong> task</td><td class="mono">staff</td></tr>
+              <tr><td>Unblock a task</td><td class="mono">staff</td></tr>
+              <tr><td>Fill in a task's missing due date/category/estimate</td><td class="mono">staff</td></tr>
+              <tr><td>Generate a delivery report</td><td class="mono">staff</td></tr>
+              <tr><td>Write the weekly client-update email</td><td class="mono">staff</td></tr>
+              <tr><td>Generate this month's tasks <strong>by asking PACE</strong></td><td class="mono">admin</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="why">
+          <p class="why-label">A real gotcha</p>
+          <p>Clicking <strong>Generate this month</strong> on the Tasks page itself is open to
+            anyone, but <em>asking PACE to do it in chat</em> currently requires admin — the two
+            paths aren't gated the same way. If PACE tells you it needs an admin for that, use
+            the button on the board instead if you're not one.</p>
+        </div>
+        <p>An unlinked Slack account can still read the digest, but every write is refused until
+          an admin links you on the Team page.</p>
+      </section>
+
+      <section id="s12" class="block">
+        <div class="block-head"><span class="block-num">12</span><h2>What PACE leaves on the task's Activity log</h2></div>
+        <p class="lede">Worth knowing so you're not confused later: <strong>PACE doesn't leave
+          its own signature.</strong></p>
+        <p>When it reassigns, unblocks, or moves a task, the activity entry is the exact same
+          kind you'd see from a manual edit — "changed the assignee," "changed the status,"
+          "changed a date" — and it's attributed to whoever typed <strong>yes</strong> to confirm
+          it, not to "PACE" as a distinct actor.</p>
+        <div class="note">
+          <p>If you see a task's status flip and don't remember doing it, it was probably a
+            Chase Plan or nudge you (or a teammate) confirmed earlier that day — check the Slack
+            thread, not the task, for the "why." QA's entries are the one exception: a completed
+            review always leaves its own clearly labeled <strong>"QA reviewed the
+            deliverable"</strong> row (§20).</p>
+        </div>
+      </section>
+
+      <div class="part-divider"><span class="pd-num">Part 2</span><h2>QA</h2></div>
+
+      <section id="s13" class="block">
+        <div class="block-head"><span class="block-num">13</span><h2>What QA actually does</h2></div>
+        <p class="lede">QA is the gate between "a VA marked it done" and "it goes to the client."</p>
+        <p>When a task reaches <strong>In QA</strong>, QA finds the thing that was actually
+          produced — a page, a GBP post's text, a batch of citations, a guest post — runs a fixed
+          checklist for that <em>kind</em> of deliverable, and settles on one of four outcomes.</p>
+        <div class="why">
+          <p class="why-label">Deliberately mechanical</p>
+          <p>The pass/fail decision is always computed in code, <strong>never guessed by an
+            LLM</strong>. An AI model is only used to <em>phrase</em> the explanation, plus two
+            narrow judgment calls (does a map-embed page contain a real "we provide this service"
+            sentence, and does a rendered screenshot look visually broken) — and neither of those
+            can flip a verdict the deterministic checks already decided.</p>
+        </div>
+      </section>
+
+      <section id="s14" class="block">
+        <div class="block-head"><span class="block-num">14</span><h2>How a review gets triggered</h2></div>
+        <ol>
+          <li><strong>Automatically</strong>, the moment a task's status becomes In QA — including
+            the board's own auto-advance when you check off the last checklist item. This is the
+            normal path: finish the work, and QA runs unprompted.</li>
+          <li><strong>The "For QA" button</strong> in the task drawer header — moves the task to
+            In QA and reviews it right away, for when you want a check before the checklist is
+            technically finished.</li>
+          <li><strong>The "Run QA" button</strong> inside the QA panel itself — reviews the task
+            in place without changing its status.</li>
+          <li><strong>Ask PACE</strong> — "run QA on the roof-repair GBP post for Acme" (or ask QA
+            directly, §19). Confirm-gated like any PACE action.</li>
+        </ol>
+        <p>A task that just <strong>passed</strong> won't be re-reviewed automatically if it's
+          dragged out of In QA and back within 30 minutes — that flap guard only applies to a
+          clean pass; a bounced task re-entering In QA (the normal rework loop) always re-runs.</p>
+      </section>
+
+      <section id="s15" class="block">
+        <div class="block-head"><span class="block-num">15</span><h2>The QA panel (in the task drawer)</h2></div>
+        <p>Every top-level task has a <strong>QA</strong> section in its drawer, below the checklist:</p>
+        <ul>
+          <li>A <strong>readiness banner</strong> — plain English on whether QA can even run yet,
+            and exactly what's missing if not ("Before QA can run, add: the page URL to review").
+            The Run QA button is disabled until readiness clears.</li>
+          <li>A <strong>Rubric</strong> dropdown, in case the task's name doesn't clearly say what
+            kind of deliverable it is.</li>
+          <li>For a website page, a <strong>Page type</strong> dropdown (service / local landing
+            / location) — picks which of the client's stored reference-page layouts the
+            design-fit check compares against.</li>
+          <li><strong>Page URL to review</strong> and <strong>Target keyword</strong> fields — the
+            guided way to give QA what it needs, instead of relying on task-naming conventions.</li>
+          <li>The <strong>Run QA</strong> button, the latest verdict, a per-check breakdown, the
+            URL(s) it actually opened, and a collapsible history of every past review.</li>
+        </ul>
+      </section>
+
+      <section id="s16" class="block">
+        <div class="block-head"><span class="block-num">16</span><h2>Reading a verdict</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:22%">Verdict</th><th style="width:34%">What it means</th><th>What happens to the task</th></tr></thead>
+            <tbody>
+              <tr><td><span class="verdict pass">Passed</span></td><td>Every blocking check cleared.</td><td>Stays in In QA — someone still moves it on to Sent to Client by hand.</td></tr>
+              <tr><td><span class="verdict fail">Failed</span></td><td>At least one blocking check came back false.</td><td>Bounces to In Progress, and QA adds a "Rework: …" checklist item for each failed check.</td></tr>
+              <tr><td><span class="verdict human">Needs a human</span></td><td>A blocking check couldn't be verified at all.</td><td>Stays exactly where it was. QA never guesses; a person has to look.</td></tr>
+              <tr><td><span class="verdict skip">Not QA-checked</span></td><td>This deliverable type is out of QA's scope entirely.</td><td>Stays where it was; nothing else happens.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="why">
+          <p class="why-label">Fail-open is the whole safety model</p>
+          <p>Anything QA can't verify — a site that blocked the fetch, a missing deliverable
+            link, no keyword on the task, an unreachable screenshot — reads as <strong>Needs a
+            human</strong>, never as an automatic fail. QA would rather ask a person than wrongly
+            bounce good work.</p>
+        </div>
+
+        <h3>The self-closing rework loop</h3>
+        <p>A failed review's "Rework: …" items are real checklist items, not just notes — which
+          means checking them all off <strong>automatically moves the task back to In QA</strong>,
+          exactly like finishing the checklist normally does, and QA re-reviews it on its own. Fix
+          → check the box → re-review → pass, with nobody having to remember to re-run anything.</p>
+        <div class="qacard">
+          <span class="verdict fail">Failed</span>
+          <p style="margin:0.6rem 0 0; font-size:0.82rem; color:var(--ink-faint); font-family:'IBM Plex Mono',monospace; text-transform:uppercase; letter-spacing:.04em;">QA_Checklists §Blog Post (Title + body)</p>
+          <ul class="qc-checks">
+            <li class="ok">Key Takeaways section present</li>
+            <li class="bad">CTA present</li>
+            <li class="ok">No duplicate headings</li>
+            <li class="adv">(advisory) 0 external link(s)</li>
+          </ul>
+          <p class="qc-explain">"The deliverable fails because two blocking checks are unmet: no
+            CTA is present (must point to the correct page), and no external citations are
+            present (advisory, but the 0-link result indicates missing authority support).
+            Rework the article to add a clear call-to-action linking to a relevant service page
+            and incorporate at least one external link…"</p>
+        </div>
+        <p>That task got a new checklist item, rendered as <span class="mono">Rework: &lt;the
+          failed check's label&gt;</span> — and once checked off, the article went back into the
+          QA queue on its own.</p>
+
+        <h3>What to actually do about "Needs a human"</h3>
+        <p>This is the most common outcome until the team's conventions are second nature:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:30%">The panel says…</th><th style="width:30%">Usually means</th><th>Fix</th></tr></thead>
+            <tbody>
+              <tr><td>"the page URL to review" is missing</td><td>No link on the task</td><td>Fill in the Page URL to review field, or add a "Deliverable links" subtask</td></tr>
+              <tr><td>"the target keyword" is missing</td><td>Keyword check couldn't run</td><td>Fill in Target keyword, or make sure it's in the task name</td></tr>
+              <tr><td>"could not verify" on a keyword check</td><td>Same as above</td><td>Same fix</td></tr>
+              <tr><td>"deliverable link can't be graded automatically"</td><td>You linked a Google Doc/Slides/Forms draft, not the live page</td><td>Link the actual live placement instead</td></tr>
+              <tr><td>"page unreachable/blocked"</td><td>The site timed out or bot-blocked the fetch</td><td>Open it yourself and confirm it's actually live; re-run QA</td></tr>
+              <tr><td>"screenshot unavailable"</td><td>The visual-render check couldn't capture the page</td><td>The rest of the review still stands — check manually if worried</td></tr>
+              <tr><td>Sheet read comes back empty</td><td>The Google Sheet isn't shared "anyone with the link," or has no URL column</td><td>Fix sharing, or add a Live URL / Citation URL header column</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s17" class="block">
+        <div class="block-head"><span class="block-num">17</span><h2>The rubrics — every checklist QA can run</h2></div>
+        <p class="lede">QA figures out which checklist applies by matching the task's (or its
+          library template's) name, case-insensitively, first match wins. A task generated by a
+          Blog Writer run is always graded as a blog article regardless of its name. If nothing
+          matches, it's flagged <strong>generic</strong> — QA never invents a standard for a task
+          type it doesn't recognize.</p>
+
+        <h3>GBP Posts</h3>
+        <p><em>Blocking, all three, bounce if any fail:</em></p>
+        <ul>
+          <li>Target keyword present in the body.</li>
+          <li>A CTA is present (an imperative phrase like "call," "get a quote," or a
+            <span class="mono">tel:</span> link).</li>
+          <li>At least one emoji.</li>
+        </ul>
+        <p>The post's copy is read from the task's "Deliverable links" subtask description, then
+          the task description, then — if the post was actually published through the suite's
+          GBP Posts tool — the real copy that went live, with no paste needed at all.</p>
+
+        <h3>Citations</h3>
+        <p><em>Blocking:</em> the business's <strong>name, address, and phone (NAP)</strong>
+          match the client card, sampled from <strong>3</strong> citations pulled off the linked
+          Google Sheet (first / a middle one / last — the same three every re-run). A page that
+          can't be fetched reads "could not verify," never a fail.</p>
+
+        <h3>Guest Posts / Niche Edits</h3>
+        <p><em>Blocking, one check:</em> the placement's body content contains a <strong>link
+          back to the client's own website</strong>.</p>
+
+        <h3>Press Release</h3>
+        <p><em>Blocking, bounce if any of these four fail:</em></p>
+        <ul>
+          <li>Target keyword in the <strong>title</strong>.</li>
+          <li>Target keyword somewhere in the <strong>body</strong>.</li>
+          <li>At least one link whose anchor text is <strong>not</strong> an exact match of the
+            keyword (guards against over-optimized anchor text).</li>
+          <li><strong>NAP included</strong> on the page.</li>
+        </ul>
+
+        <h3>Map Embeds</h3>
+        <p><em>Blocking, bounce if any missing:</em></p>
+        <ul>
+          <li>A <strong>grammatically correct, plain-English sentence</strong> stating that the
+            client provides the service (e.g. "Amazing Rankings provides SEO services in
+            Sydney") — not structured data, a real sentence. The only place QA hands this
+            judgment to a small AI model.</li>
+          <li><strong>NAP included.</strong></li>
+          <li>A <strong>Google Maps embed</strong> actually present on the page.</li>
+        </ul>
+
+        <h3>Website Pages Posted</h3>
+        <p>The deepest rubric — it checks everything the automated SEO scorer can't see. Blocking
+          unless marked advisory:</p>
+        <ul>
+          <li>Meta title present.</li>
+          <li>Target keyword in the <strong>title tag</strong>, the <strong>URL slug</strong>,
+            and the <strong>H1</strong>.</li>
+          <li>An <strong>internal link</strong> to the client's own site.</li>
+          <li><strong>Images have alt text.</strong></li>
+          <li>The client's <strong>business name</strong> actually appears on the page.</li>
+          <li><em>(advisory)</em> Meta description present.</li>
+          <li><strong>Design fit — layout</strong>: section structure and heading order compared
+            against the client's stored reference page for that page type. Below the fidelity
+            floor it reads "could not verify," never a fail — and if the client has no reference
+            page on file, this check reports itself as unavailable (advisory) instead of a
+            meaningless score.</li>
+          <li><strong>Design fit — visual, two layers</strong>: every stylesheet and image is
+            checked for a hard 404 (a dead stylesheet is blocking; a dead image is advisory), and
+            when nothing free already vouches for a clean render, a rendered screenshot is judged
+            by a small AI model for obvious visual breakage. Only a high-confidence broken render
+            fails; anything uncertain is "needs a human," never an auto-bounce.</li>
+        </ul>
+        <p>If the page is one the suite itself generated (a Local SEO page, an ecommerce page, a
+          Website Builder page), its live URL is found automatically — nothing to paste — and the
+          page's own SEO quality score rides along in the review as a bonus reference number.</p>
+
+        <h3>Blog Post (Title + body)</h3>
+        <p>Reads the finished article text straight from the content run. Blocking unless marked
+          advisory:</p>
+        <ul>
+          <li>A <strong>Key Takeaways</strong> section present.</li>
+          <li>A <strong>CTA</strong> present.</li>
+          <li><strong>No duplicate headings.</strong></li>
+          <li><em>(advisory)</em> Paragraphs within the length cap; at least one external
+            citation; the target keyword present.</li>
+        </ul>
+
+        <h3>Not QA-checked / handed off</h3>
+        <p>A few task types are deliberately <strong>not</strong> graded by QA at all:</p>
+        <ul>
+          <li><strong>GBP Blast</strong>, <strong>HyperLocal GBP Blast</strong>, <strong>Blog
+            Post Scheduling</strong> — owner ruling: not a deliverable QA checks.</li>
+          <li><strong>Service Silo</strong> — hands off to SerMaStr instead. Judging whether a
+            silo plan picked the right services and groupings is a strategy call, not a presence
+            check.</li>
+          <li>Anything QA doesn't recognize at all reads <strong>"needs a human"</strong> (the
+            <strong>generic</strong> rubric) rather than being silently skipped.</li>
+        </ul>
+      </section>
+
+      <section id="s18" class="block">
+        <div class="block-head"><span class="block-num">18</span><h2>The "Deliverable links" convention</h2></div>
+        <p class="lede">QA can only check a deliverable it can find. For anything living on a
+          third-party site (a guest post, a niche edit, a press release, a citation, a map
+          embed), give it a <strong>"Deliverable links"</strong> subtask before moving the task
+          to In QA:</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:28%">Deliverable</th><th>Where to put the link</th></tr></thead>
+            <tbody>
+              <tr><td>Guest post / niche edit</td><td>The URL, in the subtask itself</td></tr>
+              <tr><td>Citations / press release</td><td>A Google Sheet link, shared "anyone with the link → Viewer," ideally with a Live URL / Citation URL header column</td></tr>
+              <tr><td>Map embeds</td><td>A .txt file attached to the task, listing the placement URL(s)</td></tr>
+              <tr><td>A website page you posted yourself</td><td>The Page URL to review field in the QA panel — no subtask needed</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="why">
+          <p class="why-label">Never do this</p>
+          <p>Never paste a <strong>Google Doc/Slides/Forms</strong> link as the deliverable —
+            that's a draft container, not a live placement, and its rendered HTML would
+            false-fail the checks; link the live page instead.</p>
+        </div>
+        <p><strong>The target keyword</strong> normally just needs to be part of the task's name
+          — QA reads it as the name minus the standard template name ("GBP Posts — emergency roof
+          repair," or a task fully renamed to just the keyword). A bare template name with
+          nothing added yields "could not verify," never a guess. An explicit
+          <span class="mono">Keyword: &lt;term&gt;</span> line in the description always
+          overrides, and the Target keyword field in the QA panel is the simplest option of all.</p>
+      </section>
+
+      <section id="s19" class="block">
+        <div class="block-head"><span class="block-num">19</span><h2>Talking to QA directly</h2></div>
+        <p class="lede">Beyond the automatic reviewer, there's a dedicated <strong>QA chat</strong>
+          — a <span class="mono">/qa</span> entry in the sidebar, live today. It's a friendly,
+          plain-spoken reviewer built for someone who's never QA'd anything before:</p>
+        <ul>
+          <li><strong>Paste a live URL</strong> and say what it is ("QA this guest post," "check
+            this citation," or just paste a link on the client's own site) — it runs the real
+            checks inline and reports back, without touching the board at all.</li>
+          <li><strong>Name a board task</strong> ("QA the Inner West page") — it confirms before
+            running the full task review, since that one <em>can</em> bounce the task.</li>
+          <li><strong>Ask how QA's been going</strong> — "what failed QA this week for Acme?" —
+            it answers from the actual recorded verdicts, never re-judging anything itself.</li>
+        </ul>
+        <p>If you paste a link to something on someone else's site (a guest post, a press
+          release, a directory listing), QA will ask which client it's for — that's expected, not
+          a bug, since a third-party link can't reveal the client on its own.</p>
+      </section>
+
+      <section id="s20" class="block">
+        <div class="block-head"><span class="block-num">20</span><h2>Where QA results show up</h2></div>
+        <ul>
+          <li><strong>The task drawer's QA panel</strong> — always the full history.</li>
+          <li><strong>Notifications</strong> — a fail or needs-human posts a warning to the
+            client's feed (and Slack, when configured); a clean pass is silent by default so the
+            channel isn't noisy. Repeated fails on the same task in one day post only once.</li>
+          <li><strong>The task's Activity log</strong> — a distinctly labeled "QA reviewed the
+            deliverable" entry, every time (contrast this with PACE's writes, which look like
+            ordinary edits — §12).</li>
+          <li><strong>SerMaStr and PACE</strong> can both read recent QA verdicts when you ask
+            them about a client's quality or delivery health — they cite the recorded verdict
+            rather than re-judging anything.</li>
+        </ul>
+      </section>
+
+      <section id="s21" class="block">
+        <div class="block-head"><span class="block-num">21</span><h2>Who owns what, once QA is involved</h2></div>
+        <ul>
+          <li><strong>QA</strong> judges the deliverable and opens the finding — the bounce, the
+            rework items. It doesn't chase anyone or decide what to do next.</li>
+          <li><strong>PACE</strong> owns getting the rework actually done — nudging, reassigning,
+            keeping the bounced task moving.</li>
+          <li><strong>SerMaStr</strong> owns the judgment calls QA hands off (a Service Silo
+            plan) and any systemic pattern QA's findings reveal (every page on a client failing
+            the same check is a strategy signal, not just a string of one-off fails).</li>
+        </ul>
+      </section>
+
+      <section id="s22" class="block">
+        <div class="block-head"><span class="block-num">22</span><h2>Quick reference</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:44%">Want to…</th><th>Where</th></tr></thead>
+            <tbody>
+              <tr><td>See what's overdue/stuck across every board</td><td>The daily digest, or ask PACE in #pace / /pace</td></tr>
+              <tr><td>Approve PACE's proposed fixes for the day</td><td>Reply "yes" (or "yes 1,3") to the Chase Plan</td></tr>
+              <tr><td>Ask "what should I work on today?"</td><td>#pace or /pace, no client needed</td></tr>
+              <tr><td>Get PACE to reassign / due-date / unblock / nudge one task</td><td>Ask it in plain English — it confirms before acting</td></tr>
+              <tr><td>Fix several tasks at once</td><td>Ask PACE for a batch — "nudge all of X's overdue"</td></tr>
+              <tr><td>Find out why a task is stuck</td><td>Ask PACE — it reads the task's full history before answering</td></tr>
+              <tr><td>Generate this month's tasks via chat</td><td>Needs admin — use the board's own button otherwise</td></tr>
+              <tr><td>Check a specific task's deliverable</td><td>Task drawer → QA panel → Run QA</td></tr>
+              <tr><td>Fix a "needs a human" result</td><td>See the troubleshooting table (§16) — usually a missing link or keyword</td></tr>
+              <tr><td>Work through a failed review</td><td>Check off the "Rework:" items QA added — it re-reviews itself</td></tr>
+              <tr><td>QA a page without a task</td><td>The /qa chat — paste the URL</td></tr>
+              <tr><td>See what QA has caught recently</td><td>Task's Activity log, the QA panel's history, or ask QA/PACE/SerMaStr</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <p class="colophon">See also the Task Manager Field Guide for the board itself — sections,
+        statuses, checklists, views, and Task Library — and
+        <span class="mono">docs/pm-operations-addendum.md</span> for the judgment calls behind
+        capacity, duplicate task names, and Chase Plan triage.</p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+  if(!('IntersectionObserver' in window)) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      var link = document.querySelector('.rail-list a[data-target="'+entry.target.id+'"]');
+      if(!link) return;
+      if(entry.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(function(s){ if(s) io.observe(s); });
+})();
+</script>
+
+</body>
+</html>

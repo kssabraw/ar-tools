@@ -1,0 +1,648 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A novice-to-proficient walkthrough for SerMaStr, the agency's AI Director of SEO.">
+<title>SerMaStr Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --paper:#F0EEE7; --paper-raised:#FFFFFF; --ink:#1C2321; --ink-soft:#56605B; --ink-faint:#8A9089;
+    --line:#D9D4C6; --line-strong:#C3BDA9; --teal:#1F6F72; --teal-ink:#0F4547; --teal-soft:#E1EEED;
+    --brass:#A8752A; --brass-ink:#7A551D; --brass-soft:#F3E7D2; --rust:#AE4D38; --rust-soft:#F5E4DE;
+    --shadow: 0 1px 2px rgba(28,35,33,0.06), 0 8px 24px rgba(28,35,33,0.05); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+      --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+      --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#181B19; --paper-raised:#20241F; --ink:#ECE8DE; --ink-soft:#B4B4A9; --ink-faint:#767C74;
+    --line:#33372F; --line-strong:#454A3F; --teal:#59B0AB; --teal-ink:#BEEAE4; --teal-soft:#1B2F2C;
+    --brass:#D9A54B; --brass-ink:#F0CC8B; --brass-soft:#2E2415; --rust:#E08267; --rust-soft:#331F19;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.25);
+  }
+  *{ box-sizing:border-box; }
+  body{ background:var(--paper); color:var(--ink); font-family:"IBM Plex Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Fraunces", Georgia, "Times New Roman", serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--teal-ink, var(--teal)); }
+  a:focus-visible, button:focus-visible, summary:focus-visible{ outline:2px solid var(--teal); outline-offset:2px; }
+  code, .mono{ font-family:"IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding: 0 1.5rem 6rem; }
+
+  .masthead{ padding: 3.25rem 0 2.25rem; border-bottom: 1px solid var(--line); display:flex; flex-direction:column; gap:1.75rem; }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:64px; height:64px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"IBM Plex Mono", monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--brass-ink, var(--brass)); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem, 1.4rem + 1.8vw, 2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Fraunces", serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  .layout{ display:grid; grid-template-columns: 240px minmax(0,1fr); gap: 3rem; margin-top:2.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.84rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; transition:color .15s ease, border-color .15s ease; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--teal-ink,var(--teal)); border-left-color:var(--teal); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding: 2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"IBM Plex Mono", monospace; font-size:0.85rem; color:var(--brass-ink,var(--brass)); letter-spacing:0.03em; flex:none; }
+  .block h2{ font-size:1.5rem; }
+  .block h3{ font-size:1.08rem; margin-top:1.9rem; margin-bottom:0.6rem; font-weight:600; }
+  .block p{ margin:0.9rem 0; color:var(--ink); max-width:40rem; }
+  .block p.lede{ font-size:1.06rem; }
+  .block ul, .block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.4rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .why{ background:var(--brass-soft); border-left:3px solid var(--brass); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .why-label{ font-family:"IBM Plex Mono", monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--brass-ink,var(--brass)); margin:0 0 0.3rem; font-weight:600; }
+  .why p{ margin:0; color:var(--ink); }
+  .note{ background:var(--teal-soft); border-left:3px solid var(--teal); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .note p{ margin:0; }
+  .note strong{ color:var(--teal-ink,var(--teal)); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.9rem; }
+  thead th{ text-align:left; font-family:"IBM Plex Mono", monospace; font-size:0.66rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); font-weight:600; }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink); }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; color:var(--ink); }
+
+  /* Conversation transcript */
+  .chat{ border:1px solid var(--line); border-radius:var(--radius); padding:1rem 1.2rem; margin:1.2rem 0; background:var(--paper-raised); box-shadow:var(--shadow); }
+  .chat .turn{ margin:0.6rem 0; line-height:1.65; color:var(--ink); }
+  .chat .turn:first-child{ margin-top:0; }
+  .chat .turn:last-child{ margin-bottom:0; }
+  .chat .who{ font-family:"IBM Plex Mono",monospace; font-size:0.66rem; letter-spacing:.08em; text-transform:uppercase; margin-right:0.55rem; font-weight:600; }
+  .chat .who.you{ color:var(--ink-faint); }
+  .chat .who.bot{ color:var(--teal-ink,var(--teal)); }
+  .chat ol{ margin:0.5rem 0 0.3rem 0; padding-left:1.4rem; }
+  .chat-cap{ font-family:"IBM Plex Mono",monospace; font-size:0.68rem; letter-spacing:.08em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.6rem; }
+
+  /* Exercise checklist */
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"IBM Plex Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--brass); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .refcard h3{ margin-top:0; font-size:1rem; }
+  .refcard h3:first-child{ margin-top:0; }
+
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.86rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-title{ margin-bottom:0.5rem; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--teal-soft); border-color:var(--teal); }
+  }
+  @media (max-width:640px){ .masthead-inner{ gap:1rem; } .mark{ width:48px; height:48px; } .masthead{ padding-top:2rem; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <path d="M32 6 L37 27 L58 32 L37 37 L32 58 L27 37 L6 32 L27 27 Z" fill="var(--brass)" stroke="var(--ink)" stroke-width="1.2" stroke-linejoin="round"/>
+          <path d="M50 10 L52.5 17 L60 19.5 L52.5 22 L50 29 L47.5 22 L40 19.5 L47.5 17 Z" fill="var(--teal)" stroke="var(--ink)" stroke-width="1" stroke-linejoin="round"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · SEO Strategy</p>
+        <h1>SerMaStr, start to proficient</h1>
+        <p class="dek">The agency's AI Director of SEO — a chat teammate with read access to
+          everything the suite knows about a client, and the judgment to answer strategy
+          questions the way a senior strategist would.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">14</span><span class="meta-label">Sections</span></div>
+      <div class="meta-item"><span class="meta-num">3</span><span class="meta-label">Proficiency levels</span></div>
+      <div class="meta-item"><span class="meta-num">2</span><span class="meta-label">Action tiers</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Code required</span></div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Short version</a></li>
+        <li><a href="#s2" data-target="s2">02 · Where to find it</a></li>
+        <li><a href="#s3" data-target="s3">03 · What it actually is</a></li>
+        <li><a href="#s4" data-target="s4">04 · How it thinks</a></li>
+        <li><a href="#s5" data-target="s5">05 · What it can see</a></li>
+        <li><a href="#s6" data-target="s6">06 · What it can do</a></li>
+        <li><a href="#s7" data-target="s7">07 · What it can NOT do</a></li>
+        <li><a href="#s8" data-target="s8">08 · The other agents</a></li>
+        <li><a href="#s9" data-target="s9">09 · Novice path</a></li>
+        <li><a href="#s10" data-target="s10">10 · Intermediate path</a></li>
+        <li><a href="#s11" data-target="s11">11 · Advanced usage</a></li>
+        <li><a href="#s12" data-target="s12">12 · Troubleshooting</a></li>
+        <li><a href="#s13" data-target="s13">13 · Practice exercises</a></li>
+        <li><a href="#s14" data-target="s14">14 · Quick reference</a></li>
+      </ol>
+    </nav>
+
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>The one-paragraph version</h2></div>
+        <p class="lede"><strong>SerMaStr is the agency's AI Director of SEO.</strong> It's a
+          chat-based teammate — reachable in Slack and on its own dashboard page — that has read
+          access to <em>everything</em> the suite knows about a client (rankings, Maps presence,
+          AI-answer visibility, content produced, competitors, budget, backlinks, alerts, the
+          SOPs) and can answer strategy questions the way a senior strategist would: opinionated,
+          specific, citing the numbers and the playbook.</p>
+        <p>It can also <strong>take action</strong> — running scans, editing campaign settings,
+          creating tasks, even commissioning a new page — but anything that costs money or
+          changes something real is confirmed with you first. It doesn't schedule your day and it
+          doesn't chase your team for status updates; that's <strong>PACE</strong>, its sibling
+          agent (§8). SerMaStr's job is judgment: <em>what should we do, and why.</em></p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Where to find it</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:26%">Surface</th><th>How to get there</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Slack — dedicated channel</td><td>Ask an admin which channel is wired up for SerMaStr. Just type your question in plain English — <strong>no @mention needed.</strong> SerMaStr answers every human message posted there.</td></tr>
+              <tr><td class="term">Slack — DM</td><td>You can also DM the SerMaStr bot directly. Works the same as the channel.</td></tr>
+              <tr><td class="term">Dashboard</td><td>Sidebar → <strong>SerMaStr</strong> (the sparkle icon) → <span class="mono">/assistant</span>. A full-page chat, same brain as Slack.</td></tr>
+              <tr><td class="term">In-thread memory</td><td>Reply inside a Slack thread and SerMaStr reads the thread history — you don't have to re-explain context turn to turn.</td></tr>
+              <tr><td class="term">Conversation history</td><td>The dashboard chat saves your threads server-side (not just your browser) — a picker lets you reopen an old one or start fresh. Only you (and admins, for troubleshooting) can read your own threads.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>If you don't see the SerMaStr sidebar entry or the Slack channel doesn't respond, ask
+          an admin — it's a one-time setup, not something you provision yourself.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>What SerMaStr actually is</h2></div>
+        <p>Under the hood, SerMaStr is given a system prompt that starts:</p>
+        <div class="chat">
+          <p class="turn"><em>"You are SerMastr, the agency's Director of SEO — a senior
+            strategist teammates come to for judgment, not just data."</em></p>
+        </div>
+        <p>That framing matters, because it explains the tone you'll get and the behavior to
+          expect:</p>
+        <ul>
+          <li><strong>It has opinions, and it commits to them.</strong> Ask "what should we do
+            about Acme's roof-repair keyword?" and you'll get a recommendation with a reason —
+            not a bulleted list of neutral options. If your ask contradicts the data, it will
+            push back and show you the number that changed its mind.</li>
+          <li><strong>It decides instead of interrogating you.</strong> If you ask something
+            underspecified, it makes the sensible professional call, states the assumption in one
+            line so you can correct it, and moves on — it only stops to ask a real question when
+            the answer would flip the whole recommendation and it genuinely can't infer it.</li>
+          <li><strong>It's not always running.</strong> A full <strong>strategist review</strong>
+            (the deepest, most expensive mode — §11) runs weekly for clients with something worth
+            reviewing, or on demand, or when something serious happens. Day-to-day chat answers
+            are a lighter-weight read of live data, not a full review every time.</li>
+          <li><strong>It remembers, per client.</strong> SerMaStr can save a short durable note
+            about a client — a decision made in conversation, a commitment, a fact the suite
+            doesn't track — and bring it back up later, including following up on commitments
+            that look overdue.</li>
+        </ul>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>How SerMaStr thinks — four ideas worth understanding first</h2></div>
+
+        <h3>4.1 Everything is scoped to one client — unless you don't name one</h3>
+        <p>Mention a client's name (or their domain) and SerMaStr pulls that client's full
+          picture before answering. <strong>Say no client name</strong>, and it switches to
+          <strong>portfolio mode</strong> — an agency-wide view (open alerts, freezes, unread
+          notifications, open goals, across every client) so you can ask "who needs attention
+          this week?" without naming anyone.</p>
+        <div class="why">
+          <p class="why-label">Why this matters</p>
+          <p>Without it, every morning check-in would mean naming clients one by one and hoping
+            you didn't skip the one that's actually on fire. Portfolio mode is how you triage the
+            whole book in one question instead.</p>
+        </div>
+        <div class="chat">
+          <p class="chat-cap">A real portfolio-mode reply</p>
+          <p class="turn"><span class="who you">You</span>who needs attention this week?</p>
+          <p class="turn"><span class="who bot">SerMaStr</span>Three things stand out.
+            <strong>Coastal Plumbing</strong> is frozen — Google flagged a manual action on their
+            homepage 4 days ago, nothing else should move until that's lifted. <strong>Acme
+            Roofing</strong> has two open alerts stacking: a rank drop on "roof repair
+            Springfield" and a Maps decline in the north-side grid — worth a real look today.
+            <strong>BrightSmile Dental</strong> has nothing tracked at all — which usually means
+            the setup got skipped, not that everything's fine. I'd start with the Coastal freeze.
+            Want the detail on any of these?</p>
+        </div>
+        <p>Notice the order: freeze first, then the client stacking alerts, then the quiet client
+          with nothing tracked — that's the triage priority SerMaStr always applies in portfolio
+          mode.</p>
+
+        <h3>4.2 It only knows what's in the suite — plus two escape hatches</h3>
+        <p>SerMaStr's campaign numbers (rank, visibility, clicks, alerts) come <strong>only</strong>
+          from the suite's own data or a live pull — never estimated, never guessed. Two things
+          extend its reach without breaking that rule: a <strong>memory</strong> of things you've
+          told it, and <strong>web search</strong> for public information the suite doesn't track
+          (a competitor's reviews, industry news) — it always says where a fact came from, and
+          never uses web search for the client's own campaign metrics.</p>
+        <div class="why">
+          <p class="why-label">Why this matters</p>
+          <p>A generic-sounding answer to "should we expand into City X" is worthless if it's
+            actually a guess. SerMaStr's confidence tracks its evidence — when it has nothing, it
+            says so instead of papering over the gap with plausible-sounding SEO advice.</p>
+        </div>
+        <div class="chat">
+          <p class="chat-cap">The four-step "no data" pattern</p>
+          <p class="turn"><span class="who you">You</span>should we push into Shelbyville for Acme?</p>
+          <p class="turn"><span class="who bot">SerMaStr</span>Nothing for Shelbyville
+            specifically — it's not a tracked keyword, hasn't had a geo-grid scan, and isn't in
+            Acme's target cities. What I do have: Acme ranks #2 in Springfield for "roof repair,"
+            with strong pin coverage, so the same play has worked nearby. Which service should
+            Shelbyville lead with? If it's roof repair, I can add it to the tracker and run a
+            geo-grid scan centered there to get a real read before we commit to a page. Want me
+            to do that?</p>
+        </div>
+        <p>Name the gap specifically → answer from the nearest real data → ask the one question
+          that would let it be specific → offer, never run, the step that would close the gap.</p>
+
+        <h3>4.3 It cites your playbook, not general SEO folklore</h3>
+        <p>For any strategy-shaped question, SerMaStr's advice is required to come from the
+          agency's written SOP library, cited inline (e.g. <em>"How_To_Rank_In_Google_Maps SOP
+          §Relevance"</em>). If the SOPs are silent on something, it says so explicitly rather
+          than making something up. Pure data lookups ("what's our rank for X") don't need a
+          citation — that rule is for advice.</p>
+
+        <h3>4.4 It reads the instruments correctly, every time</h3>
+        <ul>
+          <li><strong>Rank position: lower is better.</strong> A missing GSC position for a day
+            means <em>no data that day</em> — never "it dropped out."</li>
+          <li><strong>Maps average rank is only over pins where the business was found.</strong>
+            3 found pins out of 25 at an average rank of 2.0 is barely present, not "ranking #2."</li>
+          <li><strong>The GBP description is not a local-pack ranking factor</strong> — it
+            matters for <strong>AI visibility</strong> instead.</li>
+          <li><strong>A single AI-visibility engine flipping on one keyword is noise, not a
+            trend.</strong> It reads batch rollups and cross-batch trends.</li>
+        </ul>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>What SerMaStr can see</h2></div>
+        <p>SerMaStr is handed one snapshot per client, module by module. You don't need to know
+          the internal names — this table translates them into things you can actually ask.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:30%">Ask about…</th><th>What it's reading — and why you'd check it</th></tr></thead>
+            <tbody>
+              <tr><td class="term">"How's the campaign going?" / goal progress</td><td><strong>Campaign Goals</strong> — status: achieved / on_track / behind / overdue. Check this first on any client.</td></tr>
+              <tr><td class="term">Rankings, drops, striking-distance</td><td><strong>Organic rank tracker</strong> — tracked keywords, trend, open alerts, the latest Action Plan.</td></tr>
+              <tr><td class="term">Local pack / Google Maps</td><td><strong>Maps geo-grid</strong> — average rank (with pin coverage), top-3/top-10 counts, weak areas.</td></tr>
+              <tr><td class="term">"Do we show up in AI answers?"</td><td><strong>AI Visibility</strong> — per-engine visibility, invisible keywords.</td></tr>
+              <tr><td class="term">What's been written/published</td><td><strong>Content</strong> vs. <strong>Site inventory</strong> — ask before commissioning anything, so you never duplicate a page.</td></tr>
+              <tr><td class="term">Competitors</td><td><strong>Competitors</strong> — pins, GBP rating, referring domains, organic overlap, review velocity, new pages.</td></tr>
+              <tr><td class="term">"Who's beating us, and on what"</td><td><strong>Domain Intelligence</strong> — keyword and link gaps, opportunity-scored.</td></tr>
+              <tr><td class="term">Backlinks</td><td><strong>Backlink Explorer</strong> snapshot — DR, referring domains, what changed.</td></tr>
+              <tr><td class="term">"Where will we be in 90 days?"</td><td><strong>Forecast</strong> — deterministic projections, quick-win scenario, goal trajectory. Cited verbatim, never recomputed.</td></tr>
+              <tr><td class="term">"Is this a Google update or just us?"</td><td><strong>Trends</strong> — cross-client algo-update detection + seasonal demand.</td></tr>
+              <tr><td class="term">Budget / "can we afford this?"</td><td><strong>Budget</strong> — deployable retainer, fixed costs, discretionary remainder.</td></tr>
+              <tr><td class="term">The monthly task plan</td><td><strong>Task plan</strong> (Recipe Engine) — budget, spend, flags, staffing.</td></tr>
+              <tr><td class="term">"How did QA go this month?"</td><td><strong>QA</strong> — 30 days of review verdicts, patterns by writer/page type.</td></tr>
+              <tr><td class="term">Is anything paused right now?</td><td><strong>Health</strong> — an active freeze (the single most urgent thing to know), open episodes, offpage alerts.</td></tr>
+              <tr><td class="term">The client's business profile</td><td><strong>Setup</strong> — GBP, target cities, client type, brand voice, ICP.</td></tr>
+              <tr><td class="term">Cross-agent friction</td><td><strong>Director of Operations</strong> — read-only "seam" flags. Insight, never an instruction.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p>A module simply <strong>isn't there</strong> when nothing has been set up or run yet —
+          SerMaStr says so rather than guessing, and that's a legitimate answer, not a bug.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>What SerMaStr can do — actions</h2></div>
+        <p class="lede">SerMaStr doesn't just report — it can trigger real work. Every action
+          falls into one of two buckets.</p>
+
+        <h3>6.1 Free — runs immediately, no confirmation</h3>
+        <ul>
+          <li><strong>Rebuild the Action Plan</strong> — no API spend, no side effects to guard.</li>
+          <li><strong>Live Search Console pull</strong> — current/latest performance.</li>
+          <li><strong>Cost-plan check</strong> — prices a proposed task set against the client's
+            discretionary budget; always called before proposing anything that costs money.</li>
+          <li><strong>Web search</strong> — public info only, bounded to a few per question.</li>
+          <li><strong>SOP lookup</strong> — pulls a section not already loaded.</li>
+          <li>Maps/keyword history lookups, LeadOff city lookups — free reference reads.</li>
+        </ul>
+
+        <h3>6.2 Confirm-gated — SerMaStr stages it, you approve it</h3>
+        <p>Anything that spends API budget <strong>or</strong> changes something real gets
+          staged, not run:</p>
+        <div class="chat">
+          <p class="turn"><em>"This will run a Maps geo-grid scan for Acme Roofing (2 paid
+            DataForSEO calls). Reply <strong>yes</strong> to proceed."</em></p>
+        </div>
+        <p>Reply <strong>yes</strong> and it runs. Reply anything else, and the pending action is
+          dropped. <strong>Note:</strong> the confirmation is per-conversation-thread — a new
+          question before you reply "yes" cancels the pending action.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:22%">Group</th><th>Actions</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Run work</td><td>Maps geo-grid scan · GSC Research · AI Visibility scan · a full strategist review · generate a client report · push the monthly task plan · a live SERP check · a backlink lookup · an authority report.</td></tr>
+              <tr><td class="term">Task board</td><td>Add a task · remove a task · mark a task complete (extracting name, assignee, and notes from your message).</td></tr>
+              <tr><td class="term">Client profile</td><td>Website URL · GSC property · business location · retainer · client type · SAB flag · target cities.</td></tr>
+              <tr><td class="term">Campaign management</td><td>Add/remove tracked keywords, AI-visibility keywords/competitors, a campaign goal.</td></tr>
+              <tr><td class="term">Commission content</td><td>Start a content run (blog/service page) · generate a Local SEO page · reoptimize a live page by URL.</td></tr>
+              <tr><td class="term">Strategy</td><td>Save recommended steps to the client's Action Plan — recommend-only.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>6.3 Worked examples</h3>
+        <div class="chat">
+          <p class="chat-cap">Commissioning content</p>
+          <p class="turn"><span class="who you">You</span>can we add "emergency roof tarping" as
+            a tracked keyword for Acme, and also start a blog post on it</p>
+          <p class="turn"><span class="who bot">SerMaStr</span>That's not yet a tracked keyword
+            or a page for Acme — I checked the tracker and the site inventory, nothing on that
+            term. I'll add it to rank tracking and start a blog post targeting it. This will add
+            1 tracked keyword and start a content run for Acme Roofing. Reply <strong>yes</strong>
+            to proceed.</p>
+          <p class="turn"><span class="who you">You</span>yes</p>
+          <p class="turn"><span class="who bot">SerMaStr</span>Done — "emergency roof tarping" is
+            now tracked, and the blog run is queued. I'll ping you back once it's ready, or check
+            Runs in the dashboard.</p>
+        </div>
+        <div class="chat">
+          <p class="chat-cap">Diagnosing a drop — the "why," not just the alert</p>
+          <p class="turn"><span class="who you">You</span>why did "roof repair Springfield" drop for Acme?</p>
+          <p class="turn"><span class="who bot">SerMaStr</span>It fell from #3 to #7 over the
+            last 9 days. Two things line up: impressions on that query dropped too — not just
+            position — and the latest SERP snapshot shows a competitor, Springfield Roof Pros,
+            picked up a review spike and moved into the top 3. That traces to competitor movement
+            (Rank_Drop_Mitigation_SOP_Organic §B5 step 6), not a technical issue on our side. I'd
+            fund another link round on that page this month. Want me to save that to the Action
+            Plan?</p>
+        </div>
+        <div class="chat">
+          <p class="chat-cap">"What should we improve?" — a strategist-style answer, not a data dump</p>
+          <p class="turn"><span class="who you">You</span>what should we improve for Acme this month?</p>
+          <p class="turn"><span class="who bot">SerMaStr</span>Three things, ranked by leverage:</p>
+          <ol>
+            <li>Reoptimize "roof repair Springfield" — striking-distance at position 6, already
+              found on 22 of 25 geo-grid pins, just not converting to page one. Cheapest win on
+              the board.</li>
+            <li>A location page for the north-side grid — average rank 9.4 across found pins,
+              well behind the rest of the city. A coverage gap, not a ranking problem.</li>
+            <li>Two AI-visibility keywords are invisible across every engine. Worth a GBP profile
+              pass — AI Overviews lean heavily on GBP completeness.</li>
+          </ol>
+          <p class="turn"><span class="who bot">SerMaStr</span>This month's task plan also has one
+            unstaffed content line — I'd put a body on that before adding anything new. Want a
+            full strategist review, or should I save these three as Action Plan steps?</p>
+        </div>
+        <p>Notice what each of these does that a vague answer wouldn't: it names the specific
+          page or keyword, gives the number behind the claim, cites the SOP it's following, and
+          ends with a concrete next move.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>What SerMaStr can NOT do</h2></div>
+        <p class="lede">Read this as carefully as §6 — a new hire's most common mistake is
+          assuming SerMaStr is more autonomous, or less capable, than it actually is.</p>
+        <ul>
+          <li><strong>It never publishes to a client's live site.</strong> Commissioning content
+            creates a <em>draft</em> deliverable — publishing is a separate, human step.</li>
+          <li><strong>Some things are dashboard-only, on purpose:</strong> creating/archiving a
+            client, freezing/lifting a freeze, WordPress/Drive credentials, brand-voice or ICP
+            long-form text, reference page structures, the GBP OAuth connection.</li>
+          <li><strong>A frozen client pauses content/link output</strong> — including SerMaStr's
+            commission actions. It surfaces that prominently and won't route around it.</li>
+          <li><strong>It doesn't override anyone else's precedence engine.</strong> The Director
+            of Operations context is read-only insight — it can cite a conflict and offer to
+            raise it, but has no authority over PACE, the reoptimization planner, or autonomy.</li>
+          <li><strong>It doesn't run unattended.</strong> Every side-effecting or paid action is
+            confirm-gated. A separate, much more conservative <strong>autonomy</strong> layer
+            exists for a few narrow tasks on opted-in clients — a different system, off by default.</li>
+          <li><strong>It won't re-judge a QA verdict, or re-derive a computed status.</strong>
+            Goal status, QA pass/fail, and rank-drop classification are computed deterministically
+            elsewhere; SerMaStr reports them, it doesn't second-guess them.</li>
+          <li><strong>Anyone in the channel can trigger an action</strong> — it doesn't currently
+            gate <em>who</em> can approve a confirm. Use judgment on a shared client.</li>
+          <li><strong>It's not a search engine for the open web by default.</strong> It only
+            reaches outside the suite when a question genuinely needs public information.</li>
+        </ul>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>How SerMaStr fits with the other agents</h2></div>
+        <p>The suite runs a small cast of AI teammates that share the same rails (Slack, the
+          notifications service, the scheduler) but do different jobs.</p>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Agent</th><th>Job</th><th>Cadence</th><th>Executes?</th></tr></thead>
+            <tbody>
+              <tr><td class="term">SerMaStr</td><td>Strategy — what should we do and why</td><td>Chat on demand + a weekly deeper review</td><td>Proposes; executes only small, confirmed actions</td></tr>
+              <tr><td class="term">PACE</td><td>Keeps delivery moving on the task board</td><td>Daily Chase Plan + on-demand chat</td><td>Proposes a batch; a human replies "yes" to approve</td></tr>
+              <tr><td class="term">QA</td><td>Judges whether finished work is actually good</td><td>Automatic on In QA, or on demand</td><td>Verdicts only — never edits the deliverable</td></tr>
+              <tr><td class="term">DORA</td><td>Flags friction between the other three agents</td><td>Daily reconciliation + a weekly digest</td><td>Read-only — opens a board task, never resolves it</td></tr>
+              <tr><td class="term">Autonomy executor</td><td>Auto-commissions a few pre-approved actions on opted-in clients</td><td>Weekly, per opted-in client</td><td>The one layer that can act with no human confirm</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>Rule of thumb:</strong> ask SerMaStr "what should we do" questions and
+          strategy. Ask PACE "is this task on track / who has capacity" questions. Never expect
+          SerMaStr to chase a stalled task, and never expect PACE to explain <em>why</em> a
+          ranking dropped.</p>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Novice path — your first week</h2></div>
+        <p>Do these in order. Each builds on the last.</p>
+        <ol>
+          <li><strong>Say hello with a real client question</strong> — <em>"How is Acme Roofing
+            doing?"</em> Read the reply structure: goal progress first, then 2–3 wins, then 2–3
+            concerns, each with a number.</li>
+          <li><strong>Ask a portfolio question with no client name</strong> — <em>"Who needs
+            attention this week?"</em> Notice it triages the whole book on its own.</li>
+          <li><strong>Ask something it has no data for on purpose</strong> — a city or keyword
+            never tracked. Read how it names the gap, answers from the nearest real data, asks
+            one question, and offers (never runs) the step that would close it.</li>
+          <li><strong>Trigger your first free action</strong> — <em>"Rebuild the Action Plan for
+            Acme."</em> No confirmation needed.</li>
+          <li><strong>Trigger your first confirm-gated action</strong> — ask it to add a tracked
+            keyword. Read the confirmation closely, then reply <span class="mono">yes</span>.</li>
+          <li><strong>Read a strategist review</strong>, if one exists for a client you're on.</li>
+        </ol>
+        <p>By the end of week one you should be comfortable asking questions and running the
+          small stuff without checking this guide.</p>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Intermediate path — building real proficiency</h2></div>
+        <ol>
+          <li>Ask a <strong>"what should we improve"</strong> question and evaluate it against
+            §4.3 — does it cite an SOP? Does it name the specific tool/page for each
+            recommendation?</li>
+          <li><strong>Give it a fact it should remember</strong>, then start a new conversation
+            later and ask about it. It should surface the memory unprompted.</li>
+          <li>Ask a <strong>forecast question</strong> and a <strong>quick-win question</strong>,
+            then compare the numbers against the Forecast page — they should match exactly.</li>
+          <li><strong>Have it commission a real deliverable</strong> and follow it through to the
+            draft landing in the dashboard. Confirm you understand this is not the same as
+            publishing.</li>
+          <li><strong>Practice the SOP-citation habit yourself</strong> — when it cites a section
+            you haven't read, go read it.</li>
+          <li><strong>Watch what happens when you contradict the data</strong> — propose
+            something the numbers argue against and see it push back with the number that
+            changes its mind. This is designed behavior, not an error.</li>
+        </ol>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Advanced / proficient usage</h2></div>
+        <ol>
+          <li><strong>Run a full strategist review on purpose</strong> and read the whole thing —
+            assessment, findings with SOP citations, proposals, open questions. Approve or
+            dismiss a proposal and watch it become a real task via the PACE rails.</li>
+          <li><strong>Use portfolio mode as a standing morning habit</strong> — "what's on fire"
+            as the first thing you ask each day.</li>
+          <li><strong>Learn to read a Director of Operations flag</strong> as a prompt to
+            investigate, not an alarm — SerMaStr will never resolve it for you.</li>
+          <li><strong>Recognize the escalation triggers</strong> — a response episode open 6+
+            weeks with no improvement, or a client transitioning into sitewide decline, both
+            auto-queue a strategist review.</li>
+          <li><strong>Understand budget-aware planning.</strong> If you ever see a plan proposed
+            with dollar figures that don't add up against the client's discretionary budget,
+            flag it.</li>
+          <li><strong>Know the boundary with autonomy.</strong> If you're unsure whether
+            something happened because a teammate approved it or autonomy ran on its own, check
+            the client's activity/notifications feed rather than assuming.</li>
+        </ol>
+        <p>At this point you should be able to onboard the <em>next</em> new hire on SerMaStr
+          yourself.</p>
+      </section>
+
+      <section id="s12" class="block">
+        <div class="block-head"><span class="block-num">12</span><h2>Troubleshooting &amp; common gotchas</h2></div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th style="width:36%">Symptom</th><th>Likely cause / what to do</th></tr></thead>
+            <tbody>
+              <tr><td class="term">Doesn't respond in the Slack channel</td><td>It only answers plain human messages in a channel that's been wired up — check with an admin the integration is live.</td></tr>
+              <tr><td class="term">Answered about the wrong client</td><td>Client resolution is name/domain matching — be more specific, or use the exact dashboard name.</td></tr>
+              <tr><td class="term">Won't run something I asked for</td><td>It only calls an action tool when you're clearly asking it to run/start/change/create/delete. A question about results won't trigger an action.</td></tr>
+              <tr><td class="term">I said "yes" and nothing happened</td><td>The confirmation only fires from the same conversation thread, and any message in between cancels it. Re-ask, then reply "yes" immediately.</td></tr>
+              <tr><td class="term">Refuses and points me at a page instead</td><td>That field is dashboard-only by design (§7) — go to the page it names.</td></tr>
+              <tr><td class="term">Says a client is frozen, won't commission content</td><td>Working as intended — a freeze pauses all content/link output. Only an admin lifts it.</td></tr>
+              <tr><td class="term">No SOP citation on a recommendation</td><td>Fine for a pure data lookup; for anything strategy-shaped it should cite one — if it consistently doesn't, report it.</td></tr>
+              <tr><td class="term">Numbers don't match a dashboard page</td><td>Ask which module it's reading from and compare — computed things should always match exactly.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="s13" class="block">
+        <div class="block-head"><span class="block-num">13</span><h2>Practice exercises</h2></div>
+        <p>Work through these with a real (or sandbox) client, novice → advanced. Don't skip
+          ahead if an earlier one didn't go the way this guide describes.</p>
+        <h3>Novice</h3>
+        <ul class="exercise">
+          <li>Ask "how is &lt;client&gt; doing?" and identify the goal-progress lead, the wins, and the concerns.</li>
+          <li>Ask a portfolio question with no client named.</li>
+          <li>Ask about a city/keyword you know isn't tracked and confirm the four-step "no data" pattern.</li>
+          <li>Run the free "rebuild the Action Plan" action.</li>
+          <li>Run one confirm-gated action end to end (stage → read the confirm message → reply "yes").</li>
+        </ul>
+        <h3>Intermediate</h3>
+        <ul class="exercise">
+          <li>Get it to cite a specific SOP section, then go actually read that section.</li>
+          <li>Teach it a memory, start a new conversation, and confirm it recalls the memory unprompted.</li>
+          <li>Ask for a 90-day forecast and a quick-win value, and check both against the Forecast page.</li>
+          <li>Commission a content run or Local SEO page and follow it from confirm → queued → drafted.</li>
+          <li>Propose something the data contradicts and read how it pushes back.</li>
+        </ul>
+        <h3>Advanced</h3>
+        <ul class="exercise">
+          <li>Trigger and fully read a strategist review; approve one proposal and confirm it lands as a real task.</li>
+          <li>Find (or wait for) a Director of Operations flag and decide, correctly, whether it needs action or just awareness.</li>
+          <li>Explain to a teammate, without looking this guide up, the difference between SerMaStr, PACE, QA, and DORA.</li>
+          <li>Identify a case where SerMaStr correctly said "the SOPs are silent on this" instead of improvising.</li>
+        </ul>
+      </section>
+
+      <section id="s14" class="block">
+        <div class="block-head"><span class="block-num">14</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <h3>Access</h3>
+          <p>Slack channel (no @mention) · Slack DM · dashboard sidebar → <strong>SerMaStr</strong> → <span class="mono">/assistant</span></p>
+          <h3>Client scope</h3>
+          <p>Name a client → single-client mode. Name none → portfolio (agency-wide) mode.</p>
+          <h3>To trigger anything</h3>
+          <p>Ask in plain English ("run a Maps scan for Acme," "add this keyword," "start a blog
+            post about X"). Free actions run immediately; anything paid or side-effecting stages
+            a confirmation — reply <strong>yes</strong> to proceed, anything else cancels it.</p>
+          <h3>Never expects you to</h3>
+          <p>Know an internal action name, write structured input, or pick a module by its
+            technical key — describe what you want in plain language.</p>
+          <h3>Always remember</h3>
+          <p>It only reports what the suite actually knows, plus memory and public web search —
+            never a guessed number. It advises and does small confirmed actions; it does not
+            publish, does not override PACE/QA/the planner, and does not run unattended. For
+            delivery/task-board questions, go to <strong>PACE</strong> instead.</p>
+        </div>
+      </section>
+
+      <p class="colophon">Not the engineering spec (that's
+        <span class="mono">docs/modules/seo-strategist-agent-plan-v1_0.md</span>) and not the
+        task-board manual (that's the Task Manager guide, covering PACE) — this is the practical
+        "how do I actually use this thing" reference.</p>
+
+    </main>
+  </div>
+</div>
+
+<script>
+(function(){
+  var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+  var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+  if(!('IntersectionObserver' in window)) return;
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(entry){
+      var link = document.querySelector('.rail-list a[data-target="'+entry.target.id+'"]');
+      if(!link) return;
+      if(entry.isIntersecting){
+        links.forEach(function(l){ l.classList.remove('active'); });
+        link.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-15% 0px -70% 0px', threshold: 0 });
+  sections.forEach(function(s){ if(s) io.observe(s); });
+})();
+</script>
+
+</body>
+</html>

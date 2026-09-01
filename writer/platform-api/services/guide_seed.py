@@ -73,6 +73,32 @@ When a client's Action Plan is built (weekly, after a ranking drop, or when you 
 - Good starters: a *ranking-drop recovery* SOP, a *link-building* SOP, a *quick-win reoptimization* SOP, and any *theories* about what drives rankings for your niches.""",
     },
     {
+        "slug": "sermastr",
+        "title": "SerMaStr",
+        "category": "Start here",
+        "icon": "Sparkles",
+        "sort_order": 25,
+        "summary": "The agency's AI Director of SEO — a chat teammate with read access to everything the suite knows about a client, plus confirm-gated actions.",
+        "body": """# SerMaStr
+
+The agency's AI Director of SEO — a chat-based teammate with read access to everything the suite knows about a client (rankings, Maps presence, AI-answer visibility, content produced, competitors, budget, backlinks, alerts, your SOPs) and the judgment to answer strategy questions the way a senior strategist would.
+
+## Where to find it
+- **Slack** — a dedicated channel (ask an admin which one). No @mention needed; SerMaStr answers every human message posted there. DMs work the same way.
+- **Dashboard** — sidebar -> **SerMaStr**, a full-page chat.
+- Name a client and it scopes to that client. Say nothing and it switches to **portfolio mode** — an agency-wide view (open alerts, freezes, unread notifications, open goals across every client).
+
+## What it can do
+- **Answer, for free** — most questions just read live data: rankings, Maps, AI visibility, content inventory, competitors, budget, SOP-grounded strategy advice.
+- **Act, but only after you confirm** — anything that spends API budget or changes something real is staged first ("This will run a Maps geo-grid scan for Acme Roofing (2 paid DataForSEO calls). Reply **yes** to proceed."). Covers running scans/reports, editing a client's profile, adding/removing tracked keywords or goals, pushing tasks to the board, and commissioning real content (a blog post, a Local SEO page, reoptimizing a page).
+- It never decides silently, and it never publishes to a client's live site on its own.
+
+## Tips
+- It has opinions and commits to them — expect a recommendation with a reason, not a neutral list of options.
+- It cites your loaded SOPs by name and section on strategy questions. Nothing loaded yet? See the **SOPs & Playbook** guide.
+- It doesn't chase your team for status updates or judge finished work — that's **PACE** and **QA**.""",
+    },
+    {
         "slug": "action-plan",
         "title": "Action Plan",
         "category": "Tracking",
@@ -182,6 +208,32 @@ The Topic Fanout tool: expand a seed into clustered keyword silos, then schedule
 - This module is mounted under `/fanout`; it shares the same login and database.""",
     },
     {
+        "slug": "website-builder",
+        "title": "Website Builder",
+        "category": "Content",
+        "icon": "Rocket",
+        "sort_order": 65,
+        "summary": "Build a whole client website inside the suite — design, generate pages, and publish straight into the site's own repo.",
+        "body": """# Website Builder
+
+Builds a whole client website inside the suite — design in Claude Design, upload it, and the suite compiles it into a real site, generates its pages with the same engines as the rest of the suite, and commits them to the site's own private GitHub repo (which builds and deploys itself).
+
+## The stages
+Create -> Provision (mints the real repo) -> Theme (optional, upload a design) -> Plan (services x cities, and/or the blog content plan) -> Approve -> Generate & Publish pages -> optional drip-release Schedule -> Deploys -> Settings.
+
+## How to use it
+1. Open a client -> **Website Builder** card -> **Create site** (name + type: local business, informational, or lead generation).
+2. **Overview** tab -> **Provision** — mints the real GitHub repo. If a step errors the button becomes **Resume**; click it again.
+3. **Plan** tab — build the service/city catalog (local/lead-gen) and/or the blog content plan (every site type), then **Approve plan**.
+4. **Pages** tab — Generate, then Publish (commits to the repo). Or set a cadence on the **Schedule** tab to drip pages out automatically.
+5. Watch build/deploy status on **Deploys**; keep NAP/business facts correct on **Settings**.
+
+## Tips
+- "Publish" here means **committing to the site's own repo**, not posting anywhere public by hand — the repo's own pipeline builds and deploys it.
+- Needs the module switched on for the client by an admin, and is paused entirely while a client is Frozen.
+- Create, provision, plan, generate, and publish are staff/admin actions.""",
+    },
+    {
         "slug": "rank-tracker",
         "title": "Organic Rank Tracker",
         "category": "Tracking",
@@ -288,6 +340,41 @@ Quick/hidden wins are enriched with CPC / volume / competition.
 - Runs automatically once a client is GSC-eligible, then refreshes monthly. Findings feed the **Action Plan**.""",
     },
     {
+        "slug": "everhour-time",
+        "title": "Everhour Time Tracking",
+        "category": "Tracking",
+        "icon": "ClipboardList",
+        "sort_order": 105,
+        "summary": "How to log your hours in Everhour, and why it feeds client margin and team capacity.",
+        "body": """# Everhour Time Tracking
+
+**Everhour is the stopwatch. The suite is the brain.** Track your hours in Everhour (Chrome extension or web app); once a day the suite pulls them and turns them into task actuals, client cost, and your utilization. Task management itself still lives on the Task board, not Everhour -- Everhour's only job is the clock.
+
+## The two rules that matter
+- **Project = client, always.** Every client has exactly one matching Everhour project. Track work under the client you're doing it for.
+- **Tasks are mirrored, not created by you.** The moment a task is assigned to you on the Task board, a copy of it (name + assignee only) is pushed into Everhour automatically. Track time on that copy -- never create your own tasks in Everhour, and never track time on a subtask/checklist line (only top-level tasks mirror).
+
+## Day-one setup
+1. Get your Everhour account from an admin/PM and sign in at my.everhour.com.
+2. Ask your PM to confirm you're **linked** on the Team page ("Everhour user") -- unlinked time is still tracked fine in Everhour, it just won't attribute correctly in the suite yet.
+3. Install the Chrome extension (search "Everhour" in the Chrome Web Store) and pin it.
+
+## The daily habit
+- **Start a timer** -- pick the project (client), pick the mirrored task, click Start. Switching work? Just start the next timer, no need to stop the old one first.
+- **Forgot to start it?** Log it manually in My Timesheet the same day -- a missing entry reads as zero, not "unknown," and understates that client's real cost.
+- **Internal/meeting time** still counts toward your utilization -- log it under your team's internal category, never under a client by mistake.
+- **End of day** -- check the extension icon. A timer left running overnight is the single most common mistake.
+
+## Where it lands (and why it matters)
+- Task board -- estimated vs. actual hours, so future estimates get better.
+- Client workspace -- a Time card, and once an admin sets a cost rate, real Recipe Engine margin.
+- Team / Workload page -- your utilization, which is how PACE knows who has room for more work before handing it out.
+
+## Tips
+- This isn't surveillance -- nobody watches a live feed of your timer. It's a planning input for client cost, capacity, and estimate accuracy.
+- For the full walkthrough with worked examples and screenshots-free step-by-step, ask your PM for the Everhour field guide (`docs/everhour-time-tracking-user-guide.md`).""",
+    },
+    {
         "slug": "client-reports",
         "title": "Client Reports",
         "category": "Reporting",
@@ -312,6 +399,57 @@ Generates a client-facing **PDF** report written for the business owner — plai
 ## Tips
 - Sections degrade gracefully — anything with no data is hidden.
 - GA4/GBP time-series and email/Drive delivery + scheduling are on the roadmap.""",
+    },
+    {
+        "slug": "task-manager",
+        "title": "Task Manager (the delivery board)",
+        "category": "Reporting",
+        "icon": "ListChecks",
+        "sort_order": 111,
+        "summary": "The in-house delivery board — the replacement for Asana. One board per client, plus a My Tasks queue across every client.",
+        "body": """# Task Manager (the delivery board)
+
+The in-house task board — the replacement for Asana. Each client has their own board; two things are global in the sidebar: **My Tasks** (everything assigned to you, across every client) and **Task Library** (the standard recurring-task templates).
+
+## The pipeline
+Not Started -> In Progress -> In QA -> Sent to Client -> Client Approved -> Completed, plus two off-workflow statuses (Blocked, In Review) for when work can't move forward normally. Drag a card between columns to change its status.
+
+## How to use it
+1. Open a client -> **Tasks** card for their whole plan, or **My Tasks** in the sidebar for your own queue across every client.
+2. Switch between **Board**, **List**, and **Calendar** views of the same tasks.
+3. Click any card to open its drawer — assignee, due date, checklist, comments, attachments, activity log.
+4. Checking off a task's last real checklist item auto-advances it toward **In QA** — you don't always have to drag it yourself.
+
+## Tips
+- The bell icon (top of the sidebar) is your notification center — assignments, @mentions, nudges.
+- Assignees come from the shared team roster, not your login — ask an admin to link your name on the **Team** page if you don't see yourself in a dropdown.
+- Two agents watch this board for you: **PACE** keeps things moving, **QA** reviews finished work — see the PACE & QA guide.""",
+    },
+    {
+        "slug": "pace-qa",
+        "title": "PACE & QA (delivery + review agents)",
+        "category": "Reporting",
+        "icon": "Eye",
+        "sort_order": 112,
+        "summary": "The two agents that watch the task board for you — PACE keeps work moving, QA reviews whether it's actually good.",
+        "body": """# PACE & QA (delivery + review agents)
+
+Two agents that watch the task board so you don't have to chase it by hand. **PACE** keeps work moving; **QA** judges whether finished work is good. Neither decides what work should exist — that's SerMaStr.
+
+## PACE
+- Find it in **`#pace`** in Slack (its own bot — @mention it for a new question) or the **`/pace`** page (answers everything, no @mention needed).
+- Once a day it posts a **read-only digest** of what needs attention (stuck/overdue tasks, untouched producer alerts) and a **Chase Plan** — a numbered list of fixes (nudges, auto-placements, due-date bumps) that runs only once you reply **yes** (or `yes 1,3` to pick some).
+- Ask it anything a PM would know — "what's overdue for Acme?", "what should I work on today?" — or give it a one-off request ("reassign the GBP post to Marcus"). Anything that changes the board is staged and confirmed first.
+- An unaddressed problem it flags keeps reappearing daily; after 3 business days with no movement, it posts one public escalation.
+
+## QA
+- Runs automatically the moment a task reaches **In QA** (including the board's own auto-advance), or on demand via the **Run QA** button in the task drawer, or by asking PACE/QA directly.
+- Every check is computed deterministically in code, never guessed by an AI — a model only phrases the explanation. **Fail-open**: anything QA can't verify comes back "Needs a human," never a false fail.
+- A **Failed** verdict bounces the task back to In Progress with a **"Rework: ..."** checklist item per failed check — fixing them all re-enters QA automatically.
+
+## Tips
+- Link your Slack account on the **Team** page to get PACE's DMs, nudges, and (if enabled) your own morning brief.
+- See the task drawer's **QA** section for the readiness banner, rubric, and past-review history.""",
     },
     {
         "slug": "asana-tasks",
