@@ -659,6 +659,20 @@ class Settings(BaseSettings):
     maps_report_provider: str = "openai"          # openai | anthropic
     maps_report_openai_model: str = "gpt-5.4"
 
+    # Local-pack collapse brief — the proactive "why + top move" reasoning folded
+    # INTO the maps-drop alert notification (services/maps_brief.py), so a critical
+    # geo-grid collapse reaches Slack + the in-app feed as reasoning, not a bare
+    # "N alerts detected" pointer. One small, best-effort LLM call per critical
+    # collapse (severity == "critical", i.e. a lost_pack signal); on any failure
+    # the notification degrades to the deterministic alert digest (never blocks
+    # the analyze job). Runs on the maps_report provider for the same Anthropic
+    # 429-saturation reason (a separate quota). Set maps_brief_enabled=False to
+    # revert to the terse digest.
+    maps_brief_enabled: bool = True
+    maps_brief_provider: str = "openai"           # openai | anthropic
+    maps_brief_model: str = "gpt-5.4-mini"
+    maps_brief_max_tokens: int = 600
+
     # Organic Rank Analysis report — the per-keyword deep-dive (the organic
     # analogue of the Local Rank Analysis report). Sonnet writes an observational
     # narrative from the deterministic trajectory + competitive-landscape +
