@@ -1,6 +1,6 @@
 # Agent Coordination & Efficiency — plan v1.0
 
-**Status:** building (2026-09-01). All workstreams ship **dark** (default-off flags); merging changes nothing until the flags are set on PLATFORM.
+**Status:** BUILT (2026-09-01, PR #943 — Phases 0–4). All workstreams ship **dark** (default-off flags); merging changes nothing until the flags are set on PLATFORM. Enable order per workstream is in the PR body.
 
 This is the authority doc for three linked capabilities the owner asked for on 2026-09-01, on top of the existing SerMaStr / PACE / DORA agents and the two audit-log learning loops (`sermastr_audit` #937, `pace_audit` #935):
 
