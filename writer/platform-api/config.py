@@ -1941,6 +1941,19 @@ class Settings(BaseSettings):
     agent_bus_enabled: bool = False
     agent_bus_stale_hours: int = 48
 
+    # --- DORA process-efficiency analysis (docs: agent-coordination-and-efficiency-plan-v1_0) ---
+    # WS4: DORA synthesises the agency-wide process-efficiency picture (PACE
+    # findings + coordination bus + friction seams + no-effect effort) into ranked
+    # recommendations and is the single voice that reports them to humans — weekly
+    # ops_efficiency digest + as-detected alerts + on-demand in /director chat.
+    # Read-only/advisory (DORA never executes). Ships dark (default False); weekly
+    # cadence reuses director_digest_weekday.
+    director_efficiency_enabled: bool = False
+    # Best-effort LLM narrative model; empty → the deterministic report body.
+    director_efficiency_model: str = "claude-sonnet-4-6"
+    # How far back the coordination provider reads the bus.
+    director_coordination_recent_days: int = 30
+
     # --- SerMaStr Action Log (docs: SerMaStr Action Log — audit + learning ledger) ---
     # Best-effort audit + learning ledger of every STRATEGIST proposal + the human
     # decision on it (approved / dismissed / pending / senior-required) + the reused

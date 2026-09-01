@@ -797,6 +797,14 @@ async def gsc_scheduler() -> None:
                 # the qa_idle notification. Self-gated on director_enabled;
                 # runs after the PACE episode sync so it reads post-sync state.
                 _safe("director_reconcile", run_director_reconcile, now.date())
+                # DORA process-efficiency (WS4) — daily as-detected alerts + the
+                # weekly briefing. Both self-gated on director_efficiency_enabled;
+                # the weekly one also checks director_digest_weekday internally and
+                # dedupes per ISO week, so a daily call is safe/idempotent. Runs
+                # after the PACE efficiency scan + reconcile so it reads fresh state.
+                from services.director import efficiency as director_efficiency
+                _safe("director_efficiency_alerts", director_efficiency.run_daily_alerts, now.date())
+                _safe("director_efficiency_weekly", director_efficiency.run_weekly, now.date())
                 # PACE Proactive Interventions — daily FULL scan (managerial
                 # detect→propose; resolves cleared problems). Self-gated on
                 # pace_interventions_enabled; runs off the event loop (build the
