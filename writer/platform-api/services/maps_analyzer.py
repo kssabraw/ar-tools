@@ -24,6 +24,7 @@ Alert types:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -1137,13 +1138,42 @@ def analyze_scan(scan_id: str) -> dict:
             from services import notifications
 
             digest = summarize_maps_alerts(opened)
+            summary = digest["summary"]
+            # On a critical collapse, replace the terse "N alerts detected" digest
+            # with a reasoned "why + top move" brief so the alert delivers the
+            # reasoning (competitor named, sectors lost, recommended move) inline
+            # to BOTH Slack and the in-app feed — not a pointer that says go look.
+            # Best-effort: any failure keeps the deterministic digest summary.
+            if digest["severity"] == "critical":
+                try:
+                    from services import maps_brief
+
+                    client_row = (
+                        supabase.table("clients").select("name")
+                        .eq("id", client_id).limit(1).execute()
+                    ).data
+                    client_name = (client_row[0].get("name") if client_row else "") or ""
+                    brief = maps_brief.generate_brief(client_name, opened)
+                    if brief:
+                        summary = brief
+                except Exception as brief_exc:  # best-effort — never block the alert
+                    logger.warning(
+                        "maps_brief_generate_failed",
+                        extra={"scan_id": scan_id, "error": str(brief_exc)},
+                    )
             notifications.emit(
                 client_id=client_id,
                 kind="maps_drop",
                 title=digest["title"],
-                summary=digest["summary"],
+                summary=summary,
                 severity=digest["severity"],
-                payload={"link": f"clients/{client_id}/maps", "alerts": opened},
+                # `facts` preserves the deterministic alert digest even when
+                # `summary` carries the reasoned brief, so the raw signal is never lost.
+                payload={
+                    "link": f"clients/{client_id}/maps",
+                    "alerts": opened,
+                    "facts": digest["summary"],
+                },
             )
         except Exception as exc:  # notifications are best-effort
             logger.warning("maps_alert_notify_failed", extra={"scan_id": scan_id, "error": str(exc)})
@@ -1184,7 +1214,10 @@ async def run_maps_analyze_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        result = analyze_scan(scan_id)
+        # analyze_scan is synchronous (blocking Supabase reads + a best-effort
+        # brief LLM call on a critical collapse) — run it off the event loop so
+        # it never stalls the worker's other jobs.
+        result = await asyncio.to_thread(analyze_scan, scan_id)
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job_id).execute()

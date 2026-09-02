@@ -231,14 +231,16 @@ async def run_silo_plan_job(job: dict) -> None:
             )
             plan["degraded_notes"].append("Additional target cities skipped — discovery error.")
 
-        # Check the client's live site for generic location pages (e.g.
-        # /inner-west/) so areas that already have one are flagged `on_site`
-        # rather than offered for creation. Best-effort — its own guards keep a
-        # failure from sinking the plan.
-        site_index, site_note = await _build_site_location_index(client_id, location_code)
+        # Check the client's live site so pages that already exist are flagged
+        # `on_site` rather than offered for creation — both service+city landing
+        # pages (e.g. /roof-restoration-melbourne/, matched on the keyword) and
+        # generic location pages (e.g. /inner-west/, matched on the bare place).
+        # Best-effort — its own guards keep a failure from sinking the plan.
+        site_urls, site_note = await _build_site_url_list(client_id, location_code)
         if site_note:
             plan["degraded_notes"].append(site_note)
-        items = _to_items(plan["per_silo"], client_id, site_index)
+        seed_city = _parse_area(location)[0] or location.strip()
+        items = _to_items(plan["per_silo"], client_id, site_urls, seed_city)
 
         supabase.table("async_jobs").update(
             {
@@ -691,23 +693,81 @@ async def _build_target_city_silos(
     return silos, notes
 
 
+def _match_page_on_site(
+    page: dict,
+    token_index: dict[frozenset[str], str],
+    place_index: dict[str, str],
+    seed_city: str = "",
+) -> Optional[str]:
+    """Return the live URL of an existing page on the client's site for `page`, or
+    None. Tried in order of specificity:
+
+      1. the page's **keyword** (and its supporting keywords) against the site's
+         page slugs by content-word-set equality — catches service+city landing
+         pages (``/roof-restoration-melbourne/``); then
+      2. a **national (city-less) service page** — the same service with the place
+         stripped out (``/roof-restoration/``), for a business whose service pages
+         carry no geo in the slug; then
+      3. for area/location targets only (those carrying a bare `location_name`), a
+         **generic location page** for that place (``/melbourne/``).
+
+    Every page runs step 1, so service-variation pages — which carry no
+    `location_name` — are checked against the live site too (previously they could
+    only be `found`-in-tool or `missing`).
+
+    Step 2 is scoped to the **seed/primary-city base page only** — a page with no
+    `location_name`, whose place is `seed_city`. A sub-area or other-city target
+    (which carries a `location_name`) is NOT suppressed by one national page: the
+    whole point of the local silo plan is a dedicated page per locality, so hiding
+    those behind a bare ``/roof-restoration/`` would offer fewer real pages than the
+    business should have. (Erring toward *offering* is the safe direction — a false
+    "missing" is an ignorable extra, a false "on_site" silently hides a wanted
+    page.) Steps are ordered specific→general, so a city-specific page always wins
+    over the national one."""
+    candidates = [page.get("keyword") or "", *(page.get("supporting_keywords") or [])]
+    for kw in candidates:
+        url = site_page_index.match_site_page_for_keyword(kw, token_index)
+        if url:
+            return url
+    location_name = page.get("location_name")
+    if not location_name:
+        # Seed-city base page: a city-less national service page counts as coverage.
+        national = site_page_index.match_site_service_page(
+            page.get("keyword") or "", seed_city, token_index
+        )
+        if national:
+            return national
+    else:
+        # Area/other-city target: only a generic place page for it counts; a
+        # national service page does NOT (keep the locality page on offer).
+        return site_page_index.match_site_location_page(location_name, place_index)
+    return None
+
+
 def _to_items(
-    per_silo: list[dict], client_id: str, site_index: Optional[dict[str, str]] = None,
+    per_silo: list[dict],
+    client_id: str,
+    site_urls: Optional[list[str]] = None,
+    seed_city: str = "",
 ) -> list[dict]:
     """Flatten silos → page targets, marking each:
 
       - ``found``   — a page already generated in the tool (`local_seo_pages`,
                       matched on keyword); ``url`` is its published doc, and
-      - ``on_site`` — a generic location page for this place already exists on the
-                      client's live site (`site_index`, matched on the page's bare
-                      `location_name`); ``url`` is the live page, else
+      - ``on_site`` — a page for this topic already exists on the client's live site
+                      (see `_match_page_on_site`); ``url`` is the live page, else
       - ``missing`` — nothing yet; offer it for creation.
 
     `found` wins over `on_site` (a page we built and track is the more actionable
-    record). Only location targets carry a `location_name`, so the live-site check
-    applies to area/location pages — not service-variation pages."""
+    record). The live-site check now runs on **every** page — a service+city page is
+    matched on its keyword, a city-less national service page is matched with the
+    place stripped, and area/location pages additionally match a generic place page
+    via their `location_name`. `seed_city` is the city all service-variation pages
+    target, used to strip the geo for the national-service fallback."""
     supabase = get_supabase()
-    site_index = site_index or {}
+    site_urls = site_urls or []
+    token_index = site_page_index.build_page_token_index(site_urls)
+    place_index = site_page_index.build_location_slug_index(site_urls)
     existing: dict[str, dict] = {}
     try:
         rows = (
@@ -738,13 +798,7 @@ def _to_items(
             if match:
                 status, url = "found", match.get("published_doc_url")
             else:
-                site_url = (
-                    site_page_index.match_site_location_page(
-                        page.get("location_name") or "", site_index
-                    )
-                    if page.get("location_name")
-                    else None
-                )
+                site_url = _match_page_on_site(page, token_index, place_index, seed_city)
                 status, url = ("on_site", site_url) if site_url else ("missing", None)
             items.append(
                 {
@@ -758,23 +812,23 @@ def _to_items(
     return items
 
 
-async def _build_site_location_index(
+async def _build_site_url_list(
     client_id: str, location_code: Optional[int],
-) -> tuple[dict[str, str], Optional[str]]:
-    """Discover the client's existing location pages from their live site. Returns
-    ``(slug→url index, degraded_note)`` — the note is set only when the check is
-    skipped or had to fall back, never on a clean sitemap read. Best-effort: any
-    failure yields an empty index + an explanatory note, never an aborted plan."""
+) -> tuple[list[str], Optional[str]]:
+    """Discover the client's live-site URLs (for the existing-page check). Returns
+    ``(urls, degraded_note)`` — the note is set only when discovery is skipped or had
+    to fall back, never on a clean sitemap read. Best-effort: any failure yields an
+    empty list + an explanatory note, never an aborted plan."""
     try:
         client = _get_client(client_id)
     except HTTPException:
-        return {}, None
+        return [], None
     website = (client.get("gbp") or {}).get("website") or client.get("website_url") or ""
     if not website.strip():
-        return {}, (
-            "Existing-page check skipped — no website on file, so every area shows "
-            "as missing. Add the client's website to detect location pages already "
-            "on the site."
+        return [], (
+            "Existing-page check skipped — no website on file, so every page shows "
+            "as missing. Add the client's website to detect pages already on the "
+            "site."
         )
 
     code = location_code
@@ -793,17 +847,17 @@ async def _build_site_location_index(
             "local_seo_silo.site_discovery_failed",
             extra={"client_id": client_id, "error": str(exc)},
         )
-        return {}, "Existing-page check skipped — couldn't read the client's site."
+        return [], "Existing-page check skipped — couldn't read the client's site."
 
     if source == "none":
-        return {}, (
+        return [], (
             "Existing-page check skipped — couldn't read the site's sitemap or "
-            "find it in Google's index, so existing location pages may be missed."
+            "find it in Google's index, so existing pages may be missed."
         )
     note = None
     if source == "google_index":
         note = (
-            "No sitemap found — checked Google's index for existing location pages "
-            "instead (may be less complete)."
+            "No sitemap found — checked Google's index for existing pages instead "
+            "(may be less complete)."
         )
-    return site_page_index.build_location_slug_index(urls), note
+    return urls, note

@@ -413,3 +413,32 @@ def test_emit_recipient_defaults_none(monkeypatch):
     monkeypatch.setattr(notifications, "get_supabase", lambda: type("SB", (), {"table": lambda self, n: _Q(n)})())
     notifications.emit(client_id="c1", kind="rank_drop", title="Drop")
     assert captured["recipient_profile_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# resolve_delete_scope — the bulk-delete footgun guard
+# ---------------------------------------------------------------------------
+def test_resolve_delete_scope_specific_ids():
+    scope, ids = notifications.resolve_delete_scope(["a", "b"], False)
+    assert scope == "ids" and ids == ["a", "b"]
+
+
+def test_resolve_delete_scope_empty_ids_is_never_a_wipe():
+    # The core bug: a frontend sending {"ids": []} for an empty selection must
+    # delete nothing — not fall through to clearing the whole feed.
+    assert notifications.resolve_delete_scope([], False) == ("none", None)
+
+
+def test_resolve_delete_scope_no_body_is_noop():
+    assert notifications.resolve_delete_scope(None, False) == ("none", None)
+
+
+def test_resolve_delete_scope_all_flag_clears_feed():
+    assert notifications.resolve_delete_scope(None, True) == ("all", None)
+    assert notifications.resolve_delete_scope([], True) == ("all", None)
+
+
+def test_resolve_delete_scope_ids_win_over_all():
+    # Explicit ids are always honored as-is, even alongside the all flag.
+    scope, ids = notifications.resolve_delete_scope(["x"], True)
+    assert scope == "ids" and ids == ["x"]

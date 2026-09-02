@@ -627,6 +627,7 @@ async def gsc_scheduler() -> None:
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
+    from services.goal_escalation import run_goal_escalation_sweep
     from services.interventions import run_intervention_sync
     from services.everhour_sync import enqueue_due_everhour_sync
     from services.orchestrator import redispatch_due_retries
@@ -696,6 +697,12 @@ async def gsc_scheduler() -> None:
                 _safe("freeze_checks", enqueue_due_freeze_checks)
                 # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
                 _safe("episode_sync", run_episode_sync)
+                # Daily chronic-emergency escalation: re-surface a campaign goal
+                # that has stayed critically behind for weeks LOUDLY (both
+                # channels, latest reasoning), so a persistent emergency doesn't
+                # fade into a "0-proposals" whisper. Self-gated on
+                # goal_escalation_enabled.
+                _safe("goal_escalation_sweep", run_goal_escalation_sweep)
                 # Daily intervention-outcome sync (did goal-linked link-building /
                 # reoptimization work move the metric — 2-week/6-week verdicts).
                 # Self-gated: no-ops while intervention_tracking_enabled is false.

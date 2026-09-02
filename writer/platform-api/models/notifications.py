@@ -41,9 +41,12 @@ class UnreadCountsResponse(BaseModel):
 
 
 class DeleteRequest(BaseModel):
-    """Bulk-delete body. When `ids` is omitted (or empty), every notification for
-    the client is deleted (the "select all → delete" path)."""
+    """Bulk-delete body. `ids` deletes exactly those notifications (scoped to the
+    client). Clearing the WHOLE feed requires `all=True` — an omitted or empty
+    `ids` never wipes the feed, so a stray or empty-selection request can't
+    silently destroy a client's notification history."""
     ids: Optional[list[UUID]] = None
+    all: bool = False
 
 
 class OkResponse(BaseModel):

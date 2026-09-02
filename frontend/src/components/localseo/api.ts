@@ -6,6 +6,7 @@ import type {
   LocationSuggestion,
   RankabilityResult,
   ScoreHistoryRow,
+  CustomTargetsResult,
   SiloPlanJob,
   SiloPlanResult,
 } from './types'
@@ -145,6 +146,21 @@ export const localSeoApi = {
 
   getSiloPlan: (clientId: string, jobId: string) =>
     api.get<SiloPlanResult>(`/clients/${clientId}/local-seo/silo-plan/${jobId}`),
+
+  // User-supplied targets (a matrix of services × locations, or an explicit
+  // list/CSV) marked found/on_site/missing against the client's site + in-tool
+  // pages. Synchronous — parsing + existing-page marking only (no LLM/paid calls).
+  customTargets: (
+    clientId: string,
+    body: {
+      input_mode: 'matrix' | 'list'
+      services?: string
+      locations?: string
+      targets?: string
+      location: string
+      location_code?: number | null
+    },
+  ) => api.post<CustomTargetsResult>(`/clients/${clientId}/local-seo/custom-targets`, body),
 
   // Score→reoptimize as a background job: enqueue the rewrite, then poll
   // jobsStatus (result.page_id) — the UI can leave while it runs.
