@@ -43,10 +43,11 @@ export function CustomTargetsPanel({
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  const checkRef = useRef(0) // invalidates a superseded check (input edited mid-request)
 
   const bulk = useBulkCreate(clientId, onCreated)
 
-  const reset = () => { setItems(null); setNotes([]); setError(''); bulk.reset() }
+  const reset = () => { checkRef.current++; setItems(null); setNotes([]); setError(''); bulk.reset() }
 
   const matrixCount = (() => {
     const s = services.split('\n').map(x => x.trim()).filter(Boolean).length
@@ -69,6 +70,7 @@ export function CustomTargetsPanel({
 
   const check = async () => {
     if (!canCheck) return
+    const myCheck = ++checkRef.current // any input edit (via reset) or re-check invalidates this
     setChecking(true)
     setError('')
     setItems(null)
@@ -83,11 +85,14 @@ export function CustomTargetsPanel({
         location: location.trim(),
         location_code: locationCode,
       })
+      if (checkRef.current !== myCheck) return // superseded (input edited) — discard stale result
       setItems(res.items ?? [])
       setNotes(res.degraded_notes ?? [])
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not check targets')
+      if (checkRef.current === myCheck) setError(e instanceof Error ? e.message : 'Could not check targets')
     } finally {
+      // Unconditional: no second check can run concurrently (the button is disabled
+      // while checking and reset() never starts one), so the spinner is always ours.
       setChecking(false)
     }
   }
@@ -182,7 +187,11 @@ export function CustomTargetsPanel({
         onClick={check}
       >
         {checking ? <Spinner size={16} /> : <Search size={16} />}
-        {checking ? 'Checking targets…' : `Check ${mode === 'matrix' ? (matrixCount || '') : (listCount || '')} target${(mode === 'matrix' ? matrixCount : listCount) === 1 ? '' : 's'}`.trim()}
+        {(() => {
+          if (checking) return 'Checking targets…'
+          const n = mode === 'matrix' ? matrixCount : listCount
+          return n > 0 ? `Check ${n} target${n === 1 ? '' : 's'}` : 'Check targets'
+        })()}
       </button>
 
       {notes.length > 0 && (

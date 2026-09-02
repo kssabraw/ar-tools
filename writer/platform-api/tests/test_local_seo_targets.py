@@ -133,6 +133,38 @@ def test_build_silos_dispatches_by_mode():
     assert listed[0]["pages"][0]["keyword"] == "drain cleaning geelong"
 
 
+# ── cap_silos ─────────────────────────────────────────────────────────────────
+
+def test_cap_silos_no_op_under_cap():
+    per_silo = [{"silo": "A", "pages": [{"keyword": "x"}, {"keyword": "y"}]}]
+    capped, note = lt.cap_silos(per_silo, cap=10)
+    assert capped == per_silo
+    assert note is None
+
+
+def test_cap_silos_trims_across_silos_preserving_order():
+    per_silo = [
+        {"silo": "A", "pages": [{"keyword": f"a{i}"} for i in range(3)]},
+        {"silo": "B", "pages": [{"keyword": f"b{i}"} for i in range(3)]},
+    ]
+    capped, note = lt.cap_silos(per_silo, cap=4)
+    total = sum(len(s["pages"]) for s in capped)
+    assert total == 4
+    assert [p["keyword"] for p in capped[0]["pages"]] == ["a0", "a1", "a2"]  # first silo intact
+    assert [p["keyword"] for p in capped[1]["pages"]] == ["b0"]  # second trimmed
+    assert note is not None and "4 of 6" in note
+
+
+def test_cap_silos_drops_fully_trimmed_silos():
+    per_silo = [
+        {"silo": "A", "pages": [{"keyword": f"a{i}"} for i in range(2)]},
+        {"silo": "B", "pages": [{"keyword": "b0"}]},
+    ]
+    capped, note = lt.cap_silos(per_silo, cap=2)
+    assert [s["silo"] for s in capped] == ["A"]  # B dropped entirely
+    assert note is not None
+
+
 # ── plan_custom_targets (parse → mark, reusing the silo marking) ───────────────
 
 def _fake_supabase_no_pages() -> MagicMock:

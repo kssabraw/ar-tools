@@ -37,6 +37,13 @@ _SUPPORTING_HEADERS = {"supporting", "supporting_keywords", "secondary", "varian
 
 _DEFAULT_LIST_GROUP = "Custom targets"
 
+# Hard ceiling on how many targets one upload can mark in a single (synchronous)
+# request. The AI plan is bounded by the LLM; a user-supplied matrix is bounded
+# only by what's pasted (a 500×500 matrix is 250k combos), so cap it to keep the
+# response + any subsequent bulk-create sane. Generous enough for real use
+# (e.g. 30 services × 100 suburbs), a guard against pathological input.
+_MAX_TARGETS = 3000
+
 
 # ── pure helpers (no I/O) — unit-tested ──────────────────────────────────────
 
@@ -182,6 +189,30 @@ def build_silos(
     return build_list_silos(targets)
 
 
+def cap_silos(per_silo: list[dict], cap: int = _MAX_TARGETS) -> tuple[list[dict], Optional[str]]:
+    """Trim the total page count across all silos to `cap`, preserving silo + page
+    order. Returns ``(capped_silos, note)`` — `note` is set only when trimming
+    happened. Silos emptied by the trim are dropped."""
+    total = sum(len(silo.get("pages") or []) for silo in per_silo)
+    if total <= cap:
+        return per_silo, None
+    capped: list[dict] = []
+    remaining = cap
+    for silo in per_silo:
+        pages = silo.get("pages") or []
+        if remaining <= 0:
+            break
+        kept = pages[:remaining]
+        remaining -= len(kept)
+        if kept:
+            capped.append({**silo, "pages": kept})
+    note = (
+        f"Only the first {cap} of {total} targets were checked — narrow your "
+        "matrix / list to see the rest."
+    )
+    return capped, note
+
+
 # ── orchestration (marks against the client's site + in-tool pages) ───────────
 
 async def plan_custom_targets(
@@ -203,9 +234,10 @@ async def plan_custom_targets(
     per_silo = build_silos(input_mode, services, locations, targets)
     if not per_silo:
         return {"items": [], "degraded_notes": ["No targets were provided."]}
+    per_silo, cap_note = cap_silos(per_silo)
 
     site_urls, site_note = await local_seo_silo._build_site_url_list(client_id, location_code)
     seed_city = local_seo_silo._parse_area(location)[0] or (location or "").strip()
     items = local_seo_silo._to_items(per_silo, client_id, site_urls, seed_city)
-    notes = [site_note] if site_note else []
+    notes = [n for n in (cap_note, site_note) if n]
     return {"items": items, "degraded_notes": notes}
