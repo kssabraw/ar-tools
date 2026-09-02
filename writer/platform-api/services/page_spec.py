@@ -391,7 +391,7 @@ STRUCTURE_MODE_CLIENT = "client"
 STRUCTURE_MODE_TEMPLATE = "template"
 
 
-def build_client_sections(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def build_client_sections(groups: list[dict[str, Any]], has_reviews: Optional[bool] = None) -> list[dict[str, Any]]:
     """The client's reference layout as the page structure, verbatim: every
     folded reference group becomes a section IN THE CLIENT'S ORDER, keeping its
     own level, intent, heading and blocks. Nothing is merged into an absorber
@@ -444,6 +444,13 @@ def build_client_sections(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
                # a client section with prose defines the page; a heading-only
                # extra (a folded list) may be omitted when there is nothing to list
                "required": bool(words > 0 or key in TEMPLATE_KEYS)}
+        if key == "testimonials" and has_reviews is False:
+            # The client's page has a reviews block but the client has no reviews
+            # on file: the writer must never invent quotes, so the section is
+            # optional (omit it) until reviews are pulled — at which point the
+            # spec rebuilds with it required again (required is in the signature).
+            sec["required"] = False
+            sec["no_reviews"] = True
         taken[key] = sec
         ordered.append(sec)
     return ordered
@@ -513,15 +520,23 @@ def allocate_bands(
             hi = min(hi if hi else 10**9, t["items"]["max"] * wpi["max"])
         lo = max(lo, floor)
         hi = max(hi, int(round(lo * MIN_BAND_RATIO)))
-        if ceiling is not None:
-            hi = min(hi, int(ceiling))
-            lo = min(lo, hi)
+        if ceiling is not None and hi > int(ceiling):
+            # A ceiling clamp keeps the band a band: the minimum drops with it
+            # (never below the floor) instead of collapsing onto a point.
+            hi = int(ceiling)
+            lo = min(lo, max(floor, int(round(hi / MIN_BAND_RATIO))))
         if not s.get("required"):
             # An optional section may be omitted, so it never contributes to
             # the page minimum — only its maximum bounds what it may take.
             if s.get("source") == "reference" and int(s.get("words") or 0) == 0:
                 items = sum(int(b.get("items") or 0) for b in s.get("blocks") or [])
                 hi = max(40, items * 4)
+            if s.get("no_reviews"):
+                # A client section made optional for want of data hands its
+                # share back to the PAGE (the page may run that much shorter),
+                # not to the absorber — otherwise "how it works" swells to fill
+                # the space a missing reviews block left.
+                s["released_min"] = int(lo)
             lo = 0
         s["min_words"], s["max_words"] = int(lo), int(hi)
         s["share"] = round(share, 4)
@@ -554,10 +569,12 @@ def allocate_bands(
             s["min_words"] = max(floor, int(round(s["min_words"] * f)))
             s["max_words"] = max(s["max_words"], s["min_words"])
 
-    # residual → absorber, so the sums close on the page band
+    # residual → absorber, so the sums close on the page band (less any minimum
+    # an optional-for-want-of-data section released back to the page)
+    released = sum(int(s.get("released_min") or 0) for s in secs)
     others_min = sum(s["min_words"] for s in others)
     others_max = sum(s["max_words"] for s in others)
-    absorber["min_words"] = max(a_floor, t_min - others_min)
+    absorber["min_words"] = max(a_floor, t_min - released - others_min)
     absorber["max_words"] = max(
         int(round(absorber["min_words"] * MIN_BAND_RATIO)), t_max - others_max
     )
@@ -623,6 +640,7 @@ def build_spec(
     page_type: str = "local_landing",
     now: Optional[datetime] = None,
     client_structure_overrides: bool = True,
+    has_reviews: Optional[bool] = None,
 ) -> dict[str, Any]:
     """Assemble a spec from its three inputs (plan §4). Pure.
 
@@ -637,7 +655,7 @@ def build_spec(
     client_mode = bool(usable and client_structure_overrides)
     if usable:
         groups = fold_outline((reference_entry or {}).get("analysis", {}).get("outline") or [])
-        sections = build_client_sections(groups) if client_mode else ensure_required(map_to_template(groups))
+        sections = build_client_sections(groups, has_reviews) if client_mode else ensure_required(map_to_template(groups))
         ref_total = sum(_words_of(it) for it in (reference_entry or {}).get("analysis", {}).get("outline") or [] if isinstance(it, dict))
     else:
         sections = ensure_required([])
@@ -674,6 +692,9 @@ def build_spec(
                 "blocks": blocks,
                 "source": s.get("source") or "template",
             }
+            if s.get("no_reviews"):
+                entry["no_reviews"] = True
+                entry["heading_pattern"] = (entry["heading_pattern"] + " — OMIT: no client reviews on file (never invent quotes)").strip(" —")
             ref_sub = int(s.get("subsections") or 0)
             max_ref_h3 = max(max_ref_h3, ref_sub)
             if ref_sub:
@@ -711,12 +732,17 @@ def build_spec(
                 "max": max(sub["min"], min(sub["max"], ref_sub)) if ref_sub else sub["max"],
             }
         out_sections.append(entry)
+    released = sum(int(s.get("released_min") or 0) for s in sections)
+    if released:
+        total = {**total, "min": max(1, int(total["min"]) - released), "released_min": released}
     structure = copy.deepcopy(STRUCTURE_DEFAULTS)
     structure["max_sections"] = max(structure["max_sections"], len(out_sections))
     if client_mode:
         structure["max_h3_per_h2"] = max(structure["max_h3_per_h2"], max_ref_h3 + 1)
         present = {e["key"] for e in out_sections}
         omitted = [t["key"] for t in TEMPLATE_SECTIONS if t["required"] and t["key"] not in present]
+        if any(e.get("no_reviews") for e in out_sections):
+            flags = [*flags, "testimonials_optional_no_reviews"]
         if omitted:
             # Advisory: the client's layout has no slot the template would have
             # carried (a FAQ/process/geo block the scorers reward). The client's
@@ -1055,7 +1081,7 @@ def render_spec_block(spec: dict[str, Any]) -> str:
             extras.append(f"{s['subsections']['min']}–{s['subsections']['max']} H2/H3 sub-sections")
         if s.get("items"):
             extras.append(f"{s['items']['min']}–{s['items']['max']} items")
-        req = "required" if s.get("required") else "optional"
+        req = "required" if s.get("required") else ("OMIT — no reviews on file" if s.get("no_reviews") else "optional")
         lines.append(
             f"  [{s['key']}] {s.get('level')} · {req} · {s.get('min_words')}–{s.get('max_words')} words · "
             f"{s.get('intent')}: {s.get('heading_pattern') or ''}"

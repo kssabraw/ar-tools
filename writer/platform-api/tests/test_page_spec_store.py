@@ -126,3 +126,19 @@ def test_summarize_lengths_rolls_up_target_vs_actual():
     assert out["avg_overage_pct"] == 27.5   # (+5% + 50%) / 2
     assert [r["id"] for r in out["recent"]] == ["a", "b"]
     assert svc.summarize_lengths([])["in_band_pct"] is None
+
+
+def test_client_has_reviews_reads_review_text_only():
+    assert store.client_has_reviews({"gbp": {"reviews": [{"reviewer": "A", "rating": 5, "text": "Great crew"}]}}) is True
+    assert store.client_has_reviews({"gbp": {"reviews": []}}) is False
+    assert store.client_has_reviews({"gbp": {"reviews": [{"reviewer": "A", "text": "  "}]}}) is False
+    assert store.client_has_reviews({"gbp": None}) is False and store.client_has_reviews({}) is False
+
+
+def test_resolve_spec_threads_has_reviews_from_the_client_gbp():
+    client = dict(_CLIENT, gbp={"reviews": [{"reviewer": "A", "rating": 5, "text": "Great crew"}]})
+    with patch.object(store, "get_active", return_value=None), \
+         patch.object(store.page_spec, "build_spec", wraps=store.page_spec.build_spec) as build, \
+         patch.object(store, "save_new_version", side_effect=lambda *a, **k: {"id": "s", "version": 1, "edited_at": None, "spec": a[4]}):
+        store.resolve_spec(client, "k", "L", 1, _SERP, 1200)
+    assert build.call_args.kwargs["has_reviews"] is True
