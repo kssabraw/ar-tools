@@ -198,12 +198,15 @@ class Settings(BaseSettings):
     # BULK lanes (2026-09-02): dedicated workers that claim ONLY background-
     # priority async_jobs (bulk-create / matrix / reoptimize-bulk items, stamped
     # `job_priority.BACKGROUND` at enqueue). Each lane runs one ~10-min page
-    # generation at a time, so this is the batch-throughput knob: 1 keeps
-    # today's two-in-flight (this lane + the MAIN lane, which still picks bulk
-    # up when nothing else is pending); 4 runs four pages at once. The nlp
-    # container serves every lane, so watch its memory when raising this, and
-    # size the Anthropic key pool (`anthropic_api_keys`) to match. 0 disables.
-    bulk_lane_workers: int = 1
+    # generation at a time, so this is the batch-throughput knob: 3 runs three
+    # bulk pages at once (plus the MAIN lane, which still picks a bulk row up when
+    # nothing else is pending). The nlp container serves every lane, so watch its
+    # memory when raising this, and size the Anthropic key pool
+    # (`ANTHROPIC_API_KEY_SECONDARY` on nlp + PLATFORM) to match — 3 concurrent
+    # multi-pass generations lean hard on the single Anthropic account, so pair
+    # this with the second key or watch for 429 backoff (see the HANDOFF
+    # bulk-throughput tuning recipe). 0 disables. Owner ruling 2026-09-02: 3.
+    bulk_lane_workers: int = 3
     # Soft per-client fairness cap on the BULK lanes: at most this many of a
     # single client's background jobs run CONCURRENTLY while another client also
     # has bulk work pending — so one client's 40-page batch can't hold every bulk

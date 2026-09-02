@@ -202,5 +202,8 @@ def test_local_seo_generate_transient_failure_requeues(monkeypatch):
     assert writes[-1]["status"] == "failed"
 
 
-def test_bulk_lane_width_setting_defaults_to_one():
-    assert settings.bulk_lane_workers == 1
+def test_bulk_lane_width_setting_default():
+    # Owner ruling 2026-09-02: raised 1 → 3 (three bulk pages generate at once;
+    # the bulk_lane_max_per_client fairness cap engages at >1). Pair with the
+    # Anthropic key pool — see the HANDOFF bulk-throughput tuning recipe.
+    assert settings.bulk_lane_workers == 3
