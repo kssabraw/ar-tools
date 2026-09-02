@@ -32,3 +32,14 @@ drop-in fallback.
 - Platform realities bind us regardless of provider: Instagram publishing needs
   the client on a **Business/Creator** account; the X link tax applies to any
   posting layer.
+
+**Update (2026-09-02, from `docs/modules/social-media-vendor-confirm-postpeer-v1_0.md`):**
+consequence (1) is **closed** — PostPeer confirms it publishes under its **own
+platform-reviewed apps** ("App Review is done for you"), so the low-friction basis of
+this decision holds. Consequence (2), the X link-tax handling, remains **open** —
+PostPeer's pricing is a flat per-post credit model silent on the X link surcharge
+(likely absorbed; a margin/throttle risk to run down directly). Two findings reinforce
+this ADR: PostPeer has **no public SLA, status page, or legal entity** (indie-maturity →
+the swappable adapter is load-bearing), and the Ayrshare fallback is **broader/more
+mature but enterprise-priced per-profile** (~20–35× entry cost), so a provider swap is a
+cost/architecture event, not a config change.

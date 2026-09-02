@@ -21,6 +21,7 @@ data-model, token-ownership, scope, and failure/edge-path clarifications
 - `docs/adr/0003-social-autonomy-is-a-domain-executor.md`
 - `docs/modules/social-media-cost-model-v1_0.md` — worked cost model (§11).
 - `docs/modules/social-media-failure-handling-v1_0.md` — failure/edge-path spec (§14).
+- `docs/modules/social-media-vendor-confirm-postpeer-v1_0.md` — PostPeer due diligence (§14).
 
 **Sibling modules this builds on / mirrors:** GBP Posts
 (`gbp-posts-module-prd-v1_0.md` — the publish-lifecycle template), the autonomy
@@ -42,7 +43,8 @@ voice, human-approved — and publishes it to the client's own social accounts.
 - **Manager (surface)** — planning/operations: the **Calendar**, per-platform
   **Cadence**, approval, publishing, and (later) performance.
 
-**Platforms (v1):** Twitter/X, Facebook, Instagram (feed + carousel), Pinterest —
+**Platforms (v1):** Twitter/X, Facebook (Pages), Instagram (feed, **single-image** —
+carousel is deferred until PostPeer ships it; see the vendor-confirm doc), Pinterest —
 text + still image, fully produced. **YouTube** is analyze-only in v1: the module
 reverse-engineers competitor video and produces a **storyboard/brief + thumbnail +
 title/description/hashtags** for the client to shoot; it does **not** generate
@@ -291,11 +293,15 @@ not an extension of the existing executor. Not a new persona.
 
 ## 14. Open items & risks
 
-- **Vendor-confirm — BLOCKING prerequisites of P0** (the P0 smoke test is the go/no-go
-  gate, not a side-quest): PostPeer's app-review model (does it publish under its own
-  reviewed Meta/X apps? if not, ADR-0001's low-friction basis inverts) + X link-tax
-  handling; PostPeer Instagram Stories support; current TwelveLabs / nano-banana **Pro**
-  pricing. cobalt self-host is a **P5** concern, not P0.
+- **Vendor-confirm — full readout in `social-media-vendor-confirm-postpeer-v1_0.md`.**
+  ✅ **Closed:** PostPeer publishes under its **own reviewed apps** (managed OAuth —
+  ADR-0001's low-friction basis holds); platform coverage, the IG Business/Creator
+  requirement, and pricing are confirmed. **Still open, and the P0 smoke test is the
+  go/no-go gate:** (1) **X link-post billing** — PostPeer is silent, likely absorbs the
+  13× X link fee (a margin/throttle risk); (2) **IG carousel** ETA (currently roadmap →
+  v1 ships single-image IG, §1); (3) SLA / status page / webhook delivery guarantee;
+  (4) legal entity + support channel (production dependency + DPA). Also confirm current
+  TwelveLabs / nano-banana **Pro** pricing. cobalt self-host is a **P5** concern, not P0.
 - **Failure & edge paths — specified in `social-media-failure-handling-v1_0.md`** (the
   PRD above specifies the happy path). It covers the connection-health state machine,
   a **token revoked between approval and scheduled publish** (`blocked_account` hold +
