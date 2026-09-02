@@ -12,7 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-PublishDestination = Literal["google_docs", "wordpress", "github"]
+PublishDestination = Literal["app_only", "google_docs", "wordpress", "github"]
 PublishStatus = Literal["draft", "publish"]
 
 

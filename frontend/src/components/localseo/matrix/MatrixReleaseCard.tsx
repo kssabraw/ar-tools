@@ -122,14 +122,18 @@ export function MatrixReleaseCard({ clientId, matrix, onChanged }: Props) {
           </h3>
           <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 0' }}>
             Drip the grid out instead of all at once: a batch now, then a few cells per day, week or month. Each release
-            generates <em>then publishes</em> its pages to <strong>{matrix.publish_destination.replace('_', ' ')}</strong> as{' '}
-            <strong>{matrix.publish_status}</strong> (change these in the matrix settings).
+            {matrix.publish_destination === 'app_only' ? (
+              <> generates its pages into <strong>Saved Pages</strong> (nothing is published externally).</>
+            ) : (
+              <> generates <em>then publishes</em> its pages to <strong>{matrix.publish_destination.replace('_', ' ')}</strong> as{' '}
+                <strong>{matrix.publish_status}</strong> (change these in the matrix settings).</>
+            )}
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           {!open && <button type="button" style={smallBtn} onClick={openForm} disabled={saving}><CalendarClock size={13} /> {active ? 'Change' : 'Schedule…'}</button>}
           {active && <button type="button" style={{ ...smallBtn, color: '#b91c1c' }} onClick={stop} disabled={saving}><Square size={12} /> Stop</button>}
-          <button type="button" style={smallBtn} onClick={runNow} disabled={running || releasable === 0} title="Generate + publish the next batch now, outside the cadence">
+          <button type="button" style={smallBtn} onClick={runNow} disabled={running || releasable === 0} title={matrix.publish_destination === 'app_only' ? 'Generate the next batch now, outside the cadence' : 'Generate + publish the next batch now, outside the cadence'}>
             {running ? <Spinner size={12} /> : <Play size={12} />} Release next {Math.max(1, perRelease)} now
           </button>
         </div>

@@ -797,6 +797,14 @@ async def _publish_after_generate(page_id: str, payload: dict, job_id: str) -> N
     cell_id = payload.get("matrix_cell_id")
     destination = payload.get("publish_destination") or "google_docs"
     status = payload.get("publish_status") or "draft"
+    # "App only" matrix: the page is already in Saved Pages, nothing is pushed
+    # externally — the drip is just a paced generate, so the cell stays `done`.
+    if not core.publishes_externally(destination):
+        logger.info(
+            "local_seo.matrix_publish_after_app_only",
+            extra={"job_id": job_id, "page_id": page_id, "cell_id": cell_id},
+        )
+        return
     try:
         result = await publish_page(page_id, payload.get("user_id") or "", destination=destination, status=status)
         outcome = core.publish_outcome_from_result(result or {})

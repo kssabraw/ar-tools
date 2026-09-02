@@ -39,7 +39,7 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
   const [baseUrl, setBaseUrl] = useState('')
   const [templateUrl, setTemplateUrl] = useState('')
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
-  const [destination, setDestination] = useState<'google_docs' | 'wordpress' | 'github'>('google_docs')
+  const [destination, setDestination] = useState<'app_only' | 'google_docs' | 'wordpress' | 'github'>('app_only')
   const [publishStatus, setPublishStatus] = useState<'draft' | 'publish'>('draft')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -141,10 +141,14 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         <div>
           <label style={label}>Publish destination (default)</label>
           <select style={select} value={destination} onChange={e => setDestination(e.target.value as typeof destination)} disabled={saving}>
+            <option value="app_only">App only — keep in Saved Pages</option>
             <option value="google_docs">Google Docs</option>
             <option value="wordpress">WordPress</option>
             <option value="github">GitHub</option>
           </select>
+          {destination === 'app_only' && (
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>Pages stay in the app (Saved Pages + this grid). Nothing is pushed to Docs / WordPress / GitHub.</p>
+          )}
         </div>
         <div>
           <label style={label}>Publish as</label>

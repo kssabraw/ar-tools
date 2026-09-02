@@ -384,3 +384,16 @@ def test_coverage_counts():
     counts = m.coverage_counts(cells)
     assert counts["total"] == 12 and counts["done"] == 1 and counts["missing"] == 11
     assert counts["published"] == 0
+
+
+def test_publishes_externally():
+    from services import local_seo_matrix as core
+
+    assert core.publishes_externally("google_docs") is True
+    assert core.publishes_externally("wordpress") is True
+    assert core.publishes_externally("github") is True
+    # App-only and empty are not external targets.
+    assert core.publishes_externally(core.APP_ONLY) is False
+    assert core.publishes_externally("app_only") is False
+    assert core.publishes_externally("") is False
+    assert core.publishes_externally(None) is False

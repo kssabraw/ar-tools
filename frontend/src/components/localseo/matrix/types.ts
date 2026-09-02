@@ -58,7 +58,7 @@ export interface MatrixSummary {
   base_url?: string | null
   page_template_url?: string | null
   entity_provider?: string | null
-  publish_destination: 'google_docs' | 'wordpress' | 'github'
+  publish_destination: 'app_only' | 'google_docs' | 'wordpress' | 'github'
   publish_status: 'draft' | 'publish'
   release_enabled: boolean
   release_mode: 'daily' | 'weekly' | 'monthly'
@@ -105,7 +105,7 @@ export interface MatrixCreateBody {
   base_url?: string | null
   page_template_url?: string | null
   entity_provider?: string | null
-  publish_destination?: 'google_docs' | 'wordpress' | 'github'
+  publish_destination?: 'app_only' | 'google_docs' | 'wordpress' | 'github'
   publish_status?: 'draft' | 'publish'
 }
 
