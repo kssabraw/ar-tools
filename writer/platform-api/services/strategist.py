@@ -25,10 +25,10 @@ smoke gate). Pure helpers (``sanitize_review``) are unit-tested.
 
 from __future__ import annotations
 
-import html
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from html.entities import html5 as _HTML5_ENTITIES
 from typing import Optional
 
 from config import settings
@@ -421,14 +421,37 @@ def _assistant_turn(content) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure helpers (unit-tested)
 # ─────────────────────────────────────────────────────────────────────────────
+# Decode only an EXACT, semicolon-terminated HTML entity — a named entity that is
+# a verbatim key of the html5 table (``&amp;`` / ``&pound;``) or a numeric ref
+# (``&#215;`` / ``&#x2019;``). Everything else is left byte-for-byte: a bare ``&``
+# (Q&A, R&D, AT&T), a semicolon-less legacy entity (``&pound500``, ``?a=1&copy=2``,
+# ``&notindexed``), and even a ``;``-terminated token whose prefix merely happens
+# to be an entity (``&pound500;`` stays — ``html.unescape`` would bleed it to
+# ``£500;``). This kills the only corruption class blanket unescaping introduces
+# while still fixing every real ``&amp;``/``&#215;`` the scraped digest carries.
+_ENTITY_RE = re.compile(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);")
+
+
+def _decode_entity(match: "re.Match") -> str:
+    tok, inner = match.group(0), match.group(1)
+    if inner[0] == "#":  # numeric character reference
+        try:
+            cp = int(inner[2:], 16) if inner[1] in "xX" else int(inner[1:])
+            return chr(cp)
+        except (ValueError, OverflowError):
+            return tok
+    decoded = _HTML5_ENTITIES.get(inner + ";")  # exact match only — no prefix bleed
+    return decoded if decoded is not None else tok
+
+
 def _clean_prose(value) -> str:
-    """Strip + unescape HTML entities. The strategy digest carries scraped
-    competitor names ("Melbourne Roof Restoration &amp; Repair"), and the
-    model echoes them verbatim into its assessment / root_cause / findings /
-    proposal prose. Pure."""
+    """Strip + decode exact, semicolon-terminated HTML entities. The strategy
+    digest carries scraped competitor names ("Melbourne Roof Restoration
+    &amp; Repair"), and the model echoes them verbatim into its assessment /
+    root_cause / findings / proposal / question prose. Pure."""
     if not isinstance(value, str):
         return ""
-    return html.unescape(value).strip()
+    return _ENTITY_RE.sub(_decode_entity, value).strip()
 
 
 def sanitize_review(raw: dict, *, frozen: bool) -> dict:
@@ -444,16 +467,19 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     root_cause = _clean_prose(raw.get("root_cause"))
     findings = []
     for f in raw.get("findings") or []:
-        if not isinstance(f, dict) or not (f.get("synthesis") or "").strip():
+        if not isinstance(f, dict):
+            continue
+        synthesis = _clean_prose(f.get("synthesis"))
+        if not synthesis:
             continue
         findings.append(
             {
                 "signal_refs": [str(s) for s in (f.get("signal_refs") or []) if s],
-                "synthesis": _clean_prose(f["synthesis"]),
+                "synthesis": synthesis,
                 "sop_citation": (f.get("sop_citation") or "").strip(),
             }
         )
-    questions = [str(q).strip() for q in (raw.get("questions") or []) if str(q).strip()]
+    questions = [cq for q in (raw.get("questions") or []) if (cq := _clean_prose(str(q)))]
 
     proposals = []
     for p in raw.get("proposals") or []:
