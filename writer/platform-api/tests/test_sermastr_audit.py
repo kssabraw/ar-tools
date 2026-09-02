@@ -464,3 +464,43 @@ def test_build_self_analysis_report_folds_in_dismissed():
     learn = sermastr_audit.learning_signals(rows)
     report = sermastr_audit.build_self_analysis_report(perf, learn)
     assert "Most-dismissed" in report and "press_release" in report
+
+
+def test_decision_stats_counts_superseded_separately():
+    rows = [
+        {"decision": "approved"}, {"decision": "dismissed"},
+        {"decision": "superseded"}, {"decision": None},
+    ]
+    stats = sermastr_audit.decision_stats(rows)["overall"]
+    assert stats["approved"] == 1 and stats["dismissed"] == 1
+    assert stats["superseded"] == 1 and stats["pending"] == 1 and stats["total"] == 4
+
+
+def test_learning_rates_ignore_superseded():
+    rows = [
+        {"decision": "approved", "proposal_kind": "k", "client_id": "c"},
+        {"decision": "superseded", "proposal_kind": "k", "client_id": "c"},
+        {"decision": "superseded", "proposal_kind": "k", "client_id": "c"},
+    ]
+    sig = sermastr_audit.learning_signals(rows)
+    k = sig["by_kind"]["k"]
+    assert k["dismiss_rate"] == 0.0
+
+
+def test_record_superseded_writes_a_system_decision(monkeypatch):
+    from unittest.mock import MagicMock
+    from config import settings
+
+    monkeypatch.setattr(settings, "sermastr_audit_enabled", True)
+    supabase = MagicMock()
+    captured = {}
+    chain = supabase.table.return_value
+    chain.upsert.side_effect = lambda row, **kw: (captured.update(row), chain)[1]
+    monkeypatch.setattr(sermastr_audit, "get_supabase", lambda: supabase)
+
+    sermastr_audit.record_superseded(review_id="r", idx=1, proposal={"title": "t", "action": "a"},
+                                     client_id="c", client_name="Acme", trigger="goal_recovery")
+    assert captured["decision"] == "superseded"
+    assert captured["actor_source"] == "system"
+    assert "decided_by" not in captured  # None keys stripped
+    assert captured["source_ref"] == "strategy_proposal:r:1"

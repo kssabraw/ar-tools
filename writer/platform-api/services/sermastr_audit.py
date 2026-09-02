@@ -117,7 +117,7 @@ def proposal_row(review_id: str, idx: int, client_id: Optional[str],
 
 
 def _blank_stats() -> dict:
-    return {"approved": 0, "dismissed": 0, "pending": 0,
+    return {"approved": 0, "dismissed": 0, "pending": 0, "superseded": 0,
             "worked": 0, "partial": 0, "no_effect": 0, "total": 0}
 
 
@@ -128,6 +128,10 @@ def _tally_stats(bucket: dict, row: dict) -> None:
         bucket["approved"] += 1
     elif dec == "dismissed":
         bucket["dismissed"] += 1
+    elif dec == "superseded":
+        # Replaced by a newer recovery plan — a system event, never a human
+        # verdict, so it counts in neither the approve nor the dismiss rate.
+        bucket["superseded"] += 1
     else:
         bucket["pending"] += 1
     ov = row.get("outcome_verdict")
@@ -437,7 +441,7 @@ def record_decision(*, review_id: str, idx: int, proposal: dict,
     verdict is preserved. Best-effort."""
     if not settings.sermastr_audit_enabled:
         return
-    if decision not in ("approved", "dismissed"):
+    if decision not in ("approved", "dismissed", "superseded"):
         return
     from datetime import datetime, timezone
 
@@ -467,6 +471,19 @@ def record_decision(*, review_id: str, idx: int, proposal: dict,
 # ---------------------------------------------------------------------------
 # Self-read (learning) — recent history for the passive context surface
 # ---------------------------------------------------------------------------
+def record_superseded(*, review_id: str, idx: int, proposal: dict,
+                      client_id: Optional[str] = None, client_name: Optional[str] = None,
+                      trigger: Optional[str] = None) -> None:
+    """A proposal replaced by a newer recovery plan (services/goal_recovery.py).
+    Recorded as its OWN decision value, by the system — excluded from the
+    approve/dismiss learning rates. Best-effort."""
+    record_decision(
+        review_id=review_id, idx=idx, proposal=proposal, client_id=client_id,
+        client_name=client_name, trigger=trigger, decision="superseded",
+        actor_profile_id=None, actor_role=None, actor_source="system",
+    )
+
+
 def _attach_actor_names(rows: list[dict]) -> list[dict]:
     """Best-effort: fold ``actor_name`` onto each row from profiles."""
     ids = sorted({str(r["decided_by"]) for r in rows if r.get("decided_by")})

@@ -239,8 +239,15 @@ def _open_alert_count(supabase, client_id: str) -> int:
 # ---------------------------------------------------------------------------
 def run_goal_escalation_sweep() -> dict:
     """Daily: open / re-escalate / resolve chronic-goal escalations across all
-    clients. Best-effort per client — one bad client never stops the sweep."""
-    stats = {"opened": 0, "escalated": 0, "resolved": 0, "clients": 0}
+    clients. Best-effort per client — one bad client never stops the sweep.
+
+    Escalation is a two-step: each client's due goals are COLLECTED first, then
+    dispatched oldest-behind first — a ``goal_recovery`` strategist run when the
+    recovery gate is open (the FINISHED run sends the one goal_chronic message,
+    stamps the rows; capped per tick, a capped client rolls forward
+    unescalated), else the bare #949 alarm right here."""
+    stats = {"opened": 0, "escalated": 0, "resolved": 0, "clients": 0,
+             "recovery_enqueued": 0, "recovery_deferred": 0, "recovery_in_flight": 0}
     if not settings.goal_escalation_enabled:
         return stats
     supabase = get_supabase()
@@ -252,22 +259,108 @@ def run_goal_escalation_sweep() -> dict:
         logger.error("goal_escalation.list_clients_failed", extra={"error": str(exc)})
         return stats
 
+    due_clients: list[dict] = []
     for client_id in client_ids:
         try:
-            _sweep_client(supabase, client_id, today, now, stats)
+            due = _sweep_client(supabase, client_id, today, now, stats)
             stats["clients"] += 1
+            if due:
+                due_clients.append({"client_id": client_id, "items": due})
         except Exception as exc:
             logger.warning(
                 "goal_escalation.client_failed",
                 extra={"client_id": client_id, "error": str(exc)},
             )
 
-    if stats["opened"] or stats["escalated"] or stats["resolved"]:
+    _dispatch_due(supabase, due_clients, today, now, stats)
+
+    if stats["opened"] or stats["escalated"] or stats["resolved"] or stats["recovery_enqueued"]:
         logger.info("goal_escalation.sweep_complete", extra=stats)
     return stats
 
 
-def _sweep_client(supabase, client_id: str, today: date, now: datetime, stats: dict) -> None:
+def _dispatch_due(supabase, due_clients: list[dict], today: date, now: datetime, stats: dict) -> None:
+    """Route each client's due escalations to a recovery run or the bare alarm."""
+    from services import goal_recovery
+
+    recovery_open = goal_recovery.gate_open()
+    already: set[str] = set()
+    if recovery_open:
+        already = goal_recovery.clients_recovered_within(
+            max(settings.goal_escalation_reescalate_days - 1, 0)
+        )
+    candidates = [
+        {**c, "goals": goal_recovery.goals_context(c["items"], today)} for c in due_clients
+    ]
+    if recovery_open:
+        selected, deferred = goal_recovery.order_for_cap(
+            candidates, settings.goal_recovery_max_runs_per_tick
+        )
+        stats["recovery_deferred"] += len(deferred)
+        for d in deferred:
+            logger.info("goal_recovery.deferred_by_cap", extra={"client_id": d["client_id"]})
+    else:
+        selected = candidates
+
+    for c in selected:
+        client_id = c["client_id"]
+        if recovery_open:
+            if client_id in already:
+                # A complete recovery run inside the window whose stamp didn't
+                # land — don't double-spend; the next tick re-evaluates.
+                logger.info("goal_recovery.recent_run_exists", extra={"client_id": client_id})
+                continue
+            status, _rid = goal_recovery.enqueue_recovery_run(client_id, c["goals"])
+            if status == "enqueued":
+                stats["recovery_enqueued"] += 1
+                continue
+            if status == "in_flight":
+                stats["recovery_in_flight"] += 1
+                continue
+            # disabled (client opted out) / failed → the bare alarm below.
+        try:
+            _escalate_bare(supabase, client_id, c["items"], today, now, stats)
+        except Exception as exc:
+            logger.warning("goal_escalation.bare_alarm_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+
+
+def _escalate_bare(supabase, client_id: str, items: list, today: date, now: datetime, stats: dict) -> None:
+    """The #949 alarm: one critical goal_chronic per due goal, carrying the
+    latest strategist reasoning; stamps the row. Used when no recovery run can
+    carry the plan (gate closed, client opted out, enqueue failed)."""
+    client_name = _client_name(supabase, client_id)
+    alert_count = _open_alert_count(supabase, client_id)
+    reasoning = _latest_reasoning(supabase, client_id)
+    for row, g in items:
+        weeks = weeks_behind(_parse_date(row.get("behind_since")), today)
+        note = build_escalation(client_name, g, weeks, alert_count, reasoning)
+        notifications.emit(
+            client_id=client_id,
+            kind="goal_chronic",
+            title=note["title"],
+            summary=note["summary"],
+            severity="critical",
+            payload={
+                "link": f"clients/{client_id}/goals",
+                "goal_id": g.get("id"),
+                "weeks_behind": weeks,
+            },
+        )
+        supabase.table("goal_escalations").update(
+            {
+                "last_escalated_at": now.isoformat(),
+                "escalation_count": (row.get("escalation_count") or 0) + 1,
+                "updated_at": now.isoformat(),
+            }
+        ).eq("id", row["id"]).execute()
+        stats["escalated"] += 1
+
+
+def _sweep_client(supabase, client_id: str, today: date, now: datetime, stats: dict) -> list:
+    """Open/refresh/resolve one client's escalation rows. Returns the DUE
+    (row, goal_eval) pairs for the dispatcher — nothing is emitted or stamped
+    here, so a capped client can roll forward untouched."""
     from services import campaign_goals
 
     goals = campaign_goals.assess_goals(client_id, today)
@@ -277,9 +370,9 @@ def _sweep_client(supabase, client_id: str, today: date, now: datetime, stats: d
         if is_critical(g.get("status")) and g.get("goal_type") != "custom"
     }
     open_rows = _open_escalations(supabase, client_id)
-    client_name: Optional[str] = None
+    due: list = []
 
-    # 1) Open a row for every newly-critical goal; (re-)escalate the due ones.
+    # 1) Open a row for every newly-critical goal; collect the due ones.
     for gid, g in critical.items():
         row = open_rows.get(gid)
         if row is None:
@@ -295,34 +388,7 @@ def _sweep_client(supabase, client_id: str, today: date, now: datetime, stats: d
             settings.goal_escalation_chronic_weeks,
             settings.goal_escalation_reescalate_days,
         ):
-            weeks = weeks_behind(_parse_date(row.get("behind_since")), today)
-            if client_name is None:
-                client_name = _client_name(supabase, client_id)
-            note = build_escalation(
-                client_name, g, weeks,
-                _open_alert_count(supabase, client_id),
-                _latest_reasoning(supabase, client_id),
-            )
-            notifications.emit(
-                client_id=client_id,
-                kind="goal_chronic",
-                title=note["title"],
-                summary=note["summary"],
-                severity="critical",
-                payload={
-                    "link": f"clients/{client_id}/goals",
-                    "goal_id": gid,
-                    "weeks_behind": weeks,
-                },
-            )
-            supabase.table("goal_escalations").update(
-                {
-                    "last_escalated_at": now.isoformat(),
-                    "escalation_count": (row.get("escalation_count") or 0) + 1,
-                    "updated_at": now.isoformat(),
-                }
-            ).eq("id", row["id"]).execute()
-            stats["escalated"] += 1
+            due.append((row, g))
 
     # 2) Resolve open rows whose goal is no longer critical.
     for gid, row in open_rows.items():
@@ -344,6 +410,7 @@ def _sweep_client(supabase, client_id: str, today: date, now: datetime, stats: d
                 severity="info",
                 payload={"link": f"clients/{client_id}/goals", "goal_id": gid},
             )
+    return due
 
 
 def _insert_escalation(supabase, client_id: str, goal_eval: dict, behind_since: date) -> Optional[dict]:

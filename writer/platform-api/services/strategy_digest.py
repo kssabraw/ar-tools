@@ -728,6 +728,57 @@ def _prov_backlinks(supabase, client_id: str, today: date, now: datetime) -> Opt
     return out
 
 
+def _prov_open_proposals(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """The strategist's OWN still-unactioned proposals from recent completed
+    reviews — so "nothing new to add" is judged against what is actually open,
+    not against memory. Without this a stale unactioned proposal looked like
+    "already handled" and a chronic goal went un-proposed for weeks."""
+    days = int(getattr(settings, "strategist_open_proposals_days", 60) or 0)
+    if days <= 0:
+        return None
+    cutoff = (now - timedelta(days=days)).isoformat()
+    rows = (
+        supabase.table("strategy_reviews")
+        .select("id, trigger, proposals, created_at")
+        .eq("client_id", client_id).eq("status", "complete")
+        .gte("created_at", cutoff)
+        .order("created_at", desc=True).limit(20).execute()
+    ).data or []
+    items: list[dict] = []
+    for r in rows:
+        created = r.get("created_at")
+        age_days = None
+        try:
+            if created:
+                age_days = (now - datetime.fromisoformat(str(created).replace("Z", "+00:00"))).days
+        except ValueError:
+            age_days = None
+        for idx, p in enumerate(r.get("proposals") or []):
+            if (p.get("status") or "proposed") != "proposed":
+                continue
+            items.append({
+                "review_id": r.get("id"),
+                "idx": idx,
+                "trigger": r.get("trigger"),
+                "age_days": age_days,
+                "title": p.get("title"),
+                "est_cost_usd": p.get("est_cost_usd"),
+                "requires": p.get("requires"),
+                "tier": p.get("tier"),
+                "target": p.get("target"),
+            })
+    if not items:
+        return None
+    return {
+        "count": len(items),
+        "window_days": days,
+        "items": items[:30],
+        "trap": "These are YOUR earlier proposals nobody has approved or dismissed. A behind "
+                "goal with one of these already aimed at it needs a refresh, not a duplicate; "
+                "a behind goal with none needs a new proposal.",
+    }
+
+
 def _prov_campaign_goals(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
     """The client's success targets with deterministic on-track reads —
     the yardstick the strategist judges every other section against."""
@@ -1307,6 +1358,7 @@ _PROVIDERS: list[tuple[str, object]] = [
     ("gbp_audit", _prov_gbp_audit),
     ("content", _prov_content),
     ("campaign_goals", _prov_campaign_goals),
+    ("open_proposals", _prov_open_proposals),
     ("intervention_outcomes", _prov_intervention_outcomes),
     ("competitors", _prov_competitors),
     ("domain_intel", _prov_domain_intel),

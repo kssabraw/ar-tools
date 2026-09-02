@@ -277,5 +277,137 @@ def test_sweep_disabled_is_a_noop(monkeypatch):
     monkeypatch.setattr(settings, "goal_escalation_enabled", False)
     called = {"n": 0}
     monkeypatch.setattr(ge, "get_supabase", lambda: called.__setitem__("n", called["n"] + 1))
-    assert ge.run_goal_escalation_sweep() == {"opened": 0, "escalated": 0, "resolved": 0, "clients": 0}
+    stats = ge.run_goal_escalation_sweep()
+    assert all(stats[k] == 0 for k in ("opened", "escalated", "resolved", "clients", "recovery_enqueued"))
     assert called["n"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Recovery dispatch (PRD PR 2): a due goal enqueues ONE goal_recovery run per
+# client (oldest-behind first, capped per tick) and the FINISHED run sends the
+# message; the bare alarm only fires when a run is impossible.
+# ---------------------------------------------------------------------------
+def _chronic_goal(gid="g1", behind="2026-06-01"):
+    return {
+        "id": gid, "goal_type": "maps_pack_presence", "label": f"Goal {gid}",
+        "status": "behind", "progress_pct": 0.0, "baseline_date": behind,
+        "baseline_value": 6.0, "current_value": 6.2, "effective_target": 35.0,
+    }
+
+
+def _recovery_gate(monkeypatch, open_: bool):
+    from services import goal_recovery
+    monkeypatch.setattr(goal_recovery, "gate_open", lambda: open_)
+    monkeypatch.setattr(goal_recovery, "clients_recovered_within", lambda days: set())
+
+
+def test_sweep_enqueues_recovery_run_instead_of_bare_alarm(monkeypatch):
+    from services import campaign_goals, goal_recovery
+    from config import settings
+
+    monkeypatch.setattr(settings, "goal_escalation_enabled", True)
+    monkeypatch.setattr(settings, "goal_escalation_chronic_weeks", 3)
+    monkeypatch.setattr(settings, "goal_recovery_max_runs_per_tick", 5)
+    store = _make_store(open_rows=[])
+    monkeypatch.setattr(ge, "get_supabase", lambda: _FakeSB(store))
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: [_chronic_goal()])
+    _recovery_gate(monkeypatch, True)
+    enqueued = []
+    monkeypatch.setattr(goal_recovery, "enqueue_recovery_run",
+                        lambda cid, goals: (enqueued.append((cid, goals)), ("enqueued", "r-1"))[1])
+    emitted = []
+    monkeypatch.setattr(ge.notifications, "emit", lambda **kw: emitted.append(kw))
+
+    stats = ge.run_goal_escalation_sweep()
+
+    assert stats["opened"] == 1 and stats["recovery_enqueued"] == 1
+    assert stats["escalated"] == 0 and emitted == []  # the run sends the message
+    assert enqueued[0][0] == "c1"
+    assert enqueued[0][1][0]["goal_id"] == "g1" and enqueued[0][1][0]["escalation_id"] == "esc-1"
+    # NOT stamped — the finished run stamps, so a failed run retries next tick.
+    assert not any(t == "goal_escalations" and "last_escalated_at" in p for t, p in store["updates"])
+
+
+def test_sweep_falls_back_to_bare_alarm_when_run_impossible(monkeypatch):
+    from services import campaign_goals, goal_recovery
+    from config import settings
+
+    monkeypatch.setattr(settings, "goal_escalation_enabled", True)
+    monkeypatch.setattr(settings, "goal_escalation_chronic_weeks", 3)
+    store = _make_store(open_rows=[])
+    monkeypatch.setattr(ge, "get_supabase", lambda: _FakeSB(store))
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: [_chronic_goal()])
+    _recovery_gate(monkeypatch, True)
+    monkeypatch.setattr(goal_recovery, "enqueue_recovery_run", lambda cid, goals: ("failed", None))
+    emitted = []
+    monkeypatch.setattr(ge.notifications, "emit", lambda **kw: emitted.append(kw))
+
+    stats = ge.run_goal_escalation_sweep()
+
+    assert stats["escalated"] == 1 and len(emitted) == 1
+    assert emitted[0]["kind"] == "goal_chronic" and "STILL CRITICAL" in emitted[0]["title"]
+    assert any(t == "goal_escalations" and "last_escalated_at" in p for t, p in store["updates"])
+
+
+def test_sweep_in_flight_run_neither_alarms_nor_stamps(monkeypatch):
+    from services import campaign_goals, goal_recovery
+    from config import settings
+
+    monkeypatch.setattr(settings, "goal_escalation_enabled", True)
+    monkeypatch.setattr(settings, "goal_escalation_chronic_weeks", 3)
+    store = _make_store(open_rows=[])
+    monkeypatch.setattr(ge, "get_supabase", lambda: _FakeSB(store))
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: [_chronic_goal()])
+    _recovery_gate(monkeypatch, True)
+    monkeypatch.setattr(goal_recovery, "enqueue_recovery_run", lambda cid, goals: ("in_flight", None))
+    emitted = []
+    monkeypatch.setattr(ge.notifications, "emit", lambda **kw: emitted.append(kw))
+
+    stats = ge.run_goal_escalation_sweep()
+    assert stats["recovery_in_flight"] == 1 and stats["escalated"] == 0 and emitted == []
+    assert not any(t == "goal_escalations" and "last_escalated_at" in p for t, p in store["updates"])
+
+
+def test_sweep_cap_defers_the_newest_behind_client_without_alarm(monkeypatch):
+    """Two chronic clients, cap 1: the oldest-behind gets the run; the other is
+    NOT escalated today at all (no bare alarm, no stamp) and rolls forward."""
+    from services import campaign_goals, goal_recovery
+    from config import settings
+
+    monkeypatch.setattr(settings, "goal_escalation_enabled", True)
+    monkeypatch.setattr(settings, "goal_escalation_chronic_weeks", 3)
+    monkeypatch.setattr(settings, "goal_recovery_max_runs_per_tick", 1)
+    store = _make_store(open_rows=[])
+    store["reads"]["campaign_goals"] = [{"client_id": "c-new"}, {"client_id": "c-old"}]
+    monkeypatch.setattr(ge, "get_supabase", lambda: _FakeSB(store))
+    goals_by_client = {"c-new": [_chronic_goal("g-new", "2026-07-20")], "c-old": [_chronic_goal("g-old", "2026-06-01")]}
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: goals_by_client[cid])
+    _recovery_gate(monkeypatch, True)
+    enqueued = []
+    monkeypatch.setattr(goal_recovery, "enqueue_recovery_run",
+                        lambda cid, goals: (enqueued.append(cid), ("enqueued", "r"))[1])
+    emitted = []
+    monkeypatch.setattr(ge.notifications, "emit", lambda **kw: emitted.append(kw))
+
+    stats = ge.run_goal_escalation_sweep()
+
+    assert enqueued == ["c-old"]
+    assert stats["recovery_enqueued"] == 1 and stats["recovery_deferred"] == 1
+    assert stats["escalated"] == 0 and emitted == []
+
+
+def test_sweep_gate_closed_keeps_the_949_behaviour(monkeypatch):
+    from services import campaign_goals
+    from config import settings
+
+    monkeypatch.setattr(settings, "goal_escalation_enabled", True)
+    monkeypatch.setattr(settings, "goal_escalation_chronic_weeks", 3)
+    store = _make_store(open_rows=[])
+    monkeypatch.setattr(ge, "get_supabase", lambda: _FakeSB(store))
+    monkeypatch.setattr(campaign_goals, "assess_goals", lambda cid, today=None: [_chronic_goal()])
+    _recovery_gate(monkeypatch, False)
+    emitted = []
+    monkeypatch.setattr(ge.notifications, "emit", lambda **kw: emitted.append(kw))
+
+    stats = ge.run_goal_escalation_sweep()
+    assert stats["escalated"] == 1 and len(emitted) == 1 and stats["recovery_enqueued"] == 0

@@ -255,6 +255,24 @@ class Settings(BaseSettings):
     goal_escalation_enabled: bool = True
     goal_escalation_chronic_weeks: int = 3
     goal_escalation_reescalate_days: int = 14
+    # Chronic-goal RECOVERY runs (services/goal_recovery.py — PRD
+    # docs/modules/sermastr-autonomous-recovery-plans-prd-v1_0.md): when a goal
+    # is due to (re-)escalate, ONE `goal_recovery` strategist run per client
+    # produces a costed, tiered, approvable recovery plan and the FINISHED run
+    # sends the goal_chronic message (alarm + plan). Rides strategist_enabled +
+    # goal_escalation_enabled. Propose-only — nothing is handed to PACE.
+    goal_recovery_enabled: bool = True
+    # Day-one burst cap: the first tick opens rows for every chronic goal in the
+    # portfolio; only this many recovery runs are enqueued per daily tick
+    # (oldest-behind first) — a capped client is not escalated that day at all
+    # and rolls forward.
+    goal_recovery_max_runs_per_tick: int = 5
+    # Cumulative budget tiers over DEPLOYABLE (retainer × margin), assigned in
+    # code by running total in the strategist's priority order.
+    goal_recovery_tiers: str = "0.25,0.50,1.00"
+    # The `open_proposals` digest section (+ the card window): how far back the
+    # strategist sees its own still-unactioned proposals.
+    strategist_open_proposals_days: int = 60
     # Offpage agent extensions: weekly citation-liveness sweep + monthly
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True

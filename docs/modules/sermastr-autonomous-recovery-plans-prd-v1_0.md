@@ -1,6 +1,6 @@
 # SerMaStr Autonomous Recovery Plans — PRD v1.0
 
-**Status:** approved for build (owner, 2026-09-02). Nothing built yet. Two PRs, shipped in order: **PR 1** (the emit-truncation fix) then **PR 2** (chronic-goal recovery runs).
+**Status:** BUILT (owner-approved 2026-09-02). **PR 1** (the emit-truncation fix) merged as [#956](https://github.com/kssabraw/ar-tools/pull/956); **PR 2** (chronic-goal recovery runs) built the same day — see §12 for the as-built notes. Migration `20260902130000_strategy_reviews_goal_recovery.sql` applied live.
 **Owner rulings captured (2026-09-02, grilling session):** separate truncation PR first · a dedicated `goal_recovery` run **plus** a strengthened weekly prompt · proposals may reallocate the current monthly plan at proposal level, and over-budget work is offered as cumulative **+25% / +50% / +100%** tiers over deployable · **propose-only, no auto hand-off to PACE** (owner, 2026-09-02, from the implementation brief) · one run per client on the re-escalation cadence, capped at **5 runs per daily tick** · the finished run sends the one `goal_chronic` message · `goal_recovery_enabled` defaults **on**.
 **Repo:** `kssabraw/ar-tools` · backend `writer/platform-api/`. Builds on PR #949 (chronic-goal escalation + maps brief + notification-wipe fix, merged 2026-09-01).
 
@@ -201,3 +201,18 @@ Given a client with a campaign goal `behind`/`overdue` for ≥ the chronic thres
 | 18 | Weekly review after a recovery run | Runs anyway |
 | 19 | On-demand trigger | API only in this PR |
 | 20 | Still-truncated after retry | `complete` + flag + question |
+
+## 12. As built (2026-09-02)
+
+Everything in §3–§9 shipped as specified, with these implementation notes:
+
+- **`services/goal_recovery.py`** is the module: pure `parse_tiers` / `tier_ceilings` / `assign_tiers` / `budget_snapshot` / `goals_context` / `order_for_cap` / `build_recovery_block` / `build_recovery_notification` / `mark_superseded`; impure `enqueue_recovery_run` (returns `enqueued | in_flight | disabled | failed` so the sweep can tell "a run is coming" from "a run is impossible"), `load_recovery_context`, `apply_budget`, `supersede_prior_recovery`, `stamp_escalations`, `after_persist`.
+- **The sweep collects, then dispatches.** `goal_escalation._sweep_client` no longer emits — it returns the due `(row, goal)` pairs; `_dispatch_due` orders clients oldest-behind first, enqueues up to `goal_recovery_max_runs_per_tick` recovery runs, and only calls `_escalate_bare` (the #949 alarm) when the gate is closed, the client opted out, or the enqueue failed. A capped or in-flight client is neither alarmed nor stamped. Sweep stats gained `recovery_enqueued` / `recovery_deferred` / `recovery_in_flight`.
+- **Stamping moved to the run.** The FINISHED run stamps `goal_escalations.last_escalated_at` + `escalation_count` (`stamp_escalations`), so a failed run is retried by the next tick; `clients_recovered_within` (COMPLETE recovery reviews inside the window) guards the one case where a completed run's stamp did not land.
+- **`root_cause`** is an optional emit field, demanded by the recovery orientation; `sanitize_review` carries it only when the model set it, and it persists inside `strategy_reviews.budget.root_cause` (no separate column).
+- **Tiers** ride each proposal as `tier` + `cumulative_cost_usd` (labels `within_budget`, `plus_25`, `plus_50`, `plus_100`, `over`, `unbudgeted`); the envelope comes from `recipe_engine.budget_envelope` over the digest's client card values (no extra DB read).
+- **`superseded`** is a system decision: `strategist_proposals` refuses to decide on one (`proposal_superseded` → 409) and excludes it from `open_proposal_indices` (so the bulk plan→PACE handoff can never approve a stale plan); `sermastr_audit` counts it in its own bucket, outside the approve/dismiss rates.
+- **`open_proposals`** digest provider (`strategy_digest._prov_open_proposals`, window `strategist_open_proposals_days`) feeds both the weekly review and the recovery block's "prior plan" list.
+- **On demand:** `POST /clients/{id}/strategy-review` body `{"trigger": "goal_recovery"}` (409 `goal_recovery_disabled` when the flag is off, 422 `invalid_trigger` otherwise).
+- **Frontend:** `StrategistReview.tsx` shows a "Recovery plan" box (goals + root cause + budget line + "Approve tier" buttons), tier pills per proposal, a "Still open from earlier reviews" section (60 days / the 5 fetched reviews) with the same approve/dismiss + tier controls, and a superseded count.
+- **Validation (owner):** one on-demand `goal_recovery` run on First Class Roofing after deploy, then the first 08:00 UTC escalation tick.
