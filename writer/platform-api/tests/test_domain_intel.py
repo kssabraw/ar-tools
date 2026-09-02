@@ -223,19 +223,34 @@ def test_build_domain_intel_actions():
     from services import reopt_planner as rp
     gaps = [
         {"keyword": "roof repair", "competitor_domain": "rival.com", "competitor_position": 3,
-         "client_position": None, "volume": 2000, "opportunity_score": 500},
+         "client_position": None, "volume": 2000, "cpc_usd": 4.2, "keyword_difficulty": 22.0,
+         "gap_type": "missing", "opportunity_score": 500},
         {"keyword": "roof restoration", "competitor_domain": "rival.com", "competitor_position": 5,
-         "client_position": 34, "volume": 800, "opportunity_score": 200},
+         "client_position": 34, "volume": 800, "cpc_usd": 3.5, "keyword_difficulty": 15.0,
+         "gap_type": "weak", "opportunity_score": 200},
     ]
     actions = rp.build_domain_intel_actions("c1", gaps)
     assert len(actions) == 2
     a = actions[0]
     assert a["kind"] == "keyword_gap" and a["source"] == "organic"
     assert a["keyword"] == "roof repair"
-    assert "rival.com" in a["diagnosis"] and "you don't rank" in a["diagnosis"]
+    # The diagnosis names the keyword, the competitor, the gap, and the metrics.
+    assert "rival.com" in a["diagnosis"]
+    assert '"roof repair"' in a["diagnosis"]
+    assert "no page ranking for it" in a["diagnosis"]
+    assert "~2000/mo searches" in a["diagnosis"] and "difficulty 22/100" in a["diagnosis"]
+    assert "$4.20 CPC" in a["diagnosis"]
+    # A missing gap → create net-new; the recommendation + concise title name the
+    # keyword + action.
+    assert a["recommendation"].startswith('Create a new page targeting "roof repair"')
+    assert a["title"] == 'Create a page targeting "roof repair"'
     assert a["cta_path"] == "clients/c1/domain-intel"
-    # the deeper-position gap names the client's current rank
-    assert "you rank #34" in actions[1]["diagnosis"]
+    # The weak gap → strengthen the existing page, naming the client's current rank.
+    b = actions[1]
+    assert "your best page only ranks #34" in b["diagnosis"]
+    assert b["title"] == 'Strengthen your page for "roof restoration"'
+    assert b["recommendation"].startswith('Strengthen / reoptimize your existing page for "roof restoration"')
+    assert "gap type: weak" in b["recommendation"]
     # empty → no actions (additive: unchanged plan behavior)
     assert rp.build_domain_intel_actions("c1", []) == []
 
