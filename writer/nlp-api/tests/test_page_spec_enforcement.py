@@ -358,3 +358,20 @@ def test_spec_audit_prompt_carries_each_sections_band():
     intro = next(s for s in spec["sections"] if s["key"] == "intro")
     assert f"[intro] intent: hero — band: {intro['min_words']}–{intro['max_words']} words" in prompt
     assert "Judge the section against ITS OWN budget" in main._SECTION_AUDIT_SYSTEM
+
+
+def test_spec_fix_prompt_carries_the_clients_list_items():
+    spec = _spec()
+    feat = next(s for s in spec["sections"] if s["key"] == "features")
+    feat["list_items"] = ["Architecture", "Aviation", "Construction"]
+    html = _full_page(spec, bodies={"features": "<h2>h</h2><ul><li>a</li></ul><p>" + " ".join(["w"] * 90) + "</p>"})
+    measure = pspec.measure_page(html, spec)
+    v = pspec.structure_verdict(measure, spec)
+    v["measure"] = measure
+    targets = main._spec_fix_targets(v, spec)
+    t = next(x for x in targets if x["key"] == "features")
+    assert t["list_items"] == ["Architecture", "Aviation", "Construction"]
+    prompt = main._spec_fix_prompt(targets, section_edit.split_sections(html), "Acme", "k", "City", None, "")
+    assert "CLIENT'S OWN LIST ITEMS (reproduce every one, as list items): Architecture; Aviation; Construction" in prompt
+    add_prompt = main._spec_add_prompt([feat], [], "Acme", "k", "City", None, None, "")
+    assert "CLIENT'S OWN LIST ITEMS (reproduce every one): Architecture; Aviation; Construction" in add_prompt

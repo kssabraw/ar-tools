@@ -138,6 +138,13 @@ ABSORBER_MIN_SHARE_OF_MAX = 0.30
 # hard ceiling forbids it — a point target is a guess, a band is a spec.
 MIN_BAND_RATIO = 1.25
 _TESTIMONIAL_RE = re.compile(r"review|testimonial|what (our )?(clients|customers) say", re.I)
+# A "coverage" section is GEOGRAPHIC (→ the template's `local` slot) only when
+# its heading / note talk about places; "industry coverage" is its own section.
+_GEO_RE = re.compile(
+    r"\b(area|areas|location|locations|serving|serve|served|near|nearby|city|cities|town|towns|"
+    r"neighbou?rhood|neighbou?rhoods|suburb|suburbs|region|regions|county|counties|zip|zips|"
+    r"map|directions|where we|geograph\w*|local|service area)\b", re.I,
+)
 
 _HEADING_TAGS = ("h1", "h2", "h3", "h4", "h5", "h6")
 # Sections platform/nlp inject deterministically AFTER writing (NAP + map +
@@ -280,12 +287,16 @@ def fold_outline(outline: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "subsections": 0,
                 "blocks": blocks,
                 "folded_headings": 0,
+                "folded_items": [],
             }
             groups.append(current)
             continue
         # H3+ → child of the current group
         if words == 0 and not blocks:
             current["folded_headings"] += 1
+            name = (row.get("heading") or "").strip()
+            if name:
+                current["folded_items"].append(name)
             continue
         current["words"] += words
         current["subsections"] += 1
@@ -393,6 +404,8 @@ STRUCTURE_MODE_TEMPLATE = "template"
 # before the spec carries a sub-section band for it (one H3 in a 22-word
 # testimonials block is markup, not a structure the writer must reproduce).
 CLIENT_SUBSECTIONS_MIN_REF = 2
+# Cap on the client list items carried verbatim onto a spec section.
+LIST_ITEMS_MAX = 24
 
 
 def build_client_sections(groups: list[dict[str, Any]], has_reviews: Optional[bool] = None) -> list[dict[str, Any]]:
@@ -432,6 +445,13 @@ def build_client_sections(groups: list[dict[str, Any]], has_reviews: Optional[bo
             candidates = _INTENT_TO_KEYS.get(intent, ())
             if intent in ("objection", "comparison"):
                 candidates = ()  # own sections in client mode, never merged away
+            if intent == "coverage" and not _GEO_RE.search(f"{g.get('heading') or ''} {g.get('intent_note') or ''}"):
+                # "coverage" of industries / verticals is not the template's
+                # geographic `local` slot (neighborhoods, ZIPs, NAP) — mapping it
+                # there made the writer open with geography and the audit fail
+                # the section for not leading with industries (owner ruling
+                # 2026-09-02: own section; the geo block is recorded as omitted).
+                candidates = ()
             if candidates and n < len(candidates) and candidates[n] not in taken:
                 key = candidates[n]
         seen_intent[intent] = seen_intent.get(intent, 0) + 1
@@ -696,6 +716,11 @@ def build_spec(
                 "blocks": blocks,
                 "source": s.get("source") or "template",
             }
+            folded_items = [x for x in (s.get("folded_items") or []) if isinstance(x, str) and x.strip()]
+            if len(folded_items) >= 2:
+                # The client's own list (industries served, service lines…) —
+                # the writer reproduces THESE items, not a count of its own.
+                entry["list_items"] = folded_items[:LIST_ITEMS_MAX]
             if s.get("no_reviews"):
                 entry["no_reviews"] = True
                 entry["heading_pattern"] = (entry["heading_pattern"] + " — OMIT: no client reviews on file (never invent quotes)").strip(" —")
@@ -1087,6 +1112,8 @@ def render_spec_block(spec: dict[str, Any]) -> str:
             extras.append(f"{s['subsections']['min']}–{s['subsections']['max']} H2/H3 sub-sections")
         if s.get("items"):
             extras.append(f"{s['items']['min']}–{s['items']['max']} items")
+        if s.get("list_items"):
+            extras.append("list items from the client's page (reproduce these): " + "; ".join(s["list_items"]))
         req = "required" if s.get("required") else ("OMIT — no reviews on file" if s.get("no_reviews") else "optional")
         lines.append(
             f"  [{s['key']}] {s.get('level')} · {req} · {s.get('min_words')}–{s.get('max_words')} words · "
