@@ -273,6 +273,13 @@ export interface SiloPlanResult {
   error?: string | null
 }
 
+// Marked user-supplied targets (matrix or list) — the synchronous "upload your
+// own" analogue of a completed silo plan.
+export interface CustomTargetsResult {
+  items: RelatedPageItem[]
+  degraded_notes: string[]
+}
+
 // One outcome from the Reoptimization tab's per-URL flow (POST .../reoptimize-url).
 // A strong page (>= threshold) is 'skipped' with a reason; a weak one is
 // 'reoptimized' and saved as a new mode='reoptimize' page (optionally published).
