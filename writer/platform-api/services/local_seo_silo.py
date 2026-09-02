@@ -711,25 +711,35 @@ def _match_page_on_site(
       3. for area/location targets only (those carrying a bare `location_name`), a
          **generic location page** for that place (``/melbourne/``).
 
-    Every page runs steps 1–2, so service-variation pages — which carry no
+    Every page runs step 1, so service-variation pages — which carry no
     `location_name` — are checked against the live site too (previously they could
-    only be `found`-in-tool or `missing`). The place stripped in step 2 is the page's
-    own `location_name`, else the `seed_city` (all service-variation pages target the
-    seed city). Steps are ordered specific→general, so a city-specific page always
-    wins over the national one."""
+    only be `found`-in-tool or `missing`).
+
+    Step 2 is scoped to the **seed/primary-city base page only** — a page with no
+    `location_name`, whose place is `seed_city`. A sub-area or other-city target
+    (which carries a `location_name`) is NOT suppressed by one national page: the
+    whole point of the local silo plan is a dedicated page per locality, so hiding
+    those behind a bare ``/roof-restoration/`` would offer fewer real pages than the
+    business should have. (Erring toward *offering* is the safe direction — a false
+    "missing" is an ignorable extra, a false "on_site" silently hides a wanted
+    page.) Steps are ordered specific→general, so a city-specific page always wins
+    over the national one."""
     candidates = [page.get("keyword") or "", *(page.get("supporting_keywords") or [])]
     for kw in candidates:
         url = site_page_index.match_site_page_for_keyword(kw, token_index)
         if url:
             return url
-    place = page.get("location_name") or seed_city
-    national = site_page_index.match_site_service_page(
-        page.get("keyword") or "", place, token_index
-    )
-    if national:
-        return national
     location_name = page.get("location_name")
-    if location_name:
+    if not location_name:
+        # Seed-city base page: a city-less national service page counts as coverage.
+        national = site_page_index.match_site_service_page(
+            page.get("keyword") or "", seed_city, token_index
+        )
+        if national:
+            return national
+    else:
+        # Area/other-city target: only a generic place page for it counts; a
+        # national service page does NOT (keep the locality page on offer).
         return site_page_index.match_site_location_page(location_name, place_index)
     return None
 

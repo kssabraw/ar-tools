@@ -176,25 +176,54 @@ def test_specific_city_page_wins_over_national_service_page():
     assert items[0]["url"] == "https://fcr.com/roof-restoration-melbourne/"
 
 
-def test_national_service_page_covers_area_page_via_location_name():
+def test_national_service_page_does_not_cover_area_page():
+    # Option B: a national /roof-restoration/ page covers the SEED-city base page
+    # only. A sub-area / other-city target (carrying a location_name) is NOT
+    # suppressed by it — the locality page stays on offer.
     per_silo = [
         {
             "silo": "Neighborhoods",
             "pages": [
-                {
+                {  # a seed-metro suburb
                     "keyword": "roof restoration inner east",
                     "supporting_keywords": [],
                     "location_name": "Inner East",
-                }
+                },
+                {  # another target city
+                    "keyword": "roof restoration geelong",
+                    "supporting_keywords": [],
+                    "location_name": "Geelong",
+                },
             ],
         }
+    ]
+    site_urls = ["https://fcr.com/roof-restoration/"]  # only the city-less national page
+    with patch.object(silo, "get_supabase", return_value=_fake_supabase_with_pages([])):
+        items = silo._to_items(per_silo, "client-1", site_urls, seed_city="Melbourne")
+    by_kw = _status_by_kw(items)
+    assert by_kw["roof restoration inner east"]["status"] == "missing"
+    assert by_kw["roof restoration geelong"]["status"] == "missing"
+
+
+def test_national_service_page_covers_seed_city_base_but_not_other_cities():
+    # The seed-city base page (no location_name) is covered by /roof-restoration/;
+    # an other-city base page (location_name) is not.
+    per_silo = [
+        {
+            "silo": "Roof Restoration",
+            "pages": [{"keyword": "roof restoration melbourne"}],  # seed base, no location_name
+        },
+        {
+            "silo": "Geelong",
+            "pages": [{"keyword": "roof restoration geelong", "location_name": "Geelong"}],
+        },
     ]
     site_urls = ["https://fcr.com/roof-restoration/"]
     with patch.object(silo, "get_supabase", return_value=_fake_supabase_with_pages([])):
         items = silo._to_items(per_silo, "client-1", site_urls, seed_city="Melbourne")
-    # Place stripped from location_name → national service page matches.
-    assert items[0]["status"] == "on_site"
-    assert items[0]["url"] == "https://fcr.com/roof-restoration/"
+    by_kw = _status_by_kw(items)
+    assert by_kw["roof restoration melbourne"]["status"] == "on_site"   # seed base covered
+    assert by_kw["roof restoration geelong"]["status"] == "missing"     # other city offered
 
 
 # ── _match_page_on_site precedence: keyword before bare place ──────────────────
