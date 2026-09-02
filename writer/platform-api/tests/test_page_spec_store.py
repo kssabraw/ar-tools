@@ -34,6 +34,16 @@ def test_materially_different_ignores_timestamps_but_sees_band_changes():
     e = _spec()
     e["structure_mode"] = "client"
     assert store.materially_different(a, e)  # flipping the override rebuilds the spec
+    # a changed structural ask is material even with identical word bands
+    f = _spec()
+    f["sections"][0]["subsections"] = {"min": 1, "max": 2}
+    assert store.materially_different(a, f)
+    g = _spec()
+    g["sections"][-1]["items"] = {"min": 2, "max": 5}
+    assert store.materially_different(a, g)
+    h = _spec()
+    h["sections"][1]["blocks"] = [{"type": "list", "count": 1, "items": 4}]
+    assert store.materially_different(a, h)
 
 
 def test_resolve_spec_threads_the_client_override_flag():

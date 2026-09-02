@@ -46,7 +46,8 @@ def spec_key(keyword: str, location_code: Optional[int], location: str) -> str:
 def _band_signature(spec: dict[str, Any]) -> Any:
     """The parts of a spec that matter for 'is this materially different':
     the page band, the structure caps and each section's key + band + required
-    flag. Provenance timestamps and generated_at are deliberately excluded."""
+    flag + its structural asks (sub-section / item bands, block composition).
+    Provenance timestamps and generated_at are deliberately excluded."""
     total = spec.get("total") or {}
     return (
         spec.get("structure_mode") or "template",
@@ -54,10 +55,22 @@ def _band_signature(spec: dict[str, Any]) -> Any:
         tuple(sorted((k, v if not isinstance(v, dict) else tuple(sorted(v.items())))
                      for k, v in (spec.get("structure") or {}).items())),
         tuple(
-            (s.get("key"), s.get("required"), s.get("min_words"), s.get("max_words"))
+            (
+                s.get("key"), s.get("required"), s.get("min_words"), s.get("max_words"),
+                # the structural asks the verdict enforces — a spec whose
+                # sub-section / item bands or block composition changed is a
+                # different spec even when every word band is identical
+                # (live: dropping testimonials' lone-H3 band never rebuilt v2)
+                _frozen(s.get("subsections")), _frozen(s.get("items")),
+                tuple((b.get("type"), b.get("count"), b.get("items")) for b in (s.get("blocks") or []) if isinstance(b, dict)),
+            )
             for s in spec.get("sections") or []
         ),
     )
+
+
+def _frozen(v: Any) -> Any:
+    return tuple(sorted(v.items())) if isinstance(v, dict) else v
 
 
 def materially_different(a: Optional[dict[str, Any]], b: Optional[dict[str, Any]]) -> bool:
