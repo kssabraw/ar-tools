@@ -68,6 +68,13 @@ def test_page_band_falls_back_when_serp_missing_or_suspect():
     assert total["basis"] == "fallback" and "serp_target_suspect" in flags
     total, _, flags = ps.page_band({"serp_word_target": 1300, "serp_urls": ["a", "b"]}, 1200)
     assert total["basis"] == "fallback" and "serp_too_few_pages" in flags
+    # a suspect SERP must not come back as "the market": the fallback target is
+    # clamped into the plausible window (live: 2,782 fed back as 2,782)
+    total, _, flags = ps.page_band({"serp_word_target": 2782, "serp_avg_word_count": 2318, "serp_urls": ["a"] * 18}, 2782)
+    assert total["basis"] == "fallback" and "serp_target_suspect" in flags and "fallback_target_clamped" in flags
+    assert total["target"] == ps.SERP_TARGET_MAX and total["max"] == int(round(ps.SERP_TARGET_MAX * ps.BAND_UPPER))
+    total, _, flags = ps.page_band(None, 400)
+    assert total["target"] == ps.SERP_TARGET_MIN and "fallback_target_clamped" in flags
 
 
 # ── reference validation ────────────────────────────────────────────────────

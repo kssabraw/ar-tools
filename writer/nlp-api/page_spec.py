@@ -200,6 +200,13 @@ def page_band(
             basis = "fallback"
     if basis == "fallback":
         target = max(1, _int(fallback_target) or SERP_TARGET_MIN)
+        # The standing market target must itself sit inside the plausible
+        # window — otherwise a suspect SERP that was cached a moment earlier
+        # comes straight back as "the market" and the sanity flag is moot
+        # (live: a 2,782-word suspect target fed back as a 2,782-word fallback).
+        if target < SERP_TARGET_MIN or target > SERP_TARGET_MAX:
+            flags.append("fallback_target_clamped")
+            target = min(max(target, SERP_TARGET_MIN), SERP_TARGET_MAX)
         avg = int(round(target / OVERAGE_MULTIPLIER))
     total = {
         "min": avg,
