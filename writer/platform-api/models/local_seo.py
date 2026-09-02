@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field
@@ -240,6 +240,34 @@ class LocalSeoSiloPlanResult(BaseModel):
     items: list[LocalSeoSiloPlanItem] = Field(default_factory=list)
     degraded_notes: list[str] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+class LocalSeoCustomTargetsRequest(BaseModel):
+    """User-supplied Plan Silo targets — a matrix (services × locations) or an
+    explicit list/CSV — marked found / on_site / missing against the client's site
+    like the AI plan, then bulk-createable.
+
+    `input_mode` picks the parser: 'matrix' reads `services` + `locations` (each a
+    newline-separated list) and builds every "<service> <location>" combination;
+    'list' reads `targets` (one page target per line, or CSV with optional
+    group/location/supporting columns). `location` is the area the batch generates
+    under (like the AI plan) — used for the site check + bulk creation."""
+
+    input_mode: Literal["matrix", "list"]
+    services: str = ""
+    locations: str = ""
+    targets: str = ""
+    location: str = Field(..., min_length=1)
+    location_code: Optional[int] = None
+
+
+class LocalSeoCustomTargetsResult(BaseModel):
+    """Marked user-supplied targets, ready for the same bulk-create flow as the AI
+    plan. Synchronous (parsing + existing-page marking only — no LLM/paid calls
+    beyond the site discovery the marking already does)."""
+
+    items: list[LocalSeoSiloPlanItem] = Field(default_factory=list)
+    degraded_notes: list[str] = Field(default_factory=list)
 
 
 class LocalSeoReoptimizeRequest(BaseModel):

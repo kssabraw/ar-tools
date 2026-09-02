@@ -13,6 +13,7 @@ import type { AnalysisResult, ExistingMatch, LocalSeoPageDetail, LocalSeoPageLis
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { BulkCreateBar } from '../components/localseo/BulkCreateBar'
+import { CustomTargetsPanel } from '../components/localseo/CustomTargetsPanel'
 import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { useBulkCreate } from '../components/localseo/useBulkCreate'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
@@ -176,6 +177,8 @@ export function LocalSeoContent() {
   // Plan Silo bulk creation — background jobs via the shared hook (same flow as
   // the per-page Related Pages tab); selection + progress live in the hook.
   const planBulk = useBulkCreate(clientId, refreshSaved)
+  // Plan tab sub-mode: the AI-discovered plan vs the user's own matrix / list.
+  const [planMode, setPlanMode] = useState<'ai' | 'custom'>('ai')
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -519,6 +522,35 @@ export function LocalSeoContent() {
           onOpenSaved={() => { refreshSaved(); setTab('saved') }}
         />
       ) : tab === 'plan' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {/* AI-discovered plan vs the user's own matrix / list of targets. */}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {([['ai', 'AI plan'], ['custom', 'Upload your own']] as const).map(([m, txt]) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setPlanMode(m)}
+                disabled={planBulk.creating}
+                style={{
+                  flex: 1, padding: '8px 12px', fontSize: 13, fontWeight: 600,
+                  cursor: planBulk.creating ? 'not-allowed' : 'pointer',
+                  border: '1px solid', borderColor: planMode === m ? '#6366f1' : '#e2e8f0',
+                  background: planMode === m ? '#eef2ff' : '#fff', color: planMode === m ? '#4338ca' : '#64748b',
+                  borderRadius: 8,
+                }}
+              >{txt}</button>
+            ))}
+          </div>
+
+          {planMode === 'custom' ? (
+            <CustomTargetsPanel
+              clientId={clientId}
+              clientName={client?.name}
+              hasWebsite={hasWebsite}
+              onCreated={refreshSaved}
+              onFoundAction={handlePlanAction}
+            />
+          ) : (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>
           <div>
             <h2 style={{ fontSize: 16, fontWeight: 600, color: '#0f172a', margin: 0 }}>Plan the silo for a service</h2>
@@ -620,6 +652,8 @@ export function LocalSeoContent() {
               </div>
             )
           })()}
+        </div>
+          )}
         </div>
       ) : (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>

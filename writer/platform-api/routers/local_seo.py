@@ -25,6 +25,8 @@ from models.local_seo import (
     LocalSeoAnalyzeRequest,
     LocalSeoBulkGenerateJob,
     LocalSeoBulkGenerateRequest,
+    LocalSeoCustomTargetsRequest,
+    LocalSeoCustomTargetsResult,
     LocalSeoFindPageRequest,
     LocalSeoGenerateJob,
     LocalSeoGenerateJobResult,
@@ -48,7 +50,7 @@ from models.local_seo import (
     LocationSuggestion,
     PageTemplateDefaultRequest,
 )
-from services import local_seo_service, local_seo_silo
+from services import local_seo_service, local_seo_silo, local_seo_targets
 from services.freeze import assert_not_frozen
 
 logger = logging.getLogger(__name__)
@@ -276,6 +278,36 @@ async def get_local_seo_silo_plan(
 ) -> LocalSeoSiloPlanResult:
     """Poll a silo-plan job; returns its status and (when complete) page targets."""
     return LocalSeoSiloPlanResult(**local_seo_silo.get_silo_plan(str(job_id), str(client_id)))
+
+
+@router.post(
+    "/clients/{client_id}/local-seo/custom-targets",
+    response_model=LocalSeoCustomTargetsResult,
+)
+async def plan_local_seo_custom_targets(
+    client_id: UUID,
+    body: LocalSeoCustomTargetsRequest,
+    auth: dict = Depends(require_auth),
+) -> LocalSeoCustomTargetsResult:
+    """Mark a user-supplied matrix / list of page targets found / on_site / missing
+    against the client's site + in-tool pages, ready for the same bulk-create flow
+    as the AI plan. Synchronous — parsing + existing-page marking only."""
+    from services import locations_service
+
+    client = local_seo_silo._get_client(str(client_id))
+    canonical_location, resolved_code = await locations_service.resolve_location(
+        client, body.location, body.location_code
+    )
+    result = await local_seo_targets.plan_custom_targets(
+        client_id=str(client_id),
+        input_mode=body.input_mode,
+        services=body.services,
+        locations=body.locations,
+        targets=body.targets,
+        location=canonical_location,
+        location_code=resolved_code,
+    )
+    return LocalSeoCustomTargetsResult(**result)
 
 
 @router.post("/clients/{client_id}/local-seo/reoptimize-async", response_model=LocalSeoGenerateJob)
