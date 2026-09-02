@@ -2,8 +2,8 @@
 
 **Status:** Proposed (not built). Planning document only — nothing in this doc is implemented.
 **Owner:** Kyle
-**Last updated:** 2026-09-01
-**Relationship to other work:** extends the Local SEO content module (#2). Reuses the Plan Silo planner's service-variation + city/suburb discovery, the shared bulk-create job path, the nlp-api `/generate-page` writer, the per-page publish paths (Docs / WordPress / GitHub), and the Website Builder's release-schedule helpers. Adds one nlp-api request field (sibling internal links).
+**Last updated:** 2026-09-02 (revised against #951 + #953, both merged)
+**Relationship to other work:** extends the Local SEO content module (#2). **Builds directly on two PRs merged 2026-09-01/02:** [#951](https://github.com/kssabraw/ar-tools/pull/951) (the hardened existing-page marking — a published `<service> <city>` page on the live site is now `on_site`, not a false `missing`, plus the seed-city-scoped national page match) and [#953](https://github.com/kssabraw/ar-tools/pull/953) (`services/local_seo_targets.py` — the services × locations cross-product parser + list/CSV parser, and the one-shot "Upload your own" mode in the Plan Silo tab). Reuses the Plan Silo planner's service-variation + city/suburb discovery, the shared bulk-create job path, the nlp-api `/generate-page` writer, the per-page publish paths (Docs / WordPress / GitHub), and the Website Builder's release-schedule helpers. Adds one nlp-api request field (sibling internal links).
 
 > **One-line summary.** A client offers N services across M locations ("roof restoration / tile roof restoration / colorbond roof restoration" × "Melbourne / Caulfield / Hawthorn / Moorabbin"). The Matrix tab lets the team type or suggest both lists, see the N×M grid with each cell's coverage status, and fill the missing cells — all at once or dripped on a cadence — with pages that already interlink as a silo, then publish every finished cell to one destination in one action.
 
@@ -22,20 +22,34 @@ Four questions were put to the owner before this plan was written. The answers a
 
 > **Note on (c).** Publishing has deliberately stayed a synchronous per-page action across the suite ("Backgrounded tasks" ruling, 2026-08-08). A matrix-level publish of up to hundreds of pages cannot be synchronous, so this adds a **per-cell publish job** (`local_seo_matrix_publish`). It is scoped to matrix cells only — the per-page Publish button is unchanged. Recorded here as an owner-approved, matrix-scoped exception.
 
+### 0.1 What #951 and #953 already built — and what this plan adds on top
+
+Both landed after the first draft of this plan and cover the **input + coverage-check** half of the matrix. This plan is now the **persistence + linking + execution** half layered on them, not a parallel build.
+
+| Already built (merged) | Where | This plan's stance |
+|---|---|---|
+| Services × locations **cross-product** (`"<service> <location>"`, one silo per service, case-insensitive dedup, every page carrying its bare `location_name`), plus a list/CSV parser with `group`/`location`/`supporting` columns, capped at 3,000 targets per check | `local_seo_targets.build_matrix_silos` / `parse_list_rows` / `build_silos` / `cap_silos` (#953) | **Reused as the cell source.** The matrix's cells are exactly this cross-product, persisted. No second cross-product builder. |
+| **Existing-page marking** for every target: exact keyword (+ supporting keywords) by content-word-set equality against the live sitemap/Google-index URL list (flat or nested layouts, word-order-insensitive, generic wrapper words ignored, a more-specific page never suppresses the base page); a **national city-less service page** (`/roof-restoration/`) covering the **seed-city base page only** (Option B — a target carrying a `location_name` is never suppressed by it); a generic place page (`/melbourne/`) for area targets; `found`-in-tool wins | `site_page_index.build_page_token_index` / `match_site_page_for_keyword` / `match_site_service_page`; `local_seo_silo._match_page_on_site` / `_to_items(per_silo, client_id, site_urls, seed_city)` / `_build_site_url_list` (#951, refined in #953) | **Reused wholesale** through the same call shape `local_seo_targets.plan_custom_targets` uses. The earlier idea of extracting a `mark_existing` helper is dropped — there are now two callers of `_to_items` and it already takes the URL list + seed city. One matrix-specific adjustment in §3.5. |
+| A synchronous `POST …/local-seo/custom-targets` (parse + mark, no LLM/paid calls beyond site discovery) and an **"AI plan / Upload your own"** toggle on the Plan Silo tab with a **Matrix / List-CSV** sub-mode (`CustomTargetsPanel.tsx`), feeding the same `RelatedPagesList` + `BulkCreateBar` | `routers/local_seo.py`, `components/localseo/CustomTargetsPanel.tsx` (#953) | **The one-shot path stays.** The durable matrix is reachable from it ("Save as matrix", §7) and shares its axes editor, which is where the Suggest buttons land so the one-shot mode gets them too. |
+| One area (`location_code`) per batch; each keyword carries its place. #953 explicitly noted per-combination location codes as a follow-up. | #953 design decision | **This plan is that follow-up** (§3.2): metro anchor by default, optional per-row code. |
+
+**Not built by either PR** (still this plan's scope): persistence + coverage state per cell, gap-fill on axis edits, Suggest buttons, sibling internal links, the estimate/sign-off gates, drip release, bulk publish, and the grid UI.
+
 ---
 
 ## 1. Context — what exists, and the gap
 
 | Piece | What it does today | Reused how |
 |---|---|---|
-| **Plan Silo** (`services/local_seo_silo.py`) | Seed service + city → service-variation silos (Sonnet, ICP-grounded), a geocode-verified Neighborhoods silo, one silo per additional target city (`target_cities.resolve_target_cities`), each target marked `found` / `on_site` / `missing`. One-shot: the plan lives in the job result. | Its **suggestion engines** become the two "Suggest" buttons; its existing-page marking (`_to_items`) is extracted into a shared helper. |
+| **Plan Silo** (`services/local_seo_silo.py`) | Seed service + city → service-variation silos (Sonnet, ICP-grounded), a geocode-verified Neighborhoods silo, one silo per additional target city (`target_cities.resolve_target_cities`), each target marked `found` / `on_site` / `missing` by the #951 matchers. One-shot: the plan lives in the job result. | Its **suggestion engines** become the two "Suggest" buttons; its marking (`_to_items` + `_build_site_url_list`) is called as-is. |
+| **Upload your own targets** (`services/local_seo_targets.py`, `CustomTargetsPanel.tsx`, #953) | Paste services + locations (or a list/CSV) → the cross-product, marked and bulk-creatable, one-shot, one area code per batch. | **The cell source** and the create path into a saved matrix. |
 | **Bulk-create** (`enqueue_generate_bulk`, `useBulkCreate`, `BulkCreateBar`) | One staggered `local_seo_generate` job per keyword; the UI polls and can leave. | The immediate execution mode enqueues cells through the same job type, with `matrix_cell_id` in the payload. |
 | **nlp-api `/generate-page`** | Competitor SERP → Claude page → 8-engine scoring + corrective passes; accepts `page_template_url` / `reference_page_structure` / `notes`. **No internal-link input.** | Gains `internal_links` (additive, optional). |
 | **Website Builder matrix** (`website_plan.matrix_pages`, `MATRIX_SIGNOFF_THRESHOLD`=200) | Plans `/{city}/{service}/` pages for a generated Astro site. | Sign-off threshold reused verbatim; the URL-pattern preset `/{location}/{service}/` matches it so a later matrix→site bridge is trivial. |
 | **Website release schedule** (`services/website_release.py`) | Pure cadence math (`normalize_anchors`, `next_run_after`, `advance`) + a `released_at` claim + `publish_after` on the generate job. | The pure helpers are **imported** by the matrix release; the claim + `publish_after` patterns are mirrored. |
 | **Publish** (`local_seo_service.publish_page`) | Per-page, synchronous, voice-gated (409 `voice_violation`), freeze-gated; Docs / WordPress / GitHub. | Called per cell by the publish job and by the drip's `publish_after`. |
 
-**The gap:** nothing lets the team declare two lists and fill the grid. Plan Silo is one service in, cities discovered, and its output is a throwaway. The Website Builder plans a matrix but only for a site it generates.
+**The gap (post-#953):** the team can now declare two lists and bulk-create the missing combinations, but the result is a throwaway — no coverage view to come back to, no gap-fill when a suburb is added next month, no sibling links between the pages, one location code for the whole batch, nothing but "all at once", and publishing one page at a time. The Website Builder plans a matrix but only for a site it generates.
 
 ---
 
@@ -113,11 +127,11 @@ RLS mirrors `local_seo_pages` (authenticated read; backend writes with the servi
 
 Pure core (unit-tested, no I/O) + an impure store half, per the suite convention.
 
-### 3.1 Cells = the cross product, deterministically
+### 3.1 Cells = #953's cross product, persisted
 
-- `slugify(label)` — shared with the Website Builder's slug rules (lowercase, hyphenated, ASCII).
-- `compose_keyword(service, location)` → `"<service> <location>"` — the same shape the silo planner and Local SEO generation already use (`"roof restoration Hawthorn"`), so the existing-page check and the live-verified suburb SERP behaviour carry over unchanged.
-- `build_cells(matrix)` → the N×M list; `diff_cells(existing, desired)` → `{add, remove}` so editing either axis **gap-fills**: new cells are inserted `missing`, removed cells are deleted only when they have no page (a cell with a page is marked `skipped`, never deleted, so a finished page is never orphaned by a typo edit).
+- The N×M list comes from **`local_seo_targets.build_matrix_silos(services_text, locations_text)`** (one silo per service; `"<service> <location>"` keywords; case-insensitive dedup; `location_name` on every page). The matrix stores its axes as structured rows (§2) and renders them to the newline text the parser takes, so the two paths can never compose a keyword differently. If a structured entry point is wanted, add a thin `build_matrix_silos_from(services: list[str], locations: list[str])` beside it — same body, no second implementation.
+- `slugify(label)` — shared with the Website Builder's slug rules (lowercase, hyphenated, ASCII); `cells_from_silos(silos)` attaches `service_slug` / `location_slug` / `path`.
+- `diff_cells(existing, desired)` → `{add, remove}` so editing either axis **gap-fills**: new cells are inserted `missing`, removed cells are deleted only when they have no page (a cell with a page is marked `skipped`, never deleted, so a finished page is never orphaned by a typo edit). This is the piece #953's one-shot mode has no equivalent of.
 
 ### 3.2 Locations — metro anchor + optional per-row code
 
@@ -133,9 +147,11 @@ Tokens `{service}` and `{location}` (slugs). Presets: `/{service}-{location}/` (
 - **Locations** — two sources, both returned tagged by `source` so the user sees why: (1) **target cities** via `target_cities.resolve_target_cities` (GBP service area, `clients.target_cities`, site place-names, Overpass nearby); (2) **suburbs of the metro** via `local_seo_silo._neighborhoods_for_city` (Haiku proposal + geocode containment). Melbourne's Hawthorn/Moorabbin come from (2), not (1) — a metro's suburbs are neighborhoods, not target cities, and a matrix over suburbs is the common AU/UK case.
 - Both best-effort (degraded notes, never an aborted suggestion). Suggestions are merged into the axis lists as **unchecked chips** the user confirms.
 
-### 3.5 Existing-page marking
+### 3.5 Existing-page marking — reuse #951/#953 as-is, with one matrix-specific fix
 
-Extract `local_seo_silo._to_items`'s marking into a shared `local_seo_existing.mark_existing(targets, client_id, site_index)` (step-zero split of the planner, per the refactoring policy — verbatim move, silo keeps calling it). A cell is `found` when a live `local_seo_pages` row matches its keyword (page linked via `page_id`), `on_site` when the live sitemap has a generic page for the location, else `missing`. Re-run on every matrix read that is older than a short TTL and on explicit "Re-check coverage".
+Marking is exactly what `local_seo_targets.plan_custom_targets` does today: `local_seo_silo._build_site_url_list(client_id, location_code)` → `local_seo_silo._to_items(per_silo, client_id, site_urls, seed_city)`. A cell is `found` when a live `local_seo_pages` row matches its keyword (page linked via `page_id`), `on_site` when the #951 matchers find the page on the live site (exact `<service> <location>` slug in any layout, or a generic place page), else `missing`. Re-run on explicit "Re-check coverage" and lazily on a matrix read older than a short TTL; a re-check never downgrades a cell that has a `page_id`.
+
+**The fix.** #953's `build_matrix_silos` stamps `location_name` on *every* page, including the one whose location **is** the seed city ("Roof Restoration Melbourne" with `location_name="Melbourne"`). Under #953's Option B scoping, a page carrying a `location_name` is deliberately never covered by a national city-less page (`/roof-restoration/`) — correct for a suburb, wrong for the seed-city base cell, which the AI planner emits *without* a `location_name` precisely so the national page counts. So the matrix must **omit `location_name` on cells whose location slug equals the seed city's** before marking. Otherwise a single-city business with `/roof-restoration/` sees its Melbourne cell offered as `missing` and generates a duplicate. Pure, one line, unit-tested — and worth applying to `build_matrix_silos` itself (pass the seed city in) so the one-shot mode gets the same behaviour.
 
 ### 3.6 Estimate + gates (pure)
 
@@ -201,10 +217,14 @@ Models in `models/local_seo_matrix.py`; all writes `require_auth` + `assert_not_
 
 ## 7. Frontend
 
-A new **Matrix** tab in `pages/LocalSeoContent.tsx` (tab list gains `'matrix'`), components under `components/localseo/matrix/`:
+The durable matrix **grows out of #953's "Upload your own → Matrix" mode** rather than duplicating it. Three pieces:
+
+- **A shared axes editor** — `components/localseo/MatrixAxesEditor.tsx`, extracted from `CustomTargetsPanel`'s two textareas (services / locations, one per line) and gaining the two **Suggest** buttons (§3.4) and the per-row optional location typeahead (§3.2). Both the one-shot panel and the saved-matrix builder render it, so Suggest reaches the quick-check mode for free.
+- **"Save as matrix"** on the one-shot panel — after a check, the marked targets become a persisted matrix (name prompt → `POST …/matrices`) and the view switches to the grid. The one-shot Check / bulk-create path is unchanged for people who don't want a saved object.
+- **A Matrix tab** in `pages/LocalSeoContent.tsx` (tab list gains `'matrix'`), components under `components/localseo/matrix/`:
 
 - **`MatrixList`** — the client's saved matrices (name, N×M, coverage bar, release state); "New matrix".
-- **`MatrixBuilder`** — name; metro anchor (`LocationAutocomplete`); **Services** chip editor (type/paste, one per line, + "Suggest services"); **Locations** chip editor (+ "Suggest locations" showing target-cities vs suburbs-of-metro groups, per-row optional typeahead to pin a DataForSEO code); URL pattern preset; page template + entity engine (reusing `EntityProviderSelect`); publish defaults.
+- **`MatrixBuilder`** — name; metro anchor (`LocationAutocomplete`); the shared axes editor; URL pattern preset; page template + entity engine (reusing `EntityProviderSelect`); publish defaults.
 - **`MatrixGrid`** — services as rows, locations as columns; each cell a status chip (`missing` selectable checkbox, `found`/`on_site` linked, `queued`/`generating` spinner, `done` → page link + score, `failed` → error via `ErrorDetails`, `published` → live link, `publish_blocked` → words + per-cell "Publish anyway"). Row/column select-all. Polls the matrix GET every 15 s while any cell is in flight — the durable cells make the UI trivially resumable, so no `useResumableBatch` state.
 - **`MatrixRunBar`** — selected count → estimate (count · $ · minutes · sign-off flag) → **Generate now** / **Schedule…** (drip form: immediate N, then N per day/week/month) / **Leave & finish in the background** (jobs keep running).
 - **`MatrixPublishBar`** — "Publish all done cells" to destination/status with progress.
@@ -221,6 +241,8 @@ Errors go through the shared `errorGuidance` registry (new codes: `matrix_signof
 4. **Hub pages** (a page per service and per location) — declined for v1 (decision 3). Revisit once cells exist; the Website Builder already plans hubs for generated sites.
 5. **Matrix → Website Builder bridge.** A client with a suite-built site should push cells into its site plan rather than generate separately. Natural follow-up, not v1.
 6. **SerMaStr / PACE visibility.** A `_ctx_local_seo_matrix` context provider (coverage %, in-flight cells) is cheap and additive — follow-up.
+7. **Keep the one-shot matrix mode?** Default: yes — it's a free quick check and the create path into a saved matrix (§7). If the team only ever saves, fold "Upload your own → Matrix" into the Matrix tab later and leave List/CSV where it is.
+8. **List/CSV targets as a matrix.** #953's list mode carries a per-row `location` column. A saved matrix is strictly N×M; an arbitrary list is not. Default: the durable object stays a true matrix; a list stays one-shot. Revisit if a "saved target list" turns out to be wanted.
 
 ---
 
@@ -228,10 +250,10 @@ Errors go through the shared `errorGuidance` registry (new codes: `matrix_signof
 
 | Phase | Scope | Gate to next |
 |---|---|---|
-| **0 — Foundations** | Migration; `services/local_seo_matrix.py` pure core (`slugify`, `compose_keyword`, `build_cells`, `diff_cells`, `sibling_links`, `check_internal_links`, `estimate`, gates); `local_seo_existing.mark_existing` extracted from the silo planner (verbatim, silo tests green); unit tests. | Pure tests green; silo planner unchanged in behaviour. |
+| **0 — Foundations** | Migration; `services/local_seo_matrix.py` pure core (`slugify`, `cells_from_silos` over `local_seo_targets.build_matrix_silos`, `diff_cells`, `sibling_links`, `check_internal_links`, `estimate`, gates); the seed-city `location_name` fix in `build_matrix_silos` (§3.5) with a regression test in `test_local_seo_targets.py`; unit tests. | Pure tests green; #951/#953 tests green; silo planner unchanged in behaviour. |
 | **1 — Store + API + immediate run** | CRUD, suggest job, coverage marking, estimate, `generate` with cell tracking + read-side reconcile; config flags. | A 3×4 matrix generates end-to-end on PLATFORM with cells reconciling to `done` + page links. |
 | **2 — Sibling links** | nlp-api `internal_links` on generate + reoptimize + prompt block; platform-side deterministic guarantee + `link_coverage`. | Live pages verified to carry the full sibling set; composite/voice scores unchanged vs a no-links run (links must not cost score). |
-| **3 — Frontend** | Matrix tab: list, builder, grid, run bar. | Team can plan + fill a matrix without the API. |
+| **3 — Frontend** | Extract `MatrixAxesEditor` from `CustomTargetsPanel` (+ Suggest buttons, per-row typeahead); "Save as matrix" on the one-shot panel; Matrix tab: list, builder, grid, run bar. | Team can plan + fill a matrix without the API; the one-shot mode still works and now has Suggest. |
 | **4 — Drip release** | Schedule columns, `run_release`, scheduler tick, `publish_after` branch in `run_generate_job`. | A scheduled matrix releases N/day and auto-publishes to the configured destination. |
 | **5 — Bulk publish** | `local_seo_matrix_publish` job, publish route + status, `MatrixPublishBar`, per-cell voice override. | "Publish all done cells" delivers to Docs / WP / GitHub with blocked cells surfaced, never skipped silently. |
 
@@ -245,4 +267,4 @@ Per cell: one Local SEO generation (~$1, ~11 min on the single worker). The exam
 
 ## 11. Testing
 
-Pure core fully unit-tested (`tests/test_local_seo_matrix.py`): cross product + slugs; gap-fill diff (add / remove-without-page / skip-with-page); keyword composition parity with the silo planner; sibling selection caps + nearest-first; link check + deterministic append idempotence; estimate + gates; release batch ordering (location-major) and exactly-once claim; publish idempotence. The `mark_existing` extraction is pinned by the existing silo tests. nlp-api: `tests/test_internal_links.py` for the prompt block render (empty → "") and the request models. Frontend: `tsc -b` clean; grid state rendering covered by the reconcile contract.
+Pure core fully unit-tested (`tests/test_local_seo_matrix.py`): cells-from-silos + slugs (parity with `build_matrix_silos` output pinned); gap-fill diff (add / remove-without-page / skip-with-page); the seed-city `location_name` omission and its marking consequence (a `/roof-restoration/` page covers the Melbourne cell but not the Hawthorn cell — extends `test_local_seo_silo.py`'s Option B cases); sibling selection caps + nearest-first; link check + deterministic append idempotence; estimate + gates; release batch ordering (location-major) and exactly-once claim; publish idempotence. The #951 matchers and #953 parsers keep their own suites untouched. nlp-api: `tests/test_internal_links.py` for the prompt block render (empty → "") and the request models. Frontend: `tsc -b` clean; grid state rendering covered by the reconcile contract.
