@@ -7,6 +7,7 @@ import { card, label, primaryBtn } from '../shared'
 import { matrixApi } from './api'
 import { MatrixAxesEditor } from './MatrixAxesEditor'
 import { MatrixGrid } from './MatrixGrid'
+import { MatrixReleaseCard } from './MatrixReleaseCard'
 import { MatrixRunBar } from './MatrixRunBar'
 import { IN_FLIGHT, splitLines } from './types'
 import type { MatrixDetail as MatrixDetailT, MatrixLocationIn } from './types'
@@ -201,6 +202,8 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
       <MatrixGrid matrix={matrix} selected={selected} onToggle={onToggle} onOpenPage={onOpenPage} />
 
       <MatrixRunBar clientId={clientId} matrix={matrix} selected={selected} setSelected={setSelected} onStarted={refresh} />
+
+      <MatrixReleaseCard clientId={clientId} matrix={matrix} onChanged={refresh} />
     </div>
   )
 }

@@ -613,6 +613,7 @@ async def gsc_scheduler() -> None:
         enqueue_due_deploy_polls as enqueue_due_website_deploy_polls,
     )
     from services.website_release import enqueue_due_website_releases
+    from services.local_seo_matrix_release import enqueue_due_matrix_releases
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
@@ -1007,5 +1008,9 @@ async def gsc_scheduler() -> None:
             # planned posts (generate + publish) for any site whose cadence has
             # come due. Self-gated on website_builder_enabled, so inert while dark.
             _safe("website_releases", enqueue_due_website_releases)
+            # Local SEO matrix drip release: generate + publish the next batch of
+            # cells for any matrix whose cadence has come due. Self-gated on
+            # local_seo_matrix_enabled; a frozen client's matrix is skipped.
+            _safe("local_seo_matrix_releases", enqueue_due_matrix_releases)
         except Exception as exc:
             logger.error("gsc_scheduler.per_cycle_block_failed", extra={"error": str(exc)})
