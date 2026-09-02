@@ -91,3 +91,43 @@ licensed assets.
 **Auto-publish** — publishing a Post to a client's real account with no human
 click. Allowed **only** behind the top autonomy tier *and* an explicit per-client
 opt-in; never a default. Absent that, publishing is always human-approved.
+
+## Autonomy & control
+
+The endgame is an **autonomous social department**: humans approve content and
+tune the agents; the department otherwise plans, produces, schedules and (at the
+top tier) publishes on its own. This is realized as a **domain executor reusing
+the suite's existing autonomy guardrails** (autonomy tiers, the
+`autonomy_policy.classify` auto/propose/escalate decision, the fail-closed budget
+governor, freeze, the DORA veto) — **not** a new by-disposition persona.
+
+**Social Manager (orchestrator)** — the autonomous orchestration *loop* (not a
+chat persona): each cycle it reads the client's **Social Policy**, Cadence,
+goals and **Competitor Signals**, plans the period, dispatches the **Social
+Creator** to produce, routes results to approval, then schedules and (top-tier)
+publishes. The org-chart "manager" that plans/organizes/coordinates. Distinct
+from the **Manager surface** (the human's Calendar/approval UI), which is how a
+person sees and steers the same work.
+
+**Social Creator (worker)** — the bounded, tool-using production *loop* the
+Social Manager dispatches (and that the **Creator surface** invokes on-demand):
+research → **Angle** → design (copy + image) → self-critique against the
+voice-card and **Platform Spec** → regenerate. One engine, two callers (human or
+orchestrator). A *worker function*, not a persona you converse with.
+
+**Social Policy (Playbook)** — the per-client object humans edit to *tune the
+agents*: per-platform **Cadence** and on/off, allowed/blocked topics & claims,
+tone/angle preferences, competitor focus, budget ceiling, the **autonomy tier /
+approval strictness**, and **the generation prompt templates** (image and text
+style). An edited prompt still passes the deterministic Platform-Spec + voice
+validators — tuning steers output, never bypasses the brand/safety gates.
+
+**Graduated approval** — approval strictness is a function of the client's
+autonomy tier: new/low-trust → approve every Post; trusted → batch /
+approve-by-exception; top tier → **Auto-publish** with post-hoc review. What lets
+"minimal supervision" be real without abandoning control.
+
+**Platform Spec** — the per-platform constraint data (character limits, image
+aspect ratios, hashtag norms, CTA style, link policy) consumed by *both* the
+generation prompt and a **deterministic validator**; a Draft violating a hard
+constraint is flagged before it can be approved.
