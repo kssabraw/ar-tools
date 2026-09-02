@@ -1642,6 +1642,7 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     # Competitive keyword-gap opportunities (Domain Intelligence). Additive:
     # no stored gaps → no actions → unchanged behavior.
     try:
+        from services import gap_intel_filter
         from services import keyword_research_navigational as krn
 
         # Competitor-brand matchers for the intent filter (best-effort registry
@@ -1664,12 +1665,15 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
             .limit(max(settings.domain_intel_action_max * 8, 24))
             .execute()
         ).data or []
-        organic += build_domain_intel_actions(
-            client_id,
-            gap_rows,
-            matchers=matchers,
-            filter_intent=settings.domain_intel_navigational_filter,
-        )
+        # Single quality chokepoint (protects the board + PACE for all clients):
+        # deterministic navigational/brand/address gate + a best-effort LLM pass
+        # that catches the coined competitor product-brand class ("autoclaims").
+        kept_gaps, gap_report = gap_intel_filter.filter_gap_rows(gap_rows, matchers, client_id)
+        if gap_report.get("dropped_deterministic") or gap_report.get("dropped_llm"):
+            logger.info("reopt_plan_gap_filter", extra={"client_id": client_id, **{
+                k: gap_report[k] for k in ("input", "kept", "dropped_deterministic", "dropped_llm")}})
+        # Rows are already filtered; build the actions without re-filtering.
+        organic += build_domain_intel_actions(client_id, kept_gaps, filter_intent=False)
     except Exception as exc:
         logger.warning("reopt_plan_domain_intel_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop, landgrab)
