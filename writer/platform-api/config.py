@@ -1340,6 +1340,25 @@ class Settings(BaseSettings):
     # empty (no gate). Keep ≳ a single item's runtime so an interactive job waits
     # behind at most the currently-running bulk item.
     local_seo_bulk_job_spacing_seconds: int = 180
+    # Service × location matrix (docs/modules/local-seo-matrix-plan-v1_0.md). No
+    # dark launch needed — a matrix creates nothing by itself; every cell still
+    # goes through the freeze-gated local_seo_generate job.
+    local_seo_matrix_enabled: bool = True
+    # Per-cell estimate shown before a run: the same per-page figure the autonomy
+    # budget governor reserves, and the measured generation wall-clock.
+    local_seo_matrix_cost_per_page_usd: float = 1.0
+    local_seo_matrix_minutes_per_page: float = 11.0
+    # Most cells one immediate run may enqueue (bigger runs use the drip). The
+    # whole-matrix sign-off line is website_plan.MATRIX_SIGNOFF_THRESHOLD (200).
+    local_seo_matrix_max_cells_per_run: int = 50
+    # Sibling internal links per cell page: other locations for the same service
+    # (nearest-first) are capped, and the overall link count is capped so a wide
+    # matrix cannot link-stuff (every other service in the location always links).
+    local_seo_matrix_sibling_location_cap: int = 4
+    local_seo_matrix_max_links: int = 10
+    # Spacing between per-cell publish jobs ("Publish all done cells") — publishing
+    # is seconds, not minutes, so a short stagger keeps the worker interleaving.
+    local_seo_matrix_publish_spacing_seconds: int = 10
     # WheelHouse IT location/service page poster (client-gated via the per-client
     # clients.wheelhouse_cpt_enabled flag). LLM that fills the 33 ACF fields.
     wheelhouse_provider: str = "anthropic"
