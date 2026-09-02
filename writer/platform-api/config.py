@@ -1069,6 +1069,15 @@ class Settings(BaseSettings):
     # Keyword Research navigational/competitor/address guard; a comparison term
     # ("sedgwick alternatives") is kept. Off → prior behaviour.
     domain_intel_navigational_filter: bool = True
+    # On top of the deterministic gate, a best-effort LLM pass judges each surfaced
+    # gap keyword as a real content topic vs a competitor brand/PRODUCT name
+    # ("autoclaims", "timeoff", "absenceone"), a navigational lookup, or a
+    # person/address — the coined product-brand class the token rules can't name
+    # without semantics. One cheap Haiku call per rebuild; degrades to the
+    # deterministic gate on no key / failure. Off → deterministic gate only.
+    domain_intel_gap_llm_filter: bool = True
+    domain_intel_gap_filter_model: str = "claude-haiku-4-5-20251001"
+    domain_intel_gap_filter_max_tokens: int = 600
 
     # Keyword Research module (the seed-keyword explorer) — per-client keyword
     # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.
