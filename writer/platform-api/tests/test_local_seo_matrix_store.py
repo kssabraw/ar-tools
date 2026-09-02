@@ -154,3 +154,46 @@ async def test_run_generate_job_records_cell_link_coverage():
     assert fake_generate.call_args.kwargs["internal_links"] == job["payload"]["internal_links"]
     record.assert_called_once_with("cell-0", coverage)
     assert sb.table.return_value.update.call_args[0][0]["result"] == {"page_id": "page-1"}
+
+
+def test_home_link_anchor_uses_client_business_name_else_home():
+    """#4: the homepage up-link is anchored with the client's business name when
+    the lookup succeeds, and falls back to "Home" on any miss/odd result."""
+    cells = _cells()
+    # Branded: the clients lookup returns a real name.
+    sb = _fake_sb(["job-a", "job-b"])
+    sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {"name": "First Class Roofing"}
+    ]
+    with patch.object(store, "_runnable", return_value=(MATRIX, cells, cells)), \
+         patch.object(store, "get_supabase", return_value=sb), \
+         patch.object(store, "_apply_patches"):
+        store.start_generate("m1", "c1", "user-1")
+    p0 = sb.table.return_value.insert.call_args[0][0][0]["payload"]
+    home = next(lk for lk in p0["internal_links"] if lk["relation"] == core.HOME)
+    assert home == {"anchor": "First Class Roofing", "url": "https://fcr.com.au/", "relation": core.HOME}
+
+    # Fallback: a lookup returning no rows anchors "Home".
+    sb2 = _fake_sb(["job-c", "job-d"])
+    sb2.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    with patch.object(store, "_runnable", return_value=(MATRIX, cells, cells)), \
+         patch.object(store, "get_supabase", return_value=sb2), \
+         patch.object(store, "_apply_patches"):
+        store.start_generate("m1", "c1", "user-1")
+    p0b = sb2.table.return_value.insert.call_args[0][0][0]["payload"]
+    homeb = next(lk for lk in p0b["internal_links"] if lk["relation"] == core.HOME)
+    assert homeb["anchor"] == "Home"
+
+
+def test_resolve_hub_pattern_requires_only_when_hub_on():
+    """#2: an invalid hub pattern is a 400 only when the hub link is on; with the
+    link off it is silently normalized to the default (never a reject, never a
+    stored invalid pattern)."""
+    assert store._resolve_hub_pattern("/services/{service}/", require=True) == "/services/{service}/"
+    assert store._resolve_hub_pattern("", require=True) == core.DEFAULT_SERVICE_HUB_PATTERN
+    with pytest.raises(HTTPException) as exc:
+        store._resolve_hub_pattern("/no-token/", require=True)
+    assert exc.value.status_code == 400 and exc.value.detail == "hub_pattern_missing_service_token"
+    # Hub off: a bad pattern is normalized, not rejected.
+    assert store._resolve_hub_pattern("/no-token/", require=False) == core.DEFAULT_SERVICE_HUB_PATTERN
+    assert store._resolve_hub_pattern("/{service}/{location}/", require=False) == core.DEFAULT_SERVICE_HUB_PATTERN
