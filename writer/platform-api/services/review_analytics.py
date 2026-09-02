@@ -159,7 +159,10 @@ def _store(client_id: str, place_id: str, is_client: bool, reviews: list[dict]) 
         )
     supabase = get_supabase()
     try:
-        supabase.table("reviews").upsert(rows, on_conflict="client_id,review_key", ignore_duplicates=True).execute()
+        # DO UPDATE on conflict (was DO NOTHING): a re-pull must refresh a row's
+        # rating/text — the rows stored before the rating-shape fix carry null
+        # ratings and would otherwise stay null forever.
+        supabase.table("reviews").upsert(rows, on_conflict="client_id,review_key", ignore_duplicates=False).execute()
     except Exception as exc:
         logger.warning("review_analytics.store_failed", extra={"client_id": client_id, "error": str(exc)})
         return 0
