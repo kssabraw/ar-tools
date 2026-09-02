@@ -1311,6 +1311,38 @@ export interface Guide {
   updated_at: string | null
 }
 
+// DORA guide sync (services/guide_sync.py) — one review per (commit, module)
+// after a module change lands on main. `prior_body`/`proposed_body` ride only
+// on the single-run read (GET /guides/sync-runs/:id).
+export type GuideSyncStatus =
+  | 'queued' | 'running' | 'no_change' | 'applied' | 'proposed'
+  | 'rejected' | 'no_guide' | 'failed' | 'reverted' | 'dismissed'
+export interface GuideSyncCommit { sha: string; title: string; body?: string }
+export interface GuideSyncRun {
+  id: string
+  module_key: string
+  module_label: string
+  guide_slug: string | null
+  guide_id: string | null
+  commit_sha: string
+  commit_range: string | null
+  commits: GuideSyncCommit[]
+  files: string[]
+  status: GuideSyncStatus
+  needs_update: boolean | null
+  reason: string | null
+  change_summary: string | null
+  proposed_summary: string | null
+  error: string | null
+  applied_at: string | null
+  reverted_at: string | null
+  decided_by: string | null
+  created_at: string
+  updated_at: string | null
+  prior_body?: string | null
+  proposed_body?: string | null
+}
+
 // Share of Local Voice (SoLV) — Maps geo-grid.
 export interface MapsSolvCompetitorShare {
   place_id: string | null
