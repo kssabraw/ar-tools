@@ -200,12 +200,33 @@ def _validate_pattern(pattern: Optional[str]) -> str:
     return p
 
 
-def _validate_hub_pattern(pattern: Optional[str]) -> str:
+def _resolve_hub_pattern(pattern: Optional[str], *, require: bool) -> str:
+    """Normalize the service-hub pattern to a valid value. When `require` (the
+    hub link is on) an invalid pattern is a 400; when off it is silently replaced
+    with the default — so a matrix with the hub link disabled never rejects over
+    a pattern it won't use, and turning the link on later can never surface a
+    stored invalid pattern (the stored value is always valid)."""
     p = (pattern or "").strip() or core.DEFAULT_SERVICE_HUB_PATTERN
     errors = core.validate_hub_pattern(p)
     if errors:
-        raise HTTPException(status_code=400, detail=errors[0])
+        if require:
+            raise HTTPException(status_code=400, detail=errors[0])
+        return core.DEFAULT_SERVICE_HUB_PATTERN
     return p
+
+
+def _client_home_anchor(client_id: str) -> str:
+    """The homepage link's anchor: the client's business name, else "Home".
+    Best-effort with a targeted read — a failed or unexpected lookup never blocks
+    enqueueing (and keeps the pure planner deterministic under mocks)."""
+    try:
+        rows = get_supabase().table("clients").select("name").eq("id", client_id).limit(1).execute().data or []
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if isinstance(row, dict):
+            return (row.get("name") or "").strip() or "Home"
+    except Exception:  # noqa: BLE001
+        pass
+    return "Home"
 
 
 def _default_base_url(client: dict) -> Optional[str]:
@@ -241,7 +262,9 @@ async def create_matrix(client_id: str, body: dict, user_id: str) -> dict:
         "publish_destination": body.get("publish_destination") or "google_docs",
         "publish_status": body.get("publish_status") or "draft",
         "link_to_service_hub": bool(body.get("link_to_service_hub", True)),
-        "service_hub_pattern": _validate_hub_pattern(body.get("service_hub_pattern")),
+        "service_hub_pattern": _resolve_hub_pattern(
+            body.get("service_hub_pattern"), require=bool(body.get("link_to_service_hub", True))
+        ),
         "link_to_home": bool(body.get("link_to_home", True)),
         "created_by": user_id,
     }
@@ -283,7 +306,14 @@ async def update_matrix(matrix_id: str, client_id: str, body: dict) -> dict:
         if body.get(key) is not None:
             patch[key] = bool(body[key])
     if body.get("service_hub_pattern") is not None:
-        patch["service_hub_pattern"] = _validate_hub_pattern(body["service_hub_pattern"])
+        # Require a valid pattern only when the hub link is (or is being turned)
+        # on — the effective state, since the toggle can change in the same PUT.
+        hub_on = (
+            bool(body["link_to_service_hub"])
+            if body.get("link_to_service_hub") is not None
+            else bool(matrix.get("link_to_service_hub", True))
+        )
+        patch["service_hub_pattern"] = _resolve_hub_pattern(body["service_hub_pattern"], require=hub_on)
 
     pattern = matrix["url_pattern"]
     if body.get("url_pattern") is not None:
@@ -459,6 +489,7 @@ def enqueue_cells(
     matrix_id, client_id = matrix["id"], matrix["client_id"]
     rows = []
     base_url = matrix.get("base_url") or ""
+    home_anchor = _client_home_anchor(client_id)  # brand name for the homepage link
     for i, cell in enumerate(selected):
         location, code = _location_for_cell(matrix, cell)
         # Links are planned against the WHOLE grid (plan §4.1), so a cell
@@ -472,6 +503,7 @@ def enqueue_cells(
             service_hub=matrix.get("link_to_service_hub", True),
             service_hub_pattern=matrix.get("service_hub_pattern") or core.DEFAULT_SERVICE_HUB_PATTERN,
             home=matrix.get("link_to_home", True),
+            home_anchor=home_anchor,
         )
         payload = {
             "client_id": client_id,
