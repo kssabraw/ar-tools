@@ -166,6 +166,14 @@ def save_new_version(
     return inserted
 
 
+def client_has_reviews(client: dict[str, Any]) -> bool:
+    """Whether the client has review text on file (``clients.gbp.reviews`` —
+    the only review source the writer is handed). Pure."""
+    gbp = client.get("gbp") if isinstance(client.get("gbp"), dict) else {}
+    reviews = gbp.get("reviews")
+    return isinstance(reviews, list) and any(isinstance(r, dict) and (r.get("text") or "").strip() for r in reviews)
+
+
 def client_structure_overrides() -> bool:
     """Whether a usable client reference layout IS the page structure (config
     ``local_seo_client_structure_overrides``, default on)."""
@@ -202,6 +210,7 @@ def resolve_spec(
         serp_analysis=serp_analysis, reference_entry=reference, reference_page_type=ref_type,
         fallback_target=fallback_target,
         client_structure_overrides=client_structure_overrides(),
+        has_reviews=client_has_reviews(client),
     )
     if active and not materially_different(active.get("spec"), fresh):
         return public_spec(active)

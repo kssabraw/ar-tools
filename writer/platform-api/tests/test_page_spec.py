@@ -380,3 +380,37 @@ def test_structure_verdict_ok_on_a_conforming_page_and_names_each_drift():
     codes2 = {(i["key"], i["code"]) for i in v2["issues"]}
     assert (None, "order") in codes2 and ("local", "sentiment") in codes2 and ("faq", "intent_drift") in codes2
     assert v2["audited"] is True and not v2["order_ok"]
+
+
+def test_client_mode_testimonials_optional_without_reviews_and_no_point_bands():
+    outline = [
+        _row("H1", "Big Promise", "other", 40),
+        _row("H2", "What Our Clients Say", "trust", 90, [{"type": "quote", "count": 3, "words": 90}]),
+        _row("H2", "How It Works", "process", 120),
+        _row("H2", "Areas We Cover", "coverage", 110),
+        _row("H2", "Book a Visit", "cta", 0, []),
+        _row("H3", "Free on-site quote", "cta", 0, []),
+    ]
+    spec = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1, serp_analysis=_SERP,
+                         reference_entry=_ref(outline), reference_page_type="local_landing", fallback_target=1200,
+                         has_reviews=False)
+    t = next(s for s in spec["sections"] if s["key"] == "testimonials")
+    assert t["required"] is False and t["no_reviews"] is True and t["min_words"] == 0
+    # its share is released to the page, not piled onto the absorber
+    assert spec["total"]["released_min"] > 0 and spec["total"]["min"] == 882 - spec["total"]["released_min"]
+    assert sum(s["min_words"] for s in spec["sections"]) == spec["total"]["min"]
+    assert "OMIT" in t["heading_pattern"] and "testimonials_optional_no_reviews" in spec["provenance"]["flags"]
+    assert "OMIT — no reviews on file" in ps.render_spec_block(spec)
+    # with reviews on file (or unknown) the client's reviews block stays required
+    with_reviews = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1, serp_analysis=_SERP,
+                                 reference_entry=_ref(outline), reference_page_type="local_landing", fallback_target=1200,
+                                 has_reviews=True)
+    assert next(s for s in with_reviews["sections"] if s["key"] == "testimonials")["required"] is True
+    # a ceiling clamp never collapses a band onto a point (the heading-only CTA
+    # rides the template weight; on a long page its share exceeds the ceiling)
+    big = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1,
+                        serp_analysis={"serp_word_target": 2400, "serp_avg_word_count": 2000, "serp_urls": ["a"] * 12},
+                        reference_entry=_ref(outline), reference_page_type="local_landing", fallback_target=1200)
+    cta = next(s for s in big["sections"] if s["key"] == "cta-primary")
+    assert cta["max_words"] == 80 and cta["min_words"] < cta["max_words"]
+    assert all(s["max_words"] > s["min_words"] for s in big["sections"] if s["required"])
