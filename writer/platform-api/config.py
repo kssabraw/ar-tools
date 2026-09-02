@@ -2618,6 +2618,7 @@ class Settings(BaseSettings):
     guide_sync_min_ratio: float = 0.5           # rewrite must be within [min, max] × the prior body length
     guide_sync_max_ratio: float = 2.5
     guide_sync_recent_days: int = 30            # window for DORA's read-model `guide_sync` block
+    guide_sync_max_body_bytes: int = 8_000_000  # inbound payload ceiling (checked before the body is parsed)
 
     class Config:
         env_file = ".env"

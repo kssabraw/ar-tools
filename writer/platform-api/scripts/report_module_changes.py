@@ -105,7 +105,9 @@ def build_payload(before: str, after: str, cwd: str, max_chars: int, repository:
     changes = []
     for key in sorted(grouped):
         paths = grouped[key]
-        entry = {"module": key, "files": paths, "commits": commits}
+        # The platform clips a module's file list at 500; do it here too so the
+        # payload stays bounded on a giant squash merge (the diff is what matters).
+        entry = {"module": key, "files": paths[:500], "commits": commits}
         # The unmapped bucket is reported for visibility (the platform logs it)
         # but carries no diff — there is no guide to review against.
         entry["diff"] = "" if key == registry.UNMAPPED else module_diff(before, after, paths, cwd, max_chars)

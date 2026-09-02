@@ -154,9 +154,16 @@ class ModuleCommit(BaseModel):
 
 class ModuleChange(BaseModel):
     module: str = Field(min_length=1, max_length=64)
-    files: list[str] = Field(default_factory=list, max_length=500)
+    files: list[str] = Field(default_factory=list)
     diff: str = ""
     commits: list[ModuleCommit] = Field(default_factory=list, max_length=50)
+
+    @field_validator("files")
+    @classmethod
+    def _cap_files(cls, v: list[str]) -> list[str]:
+        # Clip, never reject: a giant squash merge (500+ files in one module)
+        # must still be reviewed — the diff is what DORA reads, the list is context.
+        return [str(f)[:400] for f in (v or [])[:500]]
 
     @field_validator("diff")
     @classmethod
@@ -180,21 +187,52 @@ def _presented_secret(request: Request) -> str:
     return (request.headers.get("x-guide-sync-secret") or "").strip()
 
 
-@router.post("/director/module-changes")
-async def report_module_changes(body: ModuleChangesRequest, request: Request) -> dict:
-    """The CI reporter's inbound (``scripts/report_module_changes.py``): one
-    entry per module a merge to ``main`` touched, with the user-facing files,
-    commit messages, and a bounded diff. Public endpoint guarded ONLY by the
-    shared bearer secret (``GUIDE_SYNC_SECRET``) — fail-closed: no secret
-    configured ⇒ 503 and nothing recorded; wrong secret ⇒ 401. Idempotent per
-    (commit, module), so a re-run of the workflow can't double-review."""
+def secret_matches(presented: str, configured: str) -> bool:
+    """Constant-time bearer check. Compared as UTF-8 bytes so a non-ASCII
+    header can't raise out of compare_digest into a 500 (it's just wrong)."""
+    if not presented or not configured:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), configured.encode("utf-8"))
+
+
+def guard_module_changes_request(request: Request) -> None:
+    """Everything that must be true BEFORE the body is read: the feature is on,
+    a secret is configured, the caller presented it, and the declared size is
+    sane. Raising here keeps an unauthenticated caller from making the server
+    parse a multi-megabyte JSON body."""
     if not guide_sync.gate_open():
         raise HTTPException(status_code=503, detail="guide_sync_disabled")
     if not settings.guide_sync_secret:
         raise HTTPException(status_code=503, detail="guide_sync_not_configured")
-    presented = _presented_secret(request)
-    if not presented or not hmac.compare_digest(presented, settings.guide_sync_secret):
+    if not secret_matches(_presented_secret(request), settings.guide_sync_secret):
         raise HTTPException(status_code=401, detail="invalid_secret")
+    declared = request.headers.get("content-length")
+    try:
+        if declared is not None and int(declared) > settings.guide_sync_max_body_bytes:
+            raise HTTPException(status_code=413, detail="guide_sync_payload_too_large")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad_content_length")
+
+
+@router.post("/director/module-changes")
+async def report_module_changes(request: Request) -> dict:
+    """The CI reporter's inbound (``scripts/report_module_changes.py``): one
+    entry per module a merge to ``main`` touched, with the user-facing files,
+    commit messages, and a bounded diff. Public endpoint guarded ONLY by the
+    shared bearer secret (``GUIDE_SYNC_SECRET``) — fail-closed: no secret
+    configured ⇒ 503 and nothing recorded; wrong secret ⇒ 401; oversized ⇒ 413.
+    The body is read and validated only after those checks pass (a raw
+    ``Request`` rather than a body parameter, so FastAPI doesn't parse it
+    first). Idempotent per (commit, module), so a re-run of the workflow can't
+    double-review."""
+    guard_module_changes_request(request)
+    raw = await request.body()
+    if len(raw) > settings.guide_sync_max_body_bytes:
+        raise HTTPException(status_code=413, detail="guide_sync_payload_too_large")
+    try:
+        body = ModuleChangesRequest.model_validate_json(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid_payload: {str(exc)[:300]}")
     try:
         result = await run_in_threadpool(guide_sync.ingest_module_changes, body.model_dump())
     except Exception as exc:
