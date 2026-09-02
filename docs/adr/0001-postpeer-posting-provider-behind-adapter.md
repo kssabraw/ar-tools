@@ -43,3 +43,12 @@ this ADR: PostPeer has **no public SLA, status page, or legal entity** (indie-ma
 the swappable adapter is load-bearing), and the Ayrshare fallback is **broader/more
 mature but enterprise-priced per-profile** (~20–35× entry cost), so a provider swap is a
 cost/architecture event, not a config change.
+
+**Update 2 (2026-09-02, from the live PostPeer docs supplied by the owner):** consequence
+(2) is now **closed** — the X link tax is an explicit **pass-through**: an X post whose
+body contains `http(s)://` costs **50 credits** vs **5** for a plain X post and **1** on
+every other platform (~$0.30–0.43 per link post at PostPeer's tiers). The founder also
+confirmed there is **no SLA**, which the design accepts for the pilot: publish status is
+reconciled by our own polling sync job (never webhook-dependent), and this adapter is the
+mitigation. The legal-entity question was waived by the owner. Both vendor facts this ADR
+was conditioned on are therefore settled and the decision stands.

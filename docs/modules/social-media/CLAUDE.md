@@ -50,7 +50,7 @@ guardrails.
 |---|---|---|
 | Copy / Angle / self-critique | **Claude Sonnet 5** (`claude-sonnet-5`) | $2/1M in, $10/1M out. |
 | Image gen | **nano-banana Pro** (Gemini 3 Pro Image) | For per-platform **aspect ratios** — the existing `services/nano_banana.py` (2.5 Flash) sends no `imageConfig` and does 1:1 only. Needs a **new Pro renderer passing `aspectRatio`**. ~$0.134/img ★. Requires `GEMINI_API_KEY` (dormant today). |
-| Publish | **PostPeer** behind an adapter | Managed OAuth under its own reviewed apps (confirmed). X link-tax handling ★ open. |
+| Publish | **PostPeer** behind an adapter | Managed OAuth under its own reviewed apps (confirmed). **X link tax passed through: 5 credits plain / 50 with a URL; 1 credit elsewhere** (confirmed). **No SLA** (confirmed, accepted). Media by public URL; one platform per `POST /posts` call; `publishNow` from OUR scheduler, never `scheduledFor`. API facts: vendor-confirm doc §6. |
 | Competitor scrape | **Apify** (per-platform actors) | Public/logged-out content only. |
 | Competitor video analysis | **TwelveLabs** (Pegasus/Marengo) | Ingest by public URL; cap minutes/run. |
 | Media download | **cobalt.tools** (self-hosted) | **P5 only** — owned/licensed assets. Not provisioned in v1. |
@@ -96,8 +96,12 @@ guardrails.
 - **Don't couple module code to PostPeer** — go through the adapter interface.
 - **Don't download or re-host competitor media** — analyze-in-place (ADR-0002).
 - **Don't auto-publish by default** — top tier + explicit per-client opt-in only.
-- **Don't build an IG carousel Draft type in v1** — PostPeer's IG adapter is single-media (carousel is
-  roadmap). v1 IG = single-image.
+- **Don't add an IG carousel Draft type until the owner scopes it** — PostPeer carousels ARE live
+  (≤10 items, one aspect ratio throughout), so this is now a product/cost call, not a vendor limit.
+  The v1 floor is single-image IG. (IG has **no text-only posts** — an image-less IG Draft is
+  `needs_image`, like Pinterest.)
+- **Don't hand PostPeer the schedule (`scheduledFor`)** — publish with `publishNow` from our own
+  freeze-gated job so the inline account-health check + `source_changed` guard run first.
 - **Don't use nano-banana 2.5 Flash where a non-1:1 aspect ratio is required** (Pinterest/9:16) — it
   can't produce it. Use the Pro renderer.
 - **Don't copy the keyword_research budget pattern** (fail-open) for spend — use `autonomy_budget.reserve`.
@@ -105,5 +109,6 @@ guardrails.
 ## When stuck / ask the owner
 
 The mixed 2.5-Flash/Pro image cost lever (build in v1 or later); whether v1 IG includes single-media
-Reels/Stories or feed-only; the default per-client monthly cost ceiling; anything the PostPeer P0
-questions turn up. See `HANDOFF.md` (this folder) for the live open-items list.
+Reels/Stories or feed-only; whether an **IG carousel Draft type** is in v1; the default per-client
+monthly cost ceiling. The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the
+live open-items list.

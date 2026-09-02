@@ -4,6 +4,13 @@
 records the decisions reached during the design grill; it is authoritative for the
 module's scope and shape. Implementation has not started.
 
+**Vendor-gate update (2026-09-02, later the same day):** the four PostPeer P0 questions
+are **closed** (`social-media-vendor-confirm-postpeer-v1_0.md` v1.1): the X link tax is a
+confirmed **pass-through** (5 / 50 credits), **Instagram carousels are live** (the v1
+single-image restriction was a vendor limit — carousel scope is now an owner call), there
+is **no SLA** (accepted; the adapter is the mitigation), and the legal-entity question was
+**waived by the owner**. §1/§4/§11/§14 reflect this.
+
 **Review corrections (2026-09-02):** this revision applies fixes from an adversarial
 review of v1.0 — the image model is switched to **nano-banana Pro (Gemini 3 Pro
 Image)** for per-platform aspect-ratio control (§4/§6/§11/§13), the budget meter's
@@ -43,9 +50,10 @@ voice, human-approved — and publishes it to the client's own social accounts.
 - **Manager (surface)** — planning/operations: the **Calendar**, per-platform
   **Cadence**, approval, publishing, and (later) performance.
 
-**Platforms (v1):** Twitter/X, Facebook (Pages), Instagram (feed, **single-image** —
-carousel is deferred until PostPeer ships it; see the vendor-confirm doc), Pinterest —
-text + still image, fully produced. **YouTube** is analyze-only in v1: the module
+**Platforms (v1):** Twitter/X, Facebook (Pages), Instagram (feed, **single-image as the
+floor** — PostPeer's carousel support is now confirmed live, so whether a multi-image
+carousel Draft type is in v1 is an **open owner scope decision**; Stories/Reels remain a
+separate open decision), Pinterest — text + still image, fully produced. **YouTube** is analyze-only in v1: the module
 reverse-engineers competitor video and produces a **storyboard/brief + thumbnail +
 title/description/hashtags** for the client to shoot; it does **not** generate
 video.
@@ -104,17 +112,18 @@ posture per service:
 
 | Service | Role | Posture |
 |---|---|---|
-| **PostPeer** | Publish to the client's accounts; hosts per-account OAuth | Indie/early — **behind a swappable adapter**; Ayrshare the fallback. Confirm: publishes under own reviewed apps? who pays the X link tax? |
+| **PostPeer** | Publish to the client's accounts; hosts per-account OAuth | Indie/early, **no SLA (confirmed)** — **behind a swappable adapter**; Ayrshare the fallback. Publishes under its own reviewed apps (confirmed). **X link tax is passed through: 5 credits plain / 50 credits with a URL** (vs 1 credit elsewhere); analytics reads 1 credit/call. Media by public URL. |
 | **Apify** | Scrape public competitor posts (per-platform actors) | Logged-out public content, **content not identities**; per-result pricing; retention-bound any personal data. |
 | **TwelveLabs** | Analyze competitor + client video (Pegasus/Marengo) | Reliable, first-party-grade; **ingest by public URL** (no download); metered by **minutes indexed** with a per-run cap. |
 | **cobalt.tools** | Download media | **P5 dependency only** (video production) — no v1 phase consumes it, so it is NOT provisioned in P0. **Self-hosted only**; **owned/licensed assets only** (never competitor media). |
 | **nano-banana Pro** (Gemini 3 Pro Image) | Generate/edit images | Chosen over 2.5 Flash for **flexible aspect ratios** (2K/4K, e.g. 9:16 / 2:3) + strong in-image text rendering — both required by the per-platform Platform Spec (§6). The existing `services/nano_banana.py` (2.5 Flash) sends **no** `imageConfig`/`aspectRatio`, so the module needs a **Pro-based renderer that passes per-platform `aspectRatio`** (new code, not the GBP call as-is). ~$0.134/image at 1K/2K (vs ~$0.039 for 2.5 Flash) — the largest per-Draft cost line, metered. SynthID-watermarked; keep to client's own assets. |
 | **Claude Sonnet 5** | Copy + angle + image-prompt authoring | The suite's default generation model. |
 
-**Vendor facts to verify before/at Phase 0** (not decisions): PostPeer's app-review
-model + X link-tax handling; PostPeer Instagram **Stories** support (unclear);
-current TwelveLabs + nano-banana **Pro** pricing (per-image cost drives the budget);
-cobalt self-host on Railway (P5 only).
+**Vendor facts to verify before/at Phase 0** (not decisions): current TwelveLabs +
+nano-banana **Pro** pricing (per-image cost drives the budget); cobalt self-host on
+Railway (P5 only). *PostPeer's app-review model, X link-tax handling, and Instagram
+Stories support (Business account only, caption-less) are now confirmed — vendor-confirm
+doc §1/§2/§6.*
 
 ## 5. Domain / data model (sketch)
 
@@ -246,16 +255,19 @@ not an extension of the existing executor. Not a new persona.
   separate from the Recipe-Engine/autonomy budget (this is content production, not
   link deployment) but **exposed to the Recipe Engine as a cost line**.
 - TwelveLabs metered by **minutes indexed** with a per-run cap.
-- X's **$0.20/link-post tax** surfaced as a cost warning at schedule time, plus an
-  optional per-client "avoid links on X" toggle.
-- PostPeer's per-post fee tracked but trivial.
-- **Full worked model: `social-media-cost-model-v1_0.md`.** Headline: at realistic
-  volume the **nano-banana Pro image (~$0.11/post) and competitor research
+- X's link tax is a **confirmed PostPeer pass-through** — **50 credits (~$0.30–0.43) for
+  an X post whose body contains `http(s)://`, 5 credits (~$0.03–0.04) otherwise, 1 credit
+  on every other platform**. Surfaced as a cost warning at approval/schedule time, plus a
+  per-client "avoid links on X" toggle that the Platform-Spec validator enforces
+  mechanically (a URL scheme in X copy).
+- PostPeer's non-X per-post fee tracked but trivial; analytics reads are 1 credit/call
+  (metered in P4).
+- **Full worked model: `social-media-cost-model-v1_0.md` (v1.1).** Headline: at
+  realistic volume the **nano-banana Pro image (~$0.11/post) and competitor research
   (~$20/client/mo) dominate — not the X link tax.** Base scenario (20 clients × 5
-  posts/day) ≈ **$900/mo (~$45/client)**. The **X link tax is ~$60/mo at a realistic
-  ~10% X-link-post share** — *not* the ~$600 an earlier draft overstated (it counted all
-  3,000 monthly posts as link-posts; even "half with links" is 1,500 → $300, and X is
-  one of ~5 platforms). Largest cost lever: a **mixed 2.5-Flash/Pro image path** (Flash
+  posts/day) ≈ **$960/mo (~$48/client)**. The **X line is ~$120/mo at a realistic ~10%
+  X-link-post share** (confirmed 50-credit pass-through; v1.0's $60 assumed PostPeer
+  absorbed the fee). Largest cost lever: a **mixed 2.5-Flash/Pro image path** (Flash
   for square platforms, Pro only for aspect-ratio/text-heavy graphics) roughly halves
   the dominant line.
 - The **Social Policy carries a per-client monthly hard ceiling**, enforced by the
@@ -293,14 +305,13 @@ not an extension of the existing executor. Not a new persona.
 
 ## 14. Open items & risks
 
-- **Vendor-confirm — full readout in `social-media-vendor-confirm-postpeer-v1_0.md`.**
-  ✅ **Closed:** PostPeer publishes under its **own reviewed apps** (managed OAuth —
-  ADR-0001's low-friction basis holds); platform coverage, the IG Business/Creator
-  requirement, and pricing are confirmed. **Still open, and the P0 smoke test is the
-  go/no-go gate:** (1) **X link-post billing** — PostPeer is silent, likely absorbs the
-  13× X link fee (a margin/throttle risk); (2) **IG carousel** ETA (currently roadmap →
-  v1 ships single-image IG, §1); (3) SLA / status page / webhook delivery guarantee;
-  (4) legal entity + support channel (production dependency + DPA). Also confirm current
+- **Vendor-confirm — full readout in `social-media-vendor-confirm-postpeer-v1_0.md`
+  (v1.1). The P0 vendor gate is CLOSED.** ✅ Managed OAuth under PostPeer's own reviewed
+  apps; platform coverage; IG professional-account requirement; pricing. ✅ (1) **X
+  link-post billing** — pass-through, 5/50 credits. ✅ (2) **IG carousel** — live, ≤10
+  items, one aspect ratio. ✅ (3) **SLA** — none (accepted; the adapter + polling
+  reconciliation are the mitigation). ✅ (4) legal entity — **waived by the owner**. The
+  **P0 smoke test remains the go/no-go on real reliability.** Still to confirm: current
   TwelveLabs / nano-banana **Pro** pricing. cobalt self-host is a **P5** concern, not P0.
 - **Failure & edge paths — specified in `social-media-failure-handling-v1_0.md`** (the
   PRD above specifies the happy path). It covers the connection-health state machine,
