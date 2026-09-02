@@ -97,6 +97,7 @@ def test_fold_outline_folds_heading_only_children_into_a_list_block():
     assert industries["subsections"] == 1
     assert industries["folded_headings"] == 3
     assert {"type": "list", "count": 1, "items": 3, "words": 0, "folded": True} in industries["blocks"]
+    assert industries["folded_items"] == ["Architecture Industry", "Aviation Industry", "Construction Industry"]
     # a nav heading whose only child is a lone empty sub-heading folds to a
     # one-item list group here … and is dropped as a section by both mappers
     nav = next(g for g in groups if g["heading"].startswith("Additional Services"))
@@ -263,24 +264,31 @@ def test_client_mode_keeps_the_clients_sections_and_order_and_inserts_nothing():
     keys = [s["key"] for s in spec["sections"]]
     # client order, not template order: the CTA sits where the client put it,
     # the two service bodies stay separate, objections keep their own section
-    assert keys == ["intro", "usp", "features", "ref-recurring-problem-pattern-introduction", "services", "local",
+    assert keys == ["intro", "usp", "features", "ref-recurring-problem-pattern-introduction", "services",
+                    "ref-industry-coverage-overview-heading",
                     "ref-security-stack-and-coverage-gaps", "cta-primary", "ref-reasons-businesses-switch-providers",
                     "cta-secondary"]
-    # no template section the client lacks is inserted — it is only recorded
-    assert "faq" not in keys and "getting-started" not in keys
+    # no template section the client lacks is inserted — it is only recorded;
+    # an INDUSTRY "coverage" section is its own section, never the geo slot
+    assert "faq" not in keys and "getting-started" not in keys and "local" not in keys
+    assert any(f.startswith("client_structure_omits:") and "local" in f for f in spec["provenance"]["flags"])
     # a heading-only nav stub with one lone sub-heading is not a section
     assert not any(k.startswith("ref-additional") for k in keys)
-    assert "client_structure_omits:getting-started,faq" in spec["provenance"]["flags"]
+    assert "client_structure_omits:getting-started,local,faq" in spec["provenance"]["flags"]
     secs = {s["key"]: s for s in spec["sections"]}
     assert all(s["source"] == "reference" for s in spec["sections"])
     assert secs["ref-recurring-problem-pattern-introduction"]["intent"] == "objection"
     assert secs["ref-recurring-problem-pattern-introduction"]["subsections"] == {"min": 1, "max": 3}
     # a lone H3 inside a short block (the 16-word industries prose, the CTA
     # tagline) is markup, not structure: no sub-section band from one H3
-    assert "subsections" not in secs["local"]
+    assert "subsections" not in secs["ref-industry-coverage-overview-heading"]
     assert secs["ref-recurring-problem-pattern-introduction"]["heading_pattern"].startswith("Recurring Problem Pattern")
-    # the client's proportions rule the bands (no template floor on a prose section)
-    assert secs["local"]["max_words"] < 60 and secs["local"]["items"] == {"min": 2, "max": 5}
+    # the client's proportions rule the bands (no template floor on a prose section),
+    # and the client's own list items ride on the section for the writer to reproduce
+    ind = secs["ref-industry-coverage-overview-heading"]
+    assert ind["max_words"] < 60 and ind["items"] == {"min": 2, "max": 5} and ind["intent"] == "coverage"
+    assert ind["list_items"] == ["Architecture Industry", "Aviation Industry", "Construction Industry"]
+    assert "reproduce these" in ps.render_spec_block(spec) and "Aviation Industry" in ps.render_spec_block(spec)
     assert secs["services"]["min_words"] < 200
     # a folded single sub-heading is not a list block on the CTA
     assert [b["type"] for b in secs["cta-primary"]["blocks"]] == ["cta"]
@@ -301,7 +309,7 @@ def test_client_mode_h1_always_takes_intro_and_reviews_take_testimonials():
     spec = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1, serp_analysis=_SERP,
                          reference_entry=_ref(outline), reference_page_type="local_landing", fallback_target=1200)
     keys = [s["key"] for s in spec["sections"]]
-    assert keys == ["intro", "testimonials", "getting-started", "local", "faq"]
+    assert keys == ["intro", "testimonials", "getting-started", "local", "faq"]  # "Areas We Cover" IS geographic
     faq = next(s for s in spec["sections"] if s["key"] == "faq")
     assert faq["items"] == {"min": 4, "max": 7} and faq["min_words"] >= 160
     assert spec["validation_errors"] == []

@@ -5629,7 +5629,7 @@ def _spec_fix_targets(verdict: dict, spec: dict) -> List[dict]:
         entry = by_key.setdefault(key, {
             "key": key, "words": int((rows.get(key) or {}).get("words") or 0),
             "min_words": int(band.get("min_words") or 0), "max_words": int(band.get("max_words") or 0),
-            "intent": band.get("intent"), "corrections": [],
+            "intent": band.get("intent"), "list_items": band.get("list_items") or [], "corrections": [],
         })
         entry["corrections"].append(str(issue.get("detail") or issue.get("code")))
     return list(by_key.values())
@@ -5640,7 +5640,7 @@ _SECTION_FIX_SYSTEM = """You are REWRITING specific sections of an already-writt
 Return ONLY a JSON object mapping each given `[key]` to that section's NEW inner HTML (the content INSIDE its <section> tag). Include every section you were given; include no others.
 
 Rules for each section:
-- Satisfy EVERY listed correction. Typical corrections: add the list/table the spec calls for; bring the FAQ entry count into range; merge or split the H3 sub-sections to the stated band; make the copy actually deliver the section's INTENT (a CTA asks for the call with the phone number; an FAQ is real question + answer-first answers; a process section is numbered steps); and SENTIMENT — the section must read POSITIVE and CONFIDENT throughout: capable, reassuring, forward-looking. Remove hedging ("we try", "may be able to"), apologies, fear-mongering, blame and competitor/customer disparagement; when a customer problem is named, turn it into the confident solution in the same breath.
+- Satisfy EVERY listed correction. Typical corrections: add the list/table the spec calls for; bring the FAQ entry count or the list-item count into range (when the CLIENT'S OWN LIST ITEMS are given, the list must contain every one of them — short items, one per <li>); merge or split the H3 sub-sections to the stated band; make the copy actually deliver the section's INTENT (a CTA asks for the call with the phone number; an FAQ is real question + answer-first answers; a process section is numbered steps); and SENTIMENT — the section must read POSITIVE and CONFIDENT throughout: capable, reassuring, forward-looking. Remove hedging ("we try", "may be able to"), apologies, fear-mongering, blame and competitor/customer disparagement; when a customer problem is named, turn it into the confident solution in the same breath.
 - Land INSIDE the word band (count the visible text; headings don't count). Never pad to reach the minimum: if real substance runs short, come in at the minimum with what is true.
 - Keep the section's heading level and its role. Keep every fact, phone number, address, price and named service that is accurate; NEVER invent facts, times, prices, credentials, reviews or guarantees — if a correction would need a fact you don't have, satisfy it with what IS in the business data.
 - Preserve the client's brand voice, grammatical person and required phrasing.
@@ -5657,9 +5657,14 @@ def _spec_fix_prompt(targets: List[dict], sections: List[dict], business_name: s
         if sec is None:
             continue
         corrections = "\n".join(f"  - {c}" for c in t.get("corrections") or [])
+        items_line = (
+            "CLIENT'S OWN LIST ITEMS (reproduce every one, as list items): " + "; ".join(t["list_items"]) + "\n"
+            if t.get("list_items") else ""
+        )
         parts.append(
             f"[{t['key']}] heading: {sec.get('heading') or '(no heading)'}\n"
             f"INTENT: {t.get('intent')} · BAND: {t['min_words']}–{t['max_words']} words (currently ~{t['words']})\n"
+            f"{items_line}"
             f"CORRECTIONS:\n{corrections}\n"
             f"{sec.get('inner') or ''}"
         )
@@ -5741,6 +5746,8 @@ def _spec_add_prompt(missing: List[dict], sections: List[dict], business_name: s
             extras.append(f"{m['items'].get('min')}–{m['items'].get('max')} entries")
         if m.get("subsections"):
             extras.append(f"{m['subsections'].get('min')}–{m['subsections'].get('max')} H3 sub-sections")
+        if m.get("list_items"):
+            extras.append("CLIENT'S OWN LIST ITEMS (reproduce every one): " + "; ".join(m["list_items"]))
         parts.append(
             f"[{m['key']}] level {m.get('level')} · intent: {m.get('intent')} · heading pattern: {m.get('heading_pattern') or '(free)'}\n"
             f"BAND: {m.get('min_words')}–{m.get('max_words')} words"
