@@ -62,6 +62,55 @@ def test_sanitize_unescapes_html_entities_in_prose():
     assert prop["title"] == "Match A & B"
     assert prop["action"] == "Build links & content."
     assert prop["rationale"] == "They out-link us 3\u00d7."
+    # questions are prose too — they must be decoded (Finding 2).
+    q_out = strategist.sanitize_review(
+        {"assessment": "a",
+         "questions": ["Respond to Melbourne Roof Restoration &amp; Repair?"]},
+        frozen=False,
+    )
+    assert q_out["questions"] == ["Respond to Melbourne Roof Restoration & Repair?"]
+
+
+def test_sanitize_does_not_corrupt_bare_ampersands():
+    # A blanket html.unescape would mangle a stray "&word" that happens to start
+    # with a semicolon-less legacy entity; only "&…;" tokens may decode.
+    out = strategist.sanitize_review(
+        {
+            "assessment": "Q&A and R&D and AT&T stay intact.",
+            "root_cause": "target &notindexed pages; budget &pound500; url ?a=1&copy=2",
+            "proposals": [
+                {"title": "M&A play", "action": "audit ?utm=x&reg=1 landing page"}
+            ],
+        },
+        frozen=False,
+    )
+    assert out["assessment"] == "Q&A and R&D and AT&T stay intact."
+    assert out["root_cause"] == "target &notindexed pages; budget &pound500; url ?a=1&copy=2"
+    p0 = out["proposals"][0]
+    assert p0["title"] == "M&A play"
+    assert p0["action"] == "audit ?utm=x&reg=1 landing page"
+    # a well-formed "&…;" entity still decodes.
+    dec = strategist.sanitize_review(
+        {"assessment": "cost &pound;500 &amp; rising"}, frozen=False
+    )
+    assert dec["assessment"] == "cost £500 & rising"
+
+
+def test_sanitize_findings_skips_non_string_synthesis():
+    # A non-string synthesis (model returns a list) must be skipped, not crash
+    # the whole review (Finding 3 hardening).
+    out = strategist.sanitize_review(
+        {
+            "assessment": "a",
+            "findings": [
+                {"synthesis": [1, 2]},
+                {"synthesis": "   "},
+                {"synthesis": "Real finding &amp; kept", "signal_refs": ["s1"]},
+            ],
+        },
+        frozen=False,
+    )
+    assert [f["synthesis"] for f in out["findings"]] == ["Real finding & kept"]
 
 
 def test_sanitize_forces_senior_on_passthrough_territory():
