@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A trading-floor walkthrough for the Organic Rank Tracker — reading position like a ticker.">
+<title>Organic Rank Tracker Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@400;500;600;700&family=Hanken+Grotesk:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --paper:#EDEFE9; --paper-raised:#FAFBF7; --ink:#1E231F; --ink-soft:#535B52; --ink-faint:#8A9187;
+    --line:#D3D9CE; --line-strong:#BBC2B4;
+    --gain:#2E7D4F; --gain-ink:#1E5636; --gain-soft:#DCEBE0;
+    --loss:#B23B3B; --loss-ink:#7C2929; --loss-soft:#F2DCDA;
+    --shadow: 0 1px 2px rgba(30,35,31,0.07), 0 10px 26px rgba(30,35,31,0.06); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#14181A; --paper-raised:#1C2022; --ink:#E2E7E0; --ink-soft:#ABB2A7; --ink-faint:#71776D;
+      --line:#2A2F28; --line-strong:#3A3F36;
+      --gain:#5DB57F; --gain-ink:#9CDBB4; --gain-soft:#173325;
+      --loss:#DA7B7B; --loss-ink:#EFAEAE; --loss-soft:#341C1C;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#14181A; --paper-raised:#1C2022; --ink:#E2E7E0; --ink-soft:#ABB2A7; --ink-faint:#71776D;
+    --line:#2A2F28; --line-strong:#3A3F36;
+    --gain:#5DB57F; --gain-ink:#9CDBB4; --gain-soft:#173325;
+    --loss:#DA7B7B; --loss-ink:#EFAEAE; --loss-soft:#341C1C;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Hanken Grotesk", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Spectral", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--gain-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--gain); outline-offset:2px; }
+  code,.mono{ font-family:"DM Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"DM Mono",monospace; font-size:0.68rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--gain-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Spectral",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"DM Mono",monospace; font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Ticker — the one diagram only this subject has */
+  .ticker-wrap{ padding:1.9rem 0 2.1rem; }
+  .ticker-cap{ font-family:"DM Mono",monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.9rem; }
+  .ticker{ background:var(--paper-raised); border:1px solid var(--line); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+  .trow{ display:grid; grid-template-columns: 2fr 0.7fr 0.7fr 1.6fr; gap:0.8rem; align-items:center; padding:0.55rem 1.1rem; border-bottom:1px solid var(--line); font-size:0.86rem; }
+  .trow:last-child{ border-bottom:none; }
+  .trow .kw{ font-weight:600; }
+  .trow .pos{ font-family:"DM Mono",monospace; text-align:right; }
+  .trow .delta{ font-family:"DM Mono",monospace; text-align:right; font-weight:600; }
+  .trow .delta.up{ color:var(--gain-ink); }
+  .trow .delta.down{ color:var(--loss-ink); }
+  .spark{ height:20px; }
+  .ticker-note{ margin:0.9rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:44rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"DM Mono",monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--gain-ink); border-left-color:var(--gain); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"DM Mono",monospace; font-size:0.8rem; color:var(--gain-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .bell{ position:relative; background:var(--loss-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .bell::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--loss); border-radius:2px; }
+  .bell-label{ font-family:"DM Mono",monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--loss-ink); font-weight:700; margin:0 0 0.3rem; }
+  .bell p{ margin:0; }
+
+  .note{ background:var(--gain-soft); border-left:3px solid var(--gain); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .note p{ margin:0; }
+  .note strong{ color:var(--gain-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"DM Mono",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"DM Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--gain-soft); border-color:var(--gain); }
+    .trow{ grid-template-columns: 1.4fr 0.6fr 0.6fr 1fr; font-size:0.78rem; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <polyline points="8,48 20,38 30,44 42,22 56,14" fill="none" stroke="var(--gain)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="56" cy="14" r="3.2" fill="var(--gain)"/>
+          <polyline points="8,20 18,26 28,18" fill="none" stroke="var(--loss)" stroke-width="1.6" opacity="0.55" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Tracking</p>
+        <h1>Organic Rank Tracker, at the bell</h1>
+        <p class="dek">Every tracked keyword is a position on the board — climbing, holding, or
+          sliding. Read it like a floor trader reads a ticker, not like a static report.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">Data sources</span></div>
+      <div class="meta-item"><span class="meta-num tnum">9</span><span class="meta-label">Tabs</span></div>
+      <div class="meta-item"><span class="meta-num tnum">4</span><span class="meta-label">Alert triggers</span></div>
+    </div>
+    <div class="ticker-wrap">
+      <p class="ticker-cap">The board — four tracked keywords, this morning</p>
+      <div class="ticker">
+        <div class="trow"><span class="kw">roof repair springfield</span><span class="pos tnum">#3</span><span class="delta up tnum">▲ 4</span><svg class="spark" viewBox="0 0 100 20" preserveAspectRatio="none"><polyline points="0,16 20,14 40,10 60,11 80,6 100,4" fill="none" stroke="var(--gain)" stroke-width="2"/></svg></span>
+        <div class="trow"><span class="kw">emergency plumber</span><span class="pos tnum">#11</span><span class="delta down tnum">▼ 6</span><svg class="spark" viewBox="0 0 100 20" preserveAspectRatio="none"><polyline points="0,4 20,6 40,8 60,12 80,15 100,17" fill="none" stroke="var(--loss)" stroke-width="2"/></svg></span>
+        <div class="trow"><span class="kw">hvac repair near me</span><span class="pos tnum">#7</span><span class="delta tnum" style="color:var(--ink-faint)">— 0</span><svg class="spark" viewBox="0 0 100 20" preserveAspectRatio="none"><polyline points="0,10 20,9 40,11 60,10 80,10 100,9" fill="none" stroke="var(--ink-faint)" stroke-width="2"/></svg></span>
+        <div class="trow"><span class="kw">roof inspection cost</span><span class="pos tnum">#19</span><span class="delta up tnum">▲ 9</span><svg class="spark" viewBox="0 0 100 20" preserveAspectRatio="none"><polyline points="0,17 20,14 40,10 60,9 80,7 100,3" fill="none" stroke="var(--gain)" stroke-width="2"/></svg></span>
+      </div>
+      <p class="ticker-note">Lower is better here — position #3 beats #11. A red alert bell rings
+        on a real drop; a quiet slide over weeks rings a different, gentler one.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Track keywords</a></li>
+        <li><a href="#s3" data-target="s3">03 · Read the Overview</a></li>
+        <li><a href="#s4" data-target="s4">04 · Work a keyword row</a></li>
+        <li><a href="#s5" data-target="s5">05 · Rankability &amp; SERP Trends</a></li>
+        <li><a href="#s6" data-target="s6">06 · Alerts</a></li>
+        <li><a href="#s7" data-target="s7">07 · Reports</a></li>
+        <li><a href="#s8" data-target="s8">08 · Troubleshooting</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">This tracks Google <strong>organic</strong> (blue-link) positions —
+          never Maps/local-pack, that's the separate Maps Ranker. It works with or without Search
+          Console connected, but it's a materially different tool either way.</p>
+        <table><tbody>
+          <tr><td class="term">With GSC</td><td>Overview, Pages, and Brand search tabs unlock; real click/impression numbers throughout; green "Search Console" pill.</td></tr>
+          <tr><td class="term">Without GSC</td><td>Those three tabs are hidden; you land on Keywords by default; rank comes from a weekly DataForSEO live check; blue "DataForSEO" pill.</td></tr>
+        </tbody></table>
+        <p>Not freeze-gated — the tracker keeps working during a client freeze; a freeze pauses
+          output, not observation.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Track keywords</h2></div>
+        <p><strong>Track keywords</strong> — one per line or comma-separated. <strong>Import
+          CSV</strong> reads the first column. <strong>Refresh live ranks</strong> enqueues a
+          background DataForSEO pull for keywords GSC doesn't cover. After adding your first
+          keywords, a banner offers to <strong>Run rankability</strong> right away.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Read the Overview</h2></div>
+        <p>(GSC-connected clients only.) A plain-English headline + narrative, KPI cards, status
+          chips (Climbing / Stable / Volatile / Dropping / At risk / Not in top 100 / No data),
+          <strong>Striking distance</strong> (untracked page-2 opportunities, one-click Track),
+          and <strong>Needs attention</strong> — the top 8 keywords sorted by urgency.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Work a keyword row</h2></div>
+        <p>Click a row to expand: a position chart, point-in-time ranks, and a landing-page
+          breakdown with a <strong>Pin</strong> button if the keyword ranks on more than one
+          page. Icon buttons: camera (SERP Snapshot — the AI Overview, top-10, per-domain
+          authority), bar chart (Organic Rank Analysis report — needs a snapshot first), gauge
+          (Authority report DR/UR/RD), trash (stop tracking). A deindex-risk keyword shows a
+          colored banner with a <strong>Check index</strong> button.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Rankability &amp; SERP Trends</h2></div>
+        <p><strong>Rankability</strong> — a 0–100 winnability score per keyword, sorted by
+          <strong>Quick wins</strong> (default), Rankability, or Potential value; a keyword
+          already top-3 is deliberately excluded — no upside left to capture.
+          <strong>SERP Trends</strong> — signal/enhancement prevalence over time, a
+          "what changed since last capture" digest, and a scrubbable per-keyword timeline.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Alerts</h2></div>
+        <div class="bell">
+          <p class="bell-label">four bells, not one</p>
+          <p>A 6+ spot weekly drop from top-15, falling off page 1, a 6+ spot 30-day drop from
+            ~top 20, or a gradual multi-week slide — plus deindexing. Each clears automatically
+            once the keyword recovers.</p>
+        </div>
+        <p><strong>Mark all read</strong> clears the unread badge; individual rows get Read or
+          Dismiss.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Reports</h2></div>
+        <p>(GSC-connected only.) Schedule: As needed / Weekly / Monthly / Every N days, plus an
+          optional Google Doc delivery. <strong>Generate now</strong> for an on-demand report.</p>
+        <div class="note">
+          <p>Every open drop, quick win, and hidden win surfaces automatically on the client's
+            <strong>Action Plan</strong> — you don't have to go looking for it separately.</p>
+        </div>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Overview/Pages/Brand search missing</td><td>No verified GSC property — the tool runs DataForSEO-only.</td></tr>
+          <tr><td class="term">A snapshot/report says "still processing"</td><td>Real background jobs — the page stops polling after a few minutes but the job keeps running.</td></tr>
+          <tr><td class="term">A #1 keyword isn't a "quick win"</td><td>Deliberate — nothing left to capture.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Start tracking a keyword</td><td>Keywords → <strong>Track keywords</strong></td></tr>
+            <tr><td class="term">See what needs attention</td><td>Overview → "Needs attention"</td></tr>
+            <tr><td class="term">Diagnose a drop</td><td>Camera icon (snapshot) or bar-chart icon (analysis)</td></tr>
+            <tr><td class="term">Confirm deindexing</td><td><strong>Check index</strong></td></tr>
+            <tr><td class="term">Find realistic quick wins</td><td>Rankability → sort by Quick wins</td></tr>
+            <tr><td class="term">Send a report</td><td>Reports → Generate now, or a schedule</td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Organic Rank Tracker Field Guide · AR Tools new-hire series · full text at <code>docs/organic-rank-tracker-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

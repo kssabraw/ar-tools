@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A case-file walkthrough for Domain Intelligence — the dossier on any domain, competitor or otherwise.">
+<title>Domain Intelligence Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&family=Nunito+Sans:wght@400;500;600;700&family=Cousine:wght@400;700&display=swap">
+<style>
+  :root{
+    --paper:#EDE6D3; --paper-raised:#F8F3E4; --ink:#241F16; --ink-soft:#5C5340; --ink-faint:#948A6D;
+    --line:#DBCFA9; --line-strong:#C4B786;
+    --classified:#9E2B25; --classified-ink:#701D19; --classified-soft:#F0D9D6;
+    --manila:#A6803D; --manila-ink:#785B29; --manila-soft:#EBDFC0;
+    --shadow: 0 1px 2px rgba(36,31,22,0.08), 0 10px 26px rgba(36,31,22,0.07); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#191509; --paper-raised:#211C10; --ink:#EBE2C6; --ink-soft:#B7AC88; --ink-faint:#7C7355;
+      --line:#362E19; --line-strong:#483D21;
+      --classified:#D97972; --classified-ink:#EFACA6; --classified-soft:#331D1A;
+      --manila:#D2AC5E; --manila-ink:#EBCB92; --manila-soft:#332911;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#191509; --paper-raised:#211C10; --ink:#EBE2C6; --ink-soft:#B7AC88; --ink-faint:#7C7355;
+    --line:#362E19; --line-strong:#483D21;
+    --classified:#D97972; --classified-ink:#EFACA6; --classified-soft:#331D1A;
+    --manila:#D2AC5E; --manila-ink:#EBCB92; --manila-soft:#332911;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Nunito Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Lora", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--classified-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--classified); outline-offset:2px; }
+  code,.mono{ font-family:"Cousine", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Cousine",monospace; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--classified-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Lora",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Cousine",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Case file tab — the one diagram only this subject has */
+  .file{ padding:1.9rem 0 2.1rem; }
+  .file-cap{ font-family:"Cousine",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .folder{ max-width:560px; position:relative; }
+  .tab{ display:inline-block; background:var(--manila-soft); border:1px solid var(--manila); border-bottom:none; border-radius:4px 4px 0 0; padding:0.35rem 1rem; font-family:"Cousine",monospace; font-size:0.7rem; letter-spacing:0.05em; text-transform:uppercase; color:var(--manila-ink); font-weight:700; }
+  .dossier{ background:var(--paper-raised); border:1px solid var(--manila); border-radius:0 4px 4px 4px; box-shadow:var(--shadow); padding:1.1rem 1.3rem 1.2rem; }
+  .drow{ display:flex; justify-content:space-between; gap:1rem; padding:0.42rem 0; border-bottom:1px dashed var(--line-strong); font-size:0.86rem; }
+  .drow:last-child{ border-bottom:none; }
+  .drow .k{ color:var(--ink-faint); font-family:"Cousine",monospace; font-size:0.74rem; }
+  .drow .v{ font-weight:600; text-align:right; }
+  .drow .v.gap{ color:var(--classified-ink); }
+  .file-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:44rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Cousine",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--classified-ink); border-left-color:var(--classified); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Cousine",monospace; font-size:0.78rem; color:var(--classified-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .redact{ position:relative; background:var(--classified-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .redact::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--classified); border-radius:2px; }
+  .redact-label{ font-family:"Cousine",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--classified-ink); font-weight:700; margin:0 0 0.3rem; }
+  .redact p{ margin:0; }
+
+  .brief{ background:var(--manila-soft); border-left:3px solid var(--manila); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .brief p{ margin:0; }
+  .brief strong{ color:var(--manila-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Cousine",monospace; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Cousine",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--classified-soft); border-color:var(--classified); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <path d="M8 20 L8 48 L52 48 L56 24 L24 24 L20 20 Z" fill="var(--manila-soft)" stroke="var(--manila)" stroke-width="1.4"/>
+          <circle cx="42" cy="36" r="8" fill="none" stroke="var(--ink)" stroke-width="1.6"/>
+          <line x1="48" y1="42" x2="55" y2="49" stroke="var(--ink)" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Tracking</p>
+        <h1>Domain Intelligence, open the file</h1>
+        <p class="dek">Point it at any domain — competitor, prospect, or the client's own — and
+          pull the dossier: traffic, keywords, authority, and exactly where the gaps are.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">3</span><span class="meta-label">Modes live today</span></div>
+      <div class="meta-item"><span class="meta-num tnum">24</span><span class="meta-label">Hour snapshot cache</span></div>
+      <div class="meta-item"><span class="meta-num tnum">200</span><span class="meta-label">Calls/day, shared</span></div>
+    </div>
+    <div class="file">
+      <p class="file-cap">A snapshot, opened</p>
+      <div class="folder">
+        <span class="tab">domain lookup · competitor</span>
+        <div class="dossier">
+          <div class="drow"><span class="k">Est. monthly traffic</span><span class="v tnum">18,400</span></div>
+          <div class="drow"><span class="k">Ranked keywords</span><span class="v tnum">2,110</span></div>
+          <div class="drow"><span class="k">Domain Rating</span><span class="v tnum">41</span></div>
+          <div class="drow"><span class="k">Referring domains</span><span class="v tnum">380</span></div>
+          <div class="drow"><span class="k">Keywords they rank, we don't</span><span class="v gap tnum">126 open</span></div>
+        </div>
+      </div>
+      <p class="file-note">The same file structure works on a competitor, a prospect, or the
+        client's own site — the only thing that changes is which role you file it under.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Domain lookup</a></li>
+        <li><a href="#s3" data-target="s3">03 · Keyword gap</a></li>
+        <li><a href="#s4" data-target="s4">04 · Discover</a></li>
+        <li><a href="#s5" data-target="s5">05 · Snapshots &amp; budget</a></li>
+        <li><a href="#s6" data-target="s6">06 · Troubleshooting</a></li>
+        <li><a href="#s7" data-target="s7">07 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">Any logged-in user can open a file, but every action spends from a
+          <strong>shared daily budget</strong> (200 calls/day, agency-wide) — the page header
+          always shows "Budget left today: N calls," red at zero.</p>
+        <p>Standalone (sidebar entry) gives Domain lookup only. Opened from a client workspace,
+          Keyword gap and Discover unlock too, since those need the client's registered
+          competitors in <strong>Competitive Intel</strong>.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Domain lookup</h2></div>
+        <p>Type a domain, pick a role — Competitor / Prospect / Own site — and click
+          <strong>Analyze</strong>. Auto-prefills the client's own hostname on first load. Once a
+          snapshot exists: <strong>Overview</strong> (traffic, keywords, DR, RD, traffic value,
+          content-mix bar), <strong>Ranked Keywords</strong> (keyword/position/volume/CPC/KD/
+          intent/value), <strong>Pages</strong> (grouped by ranking URL). Each has its own
+          <strong>Export CSV</strong>.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Keyword gap</h2></div>
+        <p>"Keywords your registered competitors rank for that {client} doesn't — or ranks poorly
+          for." <strong>Run gap analysis</strong> tags each row <strong>missing</strong> or
+          <strong>weak</strong>, with an opportunity score. No competitors registered? A note
+          points you at Competitive Intel first.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Discover</h2></div>
+        <p>"Domains that share the most search results with {client}." <strong>Find
+          competitors</strong> (one paid call) lists domain/shared keywords/avg position/organic
+          keywords, each with an <strong>Add</strong> button that registers it in Competitive
+          Intel — already-registered domains show green "Registered" instead.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Snapshots &amp; budget</h2></div>
+        <div class="redact">
+          <p class="redact-label">the file doesn't re-open itself for free, but close does</p>
+          <p>A snapshot caches for <strong>24 hours</strong> — re-analyzing the same domain inside
+            that window is free and silently re-serves the stored snapshot. There's no
+            "force refresh" button in this version of the UI.</p>
+        </div>
+        <div class="brief">
+          <p>The <strong>Backlink Gap</strong> analysis is built on the backend but has no button
+            in this version of the frontend — Domain lookup, Keyword gap, and Discover are the
+            three live modes today.</p>
+        </div>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Keyword gap / Discover tabs missing</td><td>They only render inside a client workspace, not the standalone sidebar entry.</td></tr>
+          <tr><td class="term">Discover says "client website unknown"</td><td>Set a website URL on the client record first.</td></tr>
+          <tr><td class="term">Every button greyed out</td><td>The shared daily budget is exhausted — resets the next day.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Look up any domain</td><td>Domain lookup tab</td></tr>
+            <tr><td class="term">Find keyword gaps vs. competitors</td><td>Keyword gap → <strong>Run gap analysis</strong></td></tr>
+            <tr><td class="term">Discover new competitors</td><td>Discover → <strong>Find competitors</strong></td></tr>
+            <tr><td class="term">See top-traffic pages</td><td>Domain lookup → Pages sub-tab</td></tr>
+            <tr><td class="term">Check remaining budget</td><td>Top of the page</td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Domain Intelligence Field Guide · AR Tools new-hire series · full text at <code>docs/domain-intelligence-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

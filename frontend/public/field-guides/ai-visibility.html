@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A broadcast-desk walkthrough for AI Visibility — is the signal getting picked up on six stations?">
+<title>AI Visibility Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;500;600;700&family=Figtree:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --paper:#ECEBF1; --paper-raised:#F9F8FC; --ink:#201E29; --ink-soft:#565467; --ink-faint:#8C8A9B;
+    --line:#D8D6E2; --line-strong:#C1BED0;
+    --signal:#6B4FA0; --signal-ink:#4A3573; --signal-soft:#E2DAF0;
+    --static:#2E8C8C; --static-ink:#1F5F5F; --static-soft:#DAEAEA;
+    --shadow: 0 1px 2px rgba(32,30,41,0.08), 0 10px 26px rgba(32,30,41,0.07); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#161520; --paper-raised:#1E1D29; --ink:#E5E3EE; --ink-soft:#ADAABE; --ink-faint:#726F82;
+      --line:#2C2A38; --line-strong:#3C3948;
+      --signal:#A78BD1; --signal-ink:#D3C1EA; --signal-soft:#2A2038;
+      --static:#5EB8B8; --static-ink:#9FDBDB; --static-soft:#132A2A;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#161520; --paper-raised:#1E1D29; --ink:#E5E3EE; --ink-soft:#ADAABE; --ink-faint:#726F82;
+    --line:#2C2A38; --line-strong:#3C3948;
+    --signal:#A78BD1; --signal-ink:#D3C1EA; --signal-soft:#2A2038;
+    --static:#5EB8B8; --static-ink:#9FDBDB; --static-soft:#132A2A;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Figtree", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Crimson Pro", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--signal-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--signal); outline-offset:2px; }
+  code,.mono{ font-family:"Spline Sans Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Spline Sans Mono",monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--signal-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Crimson Pro",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Spline Sans Mono",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Signal bars — the one diagram only this subject has */
+  .dial{ padding:1.9rem 0 2.1rem; }
+  .dial-cap{ font-family:"Spline Sans Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .stations{ display:flex; gap:1.6rem; flex-wrap:wrap; align-items:flex-end; }
+  .station{ display:flex; flex-direction:column; align-items:center; gap:0.5rem; }
+  .bars{ display:flex; align-items:flex-end; gap:3px; height:64px; }
+  .bar{ width:8px; border-radius:2px 2px 0 0; background:var(--line-strong); }
+  .bar.on{ background:var(--signal); }
+  .station-name{ font-family:"Spline Sans Mono",monospace; font-size:0.66rem; color:var(--ink-soft); text-align:center; }
+  .dial-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:44rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Spline Sans Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--signal-ink); border-left-color:var(--signal); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Spline Sans Mono",monospace; font-size:0.78rem; color:var(--signal-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .noise{ position:relative; background:var(--signal-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .noise::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--signal); border-radius:2px; }
+  .noise-label{ font-family:"Spline Sans Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--signal-ink); font-weight:700; margin:0 0 0.3rem; }
+  .noise p{ margin:0; }
+
+  .clear{ background:var(--static-soft); border-left:3px solid var(--static); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .clear p{ margin:0; }
+  .clear strong{ color:var(--static-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Spline Sans Mono",monospace; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Spline Sans Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--signal-soft); border-color:var(--signal); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="4" fill="var(--signal)"/>
+          <path d="M32 32 A12 12 0 0 1 44 44" fill="none" stroke="var(--signal)" stroke-width="2" opacity="0.7"/>
+          <path d="M32 32 A20 20 0 0 1 52 52" fill="none" stroke="var(--signal)" stroke-width="1.6" opacity="0.4"/>
+          <path d="M32 32 A12 12 0 0 0 20 20" fill="none" stroke="var(--static)" stroke-width="2" opacity="0.4"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Tracking</p>
+        <h1>AI Visibility, on the dial</h1>
+        <p class="dek">Six AI assistants, each its own station. Does the brand come through when
+          someone tunes in and asks — or is it just static?</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">6</span><span class="meta-label">Engines monitored</span></div>
+      <div class="meta-item"><span class="meta-num tnum">70/40</span><span class="meta-label">Health score bands</span></div>
+      <div class="meta-item"><span class="meta-num tnum">4</span><span class="meta-label">Tabs</span></div>
+    </div>
+    <div class="dial">
+      <p class="dial-cap">One keyword, six stations tuned in</p>
+      <div class="stations">
+        <div class="station"><div class="bars"><div class="bar on" style="height:20%"></div><div class="bar on" style="height:40%"></div><div class="bar on" style="height:65%"></div><div class="bar on" style="height:85%"></div><div class="bar on" style="height:100%"></div></div><div class="station-name">ChatGPT</div></div>
+        <div class="station"><div class="bars"><div class="bar on" style="height:20%"></div><div class="bar on" style="height:40%"></div><div class="bar on" style="height:65%"></div><div class="bar" style="height:85%"></div><div class="bar" style="height:100%"></div></div><div class="station-name">Claude</div></div>
+        <div class="station"><div class="bars"><div class="bar on" style="height:20%"></div><div class="bar" style="height:40%"></div><div class="bar" style="height:65%"></div><div class="bar" style="height:85%"></div><div class="bar" style="height:100%"></div></div><div class="station-name">Gemini</div></div>
+        <div class="station"><div class="bars"><div class="bar on" style="height:20%"></div><div class="bar on" style="height:40%"></div><div class="bar on" style="height:65%"></div><div class="bar on" style="height:85%"></div><div class="bar" style="height:100%"></div></div><div class="station-name">Perplexity</div></div>
+        <div class="station"><div class="bars"><div class="bar" style="height:20%"></div><div class="bar" style="height:40%"></div><div class="bar" style="height:65%"></div><div class="bar" style="height:85%"></div><div class="bar" style="height:100%"></div></div><div class="station-name">AI Overview</div></div>
+        <div class="station"><div class="bars"><div class="bar" style="height:20%"></div><div class="bar" style="height:40%"></div><div class="bar" style="height:65%"></div><div class="bar" style="height:85%"></div><div class="bar" style="height:100%"></div></div><div class="station-name">AI Mode</div></div>
+      </div>
+      <p class="dial-note">Four stations pick it up, two don't — that's a real, checkable
+        pattern, not noise. The mention matrix on the Overview tab is exactly this reading, per
+        keyword.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Run a scan</a></li>
+        <li><a href="#s3" data-target="s3">03 · Read the Overview</a></li>
+        <li><a href="#s4" data-target="s4">04 · Diagnose a silence</a></li>
+        <li><a href="#s5" data-target="s5">05 · Keywords &amp; Competitors</a></li>
+        <li><a href="#s6" data-target="s6">06 · Reports</a></li>
+        <li><a href="#s7" data-target="s7">07 · Schedule</a></li>
+        <li><a href="#s8" data-target="s8">08 · Troubleshooting</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">Tracks whether a brand gets <strong>mentioned</strong> when six AI
+          assistants — ChatGPT, Claude, Gemini, Perplexity, Google AI Overview, Google AI Mode —
+          answer the client's tracked keywords. Not a rank position; visibility is the share of
+          scanned answers that mention the brand, weighted by classifier confidence.</p>
+        <p>You need at least one active keyword to scan. Competitors are optional and free to
+          include — re-classified from the same answers, no extra scan.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Run a scan</h2></div>
+        <p><strong>Run scan</strong> opens a dialog: per-engine checkboxes (all six preselected —
+          no cost reason to narrow), <strong>Include competitors</strong>, and a live summary
+          ("N keywords × M engines = T answers scanned"). Close the dialog and it keeps running;
+          reopening the page reconnects automatically.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Read the Overview</h2></div>
+        <p>A <strong>Global Health Score</strong> arc gauge (≥70 "Healthy," ≥40 "Partial," below
+          "Invisible"), Visibility Share, Keywords Tracked, Engines Monitored. The
+          <strong>mention matrix</strong> — one row per keyword, one column per engine — reads:
+          ✓ found, ✗ not found, "!" scan failed, a pulsing dot pending, or a slashed circle
+          (Google generated no AI answer at all for that search — excluded from the score, not a
+          miss).</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Diagnose a silence</h2></div>
+        <p>Click a red ✗ cell to open the detail sheet: mention type, sentiment, confidence, a
+          possible-misinformation flag, and a <strong>"Why invisible"</strong> section with an
+          AI-generated diagnosis.</p>
+        <div class="noise">
+          <p class="noise-label">the diagnosis can go quiet too</p>
+          <p>It's a separate, best-effort call that can independently fail — and it deliberately
+            won't auto-retry, so a failure doesn't silently burn another paid call.</p>
+        </div>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Keywords &amp; Competitors</h2></div>
+        <p><strong>Suggest AI queries</strong> (grounded on the client's profile) or
+          <strong>Import from rank tracker</strong> to pull in existing keywords. Competitors add
+          by name and cost nothing extra — they ride the same scanned answers.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Reports</h2></div>
+        <p><strong>Google Doc</strong> — a per-engine + matrix + narrative report to the client's
+          Drive folder. <strong>Export report</strong> — a white-label HTML report over a date
+          range, with Preview/Download/Print. <strong>Export CSV</strong> — the full raw scan
+          history.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Schedule</h2></div>
+        <p>Off / Weekly / Monthly, a day + hour (UTC), and an Include-competitors checkbox.</p>
+        <div class="clear">
+          <p>The comparison card always shows the newest scan that <em>did</em> include
+            competitors — a brand-only scan in between doesn't blank it.</p>
+        </div>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">A slashed-circle cell</td><td>No AI answer generated at all for that search — excluded from the score, not a miss.</td></tr>
+          <tr><td class="term">Can't click into a competitor's diagnosis</td><td>Competitor cells are re-classifications, not independently scanned — the drill-down is brand-specific only.</td></tr>
+          <tr><td class="term">Closed the scan dialog</td><td>It keeps running server-side regardless.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Run a scan</td><td>Overview → <strong>Run scan</strong></td></tr>
+            <tr><td class="term">See per-engine mentions</td><td>The mention matrix</td></tr>
+            <tr><td class="term">Understand a silence</td><td>Click a red ✗ cell</td></tr>
+            <tr><td class="term">Compare to a competitor</td><td>"Show visibility for" dropdown</td></tr>
+            <tr><td class="term">Publish a client report</td><td><strong>Google Doc</strong> or <strong>Export report</strong></td></tr>
+            <tr><td class="term">Turn on recurring scans</td><td>Schedule tab</td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">AI Visibility Field Guide · AR Tools new-hire series · full text at <code>docs/ai-visibility-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>
