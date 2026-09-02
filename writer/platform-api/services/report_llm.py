@@ -160,20 +160,45 @@ def _provider_key_ok(provider: str) -> bool:
     }.get(provider))
 
 
+def parse_key_pool(raw: Optional[str]) -> list[str]:
+    """Comma-separated key list → ordered, de-duplicated, stripped. Pure."""
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        key = part.strip()
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
+def anthropic_account_keys(
+    primary: str, secondary: str, pool: Optional[str], enabled: bool,
+) -> list[str]:
+    """Ordered Anthropic account keys: the primary first, then the pool
+    (`anthropic_api_keys`) and the legacy secondary, de-duplicated, only when
+    failover is enabled. The primary slot is always kept (even empty) so callers
+    that build one client per key still build exactly one when nothing else is
+    configured. Pure; shared by this module and `anthropic_failover`."""
+    keys = [primary]
+    if not enabled:
+        return keys
+    for key in [*parse_key_pool(pool), secondary]:
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
 def _anthropic_keys() -> list[str]:
     """Ordered Anthropic account keys to try before advancing off the anthropic
-    provider: the primary, then the secondary account (same models, more
-    capacity) when failover is enabled and its key is set + distinct. This is the
-    second-account axis the owner asked for — tried FIRST, ahead of any
-    cross-provider (OpenAI/Gemini) fallback."""
-    keys = [settings.anthropic_api_key]
-    secondary = getattr(settings, "anthropic_api_key_secondary", "")
-    if (
-        getattr(settings, "anthropic_key_failover_enabled", True)
-        and secondary
-        and secondary != settings.anthropic_api_key
-    ):
-        keys.append(secondary)
+    provider: the primary, then every further account (same models, more
+    capacity) when failover is enabled. This is the second-account axis the
+    owner asked for — tried FIRST, ahead of any cross-provider (OpenAI/Gemini)
+    fallback — generalised to an N-account pool on 2026-09-02."""
+    keys = anthropic_account_keys(
+        settings.anthropic_api_key,
+        getattr(settings, "anthropic_api_key_secondary", ""),
+        getattr(settings, "anthropic_api_keys", ""),
+        getattr(settings, "anthropic_key_failover_enabled", True),
+    )
     return [k for k in keys if k]
 
 

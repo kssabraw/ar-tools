@@ -117,12 +117,22 @@ _CLAIM_SCAN_LIMIT = 10
 
 
 async def _claim_next_job(
-    job_types: list[str] | None = None, exclude_types: list[str] | None = None
+    job_types: list[str] | None = None,
+    exclude_types: list[str] | None = None,
+    priority_min: int | None = None,
+    priority_max: int | None = None,
 ) -> dict | None:
-    """Claim the oldest claimable pending job (optionally restricted to
-    `job_types` — the interactive/fanout lane's filter — or with `exclude_types`
-    held back for the MAIN lane, so long dedicated-lane jobs never block it) and
-    atomically mark it running.
+    """Claim the highest-priority, then oldest, claimable pending job (optionally
+    restricted to `job_types` — the interactive/fanout lane's filter — or with
+    `exclude_types` held back for the MAIN lane, so long dedicated-lane jobs
+    never block it) and atomically mark it running.
+
+    Ordering is `priority DESC, scheduled_at ASC` (see `services/job_priority.py`):
+    an interactive job (0) beats a bulk-batch item (-1) however old the batch
+    rows are — the old scheduled_at stagger decayed within ~7 jobs of a batch and
+    left clicks queued behind 30+ page generations. `priority_min` /
+    `priority_max` fence a lane to a band: the INTERACTIVE lane claims only
+    `>= 0` so it is always free for a click; the BULK lanes claim only `<= -1`.
 
     Scans a small window of the oldest rows rather than just the single oldest:
     an exhausted (`attempts >= max_attempts`) pending row would otherwise sit at
@@ -138,7 +148,14 @@ async def _claim_next_job(
             query = query.in_("job_type", job_types)
         if exclude_types:
             query = query.not_.in_("job_type", exclude_types)
-        result = query.order("scheduled_at").limit(_CLAIM_SCAN_LIMIT).execute()
+        if priority_min is not None:
+            query = query.gte("priority", priority_min)
+        if priority_max is not None:
+            query = query.lte("priority", priority_max)
+        result = (
+            query.order("priority", desc=True).order("scheduled_at")
+            .limit(_CLAIM_SCAN_LIMIT).execute()
+        )
         jobs = result.data or []
 
         for job in jobs:
@@ -1064,6 +1081,8 @@ async def job_worker(
     job_types: list[str] | None = None,
     lane: str = "main",
     exclude_types: list[str] | None = None,
+    priority_min: int | None = None,
+    priority_max: int | None = None,
 ) -> None:
     """Background loop: poll async_jobs every N seconds and process one job per tick.
 
@@ -1072,7 +1091,10 @@ async def job_worker(
     Fanout pipeline jobs, which get their own dedicated lane so a ~10-min run
     can't stall the reaper or other background work (issue #686). The INTERACTIVE
     lane is restricted to short, user-awaited job types (`interactive_job_types`)
-    so a just-clicked action never waits behind a long background job.
+    AND to non-background priority, so a just-clicked action never waits behind a
+    long background job or a bulk batch. The BULK lanes (`bulk_lane_workers`
+    wide) claim only background-priority rows — a batch's throughput is that
+    knob, not "whichever lanes happen to be idle" (2026-09-02).
     The claim's status='pending' guard makes the lanes race-safe.
     """
     interval = settings.job_worker_poll_interval_seconds
@@ -1082,7 +1104,7 @@ async def job_worker(
         try:
             if lane == "main":
                 await _reap_stale_jobs()
-            job = await _claim_next_job(job_types, exclude_types)
+            job = await _claim_next_job(job_types, exclude_types, priority_min, priority_max)
             if job:
                 logger.info(
                     "async_job_claimed",

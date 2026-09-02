@@ -28,7 +28,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import ecommerce_facts_cache
+from services import ecommerce_facts_cache, job_priority
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -969,6 +969,7 @@ async def enqueue_generate_bulk(
             "job_type": "ecommerce_generate",
             "entity_id": client_id,
             "scheduled_at": _bulk_scheduled_at(len(rows)),
+            "priority": job_priority.BACKGROUND,
             "payload": {
                 "client_id": client_id, "keyword": kw.strip(), "page_type": ptype,
                 "source_url": None, "product_input": None, "notes": note, "user_id": user_id,
@@ -1002,6 +1003,7 @@ async def enqueue_reoptimize_bulk(
             "job_type": "ecommerce_reoptimize_url",
             "entity_id": client_id,
             "scheduled_at": _bulk_scheduled_at(len(rows)),
+            "priority": job_priority.BACKGROUND,
             "payload": {
                 "client_id": client_id, "page_url": page_url,
                 "keyword": (t.get("keyword") or "").strip(),

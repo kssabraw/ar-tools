@@ -71,6 +71,7 @@ from routers.tasks import router as tasks_router
 from routers.users import router as users_router
 from routers.websites import router as websites_router
 from services.gsc_scheduler import gsc_scheduler
+from services import job_priority
 from services.job_worker import drain_inflight_jobs, job_worker
 from services.orchestrator import recover_stuck_runs
 
@@ -169,7 +170,10 @@ async def lifespan(app: FastAPI):
     )
     interactive_worker_task = (
         asyncio.create_task(
-            job_worker(job_types=list(settings.interactive_job_types), lane="interactive")
+            job_worker(
+                job_types=list(settings.interactive_job_types), lane="interactive",
+                priority_min=job_priority.INTERACTIVE,  # never a bulk-batch item
+            )
         )
         if settings.interactive_job_types
         else None
@@ -182,6 +186,18 @@ async def lifespan(app: FastAPI):
     fanout_worker_tasks = [
         asyncio.create_task(job_worker(job_types=_fanout_types, lane="fanout"))
         for _ in range(_fanout_worker_count)
+    ]
+    # BULK lanes (2026-09-02): claim only background-priority rows (bulk-create /
+    # matrix / reoptimize-bulk items), `bulk_lane_workers` wide, so a batch's
+    # throughput is a config knob. The MAIN lane still picks a bulk row up when
+    # nothing else is pending (priority ordering), and the INTERACTIVE lane
+    # never does, so a click stays fast while a batch grinds.
+    bulk_worker_tasks = [
+        asyncio.create_task(
+            job_worker(lane="bulk", exclude_types=_fanout_types or None,
+                       priority_max=job_priority.BACKGROUND)
+        )
+        for _ in range(max(0, settings.bulk_lane_workers))
     ]
     scheduler_task = asyncio.create_task(gsc_scheduler())
     # Start the Topic Fanout in-process content scheduler (its own asyncio loop;
@@ -216,7 +232,7 @@ async def lifespan(app: FastAPI):
     tasks = [
         t
         for t in (worker_task, interactive_worker_task, scheduler_task,
-                  *fanout_worker_tasks)
+                  *fanout_worker_tasks, *bulk_worker_tasks)
         if t
     ]
     for task in tasks:
