@@ -4,6 +4,13 @@
 records the decisions reached during the design grill; it is authoritative for the
 module's scope and shape. Implementation has not started.
 
+**Review corrections (2026-09-02):** this revision applies fixes from an adversarial
+review of v1.0 — the image model is switched to **nano-banana Pro (Gemini 3 Pro
+Image)** for per-platform aspect-ratio control (§4/§6/§11/§13), the budget meter's
+fail-closed template is corrected to `autonomy_budget.reserve` (§3), and there are
+data-model, token-ownership, scope, and failure/edge-path clarifications
+(§3/§5/§6/§10/§13/§14).
+
 **Companion docs:**
 - `docs/modules/social-media-module-context.md` — the domain glossary (Source,
   Angle, Draft, Post, Calendar, Cadence, Social Account, Competitor Signal, Social
@@ -77,10 +84,14 @@ Rides all standard rails — no new infrastructure:
   `FREEZE_GATED_JOB_TYPES`; routers call `assert_not_frozen`. Research/observation
   keeps running under freeze; output pauses.
 - **Per-module paid-call budget meter** — a `social_usage(day, calls)` table +
-  `reserve_social_calls` RPC (the keyword_research/domain_intel pattern),
-  fail-closed for spend.
+  `reserve_social_calls` RPC. **Copy `autonomy_budget.reserve` — fail-CLOSED on RPC
+  error (a failed reservation must never spend) — NOT `keyword_research.reserve_budget`,
+  which is fail-OPEN on RPC error.** Every paid external call (Apify / TwelveLabs /
+  nano-banana Pro / posting provider) reserves before it spends.
 - **The one genuinely new plumbing:** per-client, per-platform **Social Account**
-  connections and their tokens (held by the posting provider).
+  connections. The per-account OAuth tokens are **held by the posting provider, not
+  stored by us** — `social_accounts` keeps only the provider's `adapter_account_id`
+  (deliberate: we don't want a platform-credential store to secure).
 
 ## 4. External services
 
@@ -92,13 +103,14 @@ posture per service:
 | **PostPeer** | Publish to the client's accounts; hosts per-account OAuth | Indie/early — **behind a swappable adapter**; Ayrshare the fallback. Confirm: publishes under own reviewed apps? who pays the X link tax? |
 | **Apify** | Scrape public competitor posts (per-platform actors) | Logged-out public content, **content not identities**; per-result pricing; retention-bound any personal data. |
 | **TwelveLabs** | Analyze competitor + client video (Pegasus/Marengo) | Reliable, first-party-grade; **ingest by public URL** (no download); metered by **minutes indexed** with a per-run cap. |
-| **cobalt.tools** | Download media | **Self-hosted only**; **owned/licensed assets only** (never competitor media). |
-| **nano-banana** (Gemini 2.5 Flash Image) | Generate/edit images | Already integrated (`services/nano_banana.py`); subject-consistency for coherent sets; SynthID-watermarked; keep to client's own assets. |
+| **cobalt.tools** | Download media | **P5 dependency only** (video production) — no v1 phase consumes it, so it is NOT provisioned in P0. **Self-hosted only**; **owned/licensed assets only** (never competitor media). |
+| **nano-banana Pro** (Gemini 3 Pro Image) | Generate/edit images | Chosen over 2.5 Flash for **flexible aspect ratios** (2K/4K, e.g. 9:16 / 2:3) + strong in-image text rendering — both required by the per-platform Platform Spec (§6). The existing `services/nano_banana.py` (2.5 Flash) sends **no** `imageConfig`/`aspectRatio`, so the module needs a **Pro-based renderer that passes per-platform `aspectRatio`** (new code, not the GBP call as-is). ~$0.134/image at 1K/2K (vs ~$0.039 for 2.5 Flash) — the largest per-Draft cost line, metered. SynthID-watermarked; keep to client's own assets. |
 | **Claude Sonnet 5** | Copy + angle + image-prompt authoring | The suite's default generation model. |
 
 **Vendor facts to verify before/at Phase 0** (not decisions): PostPeer's app-review
 model + X link-tax handling; PostPeer Instagram **Stories** support (unclear);
-current TwelveLabs + nano-banana pricing; cobalt self-host on Railway.
+current TwelveLabs + nano-banana **Pro** pricing (per-image cost drives the budget);
+cobalt self-host on Railway (P5 only).
 
 ## 5. Domain / data model (sketch)
 
@@ -107,8 +119,12 @@ Indicative tables (final columns settled at build):
 
 - **`social_accounts`** — `(client_id, platform, adapter, adapter_account_id,
   handle, status, connected_at)`. One per connected platform account.
-- **`social_competitors`** — extends competitor identity with per-platform
-  **handles** (reuse/point at `client_competitors`; add handle rows).
+- **`social_competitor_handles`** — per-platform handles for a competitor, as a
+  child table keyed `(competitor_id, platform, handle)` referencing the existing
+  `client_competitors` identity — **not** bare rows on `client_competitors` itself
+  (its uniqueness indexes are partial, `WHERE domain IS NOT NULL` / `WHERE place_id
+  IS NOT NULL`, so a handle-only row with null domain **and** null place_id escapes
+  dedup and would allow duplicate competitors).
 - **`social_competitor_signals`** — per `(client, competitor, platform)`:
   themes, formats, hook patterns, cadence, top-performers (**links only**),
   rolled-up "what's working". Produced by analyze-in-place research.
@@ -131,16 +147,20 @@ Indicative tables (final columns settled at build):
 
 - **Source** — a client blog run, Local SEO/Ecommerce/Website page, keyword-research
   idea, a competitor top-performer ("make our version"), or a manual topic. Read
-  finished client content via existing helpers (`illustration._load_article`,
-  `local_seo_pages.content_html`, `syndication_rewrite.extract_source_content`,
-  etc.); reuse the reusable-image picker for assets.
+  finished client content via existing helpers — `illustration._load_article` returns
+  the article **sections** (title/keyword come from `runs.keyword`, not this helper);
+  `local_seo_pages.content_html` + `page_title`; `syndication_rewrite.extract_source_content`
+  returns `(title, markdown)` for an external URL. Reuse `list_reusable_images` for
+  assets.
 - **Angles** — 3–5 distinct editorial takes proposed by Sonnet, grounded in the
   Source + brand voice/ICP + relevant **Competitor Signals** + keyword ideas;
   multi-select; the user may hand-write one. The chosen Angle is stored on the
   Draft set.
 - **Draft fan-out** — one job produces N platform-native Drafts. **Copy is tailored
   per platform** (separate Sonnet pass each — native length/format/hashtags/CTA).
-  An optional image via nano-banana (subject-consistency for a coherent set).
+  An optional image via **nano-banana Pro**, generated at the **per-platform aspect
+  ratio** from the Platform Spec (`aspectRatio` passed to the API) so the spec
+  validator can pass it; subject-consistency for a coherent set.
   Per-platform metadata (Pinterest board+title, YouTube description, …).
 - **Platform Spec** — per-platform constraint data (char limits, aspect ratios,
   hashtag norms, CTA style, link policy) consumed by **both** the generation prompt
@@ -191,9 +211,13 @@ Indicative tables (final columns settled at build):
 
 ## 10. Autonomy (the endgame — ADR-0003)
 
-A **domain executor reusing the autonomy executor's guardrails** (tiers,
-`autonomy_policy.classify`, fail-closed budget governor, freeze, DORA veto) — not a
-new persona.
+A **domain executor that reuses the autonomy executor's guardrail *primitives***
+(`autonomy_policy.classify`, `autonomy_budget.reserve` (fail-closed), tiers, freeze,
+the DORA veto) — but **not its candidate loop**. The SEO executor's
+`gather_candidates` is remediation-reactive (it returns nothing unless a goal is
+behind/overdue), whereas social is **cadence-driven and generative**, so the
+orchestration loop below is genuinely **new code that calls the shared primitives**,
+not an extension of the existing executor. Not a new persona.
 
 - **Social Manager (orchestrator)** — a headless autonomous loop: each cycle reads
   the **Social Policy**, Cadence, goals, and Competitor Signals → plans the period →
@@ -221,6 +245,12 @@ new persona.
 - X's **$0.20/link-post tax** surfaced as a cost warning at schedule time, plus an
   optional per-client "avoid links on X" toggle.
 - PostPeer's per-post fee tracked but trivial.
+- **nano-banana Pro** per-image cost (~$0.134 at 1K/2K) is the largest per-Draft line.
+- **Model the autonomous-volume economics before P4.** At scale the X link tax
+  dominates: e.g. 20 clients × 5 posts/day, half with links ≈ 3,000 link-posts/mo ×
+  $0.20 ≈ **$600/mo in X link tax alone**, before Apify/TwelveLabs/image spend — it can
+  exceed retainer margin on small accounts once autonomy is on. The **Social Policy
+  carries a per-client monthly hard ceiling**, enforced by the fail-closed meter.
 
 ## 12. Agent integration
 
@@ -243,7 +273,8 @@ new persona.
 - **P1 — Competitor research** *(moved up to feed Angles):* Apify Signals + TwelveLabs
   analyze-in-place → Competitor Signal.
 - **P2 — Creator core:** Source → Angles → per-platform Draft fan-out, voice-enforced,
-  Platform-Spec validated.
+  Platform-Spec validated (incl. the **nano-banana Pro** renderer emitting per-platform
+  aspect ratios). cobalt is **not** provisioned here — it is a P5 dependency.
 - **P3 — Manager + full publish:** Calendar, Cadence, per-post/batch approval, the
   GBP-Posts-style publish lifecycle.
 - **P4 — Agents, autonomy, analytics:** `social` context providers, PACE tasks, opt-in
@@ -253,9 +284,18 @@ new persona.
 
 ## 14. Open items & risks
 
-- **Vendor-confirm (Phase 0):** PostPeer app-review model + X link-tax handling;
-  PostPeer Instagram Stories support; current TwelveLabs/nano-banana pricing; cobalt
-  self-host.
+- **Vendor-confirm — BLOCKING prerequisites of P0** (the P0 smoke test is the go/no-go
+  gate, not a side-quest): PostPeer's app-review model (does it publish under its own
+  reviewed Meta/X apps? if not, ADR-0001's low-friction basis inverts) + X link-tax
+  handling; PostPeer Instagram Stories support; current TwelveLabs / nano-banana **Pro**
+  pricing. cobalt self-host is a **P5** concern, not P0.
+- **Failure & edge paths to specify in the build spec** (the PRD above specifies the
+  happy path): a **Social Account token revoked between approval and scheduled publish**
+  (publish-job behavior + a connection-health model — retry / notify / hold / pause the
+  schedule); a **Source edited or unpublished after its Draft is approved** (stale
+  content on a queued Post); **partial fan-out failure** (one platform's Draft fails —
+  e.g. image gen no-ops — while the rest succeed); **empty states** (a competitor with
+  no public posts; a client with zero connected accounts entering the autonomous loop).
 - **Platform onboarding realities:** Instagram Business/Creator requirement; X link
   economics can dominate cost for link-heavy clients — model a realistic client-volume
   scenario before committing budgets.
