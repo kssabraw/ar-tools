@@ -255,6 +255,50 @@ def test_build_domain_intel_actions():
     assert rp.build_domain_intel_actions("c1", []) == []
 
 
+def test_build_domain_intel_actions_filters_navigational_and_brand():
+    from services import reopt_planner as rp
+    matchers = [{"sedgwick"}]  # the client's competitor brand
+    gaps = [
+        # navigational lookup — dropped whatever the brand
+        {"keyword": "sedgwick claim phone number", "competitor_domain": "sedgwick.com",
+         "competitor_position": 1, "client_position": None, "volume": 27100, "opportunity_score": 900},
+        # bare competitor brand — dropped
+        {"keyword": "my sedgwick", "competitor_domain": "sedgwick.com",
+         "competitor_position": 2, "client_position": None, "volume": 49500, "opportunity_score": 800},
+        # comparison term — KEPT (competitor content a challenger should write)
+        {"keyword": "sedgwick alternatives", "competitor_domain": "sedgwick.com",
+         "competitor_position": 4, "client_position": None, "volume": 300, "opportunity_score": 100},
+        # genuine topical gap — kept
+        {"keyword": "claims outsourcing", "competitor_domain": "rival.com",
+         "competitor_position": 6, "client_position": None, "volume": 500, "opportunity_score": 90},
+    ]
+    kept = rp.build_domain_intel_actions("c1", gaps, matchers=matchers)
+    kws = [a["keyword"] for a in kept]
+    assert kws == ["sedgwick alternatives", "claims outsourcing"]
+    # filter_intent=False → intent filtering off, so the brand/navigational rows
+    # survive (subject only to the action cap).
+    off = rp.build_domain_intel_actions("c1", gaps, matchers=matchers, filter_intent=False)
+    assert "my sedgwick" in [a["keyword"] for a in off]
+    assert "sedgwick claim phone number" in [a["keyword"] for a in off]
+
+
+def test_build_domain_intel_actions_filters_before_cap(monkeypatch):
+    """A navigational term at the top of the pool must not consume an action slot —
+    filtering happens before the top-N cap."""
+    from config import settings
+    from services import reopt_planner as rp
+    monkeypatch.setattr(settings, "domain_intel_action_max", 1)
+    gaps = [
+        {"keyword": "acme phone number", "competitor_domain": "acme.com",
+         "competitor_position": 1, "client_position": None, "volume": 9000, "opportunity_score": 999},
+        {"keyword": "claims automation software", "competitor_domain": "rival.com",
+         "competitor_position": 5, "client_position": None, "volume": 400, "opportunity_score": 80},
+    ]
+    kept = rp.build_domain_intel_actions("c1", gaps)
+    # The navigational top row is dropped and the real gap fills the single slot.
+    assert [a["keyword"] for a in kept] == ["claims automation software"]
+
+
 def test_summarize_plan_counts_keyword_gap():
     from services import reopt_planner as rp
     actions = [{"kind": "keyword_gap", "severity": "info"}]
