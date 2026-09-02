@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import job_priority
 from services import wheelhouse_generate
 from services.wheelhouse_fields import FIELD_NAMES, validate_fields
 from services.wheelhouse_pages import (
@@ -403,6 +404,7 @@ async def enqueue_mass(
             "job_type": "wheelhouse_generate",
             "entity_id": client_id,
             "scheduled_at": _bulk_scheduled_at(len(rows)),
+            "priority": job_priority.BACKGROUND,
             "payload": {
                 "client_id": client_id, "page_type": page_type,
                 "state": state.strip(), "city": row_city,

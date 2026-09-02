@@ -40,7 +40,7 @@ import logging
 from typing import Awaitable, Callable, Optional
 
 from config import settings
-from services.report_llm import is_transient_llm_error, retry_transient
+from services.report_llm import anthropic_account_keys, is_transient_llm_error, retry_transient
 
 logger = logging.getLogger(__name__)
 
@@ -52,16 +52,12 @@ def _client_keys() -> list[str]:
     exactly — a call site that used to build one client still builds one. The
     secondary account is appended only when failover is enabled and its key is
     set and distinct."""
-    primary = settings.anthropic_api_key
-    keys = [primary]
-    secondary = settings.anthropic_api_key_secondary
-    if (
-        settings.anthropic_key_failover_enabled
-        and secondary
-        and secondary != primary
-    ):
-        keys.append(secondary)
-    return keys
+    return anthropic_account_keys(
+        settings.anthropic_api_key,
+        settings.anthropic_api_key_secondary,
+        getattr(settings, "anthropic_api_keys", ""),
+        settings.anthropic_key_failover_enabled,
+    )
 
 
 def anthropic_keys() -> list[str]:

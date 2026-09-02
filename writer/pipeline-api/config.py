@@ -155,6 +155,11 @@ class Settings(BaseSettings):
     # headroom. Empty ⇒ primary only (no failover). Set on the `pipeline` Railway
     # service alongside ANTHROPIC_API_KEY.
     anthropic_api_key_secondary: str = ""
+    # Comma-separated pool of FURTHER Anthropic account keys (any length) — the
+    # canonical multi-account form (2026-09-02); `anthropic_api_key_secondary`
+    # is the original two-account form and is merged into the pool. Tried in
+    # order after the primary on a transient limit. Same models, more headroom.
+    anthropic_api_keys: str = ""
     anthropic_key_failover_enabled: bool = True
 
     # SIE v1.1 - Hybrid entity scoring (replaces the prior hard

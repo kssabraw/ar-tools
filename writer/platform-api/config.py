@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     # Empty ⇒ no second key and every failover path degrades to primary-only. Set
     # on all three services (PLATFORM/pipeline/nlp) since each calls Anthropic.
     anthropic_api_key_secondary: str = ""
+    # Comma-separated pool of FURTHER Anthropic account keys (any length) — the
+    # canonical multi-account form (2026-09-02); `anthropic_api_key_secondary`
+    # is the original two-account form and is merged into the same pool. Every
+    # failover path (report_llm chain, the direct FailoverAsyncAnthropic sites,
+    # the agentic loops) tries them in order after the primary on a transient
+    # limit. Same models, more headroom. Set on all three services.
+    anthropic_api_keys: str = ""
     # AI Visibility module (Brand Strength) — the two scan engines whose keys
     # aren't already shared. Absent either, that engine fails its scans with a
     # "not configured" reason; the other engines (chatgpt/claude via the keys
@@ -188,6 +195,15 @@ class Settings(BaseSettings):
     # is an atomic guarded UPDATE, so N workers never double-claim a row). Set to
     # 1 to throttle to one paid DataForSEO pipeline run at a time.
     fanout_lane_workers: int = 2
+    # BULK lanes (2026-09-02): dedicated workers that claim ONLY background-
+    # priority async_jobs (bulk-create / matrix / reoptimize-bulk items, stamped
+    # `job_priority.BACKGROUND` at enqueue). Each lane runs one ~10-min page
+    # generation at a time, so this is the batch-throughput knob: 1 keeps
+    # today's two-in-flight (this lane + the MAIN lane, which still picks bulk
+    # up when nothing else is pending); 4 runs four pages at once. The nlp
+    # container serves every lane, so watch its memory when raising this, and
+    # size the Anthropic key pool (`anthropic_api_keys`) to match. 0 disables.
+    bulk_lane_workers: int = 1
     # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
     # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
     # reads it via fanout.config.get_settings(), a different Settings class, so a

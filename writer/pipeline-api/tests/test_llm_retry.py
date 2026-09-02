@@ -142,3 +142,28 @@ def test_create_message_terminal_error_does_not_fail_over(monkeypatch):
         asyncio.run(llm._create_message(_FakeClient(primary), {"model": "m"}))
     assert primary.calls == 1    # a real error surfaces immediately
     assert secondary.calls == 0  # no failover on a non-transient error
+
+
+# ── key pool (2026-09-02) ────────────────────────────────────────────────────
+def test_parse_key_pool():
+    assert llm.parse_key_pool("") == []
+    assert llm.parse_key_pool(" c , d,,c ") == ["c", "d"]
+
+
+def test_failover_clients_walk_secondary_then_pool(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "a", raising=False)
+    monkeypatch.setattr(settings, "anthropic_api_key_secondary", "b", raising=False)
+    monkeypatch.setattr(settings, "anthropic_api_keys", "c, a, d, b", raising=False)
+    monkeypatch.setattr(settings, "anthropic_key_failover_enabled", True, raising=False)
+    llm._anthropic_secondary = None
+    llm._anthropic_pool.clear()
+    primary = _FakeClient(_FlakyMessages(failures=0, exc_factory=_rate_limit_error))
+    clients = llm._failover_clients(primary)
+    assert clients[0] is primary
+    assert len(clients) == 4  # primary + secondary + pool minus the duplicates a/b
+    assert llm.pool_keys() == ["c", "d"]
+    # disabled ⇒ primary only
+    monkeypatch.setattr(settings, "anthropic_key_failover_enabled", False, raising=False)
+    llm._anthropic_secondary = None
+    assert llm._failover_clients(primary) == [primary]
+    llm._anthropic_pool.clear()

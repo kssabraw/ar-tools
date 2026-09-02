@@ -6,6 +6,7 @@ fakes. Backoff is neutralized via `anthropic_key_failover_max_retries = 0`."""
 import httpx
 import pytest
 
+from config import settings
 from services import anthropic_failover as af
 
 
@@ -122,3 +123,23 @@ async def test_wrapper_fails_over_create(monkeypatch):
     out = await client.messages.create(model="claude-x", max_tokens=10)
     assert out["account"] == "b"  # second account served the call
     assert out["kwargs"] == {"model": "claude-x", "max_tokens": 10}
+
+
+# ── key pool (2026-09-02) ────────────────────────────────────────────────────
+def test_account_keys_pool_merges_and_dedupes():
+    from services.report_llm import anthropic_account_keys, parse_key_pool
+
+    assert parse_key_pool(" c , d,,c ") == ["c", "d"]
+    assert anthropic_account_keys("a", "b", "c,d", True) == ["a", "c", "d", "b"]
+    assert anthropic_account_keys("a", "a", "a,c", True) == ["a", "c"]
+    assert anthropic_account_keys("a", "b", "c", False) == ["a"]
+    assert anthropic_account_keys("", "", "", True) == [""]  # primary slot always kept
+
+
+def test_client_keys_read_the_pool_setting(monkeypatch):
+    monkeypatch.setattr(settings, "anthropic_api_key", "a", raising=False)
+    monkeypatch.setattr(settings, "anthropic_api_key_secondary", "b", raising=False)
+    monkeypatch.setattr(settings, "anthropic_api_keys", "c,d", raising=False)
+    monkeypatch.setattr(settings, "anthropic_key_failover_enabled", True, raising=False)
+    assert af._client_keys() == ["a", "c", "d", "b"]
+    assert af.has_secondary_key()

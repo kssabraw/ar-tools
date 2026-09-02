@@ -154,6 +154,26 @@ def _anthropic_client(**client_kwargs):
     """Failover-capable async Anthropic client. `client_kwargs` (max_retries,
     timeout, …) apply to every account's underlying SDK client."""
     return _anthropic_failover.client(**client_kwargs)
+
+
+class _AnthropicAccountSlotMiddleware:
+    """Pure-ASGI middleware: stamps each HTTP request with an Anthropic account
+    rotation slot (`anthropic_failover.begin_request_slot`) so every client built
+    while serving it starts the key pool at the same account — sticky per request
+    (a page's cached generation prompt stays warm on one account), spread across
+    requests (a bulk batch's concurrent pages divide over the pool from the first
+    call instead of after a 429 backoff). A single-key pool is unaffected."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            _anthropic_failover.begin_request_slot()
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_AnthropicAccountSlotMiddleware)
 # ScrapeOwl 429 handling: retry in place with backoff (honoring Retry-After) at
 # the same price tier instead of letting a rate-limited scrape escalate to the
 # ~2× JS-render tier.

@@ -27,6 +27,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import job_priority
 from services import local_seo_matrix as core
 from services import local_seo_silo, locations_service, target_cities
 from services.local_seo_service import _bulk_scheduled_at
@@ -472,6 +473,7 @@ def enqueue_cells(
                 "job_type": "local_seo_generate",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(i),
+                "priority": job_priority.BACKGROUND,
                 "payload": payload,
             }
         )

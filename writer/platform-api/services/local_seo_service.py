@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import analysis_cache, locations_service
+from services import analysis_cache, job_priority, locations_service
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -782,9 +782,12 @@ async def run_generate_job(job: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.generate_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Transient nlp failures (5xx / transport — a container restart, an
+        # exhausted Anthropic retry budget) re-queue with backoff while attempts
+        # remain; a 4xx fails terminally. Lazy import: job_worker imports this module.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 async def _publish_after_generate(page_id: str, payload: dict, job_id: str) -> None:
@@ -875,6 +878,7 @@ async def enqueue_generate_bulk(
                 "job_type": "local_seo_generate",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(len(rows)),
+                "priority": job_priority.BACKGROUND,
                 "payload": {
                     "client_id": client_id,
                     "keyword": kw.strip(),
@@ -914,6 +918,7 @@ async def enqueue_reoptimize_bulk(
                 "job_type": "local_seo_reoptimize_url",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(len(rows)),
+                "priority": job_priority.BACKGROUND,
                 "payload": {
                     "client_id": client_id,
                     "page_url": page_url,
@@ -963,9 +968,12 @@ async def run_reoptimize_url_job(job: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.reoptimize_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Transient nlp failures (5xx / transport — a container restart, an
+        # exhausted Anthropic retry budget) re-queue with backoff while attempts
+        # remain; a 4xx fails terminally. Lazy import: job_worker imports this module.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
@@ -1058,9 +1066,12 @@ async def run_reoptimize_page_job(job: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.reoptimize_page_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Transient nlp failures (5xx / transport — a container restart, an
+        # exhausted Anthropic retry budget) re-queue with backoff while attempts
+        # remain; a 4xx fails terminally. Lazy import: job_worker imports this module.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 async def analyze(
