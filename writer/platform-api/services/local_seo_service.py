@@ -586,6 +586,35 @@ def _resolve_page_spec(
         return None
 
 
+def _notify_over_length(client_id: str, keyword: str, page_id: Optional[str], verdict: Optional[dict]) -> None:
+    """Plan §5.5 — a page still over the spec ceiling after every trim is
+    saved honestly (length_status=over_length) AND surfaced, never shipped as
+    a clean page. One notification per page. Best-effort."""
+    if not verdict or not verdict.get("over_ceiling"):
+        return
+    try:
+        from services import notifications  # lazy
+
+        notifications.emit(
+            client_id,
+            kind="content_over_length",
+            title="Local SEO page saved over its length ceiling",
+            summary=(
+                f"'{keyword}' landed at ~{verdict.get('total_words')} words against a spec band of "
+                f"{verdict.get('min_words')}–{verdict.get('max_words')} (ceiling {verdict.get('ceiling_words')}) "
+                f"after the trim passes. Over-band sections: "
+                f"{', '.join(verdict.get('over_sections') or []) or 'none — the overage is spread across sections'}. "
+                f"Review the page spec or reoptimize the page before publishing."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "page_id": page_id, "length_verdict": {
+                k: v for k, v in verdict.items() if k != "sections"}},
+            dedupe_key=f"content_over_length:{page_id or keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never blocks generation
+        logger.warning("local_seo.over_length_notify_failed", extra={"error": str(exc)})
+
+
 def attach_length_verdict(result: dict, spec: Optional[dict]) -> dict:
     """Measure the generated page against its spec and record the verdict on
     the result: `length_verdict` (full), plus the flat fields `_persist_page`
@@ -743,6 +772,7 @@ async def generate_page(
     page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes)
     if result.get("length_verdict") is not None:
         page["length_verdict"] = result["length_verdict"]  # not a column — rides the response
+        _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
     if coverage is not None:
         page["link_coverage"] = coverage
     return page
@@ -1272,6 +1302,18 @@ async def reoptimize_page(
     # from them with every improvement to its score.
     voice_card = await voice_card_service.get_voice_card(client, user_id=user_id)
 
+    # The kept page spec for this keyword × location (same one generation used,
+    # or the owner's edit): nlp trims per section against it and the row
+    # records target vs actual. Location resolved best-effort so the spec key
+    # matches generation's (which keys on the DataForSEO code).
+    spec: Optional[dict] = None
+    try:
+        _loc, _code = await locations_service.resolve_location(client, location, None)
+        _fallback = _resolve_fallback_length_target(_code, _loc)
+        spec = _resolve_page_spec(client, keyword, _loc, _code, serp_analysis, _fallback)
+    except Exception as exc:  # noqa: BLE001 — a spec is an enhancement here, never a gate
+        logger.warning("local_seo.reoptimize_spec_unavailable", extra={"client_id": client_id, "error": str(exc)})
+
     result = await _stream_nlp("/reoptimize-page", {
         "keyword": keyword,
         "location": location,
@@ -1288,8 +1330,10 @@ async def reoptimize_page(
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
         "internal_links": internal_links or None,
+        "page_spec": spec,
     }, on_progress=on_progress)
     link_coverage = _guarantee_internal_links(result, internal_links)
+    result = attach_length_verdict(result, spec)
 
     # Newer nlp builds surface the score the reoptimize loop already computed.
     # Only re-score when it's absent (older nlp) so the persisted page still
@@ -1319,6 +1363,9 @@ async def reoptimize_page(
             logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
     page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
+    if result.get("length_verdict") is not None:
+        page["length_verdict"] = result["length_verdict"]
+        _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
     if link_coverage is not None:
         page["link_coverage"] = link_coverage
     return page

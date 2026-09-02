@@ -572,6 +572,71 @@ async def test_generate_survives_a_spec_failure():
     assert persisted["page_spec_id"] is None and persisted["length_status"] is None
 
 
+@pytest.mark.asyncio
+async def test_generate_over_ceiling_is_saved_honestly_and_notified():
+    # Plan §5.5: a page still over the spec ceiling is saved with
+    # length_status=over_length AND surfaced through the notifications service.
+    from services import page_spec as ps
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-1", 1
+    html = '<article><section id="services"><h2>s</h2><p>' + " ".join(["w"] * 3000) + "</p></section></article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec), \
+         patch("services.notifications.emit") as emit, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)):
+        page = await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["length_status"] == "over_length" and persisted["actual_words"] == 3000
+    assert page["length_verdict"]["over_ceiling"] is True
+    emit.assert_called_once()
+    assert emit.call_args.kwargs["kind"] == "content_over_length"
+    assert emit.call_args.kwargs["dedupe_key"] == "content_over_length:page-x"
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_threads_the_spec_and_records_the_verdict():
+    from services import page_spec as ps
+    inserted = {"id": "page-r", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-2", 2
+    html = "<article>" + "".join(
+        f'<section id="{s["key"]}"><h2>{s["key"]}</h2><p>' + " ".join(["w"] * s["min_words"]) + "</p></section>"
+        for s in spec["sections"]
+    ) + "</article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "composite_score": 88.0, "composite_status": "good"}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Melbourne,Victoria,Australia", 1000567))), \
+         patch.object(local_seo_service, "_resolve_fallback_length_target", return_value=1200), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec) as resolve, \
+         patch.object(local_seo_service.voice_card_service if hasattr(local_seo_service, "voice_card_service") else local_seo_service, "get_voice_card", new=AsyncMock(return_value={}), create=True), \
+         patch("services.voice_card_service.get_voice_card", new=AsyncMock(return_value={})), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        page = await local_seo_service.reoptimize_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", "<p>old</p>", None, [], serp, "user-1"
+        )
+    resolve.assert_called_once()
+    assert resolve.call_args[0][3] == 1000567  # keyed on the resolved DataForSEO code, like generate
+    payload = stream.await_args[0][1]
+    assert payload["page_spec"]["id"] == "spec-2"
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["page_spec_id"] == "spec-2" and persisted["spec_version"] == 2
+    assert persisted["length_status"] == "in_band" and persisted["mode"] == "reoptimize"
+
+
 def test_fallback_word_target_is_the_median_of_recent_targets_else_default():
     # median is robust to one unusually long SERP in the market
     assert local_seo_service.fallback_word_target([1232, 1627, 1326, 1321, 1240], 1200) == 1321
