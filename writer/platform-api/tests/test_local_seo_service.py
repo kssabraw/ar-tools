@@ -516,6 +516,62 @@ async def test_generate_uses_fallback_target_when_serp_has_no_length():
     assert persisted["run_analysis"] is True
 
 
+@pytest.mark.asyncio
+async def test_generate_threads_the_page_spec_and_records_the_length_verdict():
+    # The kept page spec rides on the nlp payload, its target drives the
+    # reference scaling, and the persisted row records spec id/version + the
+    # deterministic target-vs-actual verdict.
+    from services import page_spec as ps
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-1", 1
+    html = "<article>" + "".join(
+        f'<section id="{s["key"]}"><h2>{s["key"]}</h2><p>' + " ".join(["w"] * s["min_words"]) + "</p></section>"
+        for s in spec["sections"]
+    ) + "</article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec) as resolve, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        page = await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    resolve.assert_called_once()
+    payload = stream.await_args[0][1]
+    assert payload["page_spec"]["id"] == "spec-1"
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["page_spec_id"] == "spec-1" and persisted["spec_version"] == 1
+    assert persisted["target_words"] == 1058
+    assert persisted["actual_words"] == sum(s["min_words"] for s in spec["sections"])
+    assert persisted["length_status"] == "in_band"
+    assert page["length_verdict"]["status"] == "in_band"
+
+
+@pytest.mark.asyncio
+async def test_generate_survives_a_spec_failure():
+    # A spec that can't be built must never fail the page: the payload simply
+    # carries no spec and the row's spec columns stay null.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp_word_target": 1000})), \
+         patch.object(local_seo_service.page_spec_store, "resolve_spec", side_effect=RuntimeError("db down")), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    payload = stream.await_args[0][1]
+    assert "page_spec" not in payload
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["page_spec_id"] is None and persisted["length_status"] is None
+
+
 def test_fallback_word_target_is_the_median_of_recent_targets_else_default():
     # median is robust to one unusually long SERP in the market
     assert local_seo_service.fallback_word_target([1232, 1627, 1326, 1321, 1240], 1200) == 1321

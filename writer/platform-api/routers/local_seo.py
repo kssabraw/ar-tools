@@ -37,6 +37,8 @@ from models.local_seo import (
     LocalSeoReoptimizeBulkRequest,
     LocalSeoPageDetail,
     LocalSeoPageListItem,
+    LocalSeoPageSpecEditRequest,
+    LocalSeoPageSpecRebuildRequest,
     LocalSeoPrecheckRequest,
     LocalSeoRankabilityRequest,
     LocalSeoRankabilityResponse,
@@ -50,7 +52,7 @@ from models.local_seo import (
     LocationSuggestion,
     PageTemplateDefaultRequest,
 )
-from services import local_seo_service, local_seo_silo, local_seo_targets
+from services import local_seo_service, local_seo_silo, local_seo_targets, page_spec_service
 from services.freeze import assert_not_frozen
 
 logger = logging.getLogger(__name__)
@@ -177,6 +179,63 @@ async def set_local_seo_page_template_default(
 ) -> dict:
     """Save (or clear) the client's default page-template URL (Phase 3)."""
     return local_seo_service.set_page_template_default(str(client_id), body.page_template_url)
+
+
+# ── page spec (length + structure kept on file) ─────────────────────────────
+# docs/modules/local-seo-page-spec-plan-v1_0.md. The spec is built from the
+# cached SERP analysis + the client's reference layout; GET never spends a
+# paid call (no analysis → the standing market target, flagged on the spec).
+
+@router.get("/clients/{client_id}/local-seo/page-spec")
+async def get_local_seo_page_spec(
+    client_id: UUID,
+    keyword: str = Query(..., min_length=1),
+    location: str = Query(..., min_length=1),
+    location_code: Optional[int] = Query(None),
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """The active page spec for this keyword × location (built + saved on first
+    read), with its version history."""
+    return await page_spec_service.get_or_build(
+        str(client_id), keyword, location, location_code, user_id=auth["user_id"],
+    )
+
+
+@router.put("/clients/{client_id}/local-seo/page-spec")
+async def edit_local_seo_page_spec(
+    client_id: UUID,
+    body: LocalSeoPageSpecEditRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Persist a hand-edited spec as the next version. An edited spec sticks:
+    automatic rebuilds never overwrite it. 400 `page_spec_invalid` (with the
+    error codes) when the edit is infeasible."""
+    return await page_spec_service.save_edit(
+        str(client_id), body.keyword, body.location, body.location_code, body.spec,
+        user_id=auth["user_id"],
+    )
+
+
+@router.post("/clients/{client_id}/local-seo/page-spec/rebuild")
+async def rebuild_local_seo_page_spec(
+    client_id: UUID,
+    body: LocalSeoPageSpecRebuildRequest,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Rebuild from the current inputs, discarding any hand edit (explicit)."""
+    return await page_spec_service.get_or_build(
+        str(client_id), body.keyword, body.location, body.location_code,
+        user_id=auth["user_id"], force_rebuild=True,
+    )
+
+
+@router.get("/local-seo/page-specs/{spec_id}/download")
+async def download_local_seo_page_spec(
+    spec_id: UUID,
+    auth: dict = Depends(require_auth),
+):
+    """The spec as a downloadable JSON file."""
+    return page_spec_service.download(str(spec_id))
 
 
 @router.post("/clients/{client_id}/local-seo/analyze", response_model=LocalSeoGenerateJob)
