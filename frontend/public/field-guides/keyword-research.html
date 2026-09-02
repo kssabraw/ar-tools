@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A germination diagram for the Keyword Research tool — from seed to cluster to topic.">
+<title>Keyword Research Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Petrona:opsz,wght@8..136,400;8..136,500;8..136,600;8..136,700&family=Karla:wght@400;500;600;700&family=Overpass+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --paper:#EFEEDF; --paper-raised:#FBFAF3; --ink:#232419; --ink-soft:#5B5B47; --ink-faint:#93927B;
+    --line:#DAD8BE; --line-strong:#C4C2A0;
+    --plum:#7A4B6B; --plum-ink:#583350; --plum-soft:#EBDDE6;
+    --seed:#B8952A; --seed-ink:#83671D; --seed-soft:#F1E7C7;
+    --shadow: 0 1px 2px rgba(35,36,25,0.07), 0 10px 26px rgba(35,36,25,0.06); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#181910; --paper-raised:#212217; --ink:#EAEADA; --ink-soft:#B4B39C; --ink-faint:#7A7A64;
+      --line:#33341F; --line-strong:#454629;
+      --plum:#B37DA3; --plum-ink:#DDB6CF; --plum-soft:#2E1F2A;
+      --seed:#E0BC5C; --seed-ink:#F1D992; --seed-soft:#332A11;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#181910; --paper-raised:#212217; --ink:#EAEADA; --ink-soft:#B4B39C; --ink-faint:#7A7A64;
+    --line:#33341F; --line-strong:#454629;
+    --plum:#B37DA3; --plum-ink:#DDB6CF; --plum-soft:#2E1F2A;
+    --seed:#E0BC5C; --seed-ink:#F1D992; --seed-soft:#332A11;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Karla", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Petrona", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--plum-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--plum); outline-offset:2px; }
+  code,.mono{ font-family:"Overpass Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Overpass Mono",monospace; font-size:0.7rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--plum-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Petrona",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Overpass Mono",monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Germination diagram — the one only this subject has */
+  .germ{ padding:2rem 0 2.1rem; }
+  .germ-cap{ font-family:"Overpass Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .germ-svg{ width:100%; max-width:760px; height:auto; display:block; }
+  .germ-note{ margin:0.8rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:42rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Overpass Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--plum-ink); border-left-color:var(--plum); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Overpass Mono",monospace; font-size:0.82rem; color:var(--plum-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .clipping{ position:relative; background:var(--plum-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .clipping::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--plum); border-radius:2px; }
+  .clipping-label{ font-family:"Overpass Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--plum-ink); font-weight:700; margin:0 0 0.3rem; }
+  .clipping p{ margin:0; }
+
+  .yield{ background:var(--seed-soft); border-left:3px solid var(--seed); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .yield p{ margin:0; }
+  .yield strong{ color:var(--seed-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Overpass Mono",monospace; font-size:0.63rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  .field-log{ border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); margin:1.2rem 0; overflow:hidden; }
+  .field-log-head{ display:flex; align-items:center; justify-content:space-between; padding:0.7rem 1.1rem; border-bottom:1px solid var(--line); background:var(--paper); }
+  .field-log-head span{ font-family:"Overpass Mono",monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+  .field-log-body{ padding:0.9rem 1.1rem 1.1rem; }
+  .field-row{ display:flex; gap:0.85rem; align-items:baseline; padding:0.4rem 0; font-size:0.88rem; }
+  .field-row .tag{ flex:none; width:9.5rem; font-weight:600; }
+  .field-row .msg{ color:var(--ink-soft); }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Overpass Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--plum-soft); border-color:var(--plum); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <path d="M32 52 L32 30" stroke="var(--ink)" stroke-width="1.6"/>
+          <path d="M32 30 C 24 26, 20 18, 22 10 C 30 12, 34 20, 32 30 Z" fill="var(--seed)" opacity="0.9"/>
+          <path d="M32 34 C 40 30, 46 22, 45 14 C 37 16, 32 24, 32 34 Z" fill="var(--plum)" opacity="0.9"/>
+          <ellipse cx="32" cy="54" rx="12" ry="4" fill="none" stroke="var(--ink-faint)" stroke-width="1.2"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Content</p>
+        <h1>Keyword Research, seed to cluster</h1>
+        <p class="dek">One seed keyword goes in. What comes back is filtered, clustered, and
+          ranked by opportunity — a plot of ideas, not a raw data dump.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">Trusted sources</span></div>
+      <div class="meta-item"><span class="meta-num tnum">6</span><span class="meta-label">Drift filters</span></div>
+      <div class="meta-item"><span class="meta-num tnum">20</span><span class="meta-label">Thin-result floor</span></div>
+    </div>
+    <div class="germ">
+      <p class="germ-cap">One seed, two branches — the shape every run takes</p>
+      <svg class="germ-svg" viewBox="0 0 760 150" role="img" aria-label="A seed keyword branches into an on-topic cluster and an adjacent cluster">
+        <line x1="60" y1="130" x2="60" y2="70" stroke="var(--ink-faint)" stroke-width="2"/>
+        <circle cx="60" cy="132" r="7" fill="var(--seed)"/>
+        <text x="60" y="146" text-anchor="middle" font-family="Overpass Mono, monospace" font-size="10" fill="var(--ink-faint)">seed</text>
+        <path d="M60 70 C 130 70, 160 40, 260 30" fill="none" stroke="var(--plum)" stroke-width="2"/>
+        <path d="M60 70 C 130 90, 170 100, 260 108" fill="none" stroke="var(--seed)" stroke-width="2"/>
+        <circle cx="260" cy="30" r="5" fill="var(--plum)"/><circle cx="330" cy="24" r="5" fill="var(--plum)"/><circle cx="400" cy="30" r="5" fill="var(--plum)"/>
+        <circle cx="260" cy="108" r="5" fill="var(--seed)"/><circle cx="330" cy="112" r="5" fill="var(--seed)"/><circle cx="400" cy="106" r="5" fill="var(--seed)"/>
+        <text x="440" y="28" font-family="Petrona, serif" font-size="13" fill="var(--plum-ink)" font-weight="600">on-topic cluster</text>
+        <text x="440" y="112" font-family="Petrona, serif" font-size="13" fill="var(--seed-ink)" font-weight="600">adjacent cluster</text>
+      </svg>
+      <p class="germ-note">Everything that grows out of the seed either stays on-topic
+        (phrase-containment) or genuinely adjacent (Google's own "related searches" graph). What
+        doesn't clear the drift filters never makes it into either branch.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Research keywords</a></li>
+        <li><a href="#s3" data-target="s3">03 · Read the results</a></li>
+        <li><a href="#s4" data-target="s4">04 · What got filtered, and why</a></li>
+        <li><a href="#s5" data-target="s5">05 · A thin run</a></li>
+        <li><a href="#s6" data-target="s6">06 · Manage your seeds</a></li>
+        <li><a href="#s7" data-target="s7">07 · Topic Research (BETA)</a></li>
+        <li><a href="#s8" data-target="s8">08 · Write this post</a></li>
+        <li><a href="#s9" data-target="s9">09 · A worked run</a></li>
+        <li><a href="#s10" data-target="s10">10 · Troubleshooting</a></li>
+        <li><a href="#s11" data-target="s11">11 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">This is not the mass-content generator — it doesn't write anything. It
+          answers one question, "what should we target, and why," and hands you a filtered
+          keyword universe plus a ranked list of topic ideas.</p>
+        <p>Every run spends a small daily budget of paid calls, shared agency-wide — the page
+          shows "Budget left today: N calls" at the top, red at zero.</p>
+        <div class="clipping">
+          <p class="clipping-label">only as good as the ground</p>
+          <p>The tool researches <em>around</em> what you type. If the client's website, GBP
+            category, and location aren't filled in, "Suggest topics" and "Topic Research" have
+            far less to work with.</p>
+        </div>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Research keywords</h2></div>
+        <p>Type into the seed box — one per line, or comma-separated. Multiple seeds are fully
+          supported and researched together (a run always keeps at least 2 once you've added a
+          second, capped at 20). No idea where to start? Click <strong>Suggest topics</strong> —
+          it reads the client's GBP category, location, website, and ICP and proposes seeds as
+          click-to-add chips.</p>
+        <p>Click <strong>Research keywords</strong> — a background job, so you don't have to sit
+          and wait.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Read the results</h2></div>
+        <p>A cluster rail up top — one chip per auto-grouped topic — filters the table below; a
+          <strong>Questions only</strong> checkbox narrows to question-form keywords. Columns:
+          Keyword, Cluster, Volume, CPC, Comp, KD, Intent, <strong>Relevance</strong> (% match to
+          this client's topic/audience), and <strong>Opportunity</strong> (value × ease × intent —
+          the closest thing to "worth the most"). Run-history chips let you flip between past runs
+          without re-researching.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>What got filtered, and why</h2></div>
+        <p>The pool runs through several relevance, audience, and drift filters before you ever
+          see it — and it shows its work. A <strong>"What we filtered &amp; why"</strong> panel
+          appears with a one-line summary ("N candidates found · N kept · N filtered out") and
+          reason chips: unrelated brand or namespace, only a generic seed word, off-topic category
+          drift, wrong audience (job-seeker), or a navigational/competitor lookup. Click
+          <strong>"Show the N filtered-out keywords"</strong> to see the dropped terms next to
+          their reason.</p>
+        <div class="yield">
+          <p>If a lot of what got cut looks genuinely on-topic to you, that's a real signal —
+            broaden your seeds or add another one.</p>
+        </div>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>A thin run</h2></div>
+        <p>Fewer than ~20 keywords triggers a plain-language callout: nothing came back at all
+          (too narrow — try dropping a qualifier), plenty came back but almost everything got
+          filtered (points at the panel above), or just a generic thin result (broaden or add a
+          second seed). Below it, broader topic suggestions auto-fetch as click-to-add chips, and
+          a <strong>"Research topics instead"</strong> button jumps straight into Topic Research
+          using this run's seeds.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Manage your seeds</h2></div>
+        <p>Remove a seed with the × on its chip (only when a run has &gt;2 seeds — deletes only
+          the keywords that seed alone produced). Every People-Also-Ask question has a
+          <strong>"+ seed"</strong> link, plus a bulk <strong>"Add all as seeds"</strong> above the
+          list. <strong>Clear all</strong> for a client is permanent — runs, keywords, and reports
+          all go.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Topic Research (BETA)</h2></div>
+        <p>A deeper pass — instead of expanding your seed's wording, it starts from the client's
+          real buyer problems (ICP + site themes), validates each idea against real search demand
+          (PAA + suggestion volume), and mines what competitors publish on the same themes. Click
+          <strong>Research topics</strong> (~30 seconds, spends more budget than a plain run).
+          Read the <strong>Strategy</strong> callout first, then browse topic cards grouped under
+          pillars — buyer problem, intent/funnel, supporting keywords, real reader questions, a
+          priority badge. A card marked <strong>covered</strong> means the client likely already
+          has content on it — tick <strong>Show gaps only</strong> to hide those.</p>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Write this post</h2></div>
+        <p>Every topic card has a <strong>Write this post</strong> button — a modal pre-fills the
+          seed keyword and a full angle brief (working title, buyer problem, intent/funnel, reader
+          questions, related keywords), editable before you submit. <strong>Create draft</strong>
+          queues a real Blog Writer run, pre-loaded with your angle as writer notes.</p>
+        <p>For a batch instead of one at a time: select rows in the table and use <strong>Send
+          to Content Scheduler</strong> — this queues into AR Tools' own native bulk page-creation
+          tool, a <em>different</em> tool from Topic Fanout (see the Troubleshooting table).</p>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>A worked run</h2></div>
+        <p class="mono" style="font-size:0.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 0.6rem;">Seed: "third party claims administrator"</p>
+        <div class="field-log">
+          <div class="field-log-head"><span>Filter summary</span><span class="mono">raw pool 824</span></div>
+          <div class="field-log-body">
+            <div class="field-row"><span class="tag">Category drift</span><span class="msg">699 dropped — off the seed's real topic</span></div>
+            <div class="field-row"><span class="tag">Wrong audience</span><span class="msg">44 dropped — job-seeker searches</span></div>
+            <div class="field-row"><span class="tag">Not relevant</span><span class="msg">22 dropped — below the relevance floor</span></div>
+            <div class="field-row"><span class="tag">Kept</span><span class="msg">59 keywords, clustered into 4 topics</span></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Suggest topics / Topic Research gave nothing useful</td><td>Fill in the client's website, GBP category, location, and ICP first.</td></tr>
+          <tr><td class="term">A relevant-looking keyword got filtered</td><td>Check the reason in the filter panel — the filters are deliberately aggressive about wrong-audience and navigational noise.</td></tr>
+          <tr><td class="term">Does "Write this post" publish anything?</td><td>No — it queues a draft run. Publishing is a separate step in the Blog Writer.</td></tr>
+          <tr><td class="term">Is Content Scheduler the same as Topic Fanout?</td><td>No — Content Scheduler is this suite's own bulk tool; Topic Fanout is a separate, larger app reached from "Create Mass Posts."</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Start a run</td><td>Type seed(s) → <strong>Research keywords</strong></td></tr>
+            <tr><td class="term">Get seed ideas from the profile</td><td><strong>Suggest topics</strong></td></tr>
+            <tr><td class="term">Understand what got cut</td><td><strong>What we filtered &amp; why</strong></td></tr>
+            <tr><td class="term">Fix a thin run</td><td>Follow the callout, or <strong>Research topics instead</strong></td></tr>
+            <tr><td class="term">Go deeper than variations</td><td><strong>Topic Research (BETA)</strong></td></tr>
+            <tr><td class="term">Turn an idea into a draft</td><td><strong>Write this post</strong></td></tr>
+            <tr><td class="term">Queue a batch</td><td>Select rows → <strong>Send to Content Scheduler</strong></td></tr>
+            <tr><td class="term">Get a client deliverable</td><td><strong>Client PDF report</strong></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Keyword Research Field Guide · AR Tools new-hire series · full text at <code>docs/keyword-research-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

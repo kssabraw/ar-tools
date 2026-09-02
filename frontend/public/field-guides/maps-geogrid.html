@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A radar-room walkthrough for Maps Geo-Grid — sweeping the local pack, octant by octant.">
+<title>Maps Geo-Grid Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vollkorn:wght@400;500;600;700&family=Manrope:wght@400;500;600;700&family=Martian+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --paper:#EEEAE0; --paper-raised:#FAF8F2; --ink:#221F17; --ink-soft:#585240; --ink-faint:#928C75;
+    --line:#DBD5C1; --line-strong:#C6BFA5;
+    --amber:#C08A1E; --amber-ink:#886113; --amber-soft:#F2E4C4;
+    --radgreen:#3E7D5A; --radgreen-ink:#28543C; --radgreen-soft:#DBEAE0;
+    --shadow: 0 1px 2px rgba(34,31,23,0.07), 0 10px 26px rgba(34,31,23,0.06); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#17150E; --paper-raised:#1F1C14; --ink:#EBE5D2; --ink-soft:#B6AF94; --ink-faint:#7B755F;
+      --line:#332D1C; --line-strong:#453E27;
+      --amber:#E0B458; --amber-ink:#F0D18F; --amber-soft:#332711;
+      --radgreen:#6FB98D; --radgreen-ink:#A7DDBE; --radgreen-soft:#17281F;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#17150E; --paper-raised:#1F1C14; --ink:#EBE5D2; --ink-soft:#B6AF94; --ink-faint:#7B755F;
+    --line:#332D1C; --line-strong:#453E27;
+    --amber:#E0B458; --amber-ink:#F0D18F; --amber-soft:#332711;
+    --radgreen:#6FB98D; --radgreen-ink:#A7DDBE; --radgreen-soft:#17281F;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Manrope", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Vollkorn", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--amber-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--amber); outline-offset:2px; }
+  code,.mono{ font-family:"Martian Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Martian Mono",monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--amber-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Vollkorn",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Martian Mono",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Radar sweep — the one diagram only this subject has */
+  .radar-wrap{ padding:1.9rem 0 2.1rem; display:flex; gap:2rem; align-items:center; flex-wrap:wrap; }
+  .radar-cap{ font-family:"Martian Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.9rem; }
+  .radar-svg{ width:220px; height:220px; flex:none; }
+  .radar-legend{ display:flex; flex-direction:column; gap:0.5rem; font-size:0.86rem; max-width:30rem; }
+  .radar-legend .row{ display:flex; align-items:center; gap:0.6rem; }
+  .radar-legend .dot{ width:10px; height:10px; border-radius:50%; flex:none; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Martian Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--amber-ink); border-left-color:var(--amber); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Martian Mono",monospace; font-size:0.78rem; color:var(--amber-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .bearing{ position:relative; background:var(--amber-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .bearing::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--amber); border-radius:2px; }
+  .bearing-label{ font-family:"Martian Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--amber-ink); font-weight:700; margin:0 0 0.3rem; }
+  .bearing p{ margin:0; }
+
+  .fix{ background:var(--radgreen-soft); border-left:3px solid var(--radgreen); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .fix p{ margin:0; }
+  .fix strong{ color:var(--radgreen-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Martian Mono",monospace; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Martian Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--amber-soft); border-color:var(--amber); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <circle cx="32" cy="32" r="22" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+          <circle cx="32" cy="32" r="14" fill="none" stroke="var(--ink-faint)" stroke-width="1"/>
+          <circle cx="32" cy="32" r="6" fill="none" stroke="var(--ink-faint)" stroke-width="1"/>
+          <line x1="32" y1="10" x2="32" y2="54" stroke="var(--ink-faint)" stroke-width="0.8"/>
+          <line x1="10" y1="32" x2="54" y2="32" stroke="var(--ink-faint)" stroke-width="0.8"/>
+          <path d="M32 32 L46 20" stroke="var(--amber)" stroke-width="2" stroke-linecap="round"/>
+          <circle cx="32" cy="32" r="2.4" fill="var(--radgreen)"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Tracking</p>
+        <h1>Maps Geo-Grid, sweep by sweep</h1>
+        <p class="dek">Local-pack rank isn't one number — it's a reading at every point around the
+          business. This is how to fly the grid and read what comes back.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">8</span><span class="meta-label">Compass octants</span></div>
+      <div class="meta-item"><span class="meta-num tnum">1–10</span><span class="meta-label">Radius, miles</span></div>
+      <div class="meta-item"><span class="meta-num tnum">5</span><span class="meta-label">Tabs</span></div>
+    </div>
+    <div class="radar-wrap">
+      <div>
+        <p class="radar-cap">One scan, read by direction</p>
+        <svg class="radar-svg" viewBox="0 0 200 200" role="img" aria-label="Compass showing rank strength by octant, strongest north-east, weakest south-west">
+          <circle cx="100" cy="100" r="82" fill="none" stroke="var(--line-strong)" stroke-width="1"/>
+          <circle cx="100" cy="100" r="55" fill="none" stroke="var(--line)" stroke-width="1"/>
+          <circle cx="100" cy="100" r="28" fill="none" stroke="var(--line)" stroke-width="1"/>
+          <path d="M100 100 L100 18 A82 82 0 0 1 158 42 Z" fill="var(--radgreen)" opacity="0.75"/>
+          <path d="M100 100 L158 42 A82 82 0 0 1 182 100 Z" fill="var(--radgreen)" opacity="0.5"/>
+          <path d="M100 100 L182 100 A82 82 0 0 1 158 158 Z" fill="var(--amber)" opacity="0.55"/>
+          <path d="M100 100 L158 158 A82 82 0 0 1 100 182 Z" fill="var(--amber)" opacity="0.4"/>
+          <path d="M100 100 L100 182 A82 82 0 0 1 42 158 Z" fill="#B23B3B" opacity="0.35"/>
+          <path d="M100 100 L42 158 A82 82 0 0 1 18 100 Z" fill="#B23B3B" opacity="0.5"/>
+          <path d="M100 100 L18 100 A82 82 0 0 1 42 42 Z" fill="var(--amber)" opacity="0.45"/>
+          <path d="M100 100 L42 42 A82 82 0 0 1 100 18 Z" fill="var(--radgreen)" opacity="0.6"/>
+          <text x="100" y="12" text-anchor="middle" font-family="Martian Mono, monospace" font-size="9" fill="var(--ink-faint)">N</text>
+          <text x="188" y="103" text-anchor="middle" font-family="Martian Mono, monospace" font-size="9" fill="var(--ink-faint)">E</text>
+          <text x="100" y="196" text-anchor="middle" font-family="Martian Mono, monospace" font-size="9" fill="var(--ink-faint)">S</text>
+          <text x="12" y="103" text-anchor="middle" font-family="Martian Mono, monospace" font-size="9" fill="var(--ink-faint)">W</text>
+        </svg>
+      </div>
+      <div class="radar-legend">
+        <div class="row"><span class="dot" style="background:var(--radgreen)"></span> strong coverage — top 3 across most pins</div>
+        <div class="row"><span class="dot" style="background:var(--amber)"></span> mixed — visible but not dominant</div>
+        <div class="row"><span class="dot" style="background:#B23B3B"></span> weak — the direction worth a location page</div>
+        <p style="margin:0.3rem 0 0;color:var(--ink-soft);">Every scan reads like this, per keyword — which is exactly what the Local Rank Analysis report turns into named nearby cities.</p>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Run a scan</a></li>
+        <li><a href="#s3" data-target="s3">03 · Read the Heatmap</a></li>
+        <li><a href="#s4" data-target="s4">04 · One-offs</a></li>
+        <li><a href="#s5" data-target="s5">05 · What changed</a></li>
+        <li><a href="#s6" data-target="s6">06 · History</a></li>
+        <li><a href="#s7" data-target="s7">07 · The Local Rank Analysis report</a></li>
+        <li><a href="#s8" data-target="s8">08 · Troubleshooting</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">This tracks <strong>Google Maps / local-pack</strong> rank across a grid
+          of simulated searches around the business — never the organic blue-link SERP, which is
+          the separate Organic Rank Tracker.</p>
+        <p>Setup needs, at minimum, a Place ID and center lat/lng before any scan can run — the
+          Setup tab warns explicitly if it's missing. Weekly scanning with zero active keywords
+          also silently skips that client, flagged the same way. A geo-grid bills per keyword ×
+          pin — scan a subset when you just want to spot-check.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Run a scan</h2></div>
+        <p><strong>Run scan now</strong> (Heatmap or One-offs) — the button shows a count when
+          you've picked a subset. A <strong>Stop scan</strong> button appears mid-run; a
+          <strong>Weekly: On/Off</strong> toggle flips scheduling without opening Setup.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Read the Heatmap</h2></div>
+        <p>A completed scan gives, per keyword: <strong>At a glance</strong> (average rank,
+          top-3/top-10 coverage, found pins, strongest/weakest directions, top competitor), the
+          grid map itself, and an expandable full numeric grid. A legend maps rank bands to color
+          (1–3 / 4–7 / 8–10 / 11–15 / 16–20 / not ranked).</p>
+        <div class="bearing">
+          <p class="bearing-label">a one-off carries its own flag</p>
+          <p>A manual scan shows an indigo "One-off · not in reporting" pill — never mistaken for
+            the client's scheduled record.</p>
+        </div>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>One-offs</h2></div>
+        <p>Manual spot-checks — excluded from trends, client reports, and alerts on purpose, and
+          they don't auto-generate a report (use <strong>Generate report</strong> on the row if you
+          want one anyway). Use the keyword-scope picker to keep cost down.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>What changed</h2></div>
+        <p>Compares two scans: performance over time, coverage by area, alerts (Mark all read /
+          Read / Dismiss), and a week-over-week picker. A radius change between the two compared
+          scans is auto-normalized to the shared area, flagged with a banner — deliberate, not a
+          bug.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>History</h2></div>
+        <p><strong>Scheduled scans only</strong> — the client's real record. Trend chart, Share of
+          Local Voice, local relevance scorecard, competitor momentum/intelligence, review
+          analytics, backlink authority, GBP profile audit. Trash icon deletes a scan (blocked
+          in-flight); <strong>Clear all</strong> is scoped per tab.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>The Local Rank Analysis report</h2></div>
+        <p>Auto-generated after every scheduled scan (one-offs skip this — no LLM spend for a scan
+          outside the client's record). Contents: ring/octant analytics, a narrative, a saved map
+          image, <strong>weak coverage areas</strong> named to real nearby cities, and
+          <strong>suggested hyper-local page targets</strong> with Google Maps deep links.</p>
+        <div class="fix">
+          <p>View it via the accordion on a keyword's Heatmap card, or <strong>Printable
+            report</strong> on History (browser print → Save as PDF). If a Drive folder is
+            configured, it also auto-publishes as a Google Doc.</p>
+        </div>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Widened the grid, rankings look worse</td><td>They aren't — comparisons auto-crop to the shared area and flag it.</td></tr>
+          <tr><td class="term">A scan isn't on the trend chart</td><td>It was a one-off — only scheduled scans feed trends/alerts/reports.</td></tr>
+          <tr><td class="term">Weekly scanning stopped updating</td><td>Check for zero active keywords on Setup.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Run a full scan</td><td>Heatmap/One-offs → <strong>Run scan now</strong></td></tr>
+            <tr><td class="term">Run a cheaper partial scan</td><td>Keyword-scope picker</td></tr>
+            <tr><td class="term">Stop a scan</td><td><strong>Stop scan</strong></td></tr>
+            <tr><td class="term">See what declined</td><td><strong>What changed</strong></td></tr>
+            <tr><td class="term">Get the client report</td><td>The Local Rank Analysis accordion, or Printable report</td></tr>
+            <tr><td class="term">Toggle weekly auto-scan</td><td><strong>Weekly: On/Off</strong></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Maps Geo-Grid Field Guide · AR Tools new-hire series · full text at <code>docs/maps-geogrid-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

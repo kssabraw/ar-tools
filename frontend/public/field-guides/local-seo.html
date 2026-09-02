@@ -1,0 +1,387 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A surveyor's walkthrough for the Local SEO Writer — plotting, staking, and scoring service-area pages.">
+<title>Local SEO Writer Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600;6..72,700&family=Public+Sans:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
+<style>
+  :root{
+    --paper:#F1EAD9; --paper-raised:#FCF9F1; --ink:#26241C; --ink-soft:#5D5946; --ink-faint:#94907A;
+    --line:#DFD3B6; --line-strong:#C9BB94;
+    --stake:#C1652B; --stake-ink:#8A4419; --stake-soft:#F1DCC8;
+    --contour:#4B6B4E; --contour-ink:#324A34; --contour-soft:#DEE7DA;
+    --plot-blue:#3C5F73; --plot-blue-soft:#DAE6EA;
+    --shadow: 0 1px 2px rgba(38,36,28,0.07), 0 10px 26px rgba(38,36,28,0.06); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#1B1912; --paper-raised:#23201A; --ink:#EDE6D4; --ink-soft:#B7AF95; --ink-faint:#7C7660;
+      --line:#39331F; --line-strong:#4A422A;
+      --stake:#E08A52; --stake-ink:#F0B78C; --stake-soft:#33220F;
+      --contour:#7DAE81; --contour-ink:#B7DBB9; --contour-soft:#1E2B1F;
+      --plot-blue:#7FA7BC; --plot-blue-soft:#1C2A31;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#1B1912; --paper-raised:#23201A; --ink:#EDE6D4; --ink-soft:#B7AF95; --ink-faint:#7C7660;
+    --line:#39331F; --line-strong:#4A422A;
+    --stake:#E08A52; --stake-ink:#F0B78C; --stake-soft:#33220F;
+    --contour:#7DAE81; --contour-ink:#B7DBB9; --contour-soft:#1E2B1F;
+    --plot-blue:#7FA7BC; --plot-blue-soft:#1C2A31;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Public Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Newsreader", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--stake-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--stake); outline-offset:2px; }
+  code,.mono{ font-family:"Space Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Space Mono",monospace; font-size:0.7rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--stake-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Newsreader",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Space Mono",monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Plat map — the one diagram only this subject has */
+  .plat{ padding:1.9rem 0 2.1rem; }
+  .plat-cap{ font-family:"Space Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.9rem; }
+  .plat-grid{ display:grid; grid-template-columns:repeat(10,1fr); gap:3px; max-width:640px; }
+  .parcel{ aspect-ratio:1; border-radius:2px; }
+  .parcel.found{ background:var(--contour); }
+  .parcel.onsite{ background:var(--plot-blue); }
+  .parcel.missing{ background:var(--stake); }
+  .plat-legend{ display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:0.9rem; font-size:0.82rem; color:var(--ink-soft); }
+  .plat-legend span{ display:inline-flex; align-items:center; gap:0.4rem; }
+  .swatch{ width:11px; height:11px; border-radius:2px; display:inline-block; }
+  .plat-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:42rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Space Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--stake-ink); border-left-color:var(--stake); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Space Mono",monospace; font-size:0.82rem; color:var(--stake-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .survey-note{ position:relative; background:var(--stake-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .survey-note::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--stake); border-radius:2px; }
+  .survey-label{ font-family:"Space Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--stake-ink); font-weight:700; margin:0 0 0.3rem; }
+  .survey-note p{ margin:0; }
+
+  .grounded{ background:var(--contour-soft); border-left:3px solid var(--contour); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .grounded p{ margin:0; }
+  .grounded strong{ color:var(--contour-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Space Mono",monospace; font-size:0.63rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  .survey-log{ border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); margin:1.2rem 0; overflow:hidden; }
+  .survey-log-head{ display:flex; align-items:center; justify-content:space-between; padding:0.7rem 1.1rem; border-bottom:1px solid var(--line); background:var(--paper); }
+  .survey-log-head span{ font-family:"Space Mono",monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+  .survey-log-body{ padding:0.9rem 1.1rem 1.1rem; }
+  .survey-row{ display:flex; gap:0.85rem; align-items:baseline; padding:0.4rem 0; font-size:0.88rem; }
+  .survey-row .tag{ flex:none; width:9.5rem; font-weight:600; }
+  .survey-row .msg{ color:var(--ink-soft); }
+
+  .voice-verdict{ display:inline-flex; align-items:center; gap:0.5rem; border-radius:999px; padding:0.4rem 0.9rem; font-size:0.82rem; font-weight:600; margin:0.6rem 0; }
+  .voice-verdict.good{ background:var(--contour-soft); color:var(--contour-ink); }
+  .voice-verdict.warn{ background:var(--stake-soft); color:var(--stake-ink); }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Space Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--stake-soft); border-color:var(--stake); }
+    .plat-grid{ grid-template-columns:repeat(10,1fr); max-width:100%; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="8" y="10" width="48" height="36" fill="none" stroke="var(--ink)" stroke-width="1.4"/>
+          <line x1="8" y1="22" x2="56" y2="22" stroke="var(--ink-faint)" stroke-width="1"/>
+          <line x1="24" y1="10" x2="24" y2="46" stroke="var(--ink-faint)" stroke-width="1"/>
+          <line x1="40" y1="10" x2="40" y2="46" stroke="var(--ink-faint)" stroke-width="1"/>
+          <rect x="24" y="22" width="16" height="24" fill="var(--stake)" opacity="0.85"/>
+          <path d="M50 44 L50 58 M45 49 L55 49" stroke="var(--stake-ink)" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Content</p>
+        <h1>Local SEO Writer, plot by plot</h1>
+        <p class="dek">Every service × area combination is a parcel worth checking before you
+          stake a claim. This is how the tool surveys the ground, plots the pages, and scores
+          what gets built.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">10–12</span><span class="meta-label">Minutes per page</span></div>
+      <div class="meta-item"><span class="meta-num tnum">75</span><span class="meta-label">Reoptimize threshold</span></div>
+      <div class="meta-item"><span class="meta-num tnum">3</span><span class="meta-label">Existing-page states</span></div>
+    </div>
+    <div class="plat">
+      <p class="plat-cap">A Plan Silo result — the plat map for one seed service + area</p>
+      <div class="plat-grid" id="platGrid" aria-hidden="true"></div>
+      <div class="plat-legend">
+        <span><i class="swatch" style="background:var(--contour)"></i> found — already in the tool</span>
+        <span><i class="swatch" style="background:var(--plot-blue)"></i> on site — a generic page already lives there</span>
+        <span><i class="swatch" style="background:var(--stake)"></i> missing — the real opportunity</span>
+      </div>
+      <p class="plat-note">Only the orange parcels get offered for creation. Everything else is
+        already claimed — by you or by the client's own site.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Write a single page</a></li>
+        <li><a href="#s3" data-target="s3">03 · The precheck</a></li>
+        <li><a href="#s4" data-target="s4">04 · Plan a whole silo</a></li>
+        <li><a href="#s5" data-target="s5">05 · Score &amp; reoptimize</a></li>
+        <li><a href="#s6" data-target="s6">06 · Saved Pages &amp; Drafts</a></li>
+        <li><a href="#s7" data-target="s7">07 · Publishing</a></li>
+        <li><a href="#s8" data-target="s8">08 · The brand-voice card</a></li>
+        <li><a href="#s9" data-target="s9">09 · A worked survey</a></li>
+        <li><a href="#s10" data-target="s10">10 · Troubleshooting</a></li>
+        <li><a href="#s11" data-target="s11">11 · Practice exercises</a></li>
+        <li><a href="#s12" data-target="s12">12 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">Brand Voice and ICP are the same client-level settings the whole suite
+          shares — set them once and every generator, this one included, reads them. A Google
+          Business Profile makes the survey sharper (service-area detection, the map-pack check,
+          auto-fill) but isn't required — pages still generate without one.</p>
+        <div class="grounded">
+          <p><strong>Reference page structures</strong> are optional but worth setting on the
+            client form — point local landing / service / location / blog post at a real example
+            URL and generated pages mirror how the client actually organizes one.</p>
+        </div>
+        <table><tbody>
+          <tr><td class="term">Frozen clients</td><td>Can't generate or reoptimize. Plan Silo's own research step still runs while frozen — it's analysis, not output — only creating the missing pages is blocked.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Write a single page</h2></div>
+        <p><strong>New Page</strong> tab: enter a <strong>Service</strong> (e.g. "emergency
+          plumber") and start typing an <strong>Area / Location</strong> — you have to pick a
+          suggestion from the autocomplete; a free-typed place that doesn't resolve is rejected,
+          which keeps the geo-targeting honest. For a service-area business with no fixed
+          address, a city field appears — it feeds the optional map-pack rankability check below,
+          not generation itself.</p>
+        <p>Click <strong>Create new page</strong>. Generation takes 10–12 minutes — click
+          <strong>Leave &amp; finish in the background</strong> and it lands in Saved Pages on its
+          own.</p>
+        <h3>Check map pack</h3>
+        <p>An optional button on the same form runs a quick Maps rankability check before you
+          commit to generating — worth using when you're not sure this service + area is
+          realistically winnable in the local pack.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>The precheck</h2></div>
+        <p>Before anything generates, the tool checks whether a page for this service + area
+          might already exist — saved in the tool, live on the client's site, or already ranking.
+          Matches are tagged <strong>Ranking #N</strong> / <strong>Generated in tool</strong> /
+          <strong>On live site</strong> (plus a Blog post flag if it looks like an article), each
+          with a <strong>Reoptimize this page</strong> button.</p>
+        <div class="survey-note">
+          <p class="survey-label">not a fence, a warning flag</p>
+          <p>If none of the matches are actually the right page, <strong>Write a new page
+            anyway</strong> sits at the bottom — the precheck never silently blocks you, it just
+            makes sure you're not about to stake a claim on ground someone already surveyed.</p>
+        </div>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Plan a whole silo at once</h2></div>
+        <p><strong>Plan Silo</strong> tab: enter a seed <strong>Service</strong> + <strong>Area /
+          Location</strong> and click <strong>Plan silo</strong> — 4–6 minutes to research the
+          topic, discover related service silos, and check every candidate against what the
+          client already has (that's the plat map above). If the client has no website on file,
+          everything reads "missing" — there's nothing to check against.</p>
+        <p>Tick the missing parcels you want (or <strong>Select all missing</strong>), then
+          <strong>Create N selected page(s)</strong> — each one runs the same full generation as a
+          single page, as background jobs, with a live counter ("3 / 8 done") and failures called
+          out separately for retry.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Score &amp; reoptimize</h2></div>
+        <h3>Score tab</h3>
+        <p>Checks a page's composite score and brand-voice scorecard without rewriting anything —
+          a quick "is this actually a problem" read before committing to a rewrite pass.</p>
+        <h3>Reoptimize tab</h3>
+        <p>A multi-line box — one URL per line handles a single page too — where a bulk line can
+          be <code>URL | keyword | area</code> to pin the target for that specific page. A page
+          gets rewritten when it's below <strong>75/100 on SEO, or fails its brand-voice bar</strong>
+          — a page clearing both is skipped with a note. Unlike Blog/Ecommerce reoptimize, there's
+          no notes field here — you can't steer a specific rewrite beyond what the scorer's own
+          deficiencies drive.</p>
+        <p>Destinations: <strong>Save in the app</strong> (always) and optionally
+          <strong>publish to Google Doc</strong>. GitHub and WordPress exist for this tool but are
+          marked "Coming soon" for reoptimize specifically.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Saved Pages &amp; Drafts</h2></div>
+        <p><strong>Saved Pages</strong> lists everything generated or reoptimized, with a
+          composite score and a Generated/Reoptimized badge. Deleting there is a soft delete — it
+          moves to <strong>Drafts</strong>, where you can <strong>Restore</strong> it or delete it
+          permanently; <strong>Empty drafts</strong> clears the whole bin at once.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Publishing</h2></div>
+        <p><strong>Publish to Google Doc</strong> and <strong>Publish to WordPress</strong> (Draft
+          or Publish) live on a page's detail view; GitHub publishing lives on the bulk publisher
+          on Saved Pages instead. A generated page's detail view also carries a
+          <strong>GBP Posts</strong> tab (AI-suggested posts + the full composer) alongside
+          Related Pages.</p>
+        <p>If publish is blocked by the client's voice card, check the panel below, fix the
+          wording, or click <strong>Publish anyway</strong> to override deliberately. Regulated
+          clients carry a separate, non-overridable compliance gate.</p>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>The brand-voice card</h2></div>
+        <p>Every generated page (for a client with a guide on file) carries a headline verdict
+          plus a 0–100 score:</p>
+        <span class="voice-verdict good">Sounds like this client</span>
+        <span class="voice-verdict warn">Drifting from the guide</span>
+        <p>Eight scored dimensions follow, worst first — a dimension below 80 shows a real quoted
+          excerpt proving where it drifted; a passing one shows no quote. No guide on file → no
+          panel at all, deliberately, so a missing panel is never mistaken for "checked and
+          passed." A guide that exists but couldn't be scored shows a distinct <strong>"Brand
+          voice not checked"</strong> warning instead.</p>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>A worked survey</h2></div>
+        <p class="mono" style="font-size:0.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 0.6rem;">Riverside Plumbing · seed: "emergency plumber" + Des Moines</p>
+        <div class="survey-log">
+          <div class="survey-log-head"><span>Plan Silo results</span><span class="mono">21 candidates</span></div>
+          <div class="survey-log-body">
+            <div class="survey-row"><span class="tag">Emergency plumber</span><span class="msg">on_site — a generic page already covers Des Moines</span></div>
+            <div class="survey-row"><span class="tag">Emergency plumber Ankeny</span><span class="msg">missing — offered for creation</span></div>
+            <div class="survey-row"><span class="tag">Emergency plumber Waukee</span><span class="msg">missing — offered for creation</span></div>
+            <div class="survey-row"><span class="tag">Blocked drain Des Moines</span><span class="msg">found — already generated in tool</span></div>
+          </div>
+        </div>
+        <p>Two missing parcels selected → <strong>Create 2 selected pages</strong> → both land in
+          Saved Pages roughly 11 minutes later, each scored on arrival.</p>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">The precheck found the wrong page</td><td>Use "Write a new page anyway" — it never forces a match.</td></tr>
+          <tr><td class="term">A city got rejected</td><td>Pick from the autocomplete; a free-typed location that doesn't resolve isn't accepted.</td></tr>
+          <tr><td class="term">Everything shows "missing"</td><td>Check the client has a website on file — without one there's nothing to check existing pages against.</td></tr>
+          <tr><td class="term">Reoptimize skipped a page</td><td>It only rewrites a page failing SEO (75/100) or its voice bar — clearing both is a deliberate skip, and there's no notes field to force it here.</td></tr>
+          <tr><td class="term">No brand-voice panel</td><td>The client has no guide on file — set one and it appears on the next generate or reoptimize.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Practice exercises</h2></div>
+        <ul class="exercise">
+          <li>Write a single page and watch the precheck run before it commits to generating.</li>
+          <li>Run Plan Silo on a client with a website on file and read the found/on-site/missing split.</li>
+          <li>Bulk-create two missing pages and watch the live counter.</li>
+          <li>Score a live URL, then Reoptimize it and compare the before/after.</li>
+          <li>Soft-delete a page, then restore it from Drafts.</li>
+        </ul>
+      </section>
+
+      <section id="s12" class="block">
+        <div class="block-head"><span class="block-num">12</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Write one page</td><td><strong>New Page</strong></td></tr>
+            <tr><td class="term">Avoid duplicating a page</td><td>Automatic — the precheck</td></tr>
+            <tr><td class="term">Research &amp; bulk-create a silo</td><td><strong>Plan Silo</strong> → Create N selected</td></tr>
+            <tr><td class="term">Fix a live page</td><td><strong>Reoptimize</strong> → paste URL(s)</td></tr>
+            <tr><td class="term">See everything generated</td><td><strong>Saved Pages</strong></td></tr>
+            <tr><td class="term">Recover a delete</td><td><strong>Drafts</strong> → Restore</td></tr>
+            <tr><td class="term">Ship a page</td><td>Google Doc / WordPress (bulk includes GitHub)</td></tr>
+            <tr><td class="term">Override a voice block</td><td><strong>Publish anyway</strong></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Local SEO Writer Field Guide · AR Tools new-hire series · full text at <code>docs/local-seo-writer-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var cells = ['found','found','missing','onsite','found','missing','missing','found','onsite','found',
+                 'missing','found','found','missing','onsite','found','missing','found','found','missing'];
+    var grid = document.getElementById('platGrid');
+    cells.forEach(function(c){ var d = document.createElement('div'); d.className = 'parcel ' + c; grid.appendChild(d); });
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, BookOpen, Rocket, ListChecks, FileText, Building2, Sparkles, TrendingUp,
   MapPin, Eye, FileSearch, FileBarChart, ClipboardList, Settings, LifeBuoy, ArrowRight,
-  Plus, Pencil, Trash2, ExternalLink,
+  Plus, Pencil, Trash2, ExternalLink, Package, Layers, Share2, Search, Radar, Megaphone, Compass,
 } from 'lucide-react'
 import { Markdown } from '../components/Markdown'
 import { api } from '../lib/api'
@@ -19,6 +19,7 @@ import type { Guide, GuideCategory } from '../lib/types'
 const ICON_KEYS = [
   'Rocket', 'BookOpen', 'ListChecks', 'FileText', 'Building2', 'Sparkles',
   'TrendingUp', 'MapPin', 'Eye', 'FileSearch', 'FileBarChart', 'ClipboardList', 'Settings',
+  'Package', 'Layers', 'Share2', 'Search', 'Radar', 'Megaphone', 'Compass',
 ] as const
 
 const ICONS: Record<string, React.ReactNode> = {
@@ -27,6 +28,9 @@ const ICONS: Record<string, React.ReactNode> = {
   TrendingUp: <TrendingUp size={20} />, MapPin: <MapPin size={20} />, Eye: <Eye size={20} />,
   FileSearch: <FileSearch size={20} />, FileBarChart: <FileBarChart size={20} />,
   ClipboardList: <ClipboardList size={20} />, Settings: <Settings size={20} />,
+  Package: <Package size={20} />, Layers: <Layers size={20} />, Share2: <Share2 size={20} />,
+  Search: <Search size={20} />, Radar: <Radar size={20} />, Megaphone: <Megaphone size={20} />,
+  Compass: <Compass size={20} />,
 }
 
 const CATEGORIES: GuideCategory[] = ['Start here', 'Content', 'Tracking', 'Reporting', 'Setup']
@@ -37,6 +41,9 @@ const CATEGORIES: GuideCategory[] = ['Start here', 'Content', 'Tracking', 'Repor
 // Keyed by slug so it degrades harmlessly if a guide is renamed/removed.
 const FIELD_GUIDE_SLUGS = new Set([
   'everhour-time', 'sermastr', 'task-manager', 'pace-qa', 'website-builder',
+  'blog-writer', 'local-seo', 'ecommerce', 'keyword-research', 'topic-fanout',
+  'content-syndication', 'rank-tracker', 'maps-geogrid', 'ai-visibility',
+  'domain-intelligence', 'leadoff', 'gbp-posts', 'client-reports', 'dora',
 ])
 
 function icon(key: string): React.ReactNode {
