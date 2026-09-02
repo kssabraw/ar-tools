@@ -116,11 +116,62 @@ _inflight_jobs: set[str] = set()
 _CLAIM_SCAN_LIMIT = 10
 
 
+def order_candidates_by_fairness(
+    candidates: list[dict], running_by_client: dict[str, int], max_per_client: int | None
+) -> list[dict]:
+    """Reorder bulk-lane claim candidates so a client already at the per-client
+    in-flight cap is tried LAST. One client's bulk batch thus yields a slot to
+    any OTHER client with pending work, but never IDLES a slot: a capped client
+    alone in the window is still claimed (just after everyone else), so the cap
+    is contention-only. Stable — the priority/scheduled_at order is preserved
+    within the under-cap and at-cap groups. Pure; no cap (or 0) → order unchanged.
+
+    NB: this only engages when a client can hold >1 slot at once, i.e. with more
+    than one bulk worker (bulk_lane_workers > 1). At the default single bulk
+    worker a client's running count never exceeds 1, so the cap is a no-op."""
+    if not max_per_client:
+        return candidates
+    return sorted(
+        candidates,
+        key=lambda j: running_by_client.get(j.get("entity_id"), 0) >= max_per_client,
+    )
+
+
+def _running_counts_by_client(
+    job_types: list[str] | None, exclude_types: list[str] | None,
+    priority_min: int | None, priority_max: int | None,
+) -> dict[str, int]:
+    """RUNNING job count per client (entity_id) under the SAME filter the lane
+    claims with — the bulk lane's per-client fairness input, one query per claim
+    tick. Best-effort: a failure returns {} so the cap simply doesn't engage."""
+    try:
+        q = get_supabase().table("async_jobs").select("entity_id").eq("status", "running")
+        if job_types:
+            q = q.in_("job_type", job_types)
+        if exclude_types:
+            q = q.not_.in_("job_type", exclude_types)
+        if priority_min is not None:
+            q = q.gte("priority", priority_min)
+        if priority_max is not None:
+            q = q.lte("priority", priority_max)
+        rows = q.execute().data or []
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.warning("job_worker.running_count_failed", extra={"error": str(exc)})
+        return {}
+    counts: dict[str, int] = {}
+    for r in rows:
+        cid = r.get("entity_id")
+        if cid:
+            counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
 async def _claim_next_job(
     job_types: list[str] | None = None,
     exclude_types: list[str] | None = None,
     priority_min: int | None = None,
     priority_max: int | None = None,
+    max_per_client: int | None = None,
 ) -> dict | None:
     """Claim the highest-priority, then oldest, claimable pending job (optionally
     restricted to `job_types` — the interactive/fanout lane's filter — or with
@@ -158,6 +209,9 @@ async def _claim_next_job(
         )
         jobs = result.data or []
 
+        # Pre-pass: fail exhausted rows (they'd freeze the lane — nothing settles a
+        # *pending* row) and collect the live candidates.
+        candidates: list[dict] = []
         for job in jobs:
             if job.get("attempts", 0) >= job.get("max_attempts", 2):
                 # Exhausted but never settled to a terminal state (e.g. a failed
@@ -178,8 +232,22 @@ async def _claim_next_job(
                                "attempts": job.get("attempts", 0)},
                     )
                 continue
+            candidates.append(job)
 
-            # Atomic claim: the status='pending' guard means when the two in-process
+        # Bulk-lane per-client fairness: try under-cap clients first so one
+        # client's batch can't hold every bulk slot while another client's batch
+        # waits (see order_candidates_by_fairness — a no-op at one bulk worker).
+        # Best-effort: the running count and the atomic claim below aren't one
+        # operation, so a brief overshoot past the cap self-corrects next tick.
+        if max_per_client and candidates:
+            candidates = order_candidates_by_fairness(
+                candidates,
+                _running_counts_by_client(job_types, exclude_types, priority_min, priority_max),
+                max_per_client,
+            )
+
+        for job in candidates:
+            # Atomic claim: the status='pending' guard means when the in-process
             # lanes race for the same row, exactly one PATCH matches — the loser
             # gets an empty result and steps to the next candidate.
             update_result = (
@@ -1083,6 +1151,7 @@ async def job_worker(
     exclude_types: list[str] | None = None,
     priority_min: int | None = None,
     priority_max: int | None = None,
+    max_per_client: int | None = None,
 ) -> None:
     """Background loop: poll async_jobs every N seconds and process one job per tick.
 
@@ -1104,7 +1173,9 @@ async def job_worker(
         try:
             if lane == "main":
                 await _reap_stale_jobs()
-            job = await _claim_next_job(job_types, exclude_types, priority_min, priority_max)
+            job = await _claim_next_job(
+                job_types, exclude_types, priority_min, priority_max, max_per_client
+            )
             if job:
                 logger.info(
                     "async_job_claimed",

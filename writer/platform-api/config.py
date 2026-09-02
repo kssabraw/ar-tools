@@ -204,6 +204,15 @@ class Settings(BaseSettings):
     # container serves every lane, so watch its memory when raising this, and
     # size the Anthropic key pool (`anthropic_api_keys`) to match. 0 disables.
     bulk_lane_workers: int = 1
+    # Soft per-client fairness cap on the BULK lanes: at most this many of a
+    # single client's background jobs run CONCURRENTLY while another client also
+    # has bulk work pending — so one client's 40-page batch can't hold every bulk
+    # slot and make another client's batch wait. Contention-only (a client alone
+    # still uses every slot; the cap only yields to a DIFFERENT client) and
+    # best-effort (a brief overshoot self-corrects). Only ENGAGES when
+    # bulk_lane_workers > 1 — at the default single bulk worker a client can hold
+    # at most one slot, so the cap is a no-op. Keep < bulk_lane_workers. 0 disables.
+    bulk_lane_max_per_client: int = 2
     # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
     # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
     # reads it via fanout.config.get_settings(), a different Settings class, so a
