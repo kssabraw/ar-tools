@@ -487,6 +487,111 @@ def enqueue_cells(
     return job_ids
 
 
+PUBLISH_JOB_TYPE = "local_seo_matrix_publish"
+
+
+def _publish_scheduled_at(index: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    spacing = settings.local_seo_matrix_publish_spacing_seconds
+    return (datetime.now(timezone.utc) + timedelta(seconds=index * spacing)).isoformat()
+
+
+def start_publish(
+    matrix_id: str, client_id: str, user_id: str, *,
+    destination: Optional[str] = None, status: Optional[str] = None,
+    force_voice: bool = False, cell_ids: Optional[list[str]] = None,
+) -> dict:
+    """"Publish all done cells" (plan §5.3): one `local_seo_matrix_publish` job
+    per selected cell, staggered a few seconds apart (publishing is seconds, not
+    minutes), each publishing the cell's page to `destination` (default: the
+    matrix's) and recording the outcome on the cell. `force_voice` is the same
+    explicit brand-guide override the per-page Publish button offers — meant for
+    a single `publish_blocked` cell the user has seen the words for, so it is
+    only honoured together with explicit `cell_ids`."""
+    matrix = _matrix_row(matrix_id, client_id)
+    reconcile(matrix_id)
+    cells = _cells(matrix_id)
+    selected = core.select_publishable(cells, cell_ids)
+    if not selected:
+        return {"job_ids": [], "cell_ids": []}
+    dest = destination or matrix.get("publish_destination") or "google_docs"
+    pub_status = status or matrix.get("publish_status") or "draft"
+    force = bool(force_voice and cell_ids)
+    rows = [
+        {
+            "job_type": PUBLISH_JOB_TYPE,
+            "entity_id": client_id,
+            "scheduled_at": _publish_scheduled_at(i),
+            "payload": {
+                "client_id": client_id,
+                "matrix_id": matrix_id,
+                "matrix_cell_id": cell["id"],
+                "page_id": cell["page_id"],
+                "user_id": user_id,
+                "destination": dest,
+                "status": pub_status,
+                "force_voice": force,
+            },
+        }
+        for i, cell in enumerate(selected)
+    ]
+    inserted = get_supabase().table("async_jobs").insert(rows).execute().data or []
+    job_ids: list[str] = []
+    for cell, job in zip(selected, inserted):
+        _apply_patches([(cell["id"], {"status": "publishing", "job_id": job["id"], "error": None})])
+        job_ids.append(job["id"])
+    logger.info(
+        "local_seo_matrix.publish_enqueued",
+        extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids), "destination": dest},
+    )
+    return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected]}
+
+
+async def run_publish_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_matrix_publish': publish one
+    cell's page and record the outcome on the cell AND in the job result (so the
+    read-side reconcile can re-apply it if the cell write was lost). The job
+    itself completes whatever the publish outcome — a blocked / failed publish is
+    a recorded outcome, not a job failure."""
+    from services import local_seo_service
+
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    sb = get_supabase()
+    cell_id = payload.get("matrix_cell_id")
+    page_id = payload.get("page_id")
+    try:
+        result = await local_seo_service.publish_page(
+            page_id, payload.get("user_id") or "",
+            destination=payload.get("destination") or "google_docs",
+            status=payload.get("status") or "draft",
+            force_voice=bool(payload.get("force_voice")),
+        )
+        outcome = core.publish_outcome_from_result(result or {})
+    except HTTPException as exc:
+        outcome = core.publish_outcome_from_error(str(exc.detail))
+    except Exception as exc:  # noqa: BLE001
+        outcome = core.publish_outcome_from_error(str(exc))
+    status, url, error = outcome
+    try:
+        if cell_id:
+            record_publish_outcome(cell_id, page_id, status, url, error)
+    except Exception as exc:  # noqa: BLE001 — the job result still carries it
+        logger.warning("local_seo_matrix.publish_record_failed", extra={"job_id": job_id, "error": str(exc)})
+    sb.table("async_jobs").update(
+        {
+            "status": "complete",
+            "result": {"status": status, "url": url, "error": error, "page_id": page_id},
+            "completed_at": "now()",
+        }
+    ).eq("id", job_id).execute()
+    logger.info(
+        "local_seo_matrix.publish_job_complete",
+        extra={"job_id": job_id, "cell_id": cell_id, "outcome": status},
+    )
+
+
 def record_publish_outcome(cell_id: str, page_id: Optional[str], status: str, url: Optional[str], error: Optional[str]) -> None:
     """Record the drip's auto-publish result on the cell: `published` (+url) /
     `publish_failed` / `publish_blocked`. Carries the page id too, so the write

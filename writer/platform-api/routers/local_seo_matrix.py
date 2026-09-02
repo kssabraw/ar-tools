@@ -21,6 +21,8 @@ from models.local_seo_matrix import (
     MatrixEstimate,
     MatrixGenerateRequest,
     MatrixGenerateResult,
+    MatrixPublishRequest,
+    MatrixPublishResult,
     MatrixRecheckResult,
     MatrixReleaseRequest,
     MatrixReleaseState,
@@ -138,6 +140,23 @@ async def generate_matrix_cells(
         force_refresh=body.force_refresh,
     )
     return MatrixGenerateResult(**result)
+
+
+@router.post(_BASE + "/{matrix_id}/publish", response_model=MatrixPublishResult)
+async def publish_matrix_cells(
+    client_id: UUID, matrix_id: UUID, body: MatrixPublishRequest, auth: dict = Depends(require_auth),
+) -> MatrixPublishResult:
+    """Publish all done cells (or the given ones) to one destination — one
+    background publish job per cell; the grid shows each outcome. Freeze-gated:
+    publishing is output."""
+    _enabled()
+    assert_not_frozen(str(client_id))
+    result = store.start_publish(
+        str(matrix_id), str(client_id), auth["user_id"],
+        destination=body.destination, status=body.status, force_voice=body.force_voice,
+        cell_ids=[str(c) for c in body.cell_ids] if body.cell_ids else None,
+    )
+    return MatrixPublishResult(**result)
 
 
 @router.get(_BASE + "/{matrix_id}/release", response_model=MatrixReleaseState)

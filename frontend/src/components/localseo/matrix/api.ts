@@ -54,6 +54,14 @@ export const matrixApi = {
     `${base(clientId)}/${matrixId}/generate`, body,
   ),
 
+  // Bulk publish: one background publish job per done cell (or the given cells);
+  // the grid shows each outcome. force_voice is honoured only with explicit ids.
+  publish: (
+    clientId: string,
+    matrixId: string,
+    body: { destination?: 'google_docs' | 'wordpress' | 'github' | null; status?: 'draft' | 'publish' | null; force_voice?: boolean; cell_ids?: string[] | null },
+  ) => api.post<{ job_ids: string[]; cell_ids: string[] }>(`${base(clientId)}/${matrixId}/publish`, body),
+
   // Drip release: immediate batch now, then N per day / week / month — each
   // cell generated THEN published to the matrix's destination.
   getRelease: (clientId: string, matrixId: string) =>
