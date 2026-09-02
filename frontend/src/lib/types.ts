@@ -1822,21 +1822,58 @@ export interface StrategyProposal {
   costed_items?: StrategyCostedItem[]
   effort: 'low' | 'medium' | 'high' | null
   assignee_hint: string | null
-  status: 'proposed' | 'approved' | 'dismissed' | 'expired'
+  // 'superseded' = replaced by a newer recovery plan (system state, not a
+  // human verdict — never decidable, hidden from the open list).
+  status: 'proposed' | 'approved' | 'dismissed' | 'expired' | 'superseded'
   requires: 'none' | 'approval' | 'senior'
+  // goal_recovery reviews: the cumulative budget tier assigned server-side by
+  // running total in priority order — 'within_budget' | 'plus_25' | 'plus_50' |
+  // 'plus_100' | 'over' | 'unbudgeted'.
+  tier?: string
+  cumulative_cost_usd?: number
   decided_by?: string | null
   // Strategist Phase 5: the Asana task created when the proposal was approved
   // (absent when Asana is unconfigured / the client has no project mapping).
   asana_task?: { gid: string; url: string } | null
 }
 
+// goal_recovery reviews: the budget snapshot the plan was costed against
+// (persisted so an edited retainer never re-tiers an old plan).
+export interface StrategyReviewBudget {
+  envelope: {
+    retainer_monthly?: number | null
+    margin_used?: number
+    deployable?: number
+    reporting_cost?: number
+    baseline_stack_cost?: number
+    discretionary?: number
+    covers_baseline?: boolean
+  }
+  tiers: Record<string, number | null>
+  tier_steps: number[]
+  fundable_count: number
+  total_cost_usd: number
+  by_tier: Record<string, number>
+  root_cause: string
+  goals: Array<{
+    goal_id?: string | null
+    label?: string | null
+    goal_type?: string | null
+    status?: string | null
+    weeks_behind?: number
+    current_value?: number | null
+    target_value?: number | null
+  }>
+}
+
 export interface StrategyReview {
   id: string
   client_id: string
-  trigger: 'scheduled' | 'escalation' | 'on_demand'
+  trigger: 'scheduled' | 'escalation' | 'on_demand' | 'monthly_plan_review' | 'goal_recovery'
   status: 'running' | 'complete' | 'failed'
   model: string | null
   assessment: string | null
+  budget?: StrategyReviewBudget | null
   findings: StrategyFinding[]
   proposals: StrategyProposal[]
   questions: string[]

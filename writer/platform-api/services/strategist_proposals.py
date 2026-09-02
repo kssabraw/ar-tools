@@ -24,7 +24,11 @@ from db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
+# A human can only APPROVE or DISMISS; ``superseded`` is a system state (the
+# proposal was replaced by a newer recovery plan — services/goal_recovery.py)
+# that closes the proposal without a human verdict.
 _TERMINAL = ("approved", "dismissed")
+_CLOSED = ("approved", "dismissed", "superseded")
 
 
 class ProposalError(Exception):
@@ -81,6 +85,8 @@ async def apply_decision(
     review_trigger = rows[0].get("trigger")
     if not (0 <= idx < len(proposals)):
         raise ProposalError("proposal_not_found")
+    if proposals[idx].get("status") == "superseded":
+        raise ProposalError("proposal_superseded")
 
     # §3 passthroughs: a requires='senior' proposal is Kyle/Ryan territory —
     # only an admin may approve/dismiss it (admins are the senior owners).
@@ -190,7 +196,7 @@ def _latest_review_with_proposals(client_id: str) -> Optional[dict]:
 def open_proposal_indices(proposals: list[dict]) -> list[int]:
     """Indices of proposals still awaiting a human decision (status not
     approved/dismissed). Pure."""
-    return [i for i, p in enumerate(proposals or []) if (p.get("status") or "proposed") not in _TERMINAL]
+    return [i for i, p in enumerate(proposals or []) if (p.get("status") or "proposed") not in _CLOSED]
 
 
 async def handoff_open_proposals(

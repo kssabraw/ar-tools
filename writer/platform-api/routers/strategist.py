@@ -34,6 +34,15 @@ class ProposalStatusRequest(BaseModel):
     status: str  # approved | dismissed
 
 
+class StrategyReviewRequest(BaseModel):
+    # on_demand (default) | goal_recovery — the chronic-goal recovery plan run,
+    # exposed on demand for validation and deliberate use (PRD §4.9).
+    trigger: Optional[str] = None
+
+
+_ON_DEMAND_TRIGGERS = ("on_demand", "goal_recovery")
+
+
 @router.get("/strategist/status")
 async def strategist_status(auth: dict = Depends(require_auth)) -> dict:
     """Whether the strategist feature is on — drives the SerMaStr Log nav entry.
@@ -43,13 +52,21 @@ async def strategist_status(auth: dict = Depends(require_auth)) -> dict:
 
 
 @router.post("/clients/{client_id}/strategy-review")
-async def start_strategy_review(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+async def start_strategy_review(
+    client_id: UUID, body: Optional[StrategyReviewRequest] = None, auth: dict = Depends(require_auth)
+) -> dict:
     """Enqueue an on-demand strategist run. 409 when the feature flag is off or
-    a run is already in flight for this client."""
+    a run is already in flight for this client. ``trigger=goal_recovery`` runs
+    the chronic-goal recovery plan on demand (gated on goal_recovery_enabled)."""
     if not settings.strategist_enabled:
         raise HTTPException(status_code=409, detail="strategist_disabled")
+    trigger = (body.trigger if body and body.trigger else "on_demand")
+    if trigger not in _ON_DEMAND_TRIGGERS:
+        raise HTTPException(status_code=422, detail="invalid_trigger")
+    if trigger == "goal_recovery" and not settings.goal_recovery_enabled:
+        raise HTTPException(status_code=409, detail="goal_recovery_disabled")
     try:
-        review_id = strategist.enqueue_strategy_review(str(client_id), trigger="on_demand")
+        review_id = strategist.enqueue_strategy_review(str(client_id), trigger=trigger)
     except Exception as exc:
         logger.error("strategy_review_enqueue_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=502, detail="strategy_review_enqueue_failed") from exc
@@ -68,7 +85,7 @@ async def list_strategy_reviews(
     rows = (
         get_supabase()
         .table("strategy_reviews")
-        .select("id, client_id, trigger, status, model, assessment, findings, "
+        .select("id, client_id, trigger, status, model, assessment, budget, findings, "
                 "proposals, questions, token_usage, error, created_at, completed_at, "
                 "published_doc_id, published_doc_url, published_at")
         .eq("client_id", str(client_id))
@@ -102,6 +119,7 @@ _PROPOSAL_ERROR_STATUS = {
     "review_not_found": 404,
     "proposal_not_found": 404,
     "senior_approval_required": 403,
+    "proposal_superseded": 409,
 }
 
 

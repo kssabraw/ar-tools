@@ -138,3 +138,38 @@ async def test_handoff_open_proposals_no_review():
     with patch.object(sp, "_latest_review_with_proposals", return_value=None):
         result = await sp.handoff_open_proposals("c1", actor_id=None, actor_role=None)
     assert result["status"] == "no_review" and result["approved"] == 0
+
+
+def test_superseded_is_closed_not_open():
+    from services import strategist_proposals as sp
+
+    props = [{"status": "proposed"}, {"status": "superseded"}, {"status": "approved"}, {}]
+    assert sp.open_proposal_indices(props) == [0, 3]
+
+
+def test_apply_decision_refuses_superseded_and_invalid(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock
+    from services import strategist_proposals as sp
+
+    supabase = MagicMock()
+    chain = supabase.table.return_value
+    chain.select.return_value = chain
+    chain.eq.return_value = chain
+    chain.limit.return_value = chain
+    chain.execute.return_value = MagicMock(data=[{
+        "id": "r", "client_id": "c", "trigger": "goal_recovery",
+        "proposals": [{"title": "x", "status": "superseded"}],
+    }])
+    monkeypatch.setattr(sp, "get_supabase", lambda: supabase)
+
+    try:
+        asyncio.run(sp.apply_decision("r", 0, "approved", actor_id="u", actor_role="admin"))
+        assert False, "expected ProposalError"
+    except sp.ProposalError as exc:
+        assert exc.code == "proposal_superseded"
+    try:
+        asyncio.run(sp.apply_decision("r", 0, "superseded", actor_id="u", actor_role="admin"))
+        assert False, "expected ProposalError"
+    except sp.ProposalError as exc:
+        assert exc.code == "invalid_status"

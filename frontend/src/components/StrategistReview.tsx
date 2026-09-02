@@ -1,16 +1,23 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  BrainCircuit, Check, ChevronDown, ExternalLink, FileText, HelpCircle, Pin, RefreshCw, ShieldAlert, X,
+  BrainCircuit, Check, ChevronDown, ExternalLink, FileText, HelpCircle, LifeBuoy, Pin, RefreshCw, ShieldAlert, X,
 } from 'lucide-react'
 import { api } from '../lib/api'
-import type { StrategyProposal, StrategyReview, StrategyReviewList } from '../lib/types'
+import type { StrategyProposal, StrategyReview, StrategyReviewBudget, StrategyReviewList } from '../lib/types'
 
 // SerMaStr — the "Strategist Review" card on the Action Plan page.
 // Latest strategist run for the client: the assessment, cross-signal findings
 // with SOP citations, proposals staged for Approve / Dismiss (the strategist
 // proposes, never executes), and open questions. Approved proposals pin to the
-// top. Renders nothing while the feature flag is off and no reviews exist.
+// top. Open proposals from EARLIER reviews (last 60 days / 5 reviews) stay
+// approvable below the latest one, so a recovery plan survives the next weekly
+// review. A goal_recovery review adds the root cause, the budget line, per-
+// proposal tier pills and "Approve tier" (a client-side loop over the same
+// per-proposal endpoint — nothing new runs server-side). Renders nothing while
+// the feature flag is off and no reviews exist.
+const OPEN_WINDOW_DAYS = 60
+
 export function StrategistReview({ clientId }: { clientId: string }) {
   const queryClient = useQueryClient()
   const [showHistoryNote, setShowHistoryNote] = useState(false)
@@ -36,6 +43,24 @@ export function StrategistReview({ clientId }: { clientId: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategy-reviews', clientId] }),
   })
 
+  // "Approve tier": approve every still-open proposal whose tier is at or
+  // below the chosen one, one existing per-proposal call each (sequential so a
+  // senior-only refusal surfaces per proposal instead of aborting the batch).
+  const approveTier = useMutation({
+    mutationFn: async ({ reviewId, idxs }: { reviewId: string; idxs: number[] }) => {
+      const failed: number[] = []
+      for (const idx of idxs) {
+        try {
+          await api.post(`/strategy-proposals/${reviewId}/${idx}`, { status: 'approved' })
+        } catch {
+          failed.push(idx)
+        }
+      }
+      return { approved: idxs.length - failed.length, failed }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['strategy-reviews', clientId] }),
+  })
+
   // Save the internal review to the client's Drive folder as a Google Doc.
   const publish = useMutation({
     mutationFn: (reviewId: string) =>
@@ -51,9 +76,17 @@ export function StrategistReview({ clientId }: { clientId: string }) {
 
   const latestComplete = reviews.find((r) => r.status === 'complete')
   const running = latest?.status === 'running'
+  // Earlier reviews (inside the window) that still carry open proposals — a
+  // recovery plan must stay approvable after the next weekly review lands.
+  const earlierOpen = latestComplete
+    ? reviews.filter((r) =>
+        r.id !== latestComplete.id && r.status === 'complete' && withinDays(r.created_at, OPEN_WINDOW_DAYS)
+        && (r.proposals ?? []).some((p) => p.status === 'proposed'))
+    : []
+  const earlierOpenCount = earlierOpen.reduce((n, r) => n + r.proposals.filter((p) => p.status === 'proposed').length, 0)
 
   // One-line summary shown while collapsed.
-  const openCount = latestComplete ? latestComplete.proposals.filter((p) => p.status === 'proposed').length : 0
+  const openCount = (latestComplete ? latestComplete.proposals.filter((p) => p.status === 'proposed').length : 0) + earlierOpenCount
   const qCount = latestComplete ? (latestComplete.questions ?? []).length : 0
   const summary = running
     ? 'Reviewing…'
@@ -125,6 +158,12 @@ export function StrategistReview({ clientId }: { clientId: string }) {
         </div>
       )}
 
+      {approveTier.isSuccess && approveTier.data && approveTier.data.failed.length > 0 && (
+        <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
+          Approved {approveTier.data.approved}; {approveTier.data.failed.length} could not be approved (Kyle/Ryan-only proposals need an admin).
+        </div>
+      )}
+
       {decide.isError && (
         <div style={{ ...noteBox, color: '#b45309', background: '#fffbeb', borderColor: '#fde68a' }}>
           {(decide.error as Error)?.message === 'senior_approval_required'
@@ -154,11 +193,28 @@ export function StrategistReview({ clientId }: { clientId: string }) {
       ) : !latestComplete ? (
         <div style={smallMuted}>Review in progress — this usually takes a minute or two…</div>
       ) : (
-        <ReviewBody
-          review={latestComplete}
-          onDecide={(idx, status) => decide.mutate({ reviewId: latestComplete.id, idx, status })}
-          deciding={decide.isPending}
-        />
+        <>
+          <ReviewBody
+            review={latestComplete}
+            onDecide={(idx, status) => decide.mutate({ reviewId: latestComplete.id, idx, status })}
+            onApproveTier={(idxs) => approveTier.mutate({ reviewId: latestComplete.id, idxs })}
+            deciding={decide.isPending || approveTier.isPending}
+          />
+          {earlierOpen.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div style={sectionLabel}>Still open from earlier reviews</div>
+              {earlierOpen.map((r) => (
+                <EarlierOpen
+                  key={r.id}
+                  review={r}
+                  onDecide={(idx, status) => decide.mutate({ reviewId: r.id, idx, status })}
+                  onApproveTier={(idxs) => approveTier.mutate({ reviewId: r.id, idxs })}
+                  deciding={decide.isPending || approveTier.isPending}
+                />
+              ))}
+            </div>
+          )}
+        </>
       ))}
 
       {expanded && reviews.length > 1 && latestComplete && (
@@ -181,11 +237,77 @@ export function StrategistReview({ clientId }: { clientId: string }) {
   )
 }
 
-function ReviewBody({
-  review, onDecide, deciding,
+function EarlierOpen({
+  review, onDecide, onApproveTier, deciding,
 }: {
   review: StrategyReview
   onDecide: (idx: number, status: 'approved' | 'dismissed') => void
+  onApproveTier: (idxs: number[]) => void
+  deciding: boolean
+}) {
+  const open = (review.proposals ?? [])
+    .map((p, i) => [p, i] as [StrategyProposal, number])
+    .filter(([p]) => p.status === 'proposed')
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={smallMuted}>
+        {triggerLabel(review.trigger)} · {new Date(review.created_at).toLocaleString()}
+      </div>
+      {review.budget && <TierApproveBar review={review} onApproveTier={onApproveTier} deciding={deciding} />}
+      {open.map(([p, idx]) => (
+        <ProposalRow key={idx} proposal={p} idx={idx} onDecide={onDecide} deciding={deciding} />
+      ))}
+    </div>
+  )
+}
+
+// goal_recovery: "Approve tier" — one button per budget tier that has open
+// proposals; approving a tier approves everything at or below it (cumulative).
+function TierApproveBar({
+  review, onApproveTier, deciding,
+}: {
+  review: StrategyReview
+  onApproveTier: (idxs: number[]) => void
+  deciding: boolean
+}) {
+  const budget = review.budget
+  if (!budget) return null
+  const order = tierOrder(budget.tier_steps ?? [])
+  const open = (review.proposals ?? [])
+    .map((p, i) => [p, i] as [StrategyProposal, number])
+    .filter(([p]) => p.status === 'proposed')
+  const buttons = order
+    .map((tier) => {
+      const idxs = open.filter(([p]) => tierRank(p.tier, order) <= tierRank(tier, order)).map(([, i]) => i)
+      const own = open.filter(([p]) => p.tier === tier).length
+      return { tier, idxs, own }
+    })
+    .filter((b) => b.own > 0)
+  if (buttons.length === 0) return null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      <span style={smallMuted}>Approve tier:</span>
+      {buttons.map((b) => (
+        <button
+          key={b.tier}
+          style={tierBtn}
+          disabled={deciding}
+          title={`Approve every open proposal up to this tier (${b.idxs.length})`}
+          onClick={() => onApproveTier(b.idxs)}
+        >
+          <Check size={12} /> {tierLabel(b.tier, budget)} ({b.idxs.length})
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function ReviewBody({
+  review, onDecide, onApproveTier, deciding,
+}: {
+  review: StrategyReview
+  onDecide: (idx: number, status: 'approved' | 'dismissed') => void
+  onApproveTier: (idxs: number[]) => void
   deciding: boolean
 }) {
   const proposals = review.proposals ?? []
@@ -196,6 +318,8 @@ function ReviewBody({
     .map((p, i) => [p, i] as [StrategyProposal, number])
     .filter(([p]) => p.status === 'proposed')
   const dismissed = proposals.filter((p) => p.status === 'dismissed').length
+  const superseded = proposals.filter((p) => p.status === 'superseded').length
+  const budget = review.budget
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -204,6 +328,29 @@ function ReviewBody({
       </div>
       {review.assessment && (
         <div style={{ fontSize: 13, color: '#334155', lineHeight: 1.55 }}>{review.assessment}</div>
+      )}
+      {budget && (
+        <div style={recoveryBox}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 12, color: '#9f1239' }}>
+            <LifeBuoy size={14} /> Recovery plan
+            {budget.goals?.length ? (
+              <span style={{ fontWeight: 500, color: '#be123c' }}>
+                — {budget.goals.map((g) => `${g.label ?? g.goal_type ?? 'goal'} (week ${g.weeks_behind ?? '?'})`).join(', ')}
+              </span>
+            ) : null}
+          </div>
+          {budget.root_cause && (
+            <div style={{ fontSize: 12.5, color: '#881337', lineHeight: 1.5, marginTop: 4 }}>
+              <b>Root cause:</b> {budget.root_cause}
+            </div>
+          )}
+          <div style={{ fontSize: 12, color: '#9f1239', marginTop: 4 }}>
+            {budgetLine(budget)}
+          </div>
+          <div style={{ marginTop: 6 }}>
+            <TierApproveBar review={review} onApproveTier={onApproveTier} deciding={deciding} />
+          </div>
+        </div>
       )}
 
       {(review.questions ?? []).length > 0 && (
@@ -255,6 +402,9 @@ function ReviewBody({
       {dismissed > 0 && (
         <div style={smallMuted}>{dismissed} proposal{dismissed !== 1 ? 's' : ''} dismissed.</div>
       )}
+      {superseded > 0 && (
+        <div style={smallMuted}>{superseded} proposal{superseded !== 1 ? 's' : ''} superseded by a newer recovery plan.</div>
+      )}
     </div>
   )
 }
@@ -283,6 +433,7 @@ function ProposalRow({
             ) : p.cost_basis === 'operational' ? (
               <span style={metaPill} title="A paid tool/API run — per-run price pending research">tool cost</span>
             ) : null}
+            {p.tier && <span style={{ ...metaPill, ...tierPillStyle(p.tier) }}>{tierPillLabel(p.tier)}</span>}
             {p.effort && <span style={metaPill}>{p.effort} effort</span>}
             {p.assignee_hint && <span style={metaPill}>{p.assignee_hint}</span>}
             {p.asana_task?.url && (
@@ -325,8 +476,58 @@ function triggerLabel(trigger: string): string {
   switch (trigger) {
     case 'scheduled': return 'Weekly review'
     case 'escalation': return 'Escalation brief'
+    case 'monthly_plan_review': return 'Monthly plan review'
+    case 'goal_recovery': return 'Recovery plan'
     default: return 'On-demand review'
   }
+}
+
+function withinDays(iso: string, days: number): boolean {
+  const t = new Date(iso).getTime()
+  return Number.isFinite(t) && Date.now() - t <= days * 86_400_000
+}
+
+// Tier helpers — mirror services/goal_recovery.py (within_budget < plus_N… < over).
+function tierOrder(steps: number[]): string[] {
+  return ['within_budget', ...steps.map((s) => `plus_${Math.round(s * 100)}`)]
+}
+function tierRank(tier: string | undefined, order: string[]): number {
+  if (!tier) return order.length
+  const i = order.indexOf(tier)
+  return i === -1 ? order.length : i
+}
+function tierPillLabel(tier: string): string {
+  if (tier === 'within_budget') return 'within budget'
+  if (tier === 'over') return 'over budget'
+  if (tier === 'unbudgeted') return 'unbudgeted'
+  if (tier.startsWith('plus_')) return `+${tier.slice(5)}%`
+  return tier
+}
+function tierLabel(tier: string, budget: StrategyReviewBudget): string {
+  const ceiling = budget.tiers?.[tier]
+  const money = ceiling != null ? ` ≤ $${Math.round(ceiling).toLocaleString()}` : ''
+  return tierPillLabel(tier) + money
+}
+function tierPillStyle(tier: string): React.CSSProperties {
+  if (tier === 'within_budget') return { color: '#166534', background: '#f0fdf4' }
+  if (tier === 'over' || tier === 'unbudgeted') return { color: '#991b1b', background: '#fef2f2' }
+  return { color: '#9a3412', background: '#fff7ed' }
+}
+function budgetLine(b: StrategyReviewBudget): string {
+  const env = b.envelope ?? {}
+  const dep = env.deployable != null ? `$${Math.round(env.deployable).toLocaleString()} deployable` : 'no budget on the client card'
+  const disc = env.discretionary != null ? ` ($${Math.round(env.discretionary).toLocaleString()} discretionary)` : ''
+  const total = b.total_cost_usd != null ? ` · plan total $${Math.round(b.total_cost_usd).toLocaleString()}` : ''
+  const steps = b.tier_steps ?? []
+  const tiers = steps
+    .map((s) => {
+      const key = `plus_${Math.round(s * 100)}`
+      const ceiling = b.tiers?.[key]
+      return ceiling != null ? `+${Math.round(s * 100)}% ≤ $${Math.round(ceiling).toLocaleString()}` : null
+    })
+    .filter(Boolean)
+    .join(', ')
+  return `Budget: ${dep}${disc}${total} · ${b.fundable_count ?? 0} within budget` + (tiers ? ` · tiers ${tiers}` : '')
 }
 
 function publishErrorMessage(code?: string): string {
@@ -353,6 +554,14 @@ const sectionLabel: React.CSSProperties = {
 }
 const sopCite: React.CSSProperties = {
   fontSize: 11, color: '#7c3aed', fontWeight: 600,
+}
+const recoveryBox: React.CSSProperties = {
+  border: '1px solid #fecdd3', background: '#fff1f2', borderRadius: 8, padding: '10px 12px',
+}
+const tierBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 4,
+  fontSize: 11.5, fontWeight: 600, color: '#9f1239', background: '#fff',
+  border: '1px solid #fecdd3', borderRadius: 8, padding: '4px 9px', cursor: 'pointer',
 }
 const questionBox: React.CSSProperties = {
   border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 8, padding: '10px 12px',

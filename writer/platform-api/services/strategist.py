@@ -37,7 +37,7 @@ from services import notifications, sop_library, sop_store, strategy_digest
 logger = logging.getLogger(__name__)
 
 _LLM_TIMEOUT = 180.0
-VALID_TRIGGERS = ("scheduled", "escalation", "on_demand", "monthly_plan_review")
+VALID_TRIGGERS = ("scheduled", "escalation", "on_demand", "monthly_plan_review", "goal_recovery")
 
 # §3.2 mandatory human passthroughs — a proposal that lands in this territory
 # is briefed, never decided: force requires="senior" regardless of what the
@@ -92,6 +92,13 @@ _EMIT_TOOL = {
             "assessment": {
                 "type": "string",
                 "description": "The one-paragraph strategic read of this client's whole search surface.",
+            },
+            "root_cause": {
+                "type": "string",
+                "description": "REQUIRED on a goal_recovery run, optional otherwise: two sentences naming "
+                "the SPECIFIC driver of the behind goal — the competitor(s), the sector/quadrant, and "
+                "what they built or did (from the competitors + maps sections). Never 'a competitor "
+                "is surging'.",
             },
             "proposals": {
                 "type": "array",
@@ -229,9 +236,13 @@ falling views/sessions with steady rank points at seasonality (cross-check trend
 drop. A strong action metric (e.g. calls up sharply) is proof a lever worked — name it.
 Heed each section's TRAP note; propose only what the evidence in front of you supports; \
 cite the owning SOP as usual, and if no SOP owns the action surface it as a question.
-Do NOT restate the Action Plan back — it's in your input. Add judgment, not inventory. An \
-empty review is a valid review: if the deterministic layer already has it right, say so \
-briefly and emit no proposals.
+Do NOT restate the Action Plan back — it's in your input. Add judgment, not inventory. \
+EMPTY PROPOSALS ARE VALID ONLY when every behind/overdue goal already has an OPEN proposal \
+addressing it — the digest's open_proposals section lists your own still-unactioned \
+proposals with their age and cost; read it before deciding there is nothing new. Otherwise \
+re-propose: refreshed against today's numbers and re-costed, saying which earlier proposals \
+still stand rather than duplicating them. A behind goal with no open proposal is never \
+"nothing to add".
 
 HARD RULES (enforced in code too — violations are stripped):
 - You PROPOSE; you never execute. Every proposal is an advice object a human approves.
@@ -419,6 +430,7 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     - frozen client → proposals emptied (observation-only), noted in questions.
     """
     assessment = (raw.get("assessment") or "").strip()
+    root_cause = (raw.get("root_cause") or "").strip() if isinstance(raw.get("root_cause"), str) else ""
     findings = []
     for f in raw.get("findings") or []:
         if not isinstance(f, dict) or not (f.get("synthesis") or "").strip():
@@ -485,12 +497,15 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         )
         proposals = []
 
-    return {
+    body = {
         "assessment": assessment,
         "findings": findings,
         "proposals": proposals,
         "questions": questions,
     }
+    if root_cause:
+        body["root_cause"] = root_cause
+    return body
 
 
 def build_run_prompt(
@@ -505,6 +520,7 @@ def build_run_prompt(
     escalation_context: Optional[dict] = None,
     price_list: str = "",
     track_record: str = "",
+    recovery_block: str = "",
 ) -> str:
     """Assemble the single user message for the run. Pure.
 
@@ -525,13 +541,31 @@ def build_run_prompt(
         "proposal a concrete, assignable task with its rationale, not a vague "
         "theme. Stay within the deployable budget the plan already shows."
     )
+    _RECOVERY_ORIENTATION = (
+        " — CHRONIC-GOAL RECOVERY PLAN. A campaign goal has been critically behind for weeks "
+        "and the alarm has already been raised; your job now is the SOLUTION. You MUST emit "
+        "proposals: a concrete, multi-tactic recovery plan for the goal(s) in the RECOVERY "
+        "CONTEXT block, each proposal SOP-cited and costed via costed_items, ordered by "
+        "priority (highest leverage per dollar first — the SYSTEM assigns budget tiers from "
+        "the running total in YOUR order, so the order is the plan). You MUST set root_cause, "
+        "naming the specific competitor(s), the sector/quadrant, and what they built or did. "
+        "Proposals may reallocate the current monthly task plan (name what to drop and what "
+        "to fund with it). If the within-budget set is thin, add ONE budget-adequacy proposal "
+        "(drop-month margin / retainer conversation) marked requires='senior'. Refresh and "
+        "re-cost the prior recovery plan's open proposals rather than duplicating them; "
+        "anything you do not re-emit is superseded. Findings stay short — the plan is the "
+        "deliverable."
+    )
     parts = [
         f"TRIGGER: {trigger}"
         + (" — prepare the escalation brief for the senior review (what was tried, what moved, "
            "what you recommend they decide)." if trigger == "escalation" else "")
-        + (_MONTHLY_ORIENTATION if trigger == "monthly_plan_review" else ""),
+        + (_MONTHLY_ORIENTATION if trigger == "monthly_plan_review" else "")
+        + (_RECOVERY_ORIENTATION if trigger == "goal_recovery" else ""),
     ]
-    if escalation_context:
+    if recovery_block:
+        parts.append(recovery_block)
+    if escalation_context and trigger != "goal_recovery":
         import json as _json
 
         parts.append("ESCALATION EVENT:\n" + _json.dumps(escalation_context, default=str))
@@ -642,11 +676,26 @@ async def run_strategy_review(
         except Exception as exc:  # never let the learning read break a review
             logger.warning("sermastr_track_record_failed",
                            extra={"client_id": client_id, "error": str(exc)})
+    recovery: Optional[dict] = None
+    recovery_block = ""
+    if trigger == "goal_recovery":
+        from services import goal_recovery
+
+        try:
+            recovery = goal_recovery.load_recovery_context(client_id, escalation_context, digest)
+            recovery_block = goal_recovery.build_recovery_block(
+                recovery["goals"], recovery["prior_proposals"], recovery["envelope"],
+                recovery["ceilings"], recovery["tiers"],
+            )
+        except Exception as exc:  # the run still happens on the plain digest
+            logger.warning("goal_recovery.context_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+            recovery = None
     user = build_run_prompt(
         digest_json, sops_text, cards_text,
         trigger=trigger, frozen=frozen, max_drilldowns=max_dd, max_paid=max_paid,
         escalation_context=escalation_context, price_list=render_price_list(),
-        track_record=track_record,
+        track_record=track_record, recovery_block=recovery_block,
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]
@@ -750,22 +799,35 @@ async def run_strategy_review(
                    "proposals": len(review_body["proposals"])},
         )
 
+    budget: Optional[dict] = None
+    if trigger == "goal_recovery":
+        from services import goal_recovery
+
+        try:
+            review_body, budget = goal_recovery.apply_budget(
+                review_body, recovery or goal_recovery.load_recovery_context(client_id, None, digest)
+            )
+        except Exception as exc:  # untiered proposals are still proposals
+            logger.warning("goal_recovery.budget_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+
     # The stored input_digest is the structured digest (not the SOP text — that
     # would 5× the row for content already versioned in the repo).
+    update_row = {
+        "status": "complete",
+        "assessment": review_body["assessment"],
+        "findings": review_body["findings"],
+        "proposals": review_body["proposals"],
+        "questions": review_body["questions"],
+        "input_digest": digest,
+        "token_usage": usage,
+        "completed_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if budget is not None:
+        update_row["budget"] = budget
     updated = (
         supabase.table("strategy_reviews")
-        .update(
-            {
-                "status": "complete",
-                "assessment": review_body["assessment"],
-                "findings": review_body["findings"],
-                "proposals": review_body["proposals"],
-                "questions": review_body["questions"],
-                "input_digest": digest,
-                "token_usage": usage,
-                "completed_at": datetime.now(timezone.utc).isoformat(),
-            }
-        )
+        .update(update_row)
         .eq("id", review_id)
         .execute()
     ).data[0]
@@ -788,7 +850,17 @@ async def run_strategy_review(
     # escalation runs only — an on-demand run from the UI means a human is
     # already looking. `notify` forces it (Slack-triggered on-demand runs, so
     # the answer comes back to the channel that asked).
-    if trigger in ("scheduled", "escalation", "monthly_plan_review") or notify:
+    if trigger == "goal_recovery":
+        # The FINISHED recovery run sends the ONE goal_chronic message (alarm +
+        # root cause + plan), supersedes the prior plan and stamps the
+        # escalation rows — see services/goal_recovery.after_persist.
+        from services import goal_recovery
+
+        goal_recovery.after_persist(
+            client_id, {**updated, "id": review_id, "proposals": review_body["proposals"]},
+            recovery or {}, budget or {}, (digest.get("client") or {}).get("name"),
+        )
+    elif trigger in ("scheduled", "escalation", "monthly_plan_review") or notify:
         note = review_notification({**updated, "trigger": trigger},
                                    (digest.get("client") or {}).get("name") or "client")
         if note:

@@ -702,7 +702,7 @@ def _resp(stop_reason, blocks, out_tokens=100):
     )
 
 
-def _run_with_responses(monkeypatch, responses):
+def _run_with_responses(monkeypatch, responses, trigger="on_demand"):
     """Drive run_strategy_review against scripted Anthropic responses. Returns
     (recorded create() kwargs, persisted update payloads, emitted notifications)."""
     import asyncio
@@ -749,7 +749,7 @@ def _run_with_responses(monkeypatch, responses):
     chain.execute.return_value = MagicMock(data=[{"id": "r-1"}])
     monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
 
-    asyncio.run(strategist.run_strategy_review("c-1", trigger="on_demand", review_id="r-1"))
+    asyncio.run(strategist.run_strategy_review("c-1", trigger=trigger, review_id="r-1"))
     return calls, updates, notes
 
 
@@ -824,3 +824,78 @@ def test_run_untruncated_emit_is_unchanged(monkeypatch):
     done = next(u for u in updates if u.get("status") == "complete")
     assert "truncated" not in done["token_usage"]
     assert strategist.TRUNCATION_QUESTION not in done["questions"]
+
+
+# ---------------------------------------------------------------------------
+# goal_recovery trigger (PRD PR 2)
+# ---------------------------------------------------------------------------
+def test_goal_recovery_is_a_valid_trigger_and_has_root_cause_field():
+    assert "goal_recovery" in strategist.VALID_TRIGGERS
+    props = strategist._EMIT_TOOL["input_schema"]["properties"]
+    assert "root_cause" in props and props["root_cause"]["type"] == "string"
+
+
+def test_sanitize_carries_root_cause_only_when_present():
+    body = strategist.sanitize_review({"assessment": "a", "root_cause": "  Metro +68 pins  "}, frozen=False)
+    assert body["root_cause"] == "Metro +68 pins"
+    body = strategist.sanitize_review({"assessment": "a"}, frozen=False)
+    assert "root_cause" not in body
+    body = strategist.sanitize_review({"assessment": "a", "root_cause": 42}, frozen=False)
+    assert "root_cause" not in body
+
+
+def test_run_prompt_recovery_orientation_and_block():
+    prompt = strategist.build_run_prompt(
+        "{}", "", "", trigger="goal_recovery", frozen=False, max_drilldowns=4, max_paid=1,
+        escalation_context={"kind": "goal_chronic", "goals": [{"goal_id": "g1"}]},
+        recovery_block="CHRONIC-GOAL RECOVERY CONTEXT\n- goal x",
+    )
+    assert "TRIGGER: goal_recovery — CHRONIC-GOAL RECOVERY PLAN" in prompt
+    assert "You MUST emit proposals" in prompt and "You MUST set root_cause" in prompt
+    assert "CHRONIC-GOAL RECOVERY CONTEXT" in prompt
+    # the raw escalation JSON is NOT duplicated for a recovery run
+    assert "ESCALATION EVENT" not in prompt
+
+
+def test_system_prompt_empty_proposals_rule_points_at_open_proposals():
+    assert "EMPTY PROPOSALS ARE VALID ONLY" in strategist._SYSTEM
+    assert "open_proposals" in strategist._SYSTEM
+    assert "emit no proposals" not in strategist._SYSTEM
+
+
+def test_run_goal_recovery_tiers_stores_budget_and_notifies_once(monkeypatch):
+    """A goal_recovery run: proposals get tiers, `budget` rides the persisted
+    row, and the finished run sends ONE goal_chronic (no strategy_review note)."""
+    from services import goal_recovery
+
+    monkeypatch.setattr(
+        goal_recovery, "load_recovery_context",
+        lambda cid, ctx, digest: {
+            "goals": [{"goal_id": "g1", "escalation_id": "e1", "label": "Maps", "weeks_behind": 10,
+                       "status": "behind", "current_value": 6.2, "target_value": 35.0}],
+            "prior_proposals": [], "envelope": {"deployable": 340.0},
+            "ceilings": goal_recovery.tier_ceilings(340.0, [0.25]), "tiers": [0.25],
+        },
+    )
+    monkeypatch.setattr(goal_recovery, "supersede_prior_recovery", lambda *a, **k: 0)
+    monkeypatch.setattr(goal_recovery, "stamp_escalations", lambda goals, now: 1)
+
+    full = _resp("tool_use", [_Block(
+        "emit_strategy_review",
+        {"assessment": "full", "root_cause": "Metro built suburb pages north",
+         "proposals": [_proposal(costed_items=[{"task_type": "gbp_sniper", "quantity": 1}]),
+                       _proposal(title="Big link round", costed_items=[{"task_type": "gbp_sniper", "quantity": 40}])]},
+        "tu-1",
+    )])
+    calls, updates, notes = _run_with_responses(monkeypatch, [full], trigger="goal_recovery")
+
+    assert "CHRONIC-GOAL RECOVERY PLAN" in calls[0]["messages"][0]["content"]
+    done = next(u for u in updates if u.get("status") == "complete")
+    assert done["budget"]["root_cause"] == "Metro built suburb pages north"
+    assert done["budget"]["envelope"] == {"deployable": 340.0}
+    tiers = [p["tier"] for p in done["proposals"]]
+    assert tiers[0] == "within_budget" and tiers[1] in ("plus_25", "over")
+    assert len(notes) == 1
+    assert notes[0]["kind"] == "goal_chronic" and notes[0]["severity"] == "critical"
+    assert "Root cause: Metro built suburb pages north" in notes[0]["summary"]
+    assert notes[0]["payload"]["link"] == "clients/c-1/action-plan"
