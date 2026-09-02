@@ -1136,20 +1136,61 @@ def build_domain_intel_actions(client_id: str, gaps: list[dict]) -> list[dict]:
         comp = g.get("competitor_domain") or "a competitor"
         comp_pos = g.get("competitor_position")
         cli_pos = g.get("client_position")
-        where = "you don't rank" if cli_pos is None else f"you rank #{cli_pos}"
+        gap_type = (g.get("gap_type") or "").strip().lower()
+        comp_txt = f"{comp} ranks" + (f" #{comp_pos}" if comp_pos else "")
+
+        # Metrics line — everything the staff member needs to size the opportunity
+        # without opening the tool. Each is best-effort (bad/absent value → omitted).
+        metrics: list[str] = []
         vol = g.get("volume")
-        vol_txt = f" ~{vol}/mo searches." if vol else ""
+        if vol:
+            metrics.append(f"~{vol}/mo searches")
+        try:
+            kd = g.get("keyword_difficulty")
+            if kd is not None:
+                metrics.append(f"difficulty {float(kd):g}/100")
+        except (TypeError, ValueError):
+            pass
+        try:
+            cpc = g.get("cpc_usd")
+            if cpc:
+                metrics.append(f"${float(cpc):.2f} CPC")
+        except (TypeError, ValueError):
+            pass
+        metric_txt = f" ({', '.join(metrics)})" if metrics else ""
+
+        # A "weak" gap (the client already ranks, just poorly) is a reoptimize job;
+        # a "missing" gap (no ranking page) is net-new content. Naming which one the
+        # staff member is looking at makes the task actionable on its own.
+        if cli_pos is None:
+            where = "you have no page ranking for it"
+            title = f'Create a page targeting "{kw}"'
+            rec = (
+                f'Create a new page targeting "{kw}". {comp_txt} for it and you have no '
+                "ranking page, so this is net-new content. "
+            )
+        else:
+            where = f"your best page only ranks #{cli_pos}"
+            title = f'Strengthen your page for "{kw}"'
+            rec = (
+                f'Strengthen / reoptimize your existing page for "{kw}" — you rank #{cli_pos}, '
+                f"so a page exists but is underperforming (gap type: {gap_type or 'weak'}). "
+            )
+        rec += (
+            "Review the full ranked gap list — with backlink gaps and competitor "
+            "discovery — in Domain Intelligence."
+        )
         actions.append(
             {
                 "kind": "keyword_gap",
                 "source": "organic",
                 "keyword": kw,
-                "diagnosis": f"{comp} ranks"
-                + (f" #{comp_pos}" if comp_pos else "")
-                + f" for this; {where}.{vol_txt}",
-                "recommendation": "Competitive keyword gap — create or strengthen a page targeting this "
-                "term. Review the full ranked gap list (with backlink gaps and competitor discovery) "
-                "in Domain Intelligence.",
+                # A concise, keyword-bearing task title; the full detail lives in
+                # the recommendation/diagnosis (shown in the Action Plan + the task
+                # description) so the title stays legible on the board.
+                "title": title,
+                "diagnosis": f'{comp_txt} for "{kw}" while {where}.{metric_txt}',
+                "recommendation": rec,
                 "cta_label": "Domain Intelligence",
                 "cta_path": f"clients/{client_id}/domain-intel",
                 "severity": "info",
@@ -1576,7 +1617,10 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     try:
         gap_rows = (
             supabase.table("domain_keyword_gaps")
-            .select("keyword, competitor_domain, competitor_position, client_position, volume, opportunity_score")
+            .select(
+                "keyword, competitor_domain, competitor_position, client_position, "
+                "volume, cpc_usd, keyword_difficulty, gap_type, opportunity_score"
+            )
             .eq("client_id", client_id)
             .order("opportunity_score", desc=True)
             .limit(settings.domain_intel_action_max)
