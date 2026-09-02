@@ -287,3 +287,100 @@ def test_scale_gates():
     kinds = {g["kind"] for g in m.scale_gates(250, 60, max_per_run=50)}
     assert kinds == {"matrix_signoff_required", "matrix_cell_limit"}
     assert all(g["blocking"] for g in m.scale_gates(250, 60, max_per_run=50))
+
+
+# ── store-side pure helpers (Phase 1) ─────────────────────────────────────────
+
+def test_normalize_services_and_locations():
+    assert m.normalize_services(["Roof restoration", {"label": " Gutters "}, "roof restoration", ""]) == [
+        {"label": "Roof restoration", "slug": "roof-restoration"},
+        {"label": "Gutters", "slug": "gutters"},
+    ]
+    locs = m.normalize_locations([
+        "Hawthorn",
+        {"name": "Moorabbin", "location_code": "21136", "canonical": "Moorabbin,Victoria,Australia", "source": "suburb"},
+        "hawthorn",
+        {"name": ""},
+    ])
+    assert locs == [
+        {"name": "Hawthorn", "slug": "hawthorn", "location_code": None, "canonical": None, "source": "manual"},
+        {"name": "Moorabbin", "slug": "moorabbin", "location_code": 21136, "canonical": "Moorabbin,Victoria,Australia", "source": "suburb"},
+    ]
+
+
+def test_cells_to_silos_omits_location_name_on_the_seed_city_cell():
+    cells = _grid()
+    silos = m.cells_to_silos(cells, seed_city="Melbourne")
+    assert [s["silo"] for s in silos] == SERVICES
+    pages = silos[0]["pages"]
+    assert pages[0]["keyword"] == "Roof restoration Melbourne" and "location_name" not in pages[0]
+    assert pages[1]["location_name"] == "Caulfield"
+    # Shape parity with #953's parser (what _to_items reads).
+    parser = lt.build_matrix_silos("\n".join(SERVICES), "\n".join(LOCATIONS), seed_city="Melbourne")
+    assert silos == parser
+
+
+def test_apply_coverage_only_moves_coverage_states_and_reports_changes():
+    cells = _grid()
+    by_key = _by_key(cells)
+    done = by_key[("roof-restoration", "hawthorn")]
+    done["status"], done["page_id"] = "done", "page-1"
+    items = [
+        {"keyword": "Roof restoration Melbourne", "status": "on_site", "url": "https://fcr.com.au/roof-restoration/"},
+        {"keyword": "Roof restoration Hawthorn", "status": "on_site", "url": "https://fcr.com.au/x/"},  # done → ignored
+        {"keyword": "Roof restoration Caulfield", "status": "missing", "url": None},  # unchanged → no patch
+    ]
+    patches = m.apply_coverage(cells, items)
+    assert patches == [(by_key[("roof-restoration", "melbourne")]["id"], {"status": "on_site", "url": "https://fcr.com.au/roof-restoration/"})]
+    # A previously on_site cell whose page vanished reverts to missing with url cleared.
+    by_key[("roof-restoration", "melbourne")].update({"status": "on_site", "url": "https://fcr.com.au/roof-restoration/"})
+    patches = m.apply_coverage(cells, [{"keyword": "Roof restoration Melbourne", "status": "missing", "url": None}])
+    assert patches == [(by_key[("roof-restoration", "melbourne")]["id"], {"status": "missing", "url": None})]
+
+
+def test_reconcile_cell_updates_maps_job_states():
+    cells = _grid()
+    for i, c in enumerate(cells[:6]):
+        c["status"], c["job_id"] = "queued", f"job-{i}"
+    cells[6]["status"] = "done"  # not in flight → untouched even if a job row exists
+    jobs = {
+        "job-0": {"status": "pending"},
+        "job-1": {"status": "running"},
+        "job-2": {"status": "complete", "result": {"page_id": "page-2"}},
+        "job-3": {"status": "complete", "result": {}},
+        "job-4": {"status": "failed", "error": "boom"},
+        # job-5 missing entirely (reaped)
+    }
+    patches = dict(m.reconcile_cell_updates(cells, jobs))
+    assert cells[0]["id"] not in patches  # pending == queued, nothing to do
+    assert patches[cells[1]["id"]] == {"status": "generating"}
+    assert patches[cells[2]["id"]] == {"status": "done", "page_id": "page-2", "error": None}
+    assert patches[cells[3]["id"]] == {"status": "failed", "error": "page_missing_after_generate"}
+    assert patches[cells[4]["id"]] == {"status": "failed", "error": "boom"}
+    assert patches[cells[5]["id"]] == {"status": "failed", "error": "job_not_found"}
+    assert cells[6]["id"] not in patches
+
+
+def test_service_labels_from_pages_strips_the_city():
+    per_silo = [
+        {"silo": "Roof types", "pages": [
+            {"keyword": "tile roof restoration Melbourne"},
+            {"keyword": "colorbond roof restoration Melbourne"},
+            {"keyword": "roof restoration Melbourne"},
+            {"keyword": "Tile Roof Restoration Melbourne"},  # dup by slug
+        ]},
+        {"silo": "Triggers", "pages": [{"keyword": "storm damage roof restoration Melbourne"}]},
+    ]
+    labels = m.service_labels_from_pages(per_silo, "Melbourne")
+    assert [l["label"] for l in labels] == [
+        "tile roof restoration", "colorbond roof restoration", "roof restoration", "storm damage roof restoration",
+    ]
+    assert labels[-1]["group"] == "Triggers"
+
+
+def test_coverage_counts():
+    cells = _grid()
+    cells[0]["status"] = "done"
+    counts = m.coverage_counts(cells)
+    assert counts["total"] == 12 and counts["done"] == 1 and counts["missing"] == 11
+    assert counts["published"] == 0

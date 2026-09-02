@@ -481,3 +481,174 @@ def build_cells(
         seed_city=seed_city,
     )
     return cells_from_silos(silos, url_pattern, locations=locs)
+
+
+# ── store-side pure helpers (Phase 1) ─────────────────────────────────────────
+# Used by `local_seo_matrix_store`; kept here so they stay I/O-free + testable.
+
+
+def normalize_services(raw: Iterable) -> list[dict]:
+    """``["Roof restoration", {"label": "Gutters"}]`` → ``[{label, slug}]``,
+    deduped by slug (first wins), blanks dropped."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw or []:
+        label = (item.get("label") if isinstance(item, dict) else item) or ""
+        label = str(label).strip()
+        slug = slugify(label)
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        out.append({"label": label, "slug": slug})
+    return out
+
+
+def normalize_locations(raw: Iterable) -> list[dict]:
+    """``["Hawthorn", {"name": "Moorabbin", "location_code": 1234, ...}]`` →
+    ``[{name, slug, location_code, canonical, source}]``, deduped by slug (first
+    wins). A per-row `location_code` (+ its canonical DataForSEO name) is the
+    opt-in to generate that location's cells at its own code instead of the
+    matrix's metro anchor (plan §3.2)."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            code = item.get("location_code")
+            canonical = (item.get("canonical") or "") or None
+            source = (item.get("source") or "manual") or "manual"
+        else:
+            name, code, canonical, source = str(item or "").strip(), None, None, "manual"
+        slug = slugify(name)
+        if not slug or slug in seen:
+            continue
+        seen.add(slug)
+        out.append(
+            {
+                "name": name,
+                "slug": slug,
+                "location_code": int(code) if code is not None else None,
+                "canonical": canonical,
+                "source": source,
+            }
+        )
+    return out
+
+
+def cells_to_silos(cells: Iterable[dict], seed_city: str = "") -> list[dict]:
+    """Cells → the silo shape the existing-page marking reads
+    (`local_seo_silo._to_items`): one silo per service, every page carrying its
+    `location_name` EXCEPT the seed-city cell (plan §3.5 — so the national
+    city-less page can cover it, exactly as `build_matrix_silos` does)."""
+    seed_slug = slugify(seed_city or "")
+    by_service: dict[str, dict] = {}
+    for c in cells:
+        silo = by_service.setdefault(
+            c.get("service_slug") or "", {"silo": c.get("service_label") or "", "pages": []}
+        )
+        page = {"keyword": c.get("keyword") or "", "supporting_keywords": []}
+        if not seed_slug or (c.get("location_slug") or "") != seed_slug:
+            page["location_name"] = c.get("location_name") or ""
+        silo["pages"].append(page)
+    return [s for s in by_service.values() if s["pages"]]
+
+
+# Coverage marking may only move a cell between these three states — a cell that
+# is in flight, done, published or parked is never touched by a re-check.
+_COVERAGE_STATUSES = frozenset({"missing", "found", "on_site"})
+
+
+def apply_coverage(cells: Iterable[dict], items: Iterable[dict]) -> list[tuple[str, dict]]:
+    """Turn `_to_items` output (``[{keyword, status, url}]``) into cell patches:
+    ``[(cell_id, {status, url})]`` for every cell whose coverage CHANGED. Only
+    cells currently in a coverage state are eligible (never downgrade a generated
+    page to ``missing``); `url` is cleared when a cell reverts to ``missing``."""
+    by_kw = {(i.get("keyword") or "").strip().lower(): i for i in items}
+    patches: list[tuple[str, dict]] = []
+    for c in cells:
+        if c.get("status") not in _COVERAGE_STATUSES:
+            continue
+        item = by_kw.get((c.get("keyword") or "").strip().lower())
+        if not item:
+            continue
+        status = item.get("status") or "missing"
+        url = item.get("url") if status in {"found", "on_site"} else None
+        if status != c.get("status") or (url or None) != (c.get("url") or None):
+            patches.append((c["id"], {"status": status, "url": url}))
+    return patches
+
+
+# async_jobs status → cell status for a cell's generate job.
+_JOB_TO_CELL = {"pending": "queued", "running": "generating", "complete": "done", "failed": "failed"}
+_IN_FLIGHT = frozenset({"queued", "generating"})
+
+
+def reconcile_cell_updates(cells: Iterable[dict], jobs: dict[str, dict]) -> list[tuple[str, dict]]:
+    """Read-side reconciliation (plan §5.1): for every in-flight cell whose job row
+    is in `jobs` (``{job_id: {status, result, error}}``), the patch that brings the
+    cell up to date, or nothing when it already is. A ``complete`` job with no
+    ``page_id`` in its result is treated as failed (the generator persists the
+    page before completing, so that would mean the page write was lost). A job row
+    that is missing entirely (reaped/deleted) fails the cell so it can be re-run."""
+    patches: list[tuple[str, dict]] = []
+    for c in cells:
+        if c.get("status") not in _IN_FLIGHT or not c.get("job_id"):
+            continue
+        job = jobs.get(str(c["job_id"]))
+        if job is None:
+            patches.append((c["id"], {"status": "failed", "error": "job_not_found"}))
+            continue
+        new_status = _JOB_TO_CELL.get(job.get("status") or "", "queued")
+        patch: dict = {}
+        if new_status == "done":
+            page_id = (job.get("result") or {}).get("page_id")
+            if page_id:
+                patch = {"status": "done", "page_id": page_id, "error": None}
+            else:
+                patch = {"status": "failed", "error": "page_missing_after_generate"}
+        elif new_status == "failed":
+            patch = {"status": "failed", "error": (job.get("error") or "generation_failed")[:500]}
+        elif new_status != c.get("status"):
+            patch = {"status": new_status}
+        if patch:
+            patches.append((c["id"], patch))
+    return patches
+
+
+def service_labels_from_pages(per_silo: Iterable[dict], city: str) -> list[dict]:
+    """The silo planner composes "<modifier> <service> <city>" keywords; the
+    matrix's service axis wants "<modifier> <service>". Strip the trailing city
+    (case-insensitive) → ``[{label, group}]``, deduped by slug."""
+    city_l = (city or "").strip().lower()
+    out: list[dict] = []
+    seen: set[str] = set()
+    for silo in per_silo or []:
+        group = silo.get("silo") or ""
+        for page in silo.get("pages") or []:
+            kw = (page.get("keyword") or "").strip()
+            label = kw
+            if city_l and kw.lower().endswith(city_l):
+                label = kw[: len(kw) - len(city_l)].strip()
+            slug = slugify(label)
+            if not slug or slug in seen:
+                continue
+            seen.add(slug)
+            out.append({"label": label, "group": group})
+    return out
+
+
+def coverage_counts(cells: Iterable[dict]) -> dict[str, int]:
+    """``{status: count}`` over every known status (zeros included) + ``total``."""
+    counts = {
+        s: 0
+        for s in (
+            "missing", "found", "on_site", "queued", "generating", "done", "failed",
+            "publishing", "published", "publish_failed", "publish_blocked", "skipped",
+        )
+    }
+    total = 0
+    for c in cells:
+        total += 1
+        counts[c.get("status") or "missing"] = counts.get(c.get("status") or "missing", 0) + 1
+    counts["total"] = total
+    return counts
