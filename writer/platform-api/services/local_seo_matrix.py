@@ -652,3 +652,25 @@ def coverage_counts(cells: Iterable[dict]) -> dict[str, int]:
         counts[c.get("status") or "missing"] = counts.get(c.get("status") or "missing", 0) + 1
     counts["total"] = total
     return counts
+
+
+# ── auto-publish outcome (drip release, plan §5.2) ────────────────────────────
+
+
+def publish_outcome_from_error(detail: str) -> tuple[str, Optional[str], str]:
+    """Map a failed `publish_page` into a cell outcome ``(status, url, error)``.
+    A voice block (409 ``voice_violation[: words]``) is `publish_blocked` — the
+    page exists and a human can "Publish anyway"; anything else is
+    `publish_failed`."""
+    text = (detail or "").strip() or "publish_failed"
+    code = text.split(":", 1)[0].strip()
+    if code == "voice_violation":
+        return "publish_blocked", None, text[:500]
+    return "publish_failed", None, text[:500]
+
+
+def publish_outcome_from_result(result: dict) -> tuple[str, Optional[str], Optional[str]]:
+    """A successful `publish_page` → ``("published", url, None)``; the URL is the
+    first the destination reports (site URL, Doc URL, edit URL)."""
+    url = result.get("url") or result.get("doc_url") or result.get("edit_url") or None
+    return "published", url, None

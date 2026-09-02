@@ -426,6 +426,19 @@ def start_generate(
     if not selected:
         return {"job_ids": [], "cell_ids": [], "estimate": est}
 
+    job_ids = enqueue_cells(matrix, selected, cells, user_id, force_refresh=force_refresh)
+    return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected], "estimate": est}
+
+
+def enqueue_cells(
+    matrix: dict, selected: list[dict], all_cells: list[dict], user_id: str, *,
+    publish_after: bool = False, force_refresh: bool = False,
+) -> list[str]:
+    """Enqueue one `local_seo_generate` job per cell in `selected` (staggered like
+    every bulk flow) and flip the cells to `queued`. Shared by the immediate run
+    and the drip release; `publish_after` makes the job publish the page to the
+    matrix's destination once generated (plan §5.2). Returns the job ids."""
+    matrix_id, client_id = matrix["id"], matrix["client_id"]
     rows = []
     base_url = matrix.get("base_url") or ""
     for i, cell in enumerate(selected):
@@ -433,28 +446,33 @@ def start_generate(
         # Sibling links are planned against the WHOLE grid (plan §4.1), so a cell
         # generated before its siblings still links to their planned URLs.
         links = core.sibling_links(
-            cell, cells, base_url,
+            cell, all_cells, base_url,
             location_cap=settings.local_seo_matrix_sibling_location_cap,
             max_links=settings.local_seo_matrix_max_links,
         )
+        payload = {
+            "client_id": client_id,
+            "keyword": cell["keyword"],
+            "location": location,
+            "location_code": code,
+            "user_id": user_id,
+            "page_template_url": matrix.get("page_template_url") or None,
+            "force_refresh": bool(force_refresh),
+            "entity_provider": matrix.get("entity_provider") or None,
+            "matrix_id": matrix_id,
+            "matrix_cell_id": cell["id"],
+            "internal_links": links,
+        }
+        if publish_after:
+            payload["publish_after"] = True
+            payload["publish_destination"] = matrix.get("publish_destination") or "google_docs"
+            payload["publish_status"] = matrix.get("publish_status") or "draft"
         rows.append(
             {
                 "job_type": "local_seo_generate",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(i),
-                "payload": {
-                    "client_id": client_id,
-                    "keyword": cell["keyword"],
-                    "location": location,
-                    "location_code": code,
-                    "user_id": user_id,
-                    "page_template_url": matrix.get("page_template_url") or None,
-                    "force_refresh": bool(force_refresh),
-                    "entity_provider": matrix.get("entity_provider") or None,
-                    "matrix_id": matrix_id,
-                    "matrix_cell_id": cell["id"],
-                    "internal_links": links,
-                },
+                "payload": payload,
             }
         )
     inserted = get_supabase().table("async_jobs").insert(rows).execute().data or []
@@ -464,9 +482,19 @@ def start_generate(
         job_ids.append(job["id"])
     logger.info(
         "local_seo_matrix.generate_enqueued",
-        extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids)},
+        extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids), "publish_after": publish_after},
     )
-    return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected], "estimate": est}
+    return job_ids
+
+
+def record_publish_outcome(cell_id: str, page_id: Optional[str], status: str, url: Optional[str], error: Optional[str]) -> None:
+    """Record the drip's auto-publish result on the cell: `published` (+url) /
+    `publish_failed` / `publish_blocked`. Carries the page id too, so the write
+    is complete whether or not the read-side reconcile has run yet."""
+    patch: dict = {"status": status, "url": url, "error": error, "updated_at": "now()"}
+    if page_id:
+        patch["page_id"] = page_id
+    get_supabase().table("local_seo_matrix_cells").update(patch).eq("id", cell_id).execute()
 
 
 def record_link_coverage(cell_id: str, coverage: dict) -> None:

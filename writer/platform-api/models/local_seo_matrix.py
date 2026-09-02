@@ -168,6 +168,36 @@ class MatrixSuggestResult(BaseModel):
     error: Optional[str] = None
 
 
+class MatrixReleaseRequest(BaseModel):
+    """The drip schedule (plan §5.2): `immediate_count` cells now, then
+    `per_release_count` per cadence tick, each generated THEN published to the
+    matrix's publish destination."""
+
+    mode: Literal["daily", "weekly", "monthly"] = "daily"
+    weekday: Optional[int] = Field(None, ge=0, le=6)        # weekly: 0=Mon..6=Sun
+    day_of_month: Optional[int] = Field(None, ge=1, le=28)  # monthly
+    immediate_count: int = Field(0, ge=0)
+    per_release_count: int = Field(1, ge=1)
+    enabled: bool = True
+
+
+class MatrixReleaseSchedule(BaseModel):
+    enabled: bool = False
+    mode: str = "daily"
+    weekday: Optional[int] = None
+    day_of_month: Optional[int] = None
+    per_release_count: int = 1
+    status: str = "active"
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+
+
+class MatrixReleaseState(BaseModel):
+    schedule: MatrixReleaseSchedule
+    releasable: int = 0
+    released_now: list[UUID] = Field(default_factory=list)
+
+
 class MatrixRecheckResult(BaseModel):
     changed: int
     coverage: dict[str, int] = Field(default_factory=dict)

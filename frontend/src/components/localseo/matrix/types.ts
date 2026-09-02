@@ -127,6 +127,32 @@ export interface MatrixSuggestResult {
   error?: string | null
 }
 
+export interface MatrixReleaseSchedule {
+  enabled: boolean
+  mode: 'daily' | 'weekly' | 'monthly'
+  weekday?: number | null
+  day_of_month?: number | null
+  per_release_count: number
+  status: 'active' | 'complete' | 'paused'
+  next_run_at?: string | null
+  last_run_at?: string | null
+}
+
+export interface MatrixReleaseState {
+  schedule: MatrixReleaseSchedule
+  releasable: number
+  released_now: string[]
+}
+
+export interface MatrixReleaseBody {
+  mode: 'daily' | 'weekly' | 'monthly'
+  weekday?: number | null
+  day_of_month?: number | null
+  immediate_count: number
+  per_release_count: number
+  enabled: boolean
+}
+
 export const URL_PATTERN_PRESETS = [
   { value: '/{service}-{location}/', label: '/{service}-{location}/  (flat — WordPress)' },
   { value: '/{location}/{service}/', label: '/{location}/{service}/  (location-first — Website Builder)' },

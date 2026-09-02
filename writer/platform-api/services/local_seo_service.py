@@ -697,12 +697,45 @@ async def run_generate_job(job: dict) -> None:
                 record_link_coverage(payload["matrix_cell_id"], page["link_coverage"])
             except Exception as exc:  # noqa: BLE001
                 logger.warning("local_seo.matrix_link_coverage_failed", extra={"job_id": job_id, "error": str(exc)})
+        # Drip release: generate THEN publish just-in-time (plan §5.2). The page
+        # is already persisted + the job complete, so a publish failure costs
+        # only the publish — it lands on the cell as publish_failed / blocked.
+        if payload.get("publish_after"):
+            await _publish_after_generate(page["id"], payload, job_id)
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.generate_job_failed", extra={"job_id": job_id, "error": str(detail)})
         supabase.table("async_jobs").update(
             {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
         ).eq("id", job_id).execute()
+
+
+async def _publish_after_generate(page_id: str, payload: dict, job_id: str) -> None:
+    """The drip release's auto-publish: publish the just-generated page to the
+    matrix's destination and record the outcome on the cell. Best-effort — never
+    raises into the job (the page + job are already complete)."""
+    from services import local_seo_matrix as core
+    from services.local_seo_matrix_store import record_publish_outcome
+
+    cell_id = payload.get("matrix_cell_id")
+    destination = payload.get("publish_destination") or "google_docs"
+    status = payload.get("publish_status") or "draft"
+    try:
+        result = await publish_page(page_id, payload.get("user_id") or "", destination=destination, status=status)
+        outcome = core.publish_outcome_from_result(result or {})
+    except HTTPException as exc:
+        outcome = core.publish_outcome_from_error(str(exc.detail))
+    except Exception as exc:  # noqa: BLE001
+        outcome = core.publish_outcome_from_error(str(exc))
+    logger.info(
+        "local_seo.matrix_publish_after",
+        extra={"job_id": job_id, "page_id": page_id, "cell_id": cell_id, "outcome": outcome[0]},
+    )
+    if cell_id:
+        try:
+            record_publish_outcome(cell_id, page_id, *outcome)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local_seo.matrix_publish_record_failed", extra={"job_id": job_id, "error": str(exc)})
 
 
 def get_generate_job(job_id: str, client_id: str) -> dict:
