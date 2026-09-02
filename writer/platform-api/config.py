@@ -1467,7 +1467,13 @@ class Settings(BaseSettings):
     # Sonnet-class everywhere (spec §9 default; revisit Opus for escalation
     # briefs after the smoke gate).
     strategist_model: str = "claude-sonnet-4-6"
-    strategist_max_tokens: int = 4096
+    # Output budget for the emit round. 4096 silently truncated the
+    # emit_strategy_review tool call for every client from mid-August 2026
+    # (findings filled the budget, proposals/questions were cut off, and the
+    # review persisted as 'complete' with 0 proposals) — see
+    # docs/modules/sermastr-autonomous-recovery-plans-prd-v1_0.md §2. A
+    # truncated emit now retries once (strategist._MAX_TRUNCATION_RETRIES).
+    strategist_max_tokens: int = 16_000
     # Drill-down bounds (spec §2): ≤ N tool calls per run; the paid one
     # (audit_page → an nlp-api scoring run) is capped separately and tighter.
     strategist_max_drilldowns: int = 4

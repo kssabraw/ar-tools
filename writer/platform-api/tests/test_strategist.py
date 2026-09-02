@@ -642,3 +642,185 @@ class TestStrategistExcluded:
     def test_fails_open_on_read_error(self, monkeypatch):
         monkeypatch.setattr(strategist, "get_supabase", lambda: self._sb(boom=True))
         assert strategist._strategist_excluded("c1") is False
+
+
+# ---------------------------------------------------------------------------
+# Output-limit truncation guard (PRD: sermastr-autonomous-recovery-plans §3 PR 1)
+# From mid-August 2026 every scheduled review hit max_tokens on its emit round
+# and persisted as 'complete' with 0 proposals. These pin the three pieces of
+# the fix: schema order, the one forced retry, and the never-silent flag.
+# ---------------------------------------------------------------------------
+def test_emit_schema_writes_proposals_and_questions_before_findings():
+    props = list(strategist._EMIT_TOOL["input_schema"]["properties"])
+    assert props.index("assessment") < props.index("proposals")
+    assert props.index("proposals") < props.index("findings")
+    assert props.index("questions") < props.index("findings")
+
+
+def test_is_truncated_reads_stop_reason():
+    from types import SimpleNamespace
+
+    assert strategist.is_truncated(SimpleNamespace(stop_reason="max_tokens")) is True
+    assert strategist.is_truncated(SimpleNamespace(stop_reason="tool_use")) is False
+    assert strategist.is_truncated(SimpleNamespace()) is False
+
+
+def test_truncation_followup_answers_every_tool_use_or_is_plain_text():
+    from types import SimpleNamespace
+
+    plain = strategist.truncation_followup([])
+    assert isinstance(plain, str) and "CUT OFF" in plain
+
+    blocks = [SimpleNamespace(id="tu-1"), SimpleNamespace(id="tu-2")]
+    results = strategist.truncation_followup(blocks)
+    assert [r["tool_use_id"] for r in results] == ["tu-1", "tu-2"]
+    assert all(r["type"] == "tool_result" and "CUT OFF" in r["content"] for r in results)
+
+
+def test_assistant_turn_never_empty():
+    turn = strategist._assistant_turn([])
+    assert turn["role"] == "assistant" and turn["content"]
+    turn = strategist._assistant_turn(["block"])
+    assert turn["content"] == ["block"]
+
+
+class _Block:
+    def __init__(self, name, input, id):
+        self.type = "tool_use"
+        self.name = name
+        self.input = input
+        self.id = id
+
+
+def _resp(stop_reason, blocks, out_tokens=100):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        stop_reason=stop_reason,
+        content=blocks,
+        usage=SimpleNamespace(input_tokens=10, output_tokens=out_tokens),
+    )
+
+
+def _run_with_responses(monkeypatch, responses):
+    """Drive run_strategy_review against scripted Anthropic responses. Returns
+    (recorded create() kwargs, persisted update payloads, emitted notifications)."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from services import anthropic_failover, sermastr_audit, strategist_tools
+
+    calls: list[dict] = []
+    queue = list(responses)
+
+    class _Messages:
+        async def create(self, **kw):
+            calls.append(kw)
+            return queue.pop(0)
+
+    class _Client:
+        messages = _Messages()
+
+    async def _fake_call(clients, make_awaitable, *, log_tag="anthropic"):
+        return await make_awaitable(clients[0])
+
+    monkeypatch.setattr(anthropic_failover, "build_async_clients", lambda **kw: [_Client()])
+    monkeypatch.setattr(anthropic_failover, "call_failover", _fake_call)
+    monkeypatch.setattr(strategist_tools, "anthropic_tool_defs", lambda: [])
+    monkeypatch.setattr(strategist_tools, "TOOLS", {})
+    monkeypatch.setattr(sermastr_audit, "log_proposals", lambda *a, **k: None)
+    monkeypatch.setattr(
+        strategist.strategy_digest, "build_strategy_digest",
+        lambda cid: {"client": {"name": "Acme"}, "active_domains": []},
+    )
+    monkeypatch.setattr(strategist.strategy_digest, "render_digest", lambda d, b: "{}")
+    monkeypatch.setattr(strategist.sop_library, "load_module_cards", lambda: "")
+    monkeypatch.setattr(strategist.sop_library, "select_sops_text", lambda *a, **k: "")
+    monkeypatch.setattr(strategist.sop_store, "resolve_sops_text", lambda *a, **k: "")
+    monkeypatch.setattr(strategist, "render_price_list", lambda: "")
+    notes: list[dict] = []
+    monkeypatch.setattr(strategist.notifications, "emit", lambda **kw: notes.append(kw))
+
+    supabase = MagicMock()
+    updates: list[dict] = []
+    chain = supabase.table.return_value
+    chain.update.side_effect = lambda payload: (updates.append(payload), chain)[1]
+    chain.eq.return_value = chain
+    chain.execute.return_value = MagicMock(data=[{"id": "r-1"}])
+    monkeypatch.setattr(strategist, "get_supabase", lambda: supabase)
+
+    asyncio.run(strategist.run_strategy_review("c-1", trigger="on_demand", review_id="r-1"))
+    return calls, updates, notes
+
+
+def test_run_retries_once_on_truncated_emit_and_keeps_the_full_one(monkeypatch):
+    cut = _resp("max_tokens", [_Block(
+        "emit_strategy_review", {"assessment": "cut", "findings": [{"synthesis": "x"}]}, "tu-1",
+    )], out_tokens=4096)
+    full = _resp("tool_use", [_Block(
+        "emit_strategy_review",
+        {"assessment": "full", "proposals": [_proposal()], "questions": ["q?"]},
+        "tu-2",
+    )])
+    calls, updates, _ = _run_with_responses(monkeypatch, [cut, full])
+
+    assert len(calls) == 2
+    # The retry forces the emit tool and answers the cut-off tool_use block
+    # with the "cut off — re-emit compactly" tool_result.
+    assert calls[1]["tool_choice"] == {"type": "tool", "name": "emit_strategy_review"}
+    followup = calls[1]["messages"][-1]
+    assert followup["role"] == "user"
+    assert followup["content"][0]["tool_use_id"] == "tu-1"
+    assert "CUT OFF" in followup["content"][0]["content"]
+    # The partial emit was discarded; the full one is what persisted.
+    done = next(u for u in updates if u.get("status") == "complete")
+    assert done["assessment"] == "full"
+    assert len(done["proposals"]) == 1
+    assert done["questions"] == ["q?"]
+    assert "truncated" not in done["token_usage"]
+
+
+def test_run_flags_review_still_truncated_after_the_retry(monkeypatch):
+    cut1 = _resp("max_tokens", [_Block(
+        "emit_strategy_review", {"assessment": "cut", "findings": [{"synthesis": "x"}]}, "tu-1",
+    )], out_tokens=4096)
+    cut2 = _resp("max_tokens", [_Block(
+        "emit_strategy_review", {"assessment": "still cut", "findings": [{"synthesis": "y"}]}, "tu-2",
+    )], out_tokens=4096)
+    calls, updates, _ = _run_with_responses(monkeypatch, [cut1, cut2])
+
+    assert len(calls) == 2  # exactly one retry, never a loop
+    done = next(u for u in updates if u.get("status") == "complete")
+    assert done["token_usage"]["truncated"] is True
+    assert done["assessment"] == "still cut"
+    assert done["findings"] and done["proposals"] == []
+    assert strategist.TRUNCATION_QUESTION in done["questions"]
+
+
+def test_run_retries_when_truncation_dropped_the_tool_block(monkeypatch):
+    """A cut-off turn can arrive with no tool_use block at all — the retry is a
+    plain text turn, and the run still lands the full emit."""
+    cut = _resp("max_tokens", [], out_tokens=4096)
+    full = _resp("tool_use", [_Block(
+        "emit_strategy_review", {"assessment": "full", "proposals": [_proposal()]}, "tu-2",
+    )])
+    calls, updates, _ = _run_with_responses(monkeypatch, [cut, full])
+
+    assert len(calls) == 2
+    assert isinstance(calls[1]["messages"][-1]["content"], str)
+    assert calls[1]["messages"][-2]["role"] == "assistant"  # never an empty turn
+    done = next(u for u in updates if u.get("status") == "complete")
+    assert done["assessment"] == "full" and len(done["proposals"]) == 1
+
+
+def test_run_untruncated_emit_is_unchanged(monkeypatch):
+    full = _resp("tool_use", [_Block(
+        "emit_strategy_review", {"assessment": "full", "proposals": [_proposal()]}, "tu-1",
+    )])
+    calls, updates, _ = _run_with_responses(monkeypatch, [full])
+
+    assert len(calls) == 1
+    assert calls[0]["max_tokens"] >= 16_000
+    done = next(u for u in updates if u.get("status") == "complete")
+    assert "truncated" not in done["token_usage"]
+    assert strategist.TRUNCATION_QUESTION not in done["questions"]
