@@ -65,6 +65,32 @@ def test_competitor_comparison_is_rescued():
     assert nav.classify_intent("what is sedgwick", m) == "competitor"
 
 
+def test_navigational_catches_portal_and_account_lookups():
+    # Fix 1: portal / account-access intent is navigational whatever the brand.
+    assert nav.is_navigational("mysedgwick portal")
+    assert nav.is_navigational("adp portal")
+    assert nav.is_navigational("customer portal")
+    assert nav.is_navigational("employee login portal")
+    assert nav.is_navigational("my account")
+    # Not portal/account intent → left alone.
+    assert not nav.is_navigational("claims management services")
+    assert not nav.is_navigational("architectural preservation")
+
+
+def test_competitor_brand_glued_token_match():
+    # Fix 2: a run-together brand form ("mysedgwick") that exact-token matching
+    # misses is caught by the substring rule on the distinctive label.
+    m = nav.brand_matchers(_BSA_COMPETITORS)
+    assert nav.is_competitor_brand("mysedgwick", m)
+    assert nav.is_competitor_brand("mysedgwick login", m)
+    assert nav.classify_intent("mysedgwick portal", m) == "navigational"  # portal wins first
+    assert nav.classify_intent("mysedgwick", m) == "competitor"
+    # The distinctive ≥6-char label can't collide with an ordinary word, and a
+    # multi-token name matcher never matches on a single glued token.
+    assert not nav.is_competitor_brand("architectural preservation", m)
+    assert not nav.is_competitor_brand("goldsmith services", m)  # {gold,star} needs both
+
+
 def test_apply_navigational_drops_and_reports():
     m = nav.brand_matchers(_BSA_COMPETITORS)
     rows = [
