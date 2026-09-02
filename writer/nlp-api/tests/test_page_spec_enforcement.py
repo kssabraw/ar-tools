@@ -348,3 +348,13 @@ def test_enforce_spec_structure_drops_a_template_section_the_client_layout_lacks
         html, spec, _Q(), keyword="k", city="C", business_name="A", phone=None, address=None,
         voice_block="", serp_analysis_dict=None, client=client, label="t"))
     assert changed and "ref-extra-faq" not in new_html and verdict["status"] == "ok"
+
+
+def test_spec_audit_prompt_carries_each_sections_band():
+    spec = _spec()
+    html = _full_page(spec)
+    sections = section_edit.split_sections(html)
+    prompt = main._spec_audit_prompt(spec, sections, "Acme", "k", "City")
+    intro = next(s for s in spec["sections"] if s["key"] == "intro")
+    assert f"[intro] intent: hero — band: {intro['min_words']}–{intro['max_words']} words" in prompt
+    assert "Judge the section against ITS OWN budget" in main._SECTION_AUDIT_SYSTEM
