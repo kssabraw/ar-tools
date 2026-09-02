@@ -706,6 +706,10 @@ def test_fallback_word_target_is_the_median_of_recent_targets_else_default():
     assert local_seo_service.fallback_word_target([], 1200) == 1200
     assert local_seo_service.fallback_word_target([0, -5, None], 1200) == 1200
     assert local_seo_service.fallback_word_target([], 0) == 1
+    # an implausible target (a bloated or thin SERP) never defines the market —
+    # least of all when it is the only cached analysis at the location
+    assert local_seo_service.fallback_word_target([2782], 1200) == 1200
+    assert local_seo_service.fallback_word_target([2782, 1321, 1240, 600], 1200) == 1280
 
 
 @pytest.mark.asyncio

@@ -200,6 +200,13 @@ def page_band(
             basis = "fallback"
     if basis == "fallback":
         target = max(1, _int(fallback_target) or SERP_TARGET_MIN)
+        # The standing market target must itself sit inside the plausible
+        # window — otherwise a suspect SERP that was cached a moment earlier
+        # comes straight back as "the market" and the sanity flag is moot
+        # (live: a 2,782-word suspect target fed back as a 2,782-word fallback).
+        if target < SERP_TARGET_MIN or target > SERP_TARGET_MAX:
+            flags.append("fallback_target_clamped")
+            target = min(max(target, SERP_TARGET_MIN), SERP_TARGET_MAX)
         avg = int(round(target / OVERAGE_MULTIPLIER))
     total = {
         "min": avg,
@@ -400,8 +407,8 @@ def build_client_sections(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
     comparisons, about, a second service body, overflow — is its own
     ``ref-<slug>`` section with its reference intent preserved. Tiny stubs
     (< EXTRA_MIN_REFERENCE_WORDS words with nothing folded) are dropped; a
-    heading-only group with a folded list (an industries list, a CTA heading)
-    stays. Pure."""
+    heading-only group with a folded list of 2+ headings (an industries list)
+    stays; a lone folded sub-heading (a nav stub's one child) does not. Pure."""
     taken: dict[str, dict[str, Any]] = {}
     seen_intent: dict[str, int] = {}
     ordered: list[dict[str, Any]] = []
@@ -424,8 +431,9 @@ def build_client_sections(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
             if candidates and n < len(candidates) and candidates[n] not in taken:
                 key = candidates[n]
         seen_intent[intent] = seen_intent.get(intent, 0) + 1
-        if key is None and words < EXTRA_MIN_REFERENCE_WORDS and not folded and g.get("level") != "H1":
-            continue
+        folded_items = sum(_int(b.get("items")) for b in g.get("blocks") or [] if b.get("folded"))
+        if key is None and words < EXTRA_MIN_REFERENCE_WORDS and folded_items < 2 and g.get("level") != "H1":
+            continue  # a nav stub / NAP line / lone sub-heading — not a section of its own
         if key is None:
             base = f"ref-{_slug(g.get('heading') or intent) or intent}"
             key, i = base, 2

@@ -455,7 +455,14 @@ def fallback_word_target(targets: list[int], default: int) -> int:
     analysis is unavailable — the median of the newest cached targets at the
     same location (robust to one unusually long/short SERP), else `default`.
     Never below 1."""
-    clean = [int(t) for t in (targets or []) if isinstance(t, (int, float)) and t > 0]
+    # Only plausible targets count as "the market": an outlier SERP (thin or
+    # bloated) is exactly what the fallback exists to step around, so it must
+    # not be able to define the fallback — least of all when it is the only
+    # cached analysis at the location and would feed itself straight back.
+    clean = [
+        int(t) for t in (targets or [])
+        if isinstance(t, (int, float)) and page_spec.SERP_TARGET_MIN <= t <= page_spec.SERP_TARGET_MAX
+    ]
     if not clean:
         return max(1, int(default))
     return max(1, int(round(statistics.median(clean))))
