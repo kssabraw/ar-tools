@@ -7,6 +7,8 @@ import { Spinner } from '../Spinner'
 import { card, input, label, primaryBtn } from '../shared'
 import { matrixApi } from './api'
 import { MatrixAxesEditor } from './MatrixAxesEditor'
+import { composeLocations, type LocationPins } from './locationPins'
+import { MatrixLocationPins } from './MatrixLocationPins'
 import { splitLines, URL_PATTERN_PRESETS } from './types'
 import type { MatrixDetail } from './types'
 
@@ -31,6 +33,7 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
   const [locationCode, setLocationCode] = useState<number | null>(initialLocation?.locationCode ?? null)
   const [services, setServices] = useState(initialServices ?? '')
   const [locations, setLocations] = useState(initialLocations ?? '')
+  const [pins, setPins] = useState<LocationPins>({})
   const [pattern, setPattern] = useState<string>(URL_PATTERN_PRESETS[0].value)
   const [customPattern, setCustomPattern] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -57,7 +60,7 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         location: location.trim(),
         location_code: locationCode,
         services: splitLines(services),
-        locations: splitLines(locations),
+        locations: composeLocations(locations, pins),
         url_pattern: urlPattern,
         base_url: baseUrl.trim() || null,
         page_template_url: templateUrl.trim() || null,
@@ -105,6 +108,8 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
       </div>
 
       <MatrixAxesEditor services={services} locations={locations} onChange={(s, l) => { setServices(s); setLocations(l) }} disabled={saving} />
+
+      <MatrixLocationPins clientId={clientId} locationsText={locations} pins={pins} onChange={setPins} disabled={saving} />
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
