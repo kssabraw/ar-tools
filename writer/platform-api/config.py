@@ -1235,6 +1235,17 @@ class Settings(BaseSettings):
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.
     analysis_cache_ttl_days: int = 14
+    # A failed SERP analysis at generate time must not silently cost the page
+    # its length target (the writer then falls back to the template's per-section
+    # counts and ships 3,000+ words with length neither budgeted nor graded — seen
+    # on First Class Roofing during an nlp restart window, 2026-09-02). Retry the
+    # analysis once after this delay (the common failure is a seconds-long
+    # restart), then fall back to the market's standing target: the median
+    # `serp_word_target` of the newest cached analyses at the same DataForSEO
+    # location, else `local_seo_fallback_word_target`. 0 disables the retry.
+    local_seo_analysis_retry_delay_seconds: float = 20.0
+    local_seo_fallback_word_target: int = 1200
+    local_seo_fallback_target_samples: int = 8
 
     # Silo candidate management (Platform PRD v1.4 §7.7 / §8.5)
     # Recalibrated 0.85->0.87 for gemini-embedding-2 (P99 of cross-silo cosines +

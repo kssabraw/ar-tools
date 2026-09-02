@@ -69,6 +69,36 @@ def get(keyword: str, location_code: Optional[int], location_name: str) -> Optio
     return analysis
 
 
+def recent_word_targets(
+    location_code: Optional[int], location_name: str, limit: int = 8
+) -> list[int]:
+    """The newest cached analyses' `serp_word_target` at this location — ANY
+    keyword — newest first, up to `limit`. Feeds the fallback length target
+    when a keyword's own analysis can't be computed: the same market's other
+    queries are the best available proxy for how long its SERP pages run.
+    Best-effort: any read error → [] (the caller then uses the config default)."""
+    try:
+        query = get_supabase().table(_TABLE).select("analysis, created_at")
+        if location_code:
+            query = query.eq("location_code", location_code)
+        else:
+            query = query.eq("location_name", location_name)
+        # Over-fetch: older rows (pre length_fit) carry no target at all.
+        res = query.order("created_at", desc=True).limit(max(1, limit) * 3).execute()
+    except Exception as exc:  # best-effort — never block generation on a cache read
+        logger.warning("analysis_cache.targets_read_failed", extra={"error": str(exc)})
+        return []
+    out: list[int] = []
+    for row in res.data or []:
+        analysis = row.get("analysis")
+        target = analysis.get("serp_word_target") if isinstance(analysis, dict) else None
+        if isinstance(target, (int, float)) and target > 0:
+            out.append(int(target))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def store(keyword: str, location_code: Optional[int], location_name: str, analysis: dict) -> None:
     """Upsert the analysis under the shared key (refreshes created_at)."""
     if settings.analysis_cache_ttl_days <= 0:

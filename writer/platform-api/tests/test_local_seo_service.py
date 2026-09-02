@@ -434,22 +434,96 @@ async def test_analyze_force_refresh_bypasses_cache():
 
 @pytest.mark.asyncio
 async def test_generate_degrades_when_analysis_unavailable():
-    # analysis can't be computed (thin SERP / provider outage) → generate should
-    # still produce a page, with run_analysis flipped off so nlp doesn't re-scrape.
+    # analysis can't be computed (provider outage) even after one retry →
+    # generate still produces a page, with run_analysis flipped off so nlp
+    # doesn't re-scrape — but NOT silently: the page carries the market's
+    # fallback length target, the degrade is notified, and the persisted row
+    # records that no analysis informed it.
     inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
     supabase = _supabase_for_client(_client_row(), insert_row=inserted)
     nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    analysis = AsyncMock(return_value=None)
     with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
-         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=analysis), \
+         patch.object(local_seo_service, "_resolve_fallback_length_target", return_value=1234), \
+         patch.object(local_seo_service, "_notify_analysis_degraded") as notify, \
+         patch("services.local_seo_service.asyncio.sleep", new=AsyncMock()) as sleep, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    assert analysis.await_count == 2            # first attempt + one retry
+    sleep.assert_awaited_once()
+    payload = stream.await_args[0][1]
+    assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
+    assert "serp_analysis" not in payload
+    assert payload["length_target"] == 1234     # length is still budgeted + graded
+    notify.assert_called_once_with("client-1", "k", "Melbourne,Victoria,Australia", 1234)
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["run_analysis"] is False   # honest provenance: no analysis informed this page
+
+
+@pytest.mark.asyncio
+async def test_generate_retry_recovers_the_analysis():
+    # The failure seen in production was a seconds-long nlp restart window: the
+    # first analysis attempt fails, the retry succeeds → normal (non-degraded)
+    # generation, no fallback target, no notification.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    serp = {"serp_word_target": 1500, "serp_avg_word_count": 1250}
+    analysis = AsyncMock(side_effect=[None, serp])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=analysis), \
+         patch.object(local_seo_service, "_notify_analysis_degraded") as notify, \
+         patch("services.local_seo_service.asyncio.sleep", new=AsyncMock()), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    assert analysis.await_count == 2
+    payload = stream.await_args[0][1]
+    assert payload["serp_analysis"] == serp
+    assert "run_analysis" not in payload or payload["run_analysis"] is True
+    assert "length_target" not in payload
+    notify.assert_not_called()
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["run_analysis"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_fallback_target_when_serp_has_no_length():
+    # The analysis ran but measured no usable competitor length (thin SERP):
+    # still budget the page on the market's standing target — but that is not
+    # a degrade, so no notification and run_analysis stays True.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    serp = {"serp_urls": ["https://a.com"], "serp_word_target": None}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_fallback_length_target", return_value=1200), \
+         patch.object(local_seo_service, "_notify_analysis_degraded") as notify, \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
         await local_seo_service.generate_page(
             "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
         )
     payload = stream.await_args[0][1]
-    assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
-    assert "serp_analysis" not in payload
+    assert payload["serp_analysis"] == serp
+    assert payload["length_target"] == 1200
+    notify.assert_not_called()
     persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
-    assert persisted["run_analysis"] is True    # provenance: analysis always runs first
+    assert persisted["run_analysis"] is True
+
+
+def test_fallback_word_target_is_the_median_of_recent_targets_else_default():
+    # median is robust to one unusually long SERP in the market
+    assert local_seo_service.fallback_word_target([1232, 1627, 1326, 1321, 1240], 1200) == 1321
+    assert local_seo_service.fallback_word_target([1300, 1500], 1200) == 1400
+    # junk / empty → the config default
+    assert local_seo_service.fallback_word_target([], 1200) == 1200
+    assert local_seo_service.fallback_word_target([0, -5, None], 1200) == 1200
+    assert local_seo_service.fallback_word_target([], 0) == 1
 
 
 @pytest.mark.asyncio
