@@ -286,6 +286,67 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Publish again once the content is clean. (If you believe the flag is a genuine false positive, an admin can adjust the client’s compliance mode — but review the phrase first.)',
     ],
   },
+  // ── Service × location matrix ───────────────────────────────────────────
+  matrix_signoff_required: {
+    title: 'This matrix needs a sign-off before generating',
+    meaning:
+      'The whole matrix is over the link-equity sign-off line (200 pages). ' +
+      'A grid that large spreads the site’s authority thin, so it needs a ' +
+      'deliberate go-ahead — the same line the Website Builder uses.',
+    steps: [
+      'Review whether every service × location combination is worth a page (prune thin ones from the axes).',
+      'If it is, tick the sign-off in the run bar and generate again.',
+    ],
+  },
+  matrix_cell_limit: {
+    title: 'Too many cells for one run',
+    meaning:
+      'One immediate run is capped so a single batch cannot monopolise the ' +
+      'worker for a day. Bigger fills go out on a schedule.',
+    steps: [
+      'Select fewer cells (a row or a column at a time), or',
+      'Set up a release schedule to drip the rest out over days or weeks.',
+    ],
+  },
+  matrix_axes_empty: {
+    title: 'The matrix needs at least one service and one location',
+    meaning: 'Both axes were empty after trimming blank and duplicate lines.',
+    steps: ['Add at least one service and one location, one per line, then save.'],
+  },
+  url_pattern_missing_service_token: {
+    title: 'URL pattern must include {service}',
+    meaning:
+      'Without {service} every location’s cells would share one URL, so the ' +
+      'sibling links between pages would point at the wrong page.',
+    steps: ['Use a pattern with both tokens, e.g. /{service}-{location}/.'],
+  },
+  url_pattern_missing_location_token: {
+    title: 'URL pattern must include {location}',
+    meaning:
+      'Without {location} every cell of a service would share one URL, so the ' +
+      'sibling links between pages would point at the wrong page.',
+    steps: ['Use a pattern with both tokens, e.g. /{service}-{location}/.'],
+  },
+  url_pattern_unknown_token: {
+    title: 'Unknown token in the URL pattern',
+    meaning: 'Only {service} and {location} are substituted.',
+    steps: ['Remove the unknown token or replace it with {service} / {location}.'],
+  },
+  url_pattern_empty: {
+    title: 'URL pattern is empty',
+    meaning: 'A pattern is needed to plan each page’s URL (it drives the sibling links).',
+    steps: ['Pick a preset or type a pattern with {service} and {location}.'],
+  },
+  matrix_not_found: {
+    title: 'Matrix not found',
+    meaning: 'It may have been deleted, or belongs to a different client.',
+    steps: ['Go back to the matrix list and reopen it.'],
+  },
+  local_seo_matrix_not_enabled: {
+    title: 'The matrix feature is switched off',
+    meaning: 'local_seo_matrix_enabled is false on the platform service.',
+    steps: ['Ask an admin to enable it on the PLATFORM service and redeploy.'],
+  },
   client_frozen: {
     title: 'This client is frozen',
     meaning:

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { Building2, Grid3x3, List, Search, Upload } from 'lucide-react'
+import { Building2, Grid3x3, List, Save, Search, Upload } from 'lucide-react'
 import { localSeoApi } from './api'
 import { LocationAutocomplete } from './LocationAutocomplete'
 import { RelatedPagesList } from './RelatedPagesList'
@@ -9,6 +9,9 @@ import { Spinner } from './Spinner'
 import { ErrorDetails } from '../ErrorDetails'
 import { card, input, label, primaryBtn } from './shared'
 import type { RelatedPageItem } from './types'
+import { matrixApi } from './matrix/api'
+import { MatrixAxesEditor } from './matrix/MatrixAxesEditor'
+import { splitLines } from './matrix/types'
 
 type Mode = 'matrix' | 'list'
 
@@ -25,12 +28,15 @@ export function CustomTargetsPanel({
   hasWebsite,
   onCreated,
   onFoundAction,
+  onSaveMatrix,
 }: {
   clientId: string
   clientName?: string
   hasWebsite: boolean
   onCreated: () => void
   onFoundAction: (item: RelatedPageItem) => void
+  // Matrix mode → persist the axes as a saved matrix (opens the Matrix tab).
+  onSaveMatrix?: (matrixId: string) => void
 }) {
   const [mode, setMode] = useState<Mode>('matrix')
   const [services, setServices] = useState('')
@@ -42,6 +48,8 @@ export function CustomTargetsPanel({
   const [notes, setNotes] = useState<string[]>([])
   const [checking, setChecking] = useState(false)
   const [error, setError] = useState('')
+  const [savingMatrix, setSavingMatrix] = useState(false)
+  const [matrixName, setMatrixName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const checkRef = useRef(0) // invalidates a superseded check (input edited mid-request)
 
@@ -58,6 +66,29 @@ export function CustomTargetsPanel({
 
   const canCheck = !!location.trim() && !checking && !bulk.creating &&
     (mode === 'matrix' ? matrixCount > 0 : listCount > 0)
+  const canSaveMatrix = Boolean(onSaveMatrix) && mode === 'matrix' && matrixCount > 0 && !!location.trim() && !savingMatrix && !bulk.creating
+
+  const saveMatrix = async () => {
+    if (!canSaveMatrix || !onSaveMatrix) return
+    setSavingMatrix(true)
+    setError('')
+    try {
+      const svc = splitLines(services)
+      const locs = splitLines(locations)
+      const m = await matrixApi.create(clientId, {
+        name: matrixName.trim() || `${svc[0]} × ${locs.length} location${locs.length === 1 ? '' : 's'}`,
+        location: location.trim(),
+        location_code: locationCode,
+        services: svc,
+        locations: locs,
+      })
+      onSaveMatrix(m.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save the matrix')
+    } finally {
+      setSavingMatrix(false)
+    }
+  }
 
   const onPickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -135,20 +166,12 @@ export function CustomTargetsPanel({
       </div>
 
       {mode === 'matrix' ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
-          <div>
-            <label style={label}>Services (one per line)</label>
-            <textarea style={textarea} value={services} disabled={bulk.creating}
-              onChange={e => { setServices(e.target.value); reset() }}
-              placeholder={'Roof restoration\nGutter cleaning\nRoof repair'} />
-          </div>
-          <div>
-            <label style={label}>Locations (one per line)</label>
-            <textarea style={textarea} value={locations} disabled={bulk.creating}
-              onChange={e => { setLocations(e.target.value); reset() }}
-              placeholder={'Melbourne\nGeelong\nInner East'} />
-          </div>
-        </div>
+        <MatrixAxesEditor
+          services={services}
+          locations={locations}
+          onChange={(s, l) => { setServices(s); setLocations(l); reset() }}
+          disabled={bulk.creating || savingMatrix}
+        />
       ) : (
         <div>
           <label style={label}>Page targets</label>
@@ -193,6 +216,23 @@ export function CustomTargetsPanel({
           return n > 0 ? `Check ${n} target${n === 1 ? '' : 's'}` : 'Check targets'
         })()}
       </button>
+
+      {onSaveMatrix && mode === 'matrix' && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: '#4338ca', flex: 1, minWidth: 220 }}>
+            Keep this grid: a saved matrix tracks every cell’s coverage, gap-fills when you add a suburb later, and links the pages as a silo.
+          </span>
+          <input style={{ ...input, width: 220 }} value={matrixName} onChange={e => setMatrixName(e.target.value)} placeholder="Matrix name (optional)" disabled={savingMatrix} />
+          <button
+            type="button"
+            onClick={saveMatrix}
+            disabled={!canSaveMatrix}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, fontWeight: 600, background: '#fff', border: '1px solid #c7d2fe', borderRadius: 8, padding: '7px 12px', cursor: canSaveMatrix ? 'pointer' : 'not-allowed', color: '#4338ca', opacity: canSaveMatrix ? 1 : 0.5 }}
+          >
+            {savingMatrix ? <Spinner size={14} /> : <Save size={14} />} Save as matrix
+          </button>
+        </div>
+      )}
 
       {notes.length > 0 && (
         <div style={{ display: 'flex', gap: 10, padding: '10px 14px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, fontSize: 12, color: '#92400e' }}>

@@ -14,6 +14,7 @@ import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
 import { BulkCreateBar } from '../components/localseo/BulkCreateBar'
 import { CustomTargetsPanel } from '../components/localseo/CustomTargetsPanel'
+import { MatrixTab } from '../components/localseo/matrix/MatrixTab'
 import { useSiloPlan } from '../components/localseo/useSiloPlan'
 import { useBulkCreate } from '../components/localseo/useBulkCreate'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
@@ -72,11 +73,12 @@ export function LocalSeoContent() {
     typeof window !== 'undefined' &&
     Boolean(window.localStorage.getItem(`localseo:precheck:${clientId}`))
 
-  const [tab, setTab] = useState<'new' | 'plan' | 'score' | 'reopt' | 'saved' | 'drafts' | 'history'>(
-    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / score / reopt / drafts / history).
+  const [tab, setTab] = useState<'new' | 'plan' | 'matrix' | 'score' | 'reopt' | 'saved' | 'drafts' | 'history'>(
+    // Deep-link support: /clients/:id/local-seo?tab=saved (or plan / matrix / score / reopt / drafts / history).
     precheckResuming ? 'new'
       : searchParams.get('tab') === 'saved' ? 'saved'
       : searchParams.get('tab') === 'plan' ? 'plan'
+      : searchParams.get('tab') === 'matrix' ? 'matrix'
       : searchParams.get('tab') === 'score' ? 'score'
       : searchParams.get('tab') === 'reopt' ? 'reopt'
       : searchParams.get('tab') === 'drafts' ? 'drafts'
@@ -179,6 +181,9 @@ export function LocalSeoContent() {
   const planBulk = useBulkCreate(clientId, refreshSaved)
   // Plan tab sub-mode: the AI-discovered plan vs the user's own matrix / list.
   const [planMode, setPlanMode] = useState<'ai' | 'custom'>('ai')
+  // Matrix tab: open straight onto a matrix (deep link ?matrix=<id>, or the
+  // "Save as matrix" hand-off from the Upload-your-own panel).
+  const [matrixFocusId, setMatrixFocusId] = useState<string | null>(searchParams.get('matrix'))
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -480,7 +485,7 @@ export function LocalSeoContent() {
 
       {/* Tabs */}
       <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 10, padding: 4, marginBottom: 20 }}>
-        {(['new', 'plan', 'score', 'reopt', 'saved', 'drafts', 'history'] as const).map(t => (
+        {(['new', 'plan', 'matrix', 'score', 'reopt', 'saved', 'drafts', 'history'] as const).map(t => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -489,7 +494,7 @@ export function LocalSeoContent() {
               background: tab === t ? '#fff' : 'transparent', color: tab === t ? '#0f172a' : '#64748b',
               boxShadow: tab === t ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
             }}
-          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'score' ? 'Score' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : t === 'drafts' ? `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}` : 'Score History'}</button>
+          >{t === 'new' ? 'New Page' : t === 'plan' ? 'Plan Silo' : t === 'matrix' ? 'Matrix' : t === 'score' ? 'Score' : t === 'reopt' ? 'Reoptimize' : t === 'saved' ? 'Saved Pages' : t === 'drafts' ? `Drafts${draftPages && draftPages.length ? ` (${draftPages.length})` : ''}` : 'Score History'}</button>
         ))}
       </div>
 
@@ -521,6 +526,8 @@ export function LocalSeoContent() {
           clientName={client?.name}
           onOpenSaved={() => { refreshSaved(); setTab('saved') }}
         />
+      ) : tab === 'matrix' ? (
+        <MatrixTab key={matrixFocusId ?? 'list'} clientId={clientId} focusMatrixId={matrixFocusId} onOpenPage={openSaved} />
       ) : tab === 'plan' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           {/* AI-discovered plan vs the user's own matrix / list of targets. */}
@@ -549,6 +556,7 @@ export function LocalSeoContent() {
               hasWebsite={hasWebsite}
               onCreated={refreshSaved}
               onFoundAction={handlePlanAction}
+              onSaveMatrix={id => { setMatrixFocusId(id); setTab('matrix') }}
             />
           ) : (
         <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 18 }}>
