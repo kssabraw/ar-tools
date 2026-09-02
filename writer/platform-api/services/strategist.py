@@ -82,7 +82,9 @@ _EMIT_TOOL = {
     "name": "emit_strategy_review",
     "description": (
         "Emit the final strategy review. Call this exactly once when your analysis is "
-        "complete (after any drill-downs). This ENDS the run."
+        "complete (after any drill-downs). This ENDS the run. Write the fields in the "
+        "order given: assessment, then PROPOSALS and QUESTIONS, then findings — the "
+        "actionable parts first, so nothing actionable is lost if the output runs long."
     ),
     "input_schema": {
         "type": "object",
@@ -90,21 +92,6 @@ _EMIT_TOOL = {
             "assessment": {
                 "type": "string",
                 "description": "The one-paragraph strategic read of this client's whole search surface.",
-            },
-            "findings": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "signal_refs": {
-                            "type": "array", "items": {"type": "string"},
-                            "description": "Which digest signals this synthesis rests on (keyword/module refs).",
-                        },
-                        "synthesis": {"type": "string", "description": "The cross-signal insight itself."},
-                        "sop_citation": {"type": "string", "description": "The SOP doc/section that frames it ('' if none)."},
-                    },
-                    "required": ["synthesis"],
-                },
             },
             "proposals": {
                 "type": "array",
@@ -164,6 +151,21 @@ _EMIT_TOOL = {
             "questions": {
                 "type": "array", "items": {"type": "string"},
                 "description": "Halt-and-ask items: decisions no SOP owns, SOP conflicts, missing inputs.",
+            },
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "signal_refs": {
+                            "type": "array", "items": {"type": "string"},
+                            "description": "Which digest signals this synthesis rests on (keyword/module refs).",
+                        },
+                        "synthesis": {"type": "string", "description": "The cross-signal insight itself."},
+                        "sop_citation": {"type": "string", "description": "The SOP doc/section that frames it ('' if none)."},
+                    },
+                    "required": ["synthesis"],
+                },
             },
         },
         "required": ["assessment"],
@@ -349,6 +351,59 @@ def render_price_list() -> str:
         price = f"${e['unit_cost']:.2f}/{e['unit']}" if e["verified"] else "price pending"
         lines.append(f"- {tt}: {e['label']} — {price}")
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Output-limit truncation guard. From mid-August 2026 every scheduled review
+# hit max_tokens=4096 on its emit round: findings (then first in the schema)
+# consumed the budget, proposals/questions were cut off, and the partial tool
+# input was persisted as a 'complete' review with 0 proposals — portfolio-wide,
+# silently. The schema now puts proposals/questions first; on stop_reason
+# max_tokens the run retries the emit ONCE with an explicit "you were cut off"
+# turn, and a review still truncated after that is flagged, never silent.
+# ─────────────────────────────────────────────────────────────────────────────
+_MAX_TRUNCATION_RETRIES = 1
+
+TRUNCATION_QUESTION = (
+    "[truncated] The model's output hit the token limit even after a retry — "
+    "proposals/questions may be incomplete. Re-run this review (and check "
+    "strategist_max_tokens) before acting on it as a full picture."
+)
+
+_TRUNCATION_FOLLOWUP_TEXT = (
+    "Your emit_strategy_review call was CUT OFF by the output limit and was NOT "
+    "recorded. Call emit_strategy_review again now, and write it compactly: "
+    "assessment, then ALL proposals and questions, then at most 5 findings of at "
+    "most 2 sentences each. Do not call any other tool."
+)
+
+
+def is_truncated(resp) -> bool:
+    """Whether an Anthropic response ended on the output limit. Pure."""
+    return getattr(resp, "stop_reason", None) == "max_tokens"
+
+
+def truncation_followup(tool_uses: list) -> "list[dict] | str":
+    """The user turn that asks for a compact re-emit after a truncated round. Pure.
+
+    Every tool_use block the cut-off assistant turn carried needs a tool_result
+    in the next user turn (API contract), so the follow-up rides as one
+    tool_result per block; with no tool_use block it is a plain text turn."""
+    if not tool_uses:
+        return _TRUNCATION_FOLLOWUP_TEXT
+    return [
+        {"type": "tool_result", "tool_use_id": block.id, "content": _TRUNCATION_FOLLOWUP_TEXT}
+        for block in tool_uses
+    ]
+
+
+def _assistant_turn(content) -> dict:
+    """The assistant message to append for a response — a truncated response can
+    carry zero content blocks, which the API rejects as an empty turn."""
+    blocks = list(content or [])
+    if not blocks:
+        blocks = [{"type": "text", "text": "[output cut off]"}]
+    return {"role": "assistant", "content": blocks}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -608,9 +663,14 @@ async def run_strategy_review(
     # (same model): a single 429 (the primary account saturates under scan/report
     # bursts) previously failed the entire review job — one of the most expensive
     # artifacts in the suite to lose.
-    # loop bound: every non-emit round consumes ≥1 drill-down, +2 slack rounds
-    for round_no in range(max_dd + 3):
-        force_emit = round_no >= max_dd + 1 or len(drilldowns) >= max_dd
+    truncation_retries = 0
+    truncated = False
+    # loop bound: every non-emit round consumes ≥1 drill-down, +2 slack rounds,
+    # +1 for the single truncation retry
+    for round_no in range(max_dd + 3 + _MAX_TRUNCATION_RETRIES):
+        force_emit = (
+            round_no >= max_dd + 1 or len(drilldowns) >= max_dd or truncation_retries > 0
+        )
         resp = await anthropic_failover.call_failover(
             clients,
             lambda c: c.messages.create(
@@ -628,8 +688,22 @@ async def run_strategy_review(
 
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         emit_block = next((b for b in tool_uses if b.name == "emit_strategy_review"), None)
+        cut_off = is_truncated(resp)
+        if cut_off and truncation_retries < _MAX_TRUNCATION_RETRIES:
+            # The partial emit (or a cut-off drill-down turn) is discarded; ask
+            # for a compact re-emit and force the tool on the next round.
+            truncation_retries += 1
+            logger.warning(
+                "strategist.emit_truncated_retry",
+                extra={"client_id": client_id, "review_id": review_id, "round": round_no,
+                       "had_emit_block": emit_block is not None},
+            )
+            messages.append(_assistant_turn(resp.content))
+            messages.append({"role": "user", "content": truncation_followup(tool_uses)})
+            continue
         if emit_block is not None:
             emitted = emit_block.input or {}
+            truncated = cut_off
             break
         if not tool_uses:
             # No tool call and no emit — nudge once, then the force_emit round closes it.
@@ -665,6 +739,16 @@ async def run_strategy_review(
             "Run ended without a model assessment — treat as failed and re-run."
         )
     usage["drilldowns"] = drilldowns
+    if truncated:
+        # Still cut off after the retry: keep what parsed (the findings are
+        # worth having) but never let it read as a complete picture.
+        usage["truncated"] = True
+        review_body["questions"].append(TRUNCATION_QUESTION)
+        logger.warning(
+            "strategist.emit_truncated_final",
+            extra={"client_id": client_id, "review_id": review_id,
+                   "proposals": len(review_body["proposals"])},
+        )
 
     # The stored input_digest is the structured digest (not the SOP text — that
     # would 5× the row for content already versioned in the repo).
@@ -724,6 +808,7 @@ async def run_strategy_review(
             "proposals": len(review_body["proposals"]),
             "questions": len(review_body["questions"]),
             "drilldowns": len(drilldowns), "frozen": frozen,
+            "truncated": truncated, "truncation_retries": truncation_retries,
         },
     )
     return updated

@@ -1,6 +1,17 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-02 · **SerMaStr autonomous recovery plans — PRD approved, root cause of the 0-proposal reviews MEASURED (docs-only; nothing built yet)** (latest)
+## ⏩ Update — 2026-09-02 · **SerMaStr PR 1 — the strategist emit-truncation fix BUILT (all clients; PRD §3 PR 1)** (latest)
+
+The measured root cause of the portfolio-wide 0-proposal strategist reviews (see the entry below + `docs/modules/sermastr-autonomous-recovery-plans-prd-v1_0.md` §2) is fixed at all three points. Code in `writer/platform-api/services/strategist.py` + `config.py`; tests in `tests/test_strategist.py`.
+
+- **Cap:** `strategist_max_tokens` **4096 → 16000** (config default; worst-case output ≈ $0.25/review). ⚠️ If PLATFORM carries a `STRATEGIST_MAX_TOKENS` env override the default is dead — check `list-variables` before trusting the deploy (the Railway connector was unauthorised in this session).
+- **Schema order:** `emit_strategy_review` now lists `assessment` → `proposals` → `questions` → `findings`, and its description tells the model to write them in that order, so a long output loses the least actionable part first.
+- **`stop_reason` guard:** `is_truncated(resp)`; on `max_tokens` the run discards the partial turn, appends it (`_assistant_turn` — never an empty assistant message), answers it with `truncation_followup(tool_uses)` (one `tool_result` per cut-off `tool_use` block — API contract — or a plain text turn when the block was dropped) and forces the emit on the next round. **Exactly one retry** (`_MAX_TRUNCATION_RETRIES=1`; the loop bound grew by one round). Still truncated → stored `complete` with `token_usage.truncated=true` + `TRUNCATION_QUESTION` appended (findings kept; the `status` CHECK `running|complete|failed` untouched). Logs: `strategist.emit_truncated_retry` / `strategist.emit_truncated_final`; `strategy_review_complete` now carries `truncated` + `truncation_retries`.
+- **Tests:** schema order, the pure helpers, and four scripted-response run-loop cases (retry-then-full keeps the full emit and answers `tu-1`; still-truncated flags + appends the question and never loops; a dropped tool block retries with a text turn; an untruncated emit is byte-for-byte the old path).
+- **Verify after deploy:** one on-demand FCR review → `token_usage.output_tokens` well under 16k and `proposals > 0`; then the next weekly pass across all clients should show proposals/questions again (they were 0 across all 13 reviews the week of Aug 31).
+- **Next:** PR 2 (the `goal_recovery` runs) per PRD §4–§9.
+
+## ⏩ Update — 2026-09-02 · **SerMaStr autonomous recovery plans — PRD approved, root cause of the 0-proposal reviews MEASURED (docs-only, MERGED #955)**
 
 The owner's brief: SerMaStr must autonomously produce suggested **solutions**, not just diagnoses — First Class Roofing's weekly strategist called the local-pack goal a critical emergency for ~8 weeks and emitted **0 proposals** every week, so the owner had to extract a recovery plan by chat. The brief's Step 0 said "confirm the real mechanism before coding". Done, and it is **not** the brief's hypothesis. PRD: **`docs/modules/sermastr-autonomous-recovery-plans-prd-v1_0.md`** (20 owner rulings in §11, from a grilling session 2026-09-02).
 
