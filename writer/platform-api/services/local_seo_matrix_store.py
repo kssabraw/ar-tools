@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 _MATRIX_COLS = (
     "id, client_id, name, location, location_code, services, locations, url_pattern, "
     "base_url, page_template_url, entity_provider, publish_destination, publish_status, "
+    "link_to_service_hub, service_hub_pattern, link_to_home, "
     "release_enabled, release_mode, release_weekday, release_day_of_month, "
     "release_per_count, release_status, release_next_run_at, release_last_run_at, "
     "created_by, created_at, updated_at"
@@ -199,6 +200,14 @@ def _validate_pattern(pattern: Optional[str]) -> str:
     return p
 
 
+def _validate_hub_pattern(pattern: Optional[str]) -> str:
+    p = (pattern or "").strip() or core.DEFAULT_SERVICE_HUB_PATTERN
+    errors = core.validate_hub_pattern(p)
+    if errors:
+        raise HTTPException(status_code=400, detail=errors[0])
+    return p
+
+
 def _default_base_url(client: dict) -> Optional[str]:
     site = (client.get("gbp") or {}).get("website") or client.get("website_url") or ""
     return site.strip().rstrip("/") or None
@@ -231,6 +240,9 @@ async def create_matrix(client_id: str, body: dict, user_id: str) -> dict:
         "entity_provider": body.get("entity_provider") or None,
         "publish_destination": body.get("publish_destination") or "google_docs",
         "publish_status": body.get("publish_status") or "draft",
+        "link_to_service_hub": bool(body.get("link_to_service_hub", True)),
+        "service_hub_pattern": _validate_hub_pattern(body.get("service_hub_pattern")),
+        "link_to_home": bool(body.get("link_to_home", True)),
         "created_by": user_id,
     }
     matrix = sb.table("local_seo_matrices").insert(row).execute().data[0]
@@ -267,6 +279,11 @@ async def update_matrix(matrix_id: str, client_id: str, body: dict) -> dict:
             patch[key] = (val.strip().rstrip("/") if key == "base_url" else val.strip()) if isinstance(val, str) else val
             if key in ("base_url", "page_template_url", "entity_provider") and not patch[key]:
                 patch[key] = None
+    for key in ("link_to_service_hub", "link_to_home"):
+        if body.get(key) is not None:
+            patch[key] = bool(body[key])
+    if body.get("service_hub_pattern") is not None:
+        patch["service_hub_pattern"] = _validate_hub_pattern(body["service_hub_pattern"])
 
     pattern = matrix["url_pattern"]
     if body.get("url_pattern") is not None:
@@ -444,12 +461,17 @@ def enqueue_cells(
     base_url = matrix.get("base_url") or ""
     for i, cell in enumerate(selected):
         location, code = _location_for_cell(matrix, cell)
-        # Sibling links are planned against the WHOLE grid (plan §4.1), so a cell
-        # generated before its siblings still links to their planned URLs.
-        links = core.sibling_links(
+        # Links are planned against the WHOLE grid (plan §4.1), so a cell
+        # generated before its siblings still links to their planned URLs. Each
+        # cell also links UP to its top-level service page and the site root
+        # when the matrix opts in (default on).
+        links = core.plan_cell_links(
             cell, all_cells, base_url,
             location_cap=settings.local_seo_matrix_sibling_location_cap,
             max_links=settings.local_seo_matrix_max_links,
+            service_hub=matrix.get("link_to_service_hub", True),
+            service_hub_pattern=matrix.get("service_hub_pattern") or core.DEFAULT_SERVICE_HUB_PATTERN,
+            home=matrix.get("link_to_home", True),
         )
         payload = {
             "client_id": client_id,

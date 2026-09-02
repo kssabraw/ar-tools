@@ -41,6 +41,9 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
   const [destination, setDestination] = useState<'app_only' | 'google_docs' | 'wordpress' | 'github'>('app_only')
   const [publishStatus, setPublishStatus] = useState<'draft' | 'publish'>('draft')
+  const [linkServiceHub, setLinkServiceHub] = useState(true)
+  const [hubPattern, setHubPattern] = useState('/{service}/')
+  const [linkHome, setLinkHome] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -67,6 +70,9 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         entity_provider: entityProvider,
         publish_destination: destination,
         publish_status: publishStatus,
+        link_to_service_hub: linkServiceHub,
+        service_hub_pattern: linkServiceHub ? (hubPattern.trim() || '/{service}/') : null,
+        link_to_home: linkHome,
       })
       onCreated(matrix)
     } catch (e) {
@@ -127,6 +133,29 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
           <label style={label}>Site base URL <span style={{ fontWeight: 400, color: '#94a3b8' }}>(optional — defaults to the client’s website)</span></label>
           <input style={input} value={baseUrl} onChange={e => setBaseUrl(e.target.value)} placeholder="https://www.example.com.au" disabled={saving} />
         </div>
+      </div>
+
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label style={label}>Internal linking</label>
+        <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+          Every page links across to its siblings (other services here, this service nearby). It can also link <strong>up</strong>:
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155' }}>
+          <input type="checkbox" checked={linkServiceHub} onChange={e => setLinkServiceHub(e.target.checked)} disabled={saving} />
+          To the top-level service page
+        </label>
+        {linkServiceHub && (
+          <div style={{ paddingLeft: 24 }}>
+            <input style={{ ...input, maxWidth: 320 }} value={hubPattern} onChange={e => setHubPattern(e.target.value)} placeholder="/{service}/" disabled={saving} />
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>
+              Where your service hub pages live — must contain <code>{'{service}'}</code>, no <code>{'{location}'}</code>. e.g. <code>/{'{service}'}/</code> → <code>/roof-restoration/</code>.
+            </p>
+          </div>
+        )}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155' }}>
+          <input type="checkbox" checked={linkHome} onChange={e => setLinkHome(e.target.checked)} disabled={saving} />
+          To the home page (site root)
+        </label>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>

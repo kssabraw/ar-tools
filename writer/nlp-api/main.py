@@ -7549,6 +7549,8 @@ _INTERNAL_LINKS_MAX = 12
 _INTERNAL_LINK_RELATIONS = {
     "same_location_other_service": "another service in this location",
     "same_service_other_location": "this service in a nearby location",
+    "service_hub": "the main service page (link up to it)",
+    "home": "the homepage (link up to it)",
 }
 
 
