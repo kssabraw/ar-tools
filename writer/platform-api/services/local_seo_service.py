@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import analysis_cache, job_priority, locations_service
+from services import analysis_cache, job_priority, locations_service, page_spec, page_spec_store
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -318,6 +318,13 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         # guide on file — which is not the same as scoring zero.
         "voice_violations": result.get("voice_compliance"),
         "voice_score": (result.get("voice_compliance") or {}).get("score"),
+        # The page spec this page was written against + how it landed
+        # (attach_length_verdict). All null for pages generated without a spec.
+        "page_spec_id": result.get("page_spec_id"),
+        "spec_version": result.get("spec_version"),
+        "target_words": result.get("target_words"),
+        "actual_words": result.get("actual_words"),
+        "length_status": result.get("length_status"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -559,6 +566,77 @@ async def _apply_structure_gate(
     )
 
 
+def _resolve_page_spec(
+    client: dict, keyword: str, location: str, location_code: Optional[int],
+    serp: Optional[dict], fallback_target: Optional[int],
+) -> Optional[dict]:
+    """The page spec this generation is written against (plan §6 Phase 1):
+    the active stored version (an edit sticks), else a freshly built + saved
+    one. Best-effort — None on any failure, and generation carries on exactly
+    as before (a page must never fail because its spec couldn't be built)."""
+    try:
+        return page_spec_store.resolve_spec(
+            client, keyword, location, location_code, serp, fallback_target,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        logger.warning(
+            "local_seo.page_spec_unavailable",
+            extra={"client_id": client.get("id"), "keyword": keyword, "error": str(exc)},
+        )
+        return None
+
+
+def _notify_over_length(client_id: str, keyword: str, page_id: Optional[str], verdict: Optional[dict]) -> None:
+    """Plan §5.5 — a page still over the spec ceiling after every trim is
+    saved honestly (length_status=over_length) AND surfaced, never shipped as
+    a clean page. One notification per page. Best-effort."""
+    if not verdict or not verdict.get("over_ceiling"):
+        return
+    try:
+        from services import notifications  # lazy
+
+        notifications.emit(
+            client_id,
+            kind="content_over_length",
+            title="Local SEO page saved over its length ceiling",
+            summary=(
+                f"'{keyword}' landed at ~{verdict.get('total_words')} words against a spec band of "
+                f"{verdict.get('min_words')}–{verdict.get('max_words')} (ceiling {verdict.get('ceiling_words')}) "
+                f"after the trim passes. Over-band sections: "
+                f"{', '.join(verdict.get('over_sections') or []) or 'none — the overage is spread across sections'}. "
+                f"Review the page spec or reoptimize the page before publishing."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "page_id": page_id, "length_verdict": {
+                k: v for k, v in verdict.items() if k != "sections"}},
+            dedupe_key=f"content_over_length:{page_id or keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never blocks generation
+        logger.warning("local_seo.over_length_notify_failed", extra={"error": str(exc)})
+
+
+def attach_length_verdict(result: dict, spec: Optional[dict]) -> dict:
+    """Measure the generated page against its spec and record the verdict on
+    the result: `length_verdict` (full), plus the flat fields `_persist_page`
+    writes to the page row. Pure apart from the HTML parse; a missing spec
+    leaves the result untouched."""
+    if not spec:
+        return result
+    try:
+        measure = page_spec.measure_page(result.get("content_html") or "", spec)
+        verdict = page_spec.length_verdict(measure, spec)
+    except Exception as exc:  # noqa: BLE001 — measurement must never break the run
+        logger.warning("local_seo.length_verdict_failed", extra={"error": str(exc)})
+        return result
+    result["length_verdict"] = {**verdict, "sections": measure.get("sections") or []}
+    result["page_spec_id"] = spec.get("id")
+    result["spec_version"] = spec.get("version")
+    result["target_words"] = verdict.get("target_words")
+    result["actual_words"] = verdict.get("total_words")
+    result["length_status"] = verdict.get("status")
+    return result
+
+
 async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     user_id: str, force_refresh: bool = False,
@@ -642,6 +720,16 @@ async def generate_page(
         if not analysis_ok:
             _notify_analysis_degraded(client_id, keyword, location, serp_target)
 
+    # The kept page spec (length band + per-section bands + caps) for this
+    # keyword × location — built from the same SERP analysis + the client's
+    # reference layout, or the active edited version. Rides to nlp on the
+    # payload (consumed in Phase 2); its target also drives the reference
+    # scaling below so prompt and spec agree on the page size.
+    spec = _resolve_page_spec(client, keyword, location, location_code, serp, serp_target)
+    if spec:
+        payload["page_spec"] = spec
+        serp_target = (spec.get("total") or {}).get("target") or serp_target
+
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
     reference_analysis: Optional[dict] = None
@@ -678,9 +766,13 @@ async def generate_page(
     result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT, on_progress=on_progress)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     coverage = _guarantee_internal_links(result, internal_links)
+    result = attach_length_verdict(result, spec)
     # Record whether competitor analysis actually informed this page (it used
     # to be hard-coded True, so a degraded page was indistinguishable on read).
     page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes)
+    if result.get("length_verdict") is not None:
+        page["length_verdict"] = result["length_verdict"]  # not a column — rides the response
+        _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
     if coverage is not None:
         page["link_coverage"] = coverage
     return page
@@ -1221,6 +1313,18 @@ async def reoptimize_page(
     # from them with every improvement to its score.
     voice_card = await voice_card_service.get_voice_card(client, user_id=user_id)
 
+    # The kept page spec for this keyword × location (same one generation used,
+    # or the owner's edit): nlp trims per section against it and the row
+    # records target vs actual. Location resolved best-effort so the spec key
+    # matches generation's (which keys on the DataForSEO code).
+    spec: Optional[dict] = None
+    try:
+        _loc, _code = await locations_service.resolve_location(client, location, None)
+        _fallback = _resolve_fallback_length_target(_code, _loc)
+        spec = _resolve_page_spec(client, keyword, _loc, _code, serp_analysis, _fallback)
+    except Exception as exc:  # noqa: BLE001 — a spec is an enhancement here, never a gate
+        logger.warning("local_seo.reoptimize_spec_unavailable", extra={"client_id": client_id, "error": str(exc)})
+
     result = await _stream_nlp("/reoptimize-page", {
         "keyword": keyword,
         "location": location,
@@ -1237,8 +1341,10 @@ async def reoptimize_page(
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
         "internal_links": internal_links or None,
+        "page_spec": spec,
     }, on_progress=on_progress)
     link_coverage = _guarantee_internal_links(result, internal_links)
+    result = attach_length_verdict(result, spec)
 
     # Newer nlp builds surface the score the reoptimize loop already computed.
     # Only re-score when it's absent (older nlp) so the persisted page still
@@ -1268,6 +1374,9 @@ async def reoptimize_page(
             logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
     page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
+    if result.get("length_verdict") is not None:
+        page["length_verdict"] = result["length_verdict"]
+        _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
     if link_coverage is not None:
         page["link_coverage"] = link_coverage
     return page
@@ -1572,7 +1681,8 @@ async def run_local_seo_action_job(job: dict) -> None:
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
     "composite_status, voice_score, mode, created_at, deleted_at, "
-    "published_doc_url, published_url, published_at"
+    "published_doc_url, published_url, published_at, "
+    "target_words, actual_words, length_status"
 )
 
 

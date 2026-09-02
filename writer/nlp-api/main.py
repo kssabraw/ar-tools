@@ -122,6 +122,7 @@ import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cit
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
 import length_fit  # deterministic length-fit engine (SERP avg +20% target)
+import page_spec as pspec  # vendored from platform-api (sync-guarded): the kept page spec
 import section_edit  # split/splice generated pages by <section> for scoped corrective passes
 from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
     compute_blog_structural_aeo as _compute_blog_structural_aeo,
@@ -284,6 +285,9 @@ MAX_ECOMMERCE_AUTO_PASSES = int(os.environ.get("MAX_ECOMMERCE_AUTO_PASSES", "3")
 # to trim on any overage, or very high to disable the generation-time trim
 # (length is still scored, and the bulk reoptimizer still trims live pages).
 LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
+# Page-spec enforcement (plan §5.4): section-scoped trim passes per generation /
+# reoptimization when sections are over their band. Not time-budget gated.
+PAGE_SPEC_TRIM_PASSES = int(os.environ.get("PAGE_SPEC_TRIM_PASSES", "2"))
 
 # Wall-clock budget for generate-page's post-generation improvement passes. The
 # initial page generation + its first score always run (that's the page + its
@@ -360,7 +364,9 @@ def _voice_rank_key(scorecard: Optional[dict]) -> tuple:
     return (-crit, score)
 
 
-def _combined_rank_key(seo_score, voice: Optional[dict], seo_threshold: float) -> tuple:
+def _combined_rank_key(
+    seo_score, voice: Optional[dict], seo_threshold: float, length_ok: Optional[bool] = None
+) -> tuple:
     """Keep-best key for the two-axis second pass: rank a (SEO, voice) state so
     the page that best clears BOTH bars ships, never one axis won at the other's
     expense. Priority: fewest voice criticals, then BOTH bars cleared, then how
@@ -380,7 +386,11 @@ def _combined_rank_key(seo_score, voice: Optional[dict], seo_threshold: float) -
     both = 1 if (seo_ok and voice_ok) else 0
     cleared = (1 if seo_ok else 0) + (1 if voice_ok else 0)
     total = (sscore or 0.0) + (vscore or 0.0)
-    return (-crit, both, cleared, total)
+    # Length (page spec, plan §5.4): a pass that pushes the page OVER its band
+    # ranks below one inside it, whatever it did for SEO/voice — so a rewrite
+    # can never re-inflate a page that was in band. None = no spec = not a bar.
+    len_ok = 1 if (length_ok is None or length_ok) else 0
+    return (-crit, len_ok, both, cleared, total)
 
 
 async def _distill_voice_card(client, brand_voice: Optional[dict], detected_icp: Optional[dict]) -> dict:
@@ -5313,6 +5323,162 @@ PAGE SECTIONS — edit only the ones that need it and return their new inner HTM
         return None
 
 
+# ── page-spec enforcement (plan §5.4) ─────────────────────────────────────────
+# Deterministic measurement per <section id> against the kept spec, then a
+# section-scoped trim of ONLY the sections over their band. Never gated on the
+# time budget: the measure-and-trim step is the length guarantee; only the
+# optional voice/SEO passes yield to the clock.
+
+_SECTION_TRIM_SYSTEM = """You are CUTTING specific sections of an already-written local service page down to a word budget. This is a reduction pass, not a rewrite and never an expansion.
+
+You will be given the page's BRAND VOICE guide (keep the voice) and, for each section to cut, its `[key]`, its current word count, its budget (max words), and its current inner HTML.
+
+Return ONLY a JSON object mapping each given `[key]` to that section's NEW inner HTML (the content INSIDE its <section> tag). Include every section you were given; include no others.
+
+Rules for each section:
+- Land AT OR BELOW its max words (count the visible text; headings don't count). Cutting below the max is fine; going over is a failure.
+- Keep the section's heading. Cut by removing repeated points, generic filler, hedging, and net-new topics competitors don't cover; merge overlapping paragraphs; shorten list items. You MAY delete paragraphs, list items, table rows and H3 sub-sections inside the section.
+- Keep every fact, phone number, address, price and CTA sentence that remains accurate. Never invent anything. Keep a comparison table if present (drop rows, not the table). For a FAQ section keep at least 4 entries and every answer answer-first.
+- Preserve the client's brand voice, grammatical person and required phrasing in what remains.
+- Do NOT add new sentences, paragraphs, list items, FAQ entries or headings. Do NOT touch sections you were not given.
+- Write clean semantic HTML. Do NOT add RDFa markup or re-link phone numbers — applied automatically after your edit.
+- Output valid JSON and valid HTML fragments only. No markdown fences, no commentary."""
+
+
+def _spec_trim_targets(measure: dict, spec: dict) -> List[dict]:
+    """Pure: the sections a trim pass must cut, worst overage first —
+    ``[{key, words, max_words, cut}]``. Only sections OVER their band; a page
+    that is over its total band with no over-band section (many sections each
+    slightly under max) gets no targets — nothing can be cut without breaking
+    a band, so the page ships as-is with its honest verdict."""
+    out: List[dict] = []
+    for row in measure.get("sections") or []:
+        if row.get("status") != "over":
+            continue
+        hi = int(row.get("max_words") or 0)
+        words = int(row.get("words") or 0)
+        out.append({"key": row.get("key"), "words": words, "max_words": hi, "cut": max(0, words - hi)})
+    out.sort(key=lambda r: -r["cut"])
+    return out
+
+
+def _spec_trim_prompt(targets: List[dict], sections: List[dict], business_name: str,
+                      keyword: str, city: str, voice_block: str) -> str:
+    """Pure: the user prompt for a section-scoped trim pass."""
+    by_key = {sec["key"]: sec for sec in sections}
+    parts = []
+    for t in targets:
+        sec = by_key.get(t["key"])
+        if sec is None:
+            continue
+        parts.append(
+            f"[{t['key']}] heading: {sec.get('heading') or '(no heading)'}\n"
+            f"CURRENT: ~{t['words']} words · BUDGET: max {t['max_words']} words · CUT at least ~{t['cut']} words\n"
+            f"{sec.get('inner') or ''}"
+        )
+    voice_section = f"\n{voice_block}\n" if voice_block else ""
+    return (
+        f"BUSINESS: {business_name}\nKEYWORD: {keyword} | CITY: {city}\n{voice_section}\n"
+        "SECTIONS TO CUT — return the new inner HTML for EACH, keyed by [key]:\n\n"
+        + "\n\n".join(parts)
+    )
+
+
+async def _spec_trim_inline(
+    content_html: str, spec: dict, measure: dict, keyword: str, city: str, business_name: str,
+    phone: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict], client,
+) -> Optional[tuple]:
+    """One section-scoped trim pass. Returns ``(new_html, token_rec, applied_keys)``
+    or None when there is nothing to cut / no addressable sections / the model
+    returned nothing usable / the call failed. Never raises."""
+    try:
+        targets = _spec_trim_targets(measure, spec)
+        if not targets:
+            return None
+        sections = section_edit.split_sections(content_html)
+        if not sections:
+            return None
+        user_prompt = _spec_trim_prompt(targets, sections, business_name, keyword, city, voice_block)
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=8000,
+            temperature=0,
+            system=[{"type": "text", "text": _SECTION_TRIM_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record("section-trim-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        edits = _parse_claude_json(msg.content[0].text)
+        if not isinstance(edits, dict):
+            return None
+        wanted = {t["key"] for t in targets}
+        edits = {k: v for k, v in edits.items() if k in wanted and isinstance(v, str) and v.strip()}
+        if not edits:
+            return None
+        entities = (serp_analysis_dict or {}).get("google_entities", [])
+        edits = {k: _apply_rdfa_markup(_linkify_phones(v, phone), entities) for k, v in edits.items()}
+        new_html, applied, skipped = section_edit.apply_section_edits(content_html, edits)
+        if not applied:
+            return None
+        if skipped:
+            logger.info("section-trim: applied %s; skipped unresolved %s", applied, skipped)
+        return new_html, token_rec, applied
+    except Exception as _ste:
+        logger.warning("section-trim: failed (keeping page): %s", _ste)
+        return None
+
+
+def _spec_verdict(content_html: str, spec: Optional[dict]) -> Optional[dict]:
+    """Measure + verdict against the spec (deterministic); None without a spec."""
+    if not spec:
+        return None
+    try:
+        measure = pspec.measure_page(content_html, spec)
+        verdict = pspec.length_verdict(measure, spec)
+        verdict["measure"] = measure
+        return verdict
+    except Exception as _mve:
+        logger.warning("page-spec: measurement failed: %s", _mve)
+        return None
+
+
+async def _enforce_spec_length(
+    content_html: str, spec: Optional[dict], q, *, keyword: str, city: str, business_name: str,
+    phone: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict], client, label: str,
+) -> tuple:
+    """The length guarantee: measure the page against its spec and trim the
+    over-band sections, up to ``PAGE_SPEC_TRIM_PASSES`` times, until nothing is
+    over. Returns ``(html, token_rec_delta, verdict, changed)``. NOT gated on
+    the time budget. Best-effort: any failure keeps the page so far."""
+    tok = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    verdict = _spec_verdict(content_html, spec)
+    if verdict is None:
+        return content_html, tok, None, False
+    changed = False
+    for _pass in range(1, PAGE_SPEC_TRIM_PASSES + 1):
+        if not verdict.get("over_sections"):
+            break
+        await q.put({"step": "progress", "progress": 91,
+                     "message": f"Trimming {len(verdict['over_sections'])} section(s) to the page spec (pass {_pass})…"})
+        out = await _spec_trim_inline(
+            content_html, spec, verdict["measure"], keyword, city, business_name, phone,
+            voice_block, serp_analysis_dict, client,
+        )
+        if out is None:
+            break
+        new_html, trim_tok, applied = out
+        tok["input_tokens"] += trim_tok["input_tokens"]
+        tok["output_tokens"] += trim_tok["output_tokens"]
+        tok["cost_usd"] = round(tok["cost_usd"] + trim_tok["cost_usd"], 6)
+        new_verdict = _spec_verdict(new_html, spec)
+        if new_verdict is None or new_verdict["total_words"] >= verdict["total_words"]:
+            logger.info("%s: spec trim pass %d did not shorten the page; keeping previous", label, _pass)
+            break
+        content_html, verdict, changed = new_html, new_verdict, True
+        logger.info("%s: spec trim pass %d cut to %s words (over sections now %s)",
+                    label, _pass, verdict["total_words"], verdict["over_sections"])
+    return content_html, tok, verdict, changed
+
+
 def _sse(data: dict) -> str:
     """Format a dict as a Server-Sent Event line."""
     return f"data: {json.dumps(data)}\n\n"
@@ -7444,6 +7610,12 @@ class GeneratePageRequest(BaseModel):
     # graded (length_fit) instead of silently falling back to the template's
     # per-section counts.
     length_target: Optional[int] = None
+    # The kept page spec (platform-api services/page_spec.py): page word band +
+    # per-section min/max + structure caps. When present it REPLACES the
+    # reference-mirror block and the per-section template counts as the
+    # writer's structure/length instruction, and the page is measured and
+    # trimmed per section against it after writing (plan §5.4).
+    page_spec: Optional[dict] = None
     # Phase 3 — "page template": mirror the section structure of a reference page.
     # Provide a URL (scraped here) or raw HTML; the writer follows that section
     # layout/heading hierarchy instead of the default 13-section structure, while
@@ -7586,6 +7758,16 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 "generate-page: no SERP length target for '%s' — using fallback target %s words",
                 body.keyword, length_target,
             )
+        # The kept page spec wins on length when present: its target may be an
+        # owner edit, and it is what the page is measured against afterwards.
+        page_spec_dict = body.page_spec if isinstance(body.page_spec, dict) and body.page_spec.get("sections") else None
+        if page_spec_dict:
+            _spec_target = int(((page_spec_dict.get("total") or {}).get("target")) or 0)
+            if _spec_target > 0:
+                length_target = _spec_target
+            logger.info("generate-page: page spec v%s in force (band %s–%s)",
+                        page_spec_dict.get("version"), (page_spec_dict.get("total") or {}).get("min"),
+                        (page_spec_dict.get("total") or {}).get("max"))
 
         # Max-Cosine Synthesis (the SRT's "real cosine vs the AIO answer"): aim the
         # main entity + H2/H3 headings at the live AI Overview via Gemini cosine
@@ -7746,6 +7928,14 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                     f"{_outline}"
                 )
                 logger.info(f"generate-page: mirroring template structure ({_outline.count(chr(10)) + 1} headings)")
+                if page_spec_dict:
+                    template_text += "\n\n" + pspec.render_spec_block(page_spec_dict)
+        elif page_spec_dict:
+            # The kept page spec already folds the client's reference layout
+            # into per-section bands — it REPLACES the reference-mirror block,
+            # so the writer has one set of numbers (plan §5.6).
+            template_text = pspec.render_spec_block(page_spec_dict)
+            logger.info("generate-page: page spec drives structure + length")
         elif (body.reference_page_structure or "").strip():
             # No explicit template URL/HTML, but the suite supplied a pre-analyzed
             # reference structure for this client's page type — mirror it.
@@ -7847,7 +8037,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 f"User notes: {body.notes.strip()}\n"
             )
 
-        length_budget_text = _length_budget_line(serp_analysis_dict, body.length_target)
+        length_budget_text = _length_budget_line(serp_analysis_dict, length_target)
         internal_links_text = _internal_links_block(body.internal_links)
 
         user_prompt = f"""BUSINESS DATA
@@ -8030,6 +8220,32 @@ Full location: {body.location}
         # to the clock.
         length_engine = (inline_scores or {}).get("length_fit")
         length_def = _length_trim_deficiency(inline_scores, inline_defs, LENGTH_TRIM_MIN_RATIO)
+        spec_verdict = None
+        if page_spec_dict:
+            # Page-spec enforcement (plan §5.4): measure per section, trim only
+            # the over-band sections, re-score when anything changed. Supersedes
+            # the whole-page length_fit trim below for spec-driven pages.
+            content_html, _spec_tok, spec_verdict, _spec_changed = await _enforce_spec_length(
+                content_html, page_spec_dict, q, keyword=body.keyword, city=city,
+                business_name=body.business_name, phone=body.phone, voice_block=voice_block,
+                serp_analysis_dict=serp_analysis_dict, client=client, label="generate-page",
+            )
+            token_rec["input_tokens"]  += _spec_tok["input_tokens"]
+            token_rec["output_tokens"] += _spec_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _spec_tok["cost_usd"], 6)
+            if _spec_changed:
+                try:
+                    inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard = await _score_html_inline(
+                        content_html, body.keyword, body.location, body.business_name,
+                        body.gbp_category, body.address, serp_analysis_dict, client,
+                        voice_card=voice_card, length_target=length_target,
+                    )
+                    token_rec["input_tokens"]  += rescore_tok["input_tokens"]
+                    token_rec["output_tokens"] += rescore_tok["output_tokens"]
+                    token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
+                except Exception as _lse:
+                    logger.warning(f"generate-page: re-score after spec trim failed: {_lse}")
+            length_def = None  # the spec trim owns length now
         if length_def:
             if not _within_time_budget():
                 logger.info(
@@ -8102,9 +8318,14 @@ Full location: {body.location}
             # Keep-best across BOTH axes (see _combined_rank_key): the strongest
             # state seen wins, so a corrective pass that scores lower on either
             # axis than its predecessor is never the one that ships.
+            def _len_ok(html: str) -> Optional[bool]:
+                v = _spec_verdict(html, page_spec_dict) if page_spec_dict else None
+                return None if v is None else (v.get("status") != "over_length")
+
             _best = {"html": content_html, "schema": schema_json, "title": page_title,
                      "score": inline_score, "scores": inline_scores, "voice": voice_scorecard}
-            _best_key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD)
+            _best_key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD,
+                                           length_ok=_len_ok(content_html))
             for _fix_pass in range(1, MAX_VOICE_CORRECTION_PASSES + 1):
                 # Time budget: don't START another pass once the wall-clock budget
                 # is spent — ship the best page so far (a pass already in flight
@@ -8182,7 +8403,8 @@ Full location: {body.location}
                     logger.warning(f"generate-page: re-score after pass {_fix_pass} failed: {_re}")
                     break
 
-                _key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD)
+                _key = _combined_rank_key(inline_score, voice_scorecard, SEO_SECOND_PASS_THRESHOLD,
+                                          length_ok=_len_ok(content_html))
                 if _key > _best_key:
                     _best_key = _key
                     _best = {"html": content_html, "schema": schema_json, "title": page_title,
@@ -8207,6 +8429,13 @@ Full location: {body.location}
                     MAX_VOICE_CORRECTION_PASSES, body.keyword,
                     (voice_scorecard or {}).get("score"), inline_score,
                 )
+
+        # Final deterministic verdict vs the page spec (measured BEFORE the
+        # injected contact/trust blocks, which are not authored content).
+        if page_spec_dict:
+            spec_verdict = _spec_verdict(content_html, page_spec_dict)
+            if spec_verdict:
+                spec_verdict.pop("measure", None)
 
         # ── Deterministic Contact / Find-Us block ────────────────────────────
         # NAP + address-keyed GBP map embed + driving-directions link + a
@@ -8258,6 +8487,8 @@ Full location: {body.location}
                 # breakdown, persisted by platform-api and shown alongside (not
                 # inside) the SEO score.
                 "voice_compliance": voice_scorecard,
+                # Deterministic page-spec verdict (None without a spec).
+                "length_verdict": spec_verdict,
             },
         })
 
@@ -8280,6 +8511,8 @@ class ReoptimizePageRequest(BaseModel):
     # Fallback word target when serp_analysis carries none (mirrors
     # GeneratePageRequest.length_target).
     length_target: Optional[int] = None
+    # The kept page spec — same contract as GeneratePageRequest.page_spec.
+    page_spec: Optional[dict] = None
     # Brand voice + ICP. Previously absent here, which meant every reoptimize
     # pass rewrote the page with the client's guide missing from the prompt —
     # so voice present at generation was diluted by each later pass.
@@ -8358,6 +8591,12 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         # The word target that governs this page (SERP-measured, else the
         # caller's fallback) — threaded into every score + rewrite pass below.
         length_target = _resolve_length_target(body.serp_analysis, body.length_target)
+        page_spec_dict = body.page_spec if isinstance(body.page_spec, dict) and body.page_spec.get("sections") else None
+        if page_spec_dict:
+            _spec_target = int(((page_spec_dict.get("total") or {}).get("target")) or 0)
+            if _spec_target > 0:
+                length_target = _spec_target
+        spec_block_text = pspec.render_spec_block(page_spec_dict) if page_spec_dict else ""
 
         # Max-Cosine Synthesis against the live AI Overview (best-effort; '' when the
         # supplied serp_analysis carried no AIO / on failure).
@@ -8409,7 +8648,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             "Still keep every paragraph short per rule 2 (1–2 sentences)."
         )
 
-        length_budget_text = _length_budget_line(body.serp_analysis, body.length_target)
+        length_budget_text = _length_budget_line(body.serp_analysis, length_target)
 
         internal_links_text = _internal_links_block(body.internal_links)
         user_prompt = f"""BUSINESS DATA
@@ -8421,6 +8660,7 @@ Primary keyword: {body.keyword}
 Target city: {city}
 Full location: {body.location}
 {length_budget_text}
+{spec_block_text}
 
 {mcs_block}
 {serp_ctx}
@@ -8595,7 +8835,33 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         # runs whenever the shipped page is still over target by
         # LENGTH_TRIM_MIN_RATIO, NOT gated on the time budget, then re-scores so
         # the verdict describes the page that ships. Best-effort.
+        spec_verdict = None
         _trim_def = _length_trim_deficiency(inline_scores, inline_defs, LENGTH_TRIM_MIN_RATIO)
+        if page_spec_dict:
+            # Page-spec enforcement (plan §5.4) — supersedes the whole-page trim.
+            content_html, _spec_tok, spec_verdict, _spec_changed = await _enforce_spec_length(
+                content_html, page_spec_dict, q, keyword=body.keyword, city=city,
+                business_name=body.business_name, phone=body.phone, voice_block=voice_block,
+                serp_analysis_dict=body.serp_analysis, client=client, label="reoptimize-page",
+            )
+            token_rec["input_tokens"]  += _spec_tok["input_tokens"]
+            token_rec["output_tokens"] += _spec_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _spec_tok["cost_usd"], 6)
+            if _spec_changed:
+                try:
+                    (
+                        inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
+                    ) = await _score_html_inline(
+                        content_html, body.keyword, body.location, body.business_name,
+                        body.gbp_category, body.address, body.serp_analysis, client,
+                        voice_card=voice_card, length_target=length_target,
+                    )
+                    token_rec["input_tokens"]  += rescore_tok["input_tokens"]
+                    token_rec["output_tokens"] += rescore_tok["output_tokens"]
+                    token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
+                except Exception as _lse:
+                    logger.warning(f"reoptimize-page: re-score after spec trim failed: {_lse}")
+            _trim_def = None
         if _trim_def:
             _trim_engine = (inline_scores or {}).get("length_fit")
             if not seo_checklist:

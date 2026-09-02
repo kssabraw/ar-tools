@@ -1,0 +1,54 @@
+# PostPeer as the v1 social posting provider, behind a swappable adapter
+
+**Status:** accepted (2026-09-02)
+
+The Social Media module needs to publish to clients' own Twitter/X, Facebook,
+Instagram, Pinterest and YouTube accounts with the least possible client
+friction. We chose **PostPeer** (postpeer.dev) — it hosts the per-account OAuth
+so a client one-click-connects their own account (no per-platform Meta/X apps for
+us, no app-review on the client's side) and is cheap (~$6–8.50 / 1,000 posts).
+But PostPeer is a tiny indie product with no SLA or status page, so it must not
+be a single point of failure: **all publishing goes through our own posting
+**adapter** interface** (`connect_url` / `post` / `status`), with PostPeer as the
+first implementation and a mature provider (Ayrshare is the reference) as a
+drop-in fallback.
+
+## Considered options
+
+- **Direct per-platform integrations** — we stand up and get reviewed our own
+  Meta/X/Pinterest/Google apps. Rejected: weeks of app review, high client-side
+  friction, five separate maintenance burdens.
+- **A more mature unified provider (Ayrshare/Blotato) as the primary** — same
+  client-friction profile as PostPeer, more expensive, still third-party. Kept as
+  the adapter's fallback rather than the default, on cost.
+
+## Consequences
+
+- No module code depends on PostPeer directly; swapping providers is one adapter
+  implementation, not a refactor.
+- Two vendor facts must be confirmed before/at Phase 0 and can change the choice:
+  (1) does PostPeer publish under its *own* platform-reviewed apps (→ true
+  one-click connect)? (2) who pays X's **$0.20-per-link-post** tax?
+- Platform realities bind us regardless of provider: Instagram publishing needs
+  the client on a **Business/Creator** account; the X link tax applies to any
+  posting layer.
+
+**Update (2026-09-02, from `docs/modules/social-media-vendor-confirm-postpeer-v1_0.md`):**
+consequence (1) is **closed** — PostPeer confirms it publishes under its **own
+platform-reviewed apps** ("App Review is done for you"), so the low-friction basis of
+this decision holds. Consequence (2), the X link-tax handling, remains **open** —
+PostPeer's pricing is a flat per-post credit model silent on the X link surcharge
+(likely absorbed; a margin/throttle risk to run down directly). Two findings reinforce
+this ADR: PostPeer has **no public SLA, status page, or legal entity** (indie-maturity →
+the swappable adapter is load-bearing), and the Ayrshare fallback is **broader/more
+mature but enterprise-priced per-profile** (~20–35× entry cost), so a provider swap is a
+cost/architecture event, not a config change.
+
+**Update 2 (2026-09-02, from the live PostPeer docs supplied by the owner):** consequence
+(2) is now **closed** — the X link tax is an explicit **pass-through**: an X post whose
+body contains `http(s)://` costs **50 credits** vs **5** for a plain X post and **1** on
+every other platform (~$0.30–0.43 per link post at PostPeer's tiers). The founder also
+confirmed there is **no SLA**, which the design accepts for the pilot: publish status is
+reconciled by our own polling sync job (never webhook-dependent), and this adapter is the
+mitigation. The legal-entity question was waived by the owner. Both vendor facts this ADR
+was conditioned on are therefore settled and the decision stands.

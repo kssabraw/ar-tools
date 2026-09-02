@@ -35,6 +35,71 @@ export interface LocalSeoPageListItem {
   published_doc_url?: string | null
   published_url?: string | null
   published_at?: string | null
+  // Target vs actual length + the deterministic verdict against the page spec
+  // (docs/modules/local-seo-page-spec-plan-v1_0.md). Null for pre-spec pages.
+  target_words?: number | null
+  actual_words?: number | null
+  length_status?: 'in_band' | 'over_length' | 'under_length' | null
+}
+
+// ── page spec (length + structure kept on file) ─────────────────────────────
+
+export interface PageSpecSection {
+  key: string
+  level: 'H1' | 'H2'
+  required: boolean
+  intent: string
+  heading_pattern?: string
+  reference_heading?: string | null
+  min_words: number
+  max_words: number
+  blocks?: { type: string; count: number; items?: number }[]
+  source: 'template' | 'reference' | string
+  subsections?: { min: number; max: number }
+  items?: { min: number; max: number }
+}
+
+export interface PageSpec {
+  schema_version: number
+  id?: string | null
+  version?: number | null
+  edited_at?: string | null
+  keyword: string
+  location: string
+  location_code?: number | null
+  page_type: string
+  generated_at?: string
+  total: { min: number; target: number; max: number; basis: 'serp' | 'fallback' }
+  structure: { max_sections: number; max_h3_per_h2: number; faq: { min: number; max: number } }
+  sections: PageSpecSection[]
+  provenance: {
+    reference?: { page_type?: string | null; url?: string | null; total_words?: number | null; usable: boolean; reason?: string | null }
+    serp?: { avg_words?: number | null; target?: number | null; competitor_pages?: number | null }
+    template?: string
+    fallback_reason?: string | null
+    flags?: string[]
+  }
+  validation_errors?: string[]
+}
+
+export interface PageSpecEnvelope {
+  spec: PageSpec
+  id?: string | null
+  version?: number | null
+  edited_at?: string | null
+  validation_errors: string[]
+  versions: { id: string; version: number; edited_at?: string | null; superseded_at?: string | null; created_at: string }[]
+}
+
+export interface LengthReport {
+  pages: number
+  with_spec: number
+  in_band: number
+  over_length: number
+  under_length: number
+  in_band_pct: number | null
+  avg_overage_pct: number | null
+  recent: { id: string; keyword: string; target_words: number; actual_words: number; length_status: string; created_at: string }[]
 }
 
 /**

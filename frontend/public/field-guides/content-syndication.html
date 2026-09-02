@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A wire-desk walkthrough for Content Syndication — relaying a client's own content out as linked public copies.">
+<title>Content Syndication Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600;7..72,700&family=Barlow:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --paper:#ECEDE7; --paper-raised:#FAFBF7; --ink:#1E2422; --ink-soft:#545C58; --ink-faint:#8D948F;
+    --line:#D3D8CF; --line-strong:#BCC2B5;
+    --wire:#2A6F9E; --wire-ink:#1D4E71; --wire-soft:#DAE6EE;
+    --carbon:#6B5B7A; --carbon-ink:#4A3E56; --carbon-soft:#E5DEE9;
+    --shadow: 0 1px 2px rgba(30,36,34,0.07), 0 10px 26px rgba(30,36,34,0.06); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#15181A; --paper-raised:#1D2022; --ink:#E4E8E2; --ink-soft:#AEB6AE; --ink-faint:#727A75;
+      --line:#2C332F; --line-strong:#3C443E;
+      --wire:#6FA9D6; --wire-ink:#A9CEE8; --wire-soft:#182732;
+      --carbon:#A48DBB; --carbon-ink:#D2C1E3; --carbon-soft:#241E2C;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#15181A; --paper-raised:#1D2022; --ink:#E4E8E2; --ink-soft:#AEB6AE; --ink-faint:#727A75;
+    --line:#2C332F; --line-strong:#3C443E;
+    --wire:#6FA9D6; --wire-ink:#A9CEE8; --wire-soft:#182732;
+    --carbon:#A48DBB; --carbon-ink:#D2C1E3; --carbon-soft:#241E2C;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Barlow", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Literata", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--wire-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--wire); outline-offset:2px; }
+  code,.mono{ font-family:"JetBrains Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"JetBrains Mono",monospace; font-size:0.68rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--wire-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Literata",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"JetBrains Mono",monospace; font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Relay diagram — the one only this subject has */
+  .relay{ padding:2rem 0 2.1rem; }
+  .relay-cap{ font-family:"JetBrains Mono",monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .relay-svg{ width:100%; max-width:760px; height:auto; display:block; }
+  .relay-note{ margin:0.8rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:42rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"JetBrains Mono",monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--wire-ink); border-left-color:var(--wire); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"JetBrains Mono",monospace; font-size:0.8rem; color:var(--wire-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .dispatch{ position:relative; background:var(--wire-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .dispatch::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--wire); border-radius:2px; }
+  .dispatch-label{ font-family:"JetBrains Mono",monospace; font-size:0.62rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--wire-ink); font-weight:700; margin:0 0 0.3rem; }
+  .dispatch p{ margin:0; }
+
+  .carbon-note{ background:var(--carbon-soft); border-left:3px solid var(--carbon); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .carbon-note p{ margin:0; }
+  .carbon-note strong{ color:var(--carbon-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"JetBrains Mono",monospace; font-size:0.61rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"JetBrains Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--wire-soft); border-color:var(--wire); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="6" y="24" width="16" height="20" rx="1.5" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"/>
+          <path d="M22 30 L34 22 M22 38 L34 46" stroke="var(--wire)" stroke-width="1.6"/>
+          <rect x="34" y="12" width="14" height="18" rx="1.5" fill="var(--wire-soft)" stroke="var(--wire)" stroke-width="1.3"/>
+          <rect x="34" y="36" width="14" height="18" rx="1.5" fill="var(--carbon-soft)" stroke="var(--carbon)" stroke-width="1.3"/>
+          <path d="M41 30 L14 34" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="2 2"/>
+          <path d="M41 36 L14 34" stroke="var(--ink-faint)" stroke-width="1" stroke-dasharray="2 2"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Content</p>
+        <h1>Content Syndication, on the wire</h1>
+        <p class="dek">One page on the client's site, relayed out as unique public copies — each
+          one a fresh signal pointing straight back to the original.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">1</span><span class="meta-label">Source page, untouched</span></div>
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">Relay destinations</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Auto-publishes</span></div>
+    </div>
+    <div class="relay">
+      <p class="relay-cap">The relay — what "syndicate" actually does to one page</p>
+      <svg class="relay-svg" viewBox="0 0 760 130" role="img" aria-label="A source page relays to a rewritten Google Doc and Sheet, each linking back to the original">
+        <rect x="10" y="45" width="120" height="40" rx="4" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"/>
+        <text x="70" y="69" text-anchor="middle" font-family="Barlow, sans-serif" font-size="12" font-weight="600" fill="var(--ink)">Source page</text>
+        <path d="M130 55 C 220 30, 300 25, 380 25" fill="none" stroke="var(--wire)" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <path d="M130 75 C 220 100, 300 105, 380 105" fill="none" stroke="var(--carbon)" stroke-width="1.6" stroke-dasharray="4 3"/>
+        <rect x="380" y="6" width="120" height="38" rx="4" fill="var(--wire-soft)" stroke="var(--wire)" stroke-width="1.3"/>
+        <text x="440" y="29" text-anchor="middle" font-family="Barlow, sans-serif" font-size="12" font-weight="600" fill="var(--wire-ink)">Google Doc</text>
+        <rect x="380" y="86" width="120" height="38" rx="4" fill="var(--carbon-soft)" stroke="var(--carbon)" stroke-width="1.3"/>
+        <text x="440" y="109" text-anchor="middle" font-family="Barlow, sans-serif" font-size="12" font-weight="600" fill="var(--carbon-ink)">Sheet</text>
+        <path d="M500 25 C 560 25, 560 65, 500 65" fill="none" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <path d="M500 105 C 560 105, 560 65, 500 65" fill="none" stroke="var(--ink-faint)" stroke-width="1.2" marker-end="url(#arrow)"/>
+        <text x="580" y="70" font-family="JetBrains Mono, monospace" font-size="10" fill="var(--ink-faint)">backlink</text>
+        <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="var(--ink-faint)"/></marker></defs>
+      </svg>
+      <p class="relay-note">The source page never changes. Each relay is a genuinely rewritten
+        copy, published elsewhere, carrying a link home.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Turn it on &amp; set preferences</a></li>
+        <li><a href="#s3" data-target="s3">03 · Scan for content</a></li>
+        <li><a href="#s4" data-target="s4">04 · Review &amp; select</a></li>
+        <li><a href="#s5" data-target="s5">05 · Publish</a></li>
+        <li><a href="#s6" data-target="s6">06 · Fixing failures</a></li>
+        <li><a href="#s7" data-target="s7">07 · Troubleshooting</a></li>
+        <li><a href="#s8" data-target="s8">08 · Practice exercises</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">Scans a client's site for existing content, lets you pick which pages to
+          turn into unique rewritten versions, and publishes those as public, search-discoverable
+          Google Docs and/or Sheets — each one linking back to the original. The live site is
+          never touched.</p>
+        <div class="dispatch">
+          <p class="dispatch-label">nothing files itself</p>
+          <p>Scanning only discovers pages and lists them. Nothing goes out — not even on the
+            first scan — until you personally select pages and hit Publish, every time.</p>
+        </div>
+        <p>A frozen client blocks publishing here too.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Turn it on &amp; set preferences</h2></div>
+        <ul>
+          <li><strong>"Auto-scan daily for new content"</strong> — the on/off switch; helper text
+            shows the last scan date and reminds you it "never publishes on its own."</li>
+          <li><strong>Content types to include</strong> — Blog posts / Pages / Products (all on by
+            default). This only controls what a <em>future</em> scan adds — unchecking one after
+            a type's already been discovered doesn't hide those existing rows.</li>
+          <li><strong>"Publish to:"</strong> — Google Docs + Sheets / Docs only / Sheets only.</li>
+          <li><strong>"Sharing:"</strong> — "Anyone can find &amp; view (discoverable)" or "Anyone
+            with the link can view."</li>
+        </ul>
+        <p>Every setting saves immediately — no separate Save button.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Scan for content</h2></div>
+        <p>Click <strong>Scan now</strong> anytime, or let the daily auto-scan handle it. A scan
+          reads the sitemap (falling back to a live search-index lookup), sorts pages into blog
+          post / page / product, and adds anything genuinely new as a <strong>discovered</strong>
+          item. The "Scanning…" indicator near the title is a fixed ~45-second timer, not tied to
+          the scan actually finishing — on a large site it can vanish before the job is really
+          done; "Last scan" only updates once it truly completes.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Review &amp; select</h2></div>
+        <p>The items table shows title, type, and status, with filter tabs — All, Published, Not
+          published, Failed — each labeled with a count. Tick a page (only selectable if not
+          already fully published), or use <strong>Select all</strong>; the bulk bar shows a live
+          count and where it's headed (e.g. "→ Google Doc + Sheet · public"). The table paginates
+          at 50 rows.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Publish</h2></div>
+        <p>Click <strong>Publish N</strong>. Each selected page is rewritten into a genuinely
+          unique version and published as a Doc and/or Sheet per your settings, each with a
+          backlink to the original.</p>
+        <table><tbody>
+          <tr><td class="term">Not published</td><td>Discovered, not yet published</td></tr>
+          <tr><td class="term">Publishing…</td><td>Being rewritten and pushed out right now</td></tr>
+          <tr><td class="term">Published</td><td>Live — Doc and/or Sheet chips link to it</td></tr>
+          <tr><td class="term">Failed</td><td>Hover the red badge to see why</td></tr>
+        </tbody></table>
+        <p>Re-selecting a page whose publish target you've since widened only fills the missing
+          output — it won't duplicate what's already published.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Fixing failures</h2></div>
+        <p>Any row marked Failed gets its own <strong>Retry</strong> button. Once you have
+          published items, an <strong>"Export published CSV"</strong> button appears — title,
+          source URL, type, Doc URL, Sheet URL, publish date.</p>
+        <div class="carbon-note">
+          <p><strong>Sheets need the Apps Script webhook redeployed</strong> — if you see
+            <code>sheet_not_supported</code>, that's a one-time admin infra fix, not something a
+            retry solves. Flag it.</p>
+        </div>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Turned it on — did it publish my whole site?</td><td>No. Only the daily scan is enabled; nothing publishes until you select pages and click Publish.</td></tr>
+          <tr><td class="term">Can I un-publish something?</td><td>Not from this tool — delete the Doc/Sheet directly in Google Drive.</td></tr>
+          <tr><td class="term">Does this touch the original page?</td><td>Never — it only reads the page to produce a copy elsewhere.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Practice exercises</h2></div>
+        <ul class="exercise">
+          <li>Turn syndication on for a client and confirm nothing publishes on its own.</li>
+          <li>Run a manual scan and watch a new item appear in "Not published."</li>
+          <li>Select one page, publish it, and open the resulting Doc's backlink.</li>
+          <li>Widen publish_target on an already-published page and confirm it only fills the gap.</li>
+        </ul>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Turn syndication on</td><td>The "Auto-scan daily" toggle</td></tr>
+            <tr><td class="term">Choose Docs, Sheets, or both</td><td>"Publish to:" selector</td></tr>
+            <tr><td class="term">Control sharing</td><td>"Sharing:" selector</td></tr>
+            <tr><td class="term">Find new content now</td><td><strong>Scan now</strong></td></tr>
+            <tr><td class="term">Publish selected pages</td><td>Tick → <strong>Publish N</strong></td></tr>
+            <tr><td class="term">Fix a failed item</td><td>Its row's <strong>Retry</strong></td></tr>
+            <tr><td class="term">Get a record of what's live</td><td><strong>Export published CSV</strong></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Content Syndication Field Guide · AR Tools new-hire series · full text at <code>docs/content-syndication-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>
