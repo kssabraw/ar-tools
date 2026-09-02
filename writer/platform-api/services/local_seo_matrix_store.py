@@ -583,6 +583,7 @@ def start_publish(
             "job_type": PUBLISH_JOB_TYPE,
             "entity_id": client_id,
             "scheduled_at": _publish_scheduled_at(i),
+            "priority": job_priority.BACKGROUND,
             "payload": {
                 "client_id": client_id,
                 "matrix_id": matrix_id,

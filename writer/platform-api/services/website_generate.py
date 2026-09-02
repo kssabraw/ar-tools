@@ -29,6 +29,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import job_priority
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ def enqueue_generation(
                 "job_type": "website_page_generate",
                 "entity_id": website_id,
                 "scheduled_at": _spaced_at(len(rows)),
+                "priority": job_priority.BACKGROUND,
                 "payload": {
                     "website_id": website_id,
                     "client_id": client_id,

@@ -169,7 +169,10 @@ class _AnthropicAccountSlotMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") == "http":
+        # Only the generation/reoptimize routes take a slot: a health check or a
+        # score call between two page generations must not push both pages onto
+        # the same account (see anthropic_failover.ROTATION_PATH_PREFIXES).
+        if scope.get("type") == "http" and _anthropic_failover.should_rotate_path(scope.get("path")):
             _anthropic_failover.begin_request_slot()
         await self.app(scope, receive, send)
 

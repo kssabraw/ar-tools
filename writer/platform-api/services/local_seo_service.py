@@ -292,9 +292,15 @@ def _job_progress_writer(job_id: Optional[str]):
 
 # ── persistence ─────────────────────────────────────────────────────────────
 
-def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None) -> dict:
+def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None, job_id: Optional[str] = None) -> dict:
     row = {
         "client_id": client_id,
+        # The async job that produced this page (None for streaming/sync paths).
+        # The job handlers look this up FIRST on every attempt, so a retry after
+        # a post-persist failure (the completion write to async_jobs raising a
+        # transport error, a reaper requeue) resumes with the page that already
+        # exists instead of generating — and paying for — a duplicate.
+        "generated_by_job_id": job_id,
         "keyword": keyword,
         "location": location,
         "run_analysis": run_analysis,
@@ -699,6 +705,7 @@ async def generate_page(
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     internal_links: Optional[list[dict]] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -828,7 +835,7 @@ async def generate_page(
     result = attach_length_verdict(result, spec)
     # Record whether competitor analysis actually informed this page (it used
     # to be hard-coded True, so a degraded page was indistinguishable on read).
-    page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes)
+    page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes, job_id=job_id)
     if result.get("length_verdict") is not None:
         page["length_verdict"] = result["length_verdict"]  # not a column — rides the response
         _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
@@ -895,6 +902,34 @@ async def enqueue_generate(
     return res.data[0]["id"]
 
 
+def _page_for_job(job_id: Optional[str]) -> Optional[dict]:
+    """The live page a job already persisted (`local_seo_pages.generated_by_job_id`),
+    or None. The job handlers call this FIRST so a retried attempt — after the
+    completion write raised a transport error, or after the stale-job reaper
+    requeued a row whose page had already landed — resumes with the existing page
+    instead of regenerating a duplicate. Best-effort: a read failure returns None
+    and the attempt simply generates."""
+    if not job_id:
+        return None
+    try:
+        rows = (
+            get_supabase()
+            .table("local_seo_pages")
+            .select("id, composite_score, keyword")
+            .eq("generated_by_job_id", job_id)
+            .is_("deleted_at", "null")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort guard
+        logger.warning("local_seo.page_for_job_failed", extra={"job_id": job_id, "error": str(exc)[:200]})
+        return None
+    return rows[0] if rows else None
+
+
 async def run_generate_job(job: dict) -> None:
     """async_jobs handler for job_type='local_seo_generate'. Runs generate_page
     (which persists the page) and stores the new page id in the job result."""
@@ -902,18 +937,23 @@ async def run_generate_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        page = await generate_page(
-            client_id=payload["client_id"],
-            keyword=payload["keyword"],
-            location=payload["location"],
-            location_code=payload.get("location_code"),
-            user_id=payload["user_id"],
-            force_refresh=bool(payload.get("force_refresh")),
-            page_template_url=payload.get("page_template_url"),
-            entity_provider=payload.get("entity_provider"),
-            on_progress=_job_progress_writer(job_id),
-            internal_links=payload.get("internal_links") or None,
-        )
+        page = _page_for_job(job_id)
+        if page:
+            logger.info("local_seo.generate_job_resumed_existing_page", extra={"job_id": job_id, "page_id": page["id"]})
+        else:
+            page = await generate_page(
+                client_id=payload["client_id"],
+                keyword=payload["keyword"],
+                location=payload["location"],
+                location_code=payload.get("location_code"),
+                user_id=payload["user_id"],
+                force_refresh=bool(payload.get("force_refresh")),
+                page_template_url=payload.get("page_template_url"),
+                entity_provider=payload.get("entity_provider"),
+                on_progress=_job_progress_writer(job_id),
+                internal_links=payload.get("internal_links") or None,
+                job_id=job_id,
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -986,7 +1026,7 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
     supabase = get_supabase()
     res = (
         supabase.table("async_jobs")
-        .select("status, result, error, entity_id")
+        .select("status, result, error, entity_id, progress_message")
         .eq("id", job_id)
         .limit(1)
         .execute()
@@ -995,7 +1035,14 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
         raise HTTPException(status_code=404, detail="generate_job_not_found")
     row = res.data[0]
     result = row.get("result") or {}
-    return {"status": row["status"], "page_id": result.get("page_id"), "error": row.get("error")}
+    # `retrying`: the handler hit a transient nlp failure and the row is queued
+    # for another attempt (see job_worker.plan_job_retry) — the UI shows the
+    # note instead of a silent spinner through the backoff.
+    retrying = row["status"] == "pending" and (row.get("error") or "").startswith("transient")
+    return {
+        "status": row["status"], "page_id": result.get("page_id"), "error": row.get("error"),
+        "retrying": retrying, "progress_message": row.get("progress_message") if retrying else None,
+    }
 
 
 # ── bulk background generation / reoptimization (per-item async jobs) ─────────
@@ -1111,18 +1158,29 @@ async def run_reoptimize_url_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        result = await reoptimize_url(
-            client_id=payload["client_id"],
-            page_url=payload["page_url"],
-            keyword=payload["keyword"],
-            location=payload["location"],
-            location_code=payload.get("location_code"),
-            user_id=payload["user_id"],
-            score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
-            publish_to_doc=bool(payload.get("publish_to_doc")),
-            entity_provider=payload.get("entity_provider"),
-            on_progress=_job_progress_writer(job_id),
-        )
+        resumed = _page_for_job(job_id)
+        if resumed:
+            # A prior attempt already rewrote + persisted the page; don't rewrite
+            # (and pay) again. The full score deltas rode the lost attempt.
+            logger.info("local_seo.reoptimize_job_resumed_existing_page", extra={"job_id": job_id, "page_id": resumed["id"]})
+            result = {
+                "status": "reoptimized", "page_url": payload["page_url"], "keyword": payload["keyword"],
+                "new_score": resumed.get("composite_score"), "page": {"id": resumed["id"]}, "resumed": True,
+            }
+        else:
+            result = await reoptimize_url(
+                client_id=payload["client_id"],
+                page_url=payload["page_url"],
+                keyword=payload["keyword"],
+                location=payload["location"],
+                location_code=payload.get("location_code"),
+                user_id=payload["user_id"],
+                score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
+                publish_to_doc=bool(payload.get("publish_to_doc")),
+                entity_provider=payload.get("entity_provider"),
+                on_progress=_job_progress_writer(job_id),
+                job_id=job_id,
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -1208,19 +1266,24 @@ async def run_reoptimize_page_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        page = await reoptimize_page(
-            client_id=payload["client_id"],
-            keyword=payload["keyword"],
-            location=payload["location"],
-            existing_page_html=payload.get("existing_page_html"),
-            existing_page_url=payload.get("existing_page_url"),
-            deficiencies=payload.get("deficiencies") or [],
-            serp_analysis=payload.get("serp_analysis"),
-            user_id=payload["user_id"],
-            entity_provider=payload.get("entity_provider"),
-            on_progress=_job_progress_writer(job_id),
-            internal_links=payload.get("internal_links") or None,
-        )
+        page = _page_for_job(job_id)
+        if page:
+            logger.info("local_seo.reoptimize_page_job_resumed_existing_page", extra={"job_id": job_id, "page_id": page["id"]})
+        else:
+            page = await reoptimize_page(
+                client_id=payload["client_id"],
+                keyword=payload["keyword"],
+                location=payload["location"],
+                existing_page_html=payload.get("existing_page_html"),
+                existing_page_url=payload.get("existing_page_url"),
+                deficiencies=payload.get("deficiencies") or [],
+                serp_analysis=payload.get("serp_analysis"),
+                user_id=payload["user_id"],
+                entity_provider=payload.get("entity_provider"),
+                on_progress=_job_progress_writer(job_id),
+                internal_links=payload.get("internal_links") or None,
+                job_id=job_id,
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -1366,6 +1429,7 @@ async def reoptimize_page(
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     internal_links: Optional[list[dict]] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Reoptimize an existing page to lift its score, re-score the result, and
     persist it as a `mode='reoptimize'` row. `internal_links` (matrix sibling
@@ -1443,7 +1507,7 @@ async def reoptimize_page(
             # (Catches HTTPException from the proxy AND any decode/unexpected error.)
             logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
-    page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
+    page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id, job_id=job_id)
     if result.get("length_verdict") is not None:
         page["length_verdict"] = result["length_verdict"]
         _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
@@ -1472,6 +1536,7 @@ async def reoptimize_url(
     publish_to_doc: bool = False,
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. Strong pages (>= threshold) are skipped with a note rather
@@ -1575,6 +1640,7 @@ async def reoptimize_url(
         user_id=user_id,
         entity_provider=entity_provider,
         on_progress=on_progress,
+        job_id=job_id,
     )
 
     out: dict = {
