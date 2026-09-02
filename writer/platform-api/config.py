@@ -1062,6 +1062,12 @@ class Settings(BaseSettings):
     domain_intel_gap_alert_min: int = 5
     # How many top keyword-gap opportunities surface as Action Plan items.
     domain_intel_action_max: int = 3
+    # Drop navigational + competitor-brand keyword gaps from the Action Plan
+    # keyword-gap items (e.g. "sedgwick phone number", "my sedgwick") — a
+    # competitor lookup or portal login is never a page a challenger should
+    # build. Reuses the Keyword Research navigational/competitor filter; a
+    # comparison term ("sedgwick alternatives") is kept. Off → prior behaviour.
+    domain_intel_navigational_filter: bool = True
 
     # Keyword Research module (the seed-keyword explorer) — per-client keyword
     # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.

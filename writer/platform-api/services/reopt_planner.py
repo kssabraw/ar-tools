@@ -1120,19 +1120,42 @@ def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dic
     ]
 
 
-def build_domain_intel_actions(client_id: str, gaps: list[dict]) -> list[dict]:
+def build_domain_intel_actions(
+    client_id: str,
+    gaps: list[dict],
+    matchers: "list[set[str]] | None" = None,
+    filter_intent: bool = True,
+) -> list[dict]:
     """Top competitor keyword-gap opportunities (Domain Intelligence) as Action
     Plan items — keywords a competitor ranks for that the client doesn't. Pure.
 
     ``gaps`` is opportunity-sorted domain_keyword_gaps rows; the top N surface as
-    'create/strengthen a page' actions deep-linking into Domain Intelligence."""
-    from config import settings
+    'create/strengthen a page' actions deep-linking into Domain Intelligence.
 
-    actions: list[dict] = []
-    for i, g in enumerate(gaps[: settings.domain_intel_action_max]):
+    When ``filter_intent`` (config-gated by the caller), navigational/support
+    lookups ("sedgwick phone number") and competitor-brand terms ("my sedgwick")
+    are dropped BEFORE the top-N cap — a competitor lookup or portal login is
+    never a page a challenger should build, and letting them occupy the cap
+    starves the real opportunities beneath them. Comparison terms ("sedgwick
+    alternatives") are kept — that's competitor content worth writing. ``matchers``
+    are the client's competitor brand token-sets (empty → navigational-only)."""
+    from config import settings
+    from services import keyword_research_navigational as krn
+
+    matchers = matchers or []
+    # Filter first, then cap — a dropped navigational term must not consume a slot.
+    eligible: list[dict] = []
+    for g in gaps:
         kw = g.get("keyword")
         if not kw:
             continue
+        if filter_intent and krn.classify_intent(kw, matchers) in ("navigational", "competitor"):
+            continue
+        eligible.append(g)
+
+    actions: list[dict] = []
+    for i, g in enumerate(eligible[: settings.domain_intel_action_max]):
+        kw = g.get("keyword")
         comp = g.get("competitor_domain") or "a competitor"
         comp_pos = g.get("competitor_position")
         cli_pos = g.get("client_position")
@@ -1615,6 +1638,17 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     # Competitive keyword-gap opportunities (Domain Intelligence). Additive:
     # no stored gaps → no actions → unchanged behavior.
     try:
+        from services import keyword_research_navigational as krn
+
+        # Competitor-brand matchers for the intent filter (best-effort registry
+        # read; empty → navigational-only filtering).
+        matchers = (
+            krn.brand_matchers(krn.get_client_competitors(client_id))
+            if settings.domain_intel_navigational_filter
+            else []
+        )
+        # Fetch a pool wider than the action cap so navigational/brand drops leave
+        # room for the real opportunities beneath them (the producer re-caps).
         gap_rows = (
             supabase.table("domain_keyword_gaps")
             .select(
@@ -1623,10 +1657,15 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
             )
             .eq("client_id", client_id)
             .order("opportunity_score", desc=True)
-            .limit(settings.domain_intel_action_max)
+            .limit(max(settings.domain_intel_action_max * 8, 24))
             .execute()
         ).data or []
-        organic += build_domain_intel_actions(client_id, gap_rows)
+        organic += build_domain_intel_actions(
+            client_id,
+            gap_rows,
+            matchers=matchers,
+            filter_intent=settings.domain_intel_navigational_filter,
+        )
     except Exception as exc:
         logger.warning("reopt_plan_domain_intel_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop, landgrab)
