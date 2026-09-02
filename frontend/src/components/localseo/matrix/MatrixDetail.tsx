@@ -7,6 +7,7 @@ import { card, label, primaryBtn } from '../shared'
 import { matrixApi } from './api'
 import { MatrixAxesEditor } from './MatrixAxesEditor'
 import { MatrixGrid } from './MatrixGrid'
+import { MatrixPublishBar } from './MatrixPublishBar'
 import { MatrixReleaseCard } from './MatrixReleaseCard'
 import { MatrixRunBar } from './MatrixRunBar'
 import { IN_FLIGHT, splitLines } from './types'
@@ -96,6 +97,18 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
       setError(e instanceof Error ? e.message : 'Could not re-check coverage')
     } finally {
       setRechecking(false)
+    }
+  }
+
+  // "Publish anyway" for one blocked cell: the same explicit override the
+  // per-page Publish button offers, scoped to that cell (force_voice needs ids).
+  const forcePublish = async (cellId: string) => {
+    setError('')
+    try {
+      await matrixApi.publish(clientId, matrixId, { cell_ids: [cellId], force_voice: true })
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not publish')
     }
   }
 
@@ -199,9 +212,11 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
         </div>
       )}
 
-      <MatrixGrid matrix={matrix} selected={selected} onToggle={onToggle} onOpenPage={onOpenPage} />
+      <MatrixGrid matrix={matrix} selected={selected} onToggle={onToggle} onOpenPage={onOpenPage} onForcePublish={forcePublish} />
 
       <MatrixRunBar clientId={clientId} matrix={matrix} selected={selected} setSelected={setSelected} onStarted={refresh} />
+
+      <MatrixPublishBar clientId={clientId} matrix={matrix} onStarted={refresh} />
 
       <MatrixReleaseCard clientId={clientId} matrix={matrix} onChanged={refresh} />
     </div>

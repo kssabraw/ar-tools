@@ -8,6 +8,8 @@ interface Props {
   selected: Set<string>
   onToggle: (cellId: string, checked: boolean) => void
   onOpenPage: (pageId: string) => void
+  // The deliberate brand-guide override for ONE publish_blocked cell (plan §5.3).
+  onForcePublish?: (cellId: string) => void
   disabled?: boolean
 }
 
@@ -33,7 +35,7 @@ function selectable(cell: MatrixCell): boolean {
 // The N×M grid: services as rows, locations as columns, one status chip per
 // cell. Runnable cells (and, opt-in, already-covered ones) carry a checkbox for
 // the run bar; a cell with a page opens it, a live cell links out.
-export function MatrixGrid({ matrix, selected, onToggle, onOpenPage, disabled }: Props) {
+export function MatrixGrid({ matrix, selected, onToggle, onOpenPage, onForcePublish, disabled }: Props) {
   const services = [...matrix.services]
   const locations = [...matrix.locations]
   const byKey = new Map<string, MatrixCell>()
@@ -108,6 +110,15 @@ export function MatrixGrid({ matrix, selected, onToggle, onOpenPage, disabled }:
                       )}
                       {cell.link_coverage && cell.link_coverage.missing?.length > 0 && (
                         <span title="Some sibling links are missing on this page" style={{ fontSize: 10, color: '#d97706' }}>links</span>
+                      )}
+                      {cell.status === 'publish_blocked' && onForcePublish && (
+                        <button
+                          type="button"
+                          onClick={() => onForcePublish(cell.id)}
+                          disabled={disabled}
+                          title={cell.error ? `Blocked: ${cell.error}. Publish anyway overrides the brand-guide block for this page only.` : 'Override the brand-guide block for this page only'}
+                          style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, border: '1px solid #fecaca', background: '#fff', color: '#991b1b', cursor: 'pointer' }}
+                        >Publish anyway</button>
                       )}
                     </div>
                   </td>

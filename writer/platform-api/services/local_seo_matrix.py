@@ -580,21 +580,32 @@ def apply_coverage(cells: Iterable[dict], items: Iterable[dict]) -> list[tuple[s
 
 # async_jobs status → cell status for a cell's generate job.
 _JOB_TO_CELL = {"pending": "queued", "running": "generating", "complete": "done", "failed": "failed"}
-_IN_FLIGHT = frozenset({"queued", "generating"})
+_GENERATING = frozenset({"queued", "generating"})
+_IN_FLIGHT = frozenset({"queued", "generating", "publishing"})
 
 
 def reconcile_cell_updates(cells: Iterable[dict], jobs: dict[str, dict]) -> list[tuple[str, dict]]:
     """Read-side reconciliation (plan §5.1): for every in-flight cell whose job row
     is in `jobs` (``{job_id: {status, result, error}}``), the patch that brings the
-    cell up to date, or nothing when it already is. A ``complete`` job with no
-    ``page_id`` in its result is treated as failed (the generator persists the
-    page before completing, so that would mean the page write was lost). A job row
-    that is missing entirely (reaped/deleted) fails the cell so it can be re-run."""
+    cell up to date, or nothing when it already is.
+
+    Generate jobs: a ``complete`` job with no ``page_id`` in its result is treated
+    as failed (the generator persists the page before completing, so that would
+    mean the page write was lost). Publish jobs (a ``publishing`` cell): the job
+    result carries the outcome ``{status, url, error}`` the job also wrote to the
+    cell directly — re-applied here in case that write was lost; a ``failed``
+    job is `publish_failed`. A job row that is missing entirely (reaped/deleted)
+    fails the cell so it can be re-run."""
     patches: list[tuple[str, dict]] = []
     for c in cells:
         if c.get("status") not in _IN_FLIGHT or not c.get("job_id"):
             continue
         job = jobs.get(str(c["job_id"]))
+        if c.get("status") == "publishing":
+            patch = _reconcile_publishing(job)
+            if patch:
+                patches.append((c["id"], patch))
+            continue
         if job is None:
             patches.append((c["id"], {"status": "failed", "error": "job_not_found"}))
             continue
@@ -613,6 +624,44 @@ def reconcile_cell_updates(cells: Iterable[dict], jobs: dict[str, dict]) -> list
         if patch:
             patches.append((c["id"], patch))
     return patches
+
+
+def _reconcile_publishing(job: Optional[dict]) -> dict:
+    """The patch for a `publishing` cell given its publish job row (or None)."""
+    if job is None:
+        return {"status": "publish_failed", "error": "job_not_found"}
+    js = job.get("status") or ""
+    if js in ("pending", "running"):
+        return {}
+    if js == "failed":
+        return {"status": "publish_failed", "error": (job.get("error") or "publish_failed")[:500]}
+    result = job.get("result") or {}
+    status = result.get("status") or "publish_failed"
+    if status not in {"published", "publish_failed", "publish_blocked"}:
+        status = "publish_failed"
+    return {"status": status, "url": result.get("url"), "error": result.get("error")}
+
+
+# Cells a bulk publish acts on by default: generated but never (successfully)
+# published. `publish_blocked` needs the explicit per-cell override (force_voice)
+# and `published` an explicit re-publish, so both are only reachable by id.
+PUBLISHABLE_DEFAULT = frozenset({"done", "publish_failed"})
+PUBLISHABLE_BY_ID = frozenset({"done", "publish_failed", "publish_blocked", "published"})
+
+
+def select_publishable(cells: Iterable[dict], cell_ids: Optional[Iterable[str]] = None) -> list[dict]:
+    """The cells a bulk publish enqueues (plan §5.3): with no ids, every cell that
+    has a page and is `done` / `publish_failed`; with ids, exactly those cells if
+    they have a page and are not in flight (a `publish_blocked` cell re-tried with
+    `force_voice`, or a `published` cell re-published on purpose)."""
+    wanted = set(cell_ids) if cell_ids is not None else None
+    allowed = PUBLISHABLE_BY_ID if wanted is not None else PUBLISHABLE_DEFAULT
+    return [
+        c for c in cells
+        if c.get("page_id")
+        and c.get("status") in allowed
+        and (wanted is None or c.get("id") in wanted)
+    ]
 
 
 def service_labels_from_pages(per_silo: Iterable[dict], city: str) -> list[dict]:

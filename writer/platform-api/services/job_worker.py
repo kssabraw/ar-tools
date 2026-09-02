@@ -823,6 +823,10 @@ async def _process_job(job: dict) -> None:
         from services.local_seo_matrix_store import run_suggest_job
 
         await run_suggest_job(job)
+    elif job_type == "local_seo_matrix_publish":
+        from services.local_seo_matrix_store import run_publish_job
+
+        await run_publish_job(job)
     elif job_type == "local_seo_generate":
         await run_generate_job(job)
     elif job_type == "local_seo_reoptimize_url":

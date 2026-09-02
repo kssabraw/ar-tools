@@ -49,6 +49,8 @@ FREEZE_GATED_JOB_TYPES = {
     "local_seo_generate",
     "local_seo_reoptimize_url",
     "local_seo_reoptimize_page",
+    # Matrix bulk publish pushes pages OUT to Docs / WordPress / GitHub (output).
+    "local_seo_matrix_publish",
     "ecommerce_generate",
     "ecommerce_reoptimize_url",
     "wheelhouse_generate",

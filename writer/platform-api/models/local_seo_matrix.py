@@ -198,6 +198,23 @@ class MatrixReleaseState(BaseModel):
     released_now: list[UUID] = Field(default_factory=list)
 
 
+class MatrixPublishRequest(BaseModel):
+    """"Publish all done cells" (plan §5.3). No `cell_ids` → every `done` /
+    `publish_failed` cell; explicit ids may also re-publish a `published` cell or
+    retry a `publish_blocked` one with `force_voice` (the deliberate brand-guide
+    override, honoured only with explicit ids)."""
+
+    destination: Optional[PublishDestination] = None  # default: the matrix's
+    status: Optional[PublishStatus] = None            # default: the matrix's
+    force_voice: bool = False
+    cell_ids: Optional[list[UUID]] = None
+
+
+class MatrixPublishResult(BaseModel):
+    job_ids: list[UUID] = Field(default_factory=list)
+    cell_ids: list[UUID] = Field(default_factory=list)
+
+
 class MatrixRecheckResult(BaseModel):
     changed: int
     coverage: dict[str, int] = Field(default_factory=dict)
