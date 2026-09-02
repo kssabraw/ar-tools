@@ -40,6 +40,15 @@ export interface LocalSeoPageListItem {
   target_words?: number | null
   actual_words?: number | null
   length_status?: 'in_band' | 'over_length' | 'under_length' | null
+  // Structure verdict vs the spec (Phase 4): ok / drift. Null for pre-spec pages.
+  structure_status?: 'ok' | 'drift' | null
+}
+
+export interface StructureIssue {
+  key?: string | null
+  code: string
+  detail: string
+  advisory?: boolean
 }
 
 // ── page spec (length + structure kept on file) ─────────────────────────────
@@ -69,6 +78,10 @@ export interface PageSpec {
   location_code?: number | null
   page_type: string
   generated_at?: string
+  // 'client' = the client's reference layout IS the structure (its sections,
+  // order and blocks override the app's template); 'template' = the default
+  // 12-section skeleton (no usable reference on file, or the override is off).
+  structure_mode?: 'client' | 'template'
   total: { min: number; target: number; max: number; basis: 'serp' | 'fallback' }
   structure: { max_sections: number; max_h3_per_h2: number; faq: { min: number; max: number } }
   sections: PageSpecSection[]
@@ -99,7 +112,10 @@ export interface LengthReport {
   under_length: number
   in_band_pct: number | null
   avg_overage_pct: number | null
-  recent: { id: string; keyword: string; target_words: number; actual_words: number; length_status: string; created_at: string }[]
+  structure_checked: number
+  structure_ok: number
+  structure_drift: number
+  recent: { id: string; keyword: string; target_words: number; actual_words: number; length_status: string; structure_status?: string | null; created_at: string }[]
 }
 
 /**
@@ -157,6 +173,9 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   schema_json: string
   content_gaps: ContentGap[]
   voice_violations?: VoiceCompliance | null
+  // The structure verdict's issue list (required sections, order, caps, block
+  // composition, FAQ range, per-section intent + sentiment). Null without a spec.
+  structure_issues?: StructureIssue[] | null
   // Full per-engine scoring verdict; carries serp_signal_coverage (entities /
   // zones) surfaced in the Search-coverage panel. Absent on older saved pages.
   engine_scores?: Record<string, EngineScore> | null

@@ -10,7 +10,7 @@ import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { SearchCoveragePanel } from '../coverage/SearchCoveragePanel'
 import { RelatedPagesList } from './RelatedPagesList'
 import { VoiceCompliancePanel } from './VoiceCompliancePanel'
-import { LengthChip, PageSpecPanel } from './PageSpecPanel'
+import { LengthChip, PageSpecPanel, StructureIssues } from './PageSpecPanel'
 import { BulkCreateBar } from './BulkCreateBar'
 import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
@@ -307,6 +307,7 @@ export function GeneratedPageView({
               {page.length_status === 'over_length' && <span>Over its spec band after the trim passes — review the page spec below or reoptimize before publishing.</span>}
             </div>
           )}
+          <StructureIssues status={page.structure_status} issues={page.structure_issues} />
           <PageSpecPanel clientId={clientId} keyword={keyword} location={location} />
           <SearchCoveragePanel coverage={engine_scores?.serp_signal_coverage} />
           {content_gaps && content_gaps.length > 0 && (

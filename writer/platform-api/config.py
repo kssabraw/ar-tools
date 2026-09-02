@@ -1325,6 +1325,13 @@ class Settings(BaseSettings):
     # specific corrections fed back — keep-best by structural composite, capped at
     # `max_passes`. Only fires when a reference structure actually drove the page;
     # fully best-effort (a scoring/regen failure keeps the best page so far).
+    # Page spec (docs/modules/local-seo-page-spec-plan-v1_0.md): when the client
+    # has a usable reference page layout, that layout IS the page structure —
+    # its sections, order, blocks and sub-section counts override the app's
+    # default 12-section template (which is used only when no reference is on
+    # file). Off = the older behaviour (the reference is mapped ONTO the
+    # template's skeleton and missing template sections are inserted).
+    local_seo_client_structure_overrides: bool = True
     local_seo_structure_gate_enabled: bool = True
     local_seo_structure_min_composite: float = 85.0
     local_seo_structure_max_passes: int = 2

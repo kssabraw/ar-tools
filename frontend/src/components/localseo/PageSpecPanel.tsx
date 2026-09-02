@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Download, FileJson, RefreshCw, Save } from 'lucide-react'
 import { localSeoApi } from './api'
-import type { PageSpec, PageSpecEnvelope, PageSpecSection } from './types'
+import type { PageSpec, PageSpecEnvelope, PageSpecSection, StructureIssue } from './types'
 import { downloadFile, outlineBtn, primaryBtn } from './shared'
 import { Spinner } from './Spinner'
 
@@ -208,7 +208,11 @@ export function PageSpecPanel({
               </div>
               {ref?.usable && ref.url && (
                 <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
-                  Layout from the client's {ref.page_type?.replace('_', ' ')} reference ({ref.total_words} words) · length from {spec.provenance.serp?.competitor_pages ? `${spec.provenance.serp.competitor_pages} competitor pages (avg ${spec.provenance.serp.avg_words})` : 'the standing market target'}
+                  {spec.structure_mode === 'client'
+                    ? `Structure: the client's ${ref.page_type?.replace('_', ' ')} reference (${ref.total_words} words) — its sections, order and blocks override the app's default template`
+                    : `Layout from the client's ${ref.page_type?.replace('_', ' ')} reference (${ref.total_words} words), mapped onto the default template`}
+                  {' · length from '}{spec.provenance.serp?.competitor_pages ? `${spec.provenance.serp.competitor_pages} competitor pages (avg ${spec.provenance.serp.avg_words})` : 'the standing market target'}
+                  {flags.some(f => f.startsWith('client_structure_omits:')) && ` · the client's layout has no ${flags.find(f => f.startsWith('client_structure_omits:'))!.split(':')[1].split(',').join(' / ')} section — the scorers reward those, so expect a lower AEO/structure score by design`}
                 </p>
               )}
             </>
@@ -247,6 +251,68 @@ export function LengthChip({ target, actual, status }: { target?: number | null;
   )
 }
 
+/** Compact structure-verdict chip for a saved page row (Phase 4). */
+export function StructureChip({ status, issues }: { status?: string | null; issues?: StructureIssue[] | null }) {
+  if (!status) return null
+  const blocking = (issues || []).filter(i => !i.advisory)
+  const drift = status === 'drift'
+  const title = drift
+    ? `Structure drift — ${blocking.length} issue${blocking.length === 1 ? '' : 's'}: ${blocking.slice(0, 4).map(i => i.detail).join('; ')}`
+    : 'Structure matches the page spec (sections, order, blocks, intent + sentiment)'
+  return (
+    <span title={title} style={{ fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 4, background: drift ? '#fef2f2' : '#f0fdf4', color: drift ? '#dc2626' : '#16a34a' }}>
+      structure · {drift ? (blocking.length ? `${blocking.length} issue${blocking.length === 1 ? '' : 's'}` : 'drift') : 'ok'}
+    </span>
+  )
+}
+
+const ISSUE_LABEL: Record<string, string> = {
+  missing_required: 'Missing section',
+  unexpected_section: 'Extra section',
+  order: 'Section order',
+  cap_max_sections: 'Too many sections',
+  cap_max_h3_per_h2: 'Too many H3s',
+  block_missing: 'Missing block',
+  items_low: 'Too few items',
+  items_high: 'Too many items',
+  subsections_low: 'Too few sub-sections',
+  subsections_high: 'Too many sub-sections',
+  intent_drift: 'Intent not met',
+  sentiment: 'Sentiment',
+}
+
+/** The structure verdict's issue list on a saved page (Phase 4). */
+export function StructureIssues({ status, issues }: { status?: string | null; issues?: StructureIssue[] | null }) {
+  if (!status) return null
+  const list = issues || []
+  const blocking = list.filter(i => !i.advisory)
+  const advisory = list.filter(i => i.advisory)
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px', background: '#fff', fontSize: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: list.length ? 8 : 0 }}>
+        <span style={{ fontWeight: 600, color: '#0f172a' }}>Structure vs spec</span>
+        <StructureChip status={status} issues={issues} />
+        {status === 'ok' && <span style={{ color: '#64748b' }}>Every required section is present in spec order, the block composition matches, and each section fulfils its intent with positive, confident copy.</span>}
+        {status === 'drift' && <span style={{ color: '#64748b' }}>Still off the spec after the fix passes — review the issues below, then reoptimize or edit the spec.</span>}
+      </div>
+      {blocking.length > 0 && (
+        <ul style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 3 }}>
+          {blocking.map((i, n) => (
+            <li key={n} style={{ color: '#334155' }}>
+              <span style={{ fontWeight: 600, color: i.code === 'sentiment' || i.code === 'intent_drift' ? '#b45309' : '#dc2626' }}>{ISSUE_LABEL[i.code] || i.code}</span>
+              {i.key && <code style={{ marginLeft: 6, fontSize: 11, background: '#f1f5f9', padding: '0 4px', borderRadius: 3 }}>{i.key}</code>}
+              <span style={{ marginLeft: 6 }}>{i.detail}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {advisory.length > 0 && (
+        <p style={{ margin: '6px 0 0', color: '#94a3b8' }}>Advisory: {advisory.map(i => i.detail).join('; ')}</p>
+      )}
+    </div>
+  )
+}
+
 /** Per-client target-vs-actual rollup over saved pages (plan §5.6) — the drift
  *  table, so the next regression shows up here instead of in a page review. */
 export function LengthSummary({ clientId }: { clientId: string }) {
@@ -265,6 +331,9 @@ export function LengthSummary({ clientId }: { clientId: string }) {
       {data.over_length > 0 && <span style={{ color: '#dc2626' }}>{data.over_length} over</span>}
       {data.under_length > 0 && <span style={{ color: '#d97706' }}>{data.under_length} under</span>}
       {data.avg_overage_pct != null && <span>avg {data.avg_overage_pct > 0 ? '+' : ''}{data.avg_overage_pct}% vs target</span>}
+      {data.structure_checked > 0 && (
+        <span>· structure <b style={{ color: data.structure_drift ? '#dc2626' : '#16a34a' }}>{data.structure_ok}</b> of {data.structure_checked} ok{data.structure_drift > 0 && <span style={{ color: '#dc2626' }}> ({data.structure_drift} drifting)</span>}</span>
+      )}
       {data.pages > data.with_spec && <span style={{ opacity: 0.7 }}>{data.pages - data.with_spec} pages predate specs</span>}
     </div>
   )

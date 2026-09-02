@@ -398,6 +398,9 @@ class LocalSeoPageDetail(BaseModel):
     target_words: Optional[int] = None
     actual_words: Optional[int] = None
     length_status: Optional[str] = None
+    # Structure verdict vs the spec (Phase 4): ok / drift + the issue list.
+    structure_status: Optional[str] = None
+    structure_issues: Optional[list[dict[str, Any]]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
@@ -433,3 +436,4 @@ class LocalSeoPageListItem(BaseModel):
     target_words: Optional[int] = None
     actual_words: Optional[int] = None
     length_status: Optional[str] = None
+    structure_status: Optional[str] = None
