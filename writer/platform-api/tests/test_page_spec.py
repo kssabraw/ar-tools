@@ -45,6 +45,7 @@ _WHEELHOUSE_LIKE = [
     _row("H2", "Local Office Contact Information", "about", 15, [{"type": "list", "count": 1, "items": 3, "words": 15}]),
     _row("H2", "Contact and Consultation Invitation", "cta", 45),
     _row("H2", "Additional Services Navigation Heading", "other", 0, []),
+    _row("H3", "Additional Services Description", "other", 0, []),
 ]
 _SERP = {"keyword": "it support fort lauderdale", "location": "Fort Lauderdale", "serp_word_target": 1058,
          "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
@@ -67,6 +68,13 @@ def test_page_band_falls_back_when_serp_missing_or_suspect():
     assert total["basis"] == "fallback" and "serp_target_suspect" in flags
     total, _, flags = ps.page_band({"serp_word_target": 1300, "serp_urls": ["a", "b"]}, 1200)
     assert total["basis"] == "fallback" and "serp_too_few_pages" in flags
+    # a suspect SERP must not come back as "the market": the fallback target is
+    # clamped into the plausible window (live: 2,782 fed back as 2,782)
+    total, _, flags = ps.page_band({"serp_word_target": 2782, "serp_avg_word_count": 2318, "serp_urls": ["a"] * 18}, 2782)
+    assert total["basis"] == "fallback" and "serp_target_suspect" in flags and "fallback_target_clamped" in flags
+    assert total["target"] == ps.SERP_TARGET_MAX and total["max"] == int(round(ps.SERP_TARGET_MAX * ps.BAND_UPPER))
+    total, _, flags = ps.page_band(None, 400)
+    assert total["target"] == ps.SERP_TARGET_MIN and "fallback_target_clamped" in flags
 
 
 # ── reference validation ────────────────────────────────────────────────────
@@ -89,8 +97,12 @@ def test_fold_outline_folds_heading_only_children_into_a_list_block():
     assert industries["subsections"] == 1
     assert industries["folded_headings"] == 3
     assert {"type": "list", "count": 1, "items": 3, "words": 0, "folded": True} in industries["blocks"]
-    # a pure heading with nothing under it is dropped
-    assert not any(g["heading"].startswith("Additional Services") for g in groups)
+    # a nav heading whose only child is a lone empty sub-heading folds to a
+    # one-item list group here … and is dropped as a section by both mappers
+    nav = next(g for g in groups if g["heading"].startswith("Additional Services"))
+    assert nav["words"] == 0 and nav["folded_headings"] == 1
+    assert not any(s["key"].startswith("ref-additional") for s in ps.map_to_template(groups))
+    assert not any(s["key"].startswith("ref-additional") for s in ps.build_client_sections(groups))
     # the H1 hero with zero words survives (it is a group, not a child)
     assert groups[0]["level"] == "H1"
 
@@ -256,6 +268,8 @@ def test_client_mode_keeps_the_clients_sections_and_order_and_inserts_nothing():
                     "cta-secondary"]
     # no template section the client lacks is inserted — it is only recorded
     assert "faq" not in keys and "getting-started" not in keys
+    # a heading-only nav stub with one lone sub-heading is not a section
+    assert not any(k.startswith("ref-additional") for k in keys)
     assert "client_structure_omits:getting-started,faq" in spec["provenance"]["flags"]
     secs = {s["key"]: s for s in spec["sections"]}
     assert all(s["source"] == "reference" for s in spec["sections"])

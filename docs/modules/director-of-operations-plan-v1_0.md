@@ -8,6 +8,13 @@
 executor (`autonomous-seo-agent-plan-v1_0.md`), the shared scheduler
 (`services/gsc_scheduler.py`), the notifications service (`services/notifications.py`).
 
+> **Amendment (owner ask, 2026-09-02 — built).** DORA gained ONE write: **guide sync**
+> (`services/guide_sync.py`). Every push to `main` is reported to it (CI →
+> `POST /director/module-changes`), and when a change is user-visible DORA rewrites the affected
+> module's in-app Guides-portal page, keeping the prior version for a one-click revert. This is
+> documentation, not operational state — the §5/§8 "no scheduling / priority / capacity
+> authority" stance is unchanged. See `decisions.md` ("DORA — guide sync") and HANDOFF.
+
 > **Naming note.** "Director of Operations" is the **owner-facing surface you see and
 > query the whole operation through** — not a fifth autonomous persona with its own
 > login, auth surface, or write actions. It is the conversational face of a

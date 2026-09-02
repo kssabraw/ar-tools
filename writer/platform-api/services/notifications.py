@@ -168,6 +168,9 @@ PACE_CHANNEL_KINDS = frozenset({
     # DORA process-efficiency (services/director/efficiency.py, WS4) — the weekly
     # process-efficiency briefing + as-detected inefficiency alerts.
     "ops_efficiency",
+    # DORA guide sync (services/guide_sync.py) — "I updated / propose an update
+    # to the X guide after a module change". DORA's own chatter → #dora.
+    "guide_sync",
     # "Your content is ready" pings (services/content_ready.py) — PACE tells a
     # client's own channel when a Blog/Service run, Local SEO page, Ecommerce
     # page, or Website Builder page finishes generating.
@@ -229,7 +232,7 @@ _dm_scope_broken = False
 # Owner ruling 2026-08-29 (DORA gets its own surface). Kept a subset of
 # PACE_CHANNEL_KINDS on purpose: leaving these in PACE_CHANNEL_KINDS means an
 # unset DORA channel degrades to the PACE channel, never the strategy channel.
-DIRECTOR_CHANNEL_KINDS = frozenset({"ops_digest", "ops_seam", "ops_efficiency"})
+DIRECTOR_CHANNEL_KINDS = frozenset({"ops_digest", "ops_seam", "ops_efficiency", "guide_sync"})
 
 
 def resolve_slack_channel(

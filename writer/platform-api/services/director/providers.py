@@ -736,3 +736,16 @@ def prov_coordination(supabase, client_ids: Optional[list[str]], today: date) ->
         "stalled": metrics["stalled"][:20],
         "loops": metrics["loops"],
     }
+
+
+# ---------------------------------------------------------------------------
+# DORA guide sync — what DORA did to the in-app Guides recently (owner ask
+# 2026-09-02). Portfolio-only, read-only insight: opens no seam and no task;
+# it lets DORA answer "which guides did you update after last week's changes,
+# and why" and surface a proposal waiting on an admin. Reuses the sync
+# module's own tested rollup.
+# ---------------------------------------------------------------------------
+def prov_guide_sync(supabase, today: date) -> Optional[dict]:
+    from services import guide_sync
+
+    return guide_sync.recent_activity(supabase, today)
