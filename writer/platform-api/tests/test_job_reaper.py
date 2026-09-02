@@ -352,7 +352,8 @@ def _wire_loop(monkeypatch, process, registry):
     monkeypatch.setattr(job_worker, "_reap_stale_jobs", _noop_reap)
     served = {"done": False}
 
-    async def fake_claim(job_types=None, exclude_types=None, priority_min=None, priority_max=None):
+    async def fake_claim(job_types=None, exclude_types=None, priority_min=None,
+                         priority_max=None, max_per_client=None):
         if served["done"]:
             return None
         served["done"] = True

@@ -1,6 +1,14 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-02 · **SerMaStr recovery-plan follow-ups closed — HTML-entity unescape MERGED [#971](https://github.com/kssabraw/ar-tools/pull/971) (squash `13ac405`); the worker-lane follow-up needed no change** (latest)
+## ⏩ Update — 2026-09-02 · **Worker lanes: bulk per-client fairness + `/admin/worker-lanes` observability (PR #969, additive on top of #970)** (latest)
+
+Two small additions on top of #970's priority/bulk-lane bulk-throughput work (which already solved the FCR "a reference analysis can't run during a bulk batch" contention via a `priority` column + dedicated bulk lanes). A parallel branch had built a competing *job-type* heavy-lane design for the same problem; #970 is better (priority is per-job, so a single user-clicked `local_seo_generate` stays fast while only bulk-batch items are demoted), so that branch was reworked down to just the two pieces #970 lacks.
+
+- **Bulk-lane per-client fairness** — `job_worker.order_candidates_by_fairness` (pure, unit-tested) reorders bulk claim candidates so a client already holding `bulk_lane_max_per_client` (default 2) background slots is tried LAST, letting another client's batch through. Contention-only (a client alone still uses every slot) and best-effort (count + claim aren't atomic → brief overshoot self-corrects). Threaded through `_claim_next_job` → the BULK lane launch in `main.py`. **Only ENGAGES at `bulk_lane_workers > 1`** — at the default single bulk worker a client can hold at most one slot, so it is a no-op (future-proofing for when the bulk lane is widened).
+- **`GET /admin/worker-lanes`** (admin, read-only) — live per-lane pending/running depth for MAIN/INTERACTIVE/FANOUT/BULK (under each lane's own claim filter + priority band) plus the bulk lane's per-client running breakdown, so you can SEE whether one client's batch is dominating and whether raising `bulk_lane_workers` is warranted. Advisory-safe (returns `-1`, never 500s). `services/worker_lanes.py` + `routers/worker_lanes.py`; the lane shapes mirror the `main.py` launcher (keep in sync).
+- Config: `bulk_lane_max_per_client` (2). No migration. Pure helpers unit-tested (`tests/test_heavy_lane_fairness.py`, `tests/test_worker_lanes_status.py`); reaper loop mock signature updated for the new `max_per_client` param.
+
+## ⏩ Update — 2026-09-02 · **SerMaStr recovery-plan follow-ups closed — HTML-entity unescape MERGED [#971](https://github.com/kssabraw/ar-tools/pull/971) (squash `13ac405`); the worker-lane follow-up needed no change**
 
 The two loose ends flagged after the live First Class Roofing `goal_recovery` run are both resolved.
 
