@@ -43,6 +43,24 @@ class StrategyReviewRequest(BaseModel):
 _ON_DEMAND_TRIGGERS = ("on_demand", "goal_recovery")
 
 
+def _has_critical_goal(client_id: str) -> bool:
+    """Whether the client has at least one behind/overdue non-custom campaign
+    goal (the goal_recovery precondition). Fail-closed on a read error."""
+    from datetime import date
+
+    from services import campaign_goals, goal_escalation
+
+    try:
+        goals = campaign_goals.assess_goals(client_id, date.today())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("strategy_review.goal_check_failed", extra={"client_id": client_id, "error": str(exc)})
+        return False
+    return any(
+        goal_escalation.is_critical(g.get("status")) and g.get("goal_type") != "custom"
+        for g in goals or []
+    )
+
+
 @router.get("/strategist/status")
 async def strategist_status(auth: dict = Depends(require_auth)) -> dict:
     """Whether the strategist feature is on — drives the SerMaStr Log nav entry.
@@ -63,8 +81,14 @@ async def start_strategy_review(
     trigger = (body.trigger if body and body.trigger else "on_demand")
     if trigger not in _ON_DEMAND_TRIGGERS:
         raise HTTPException(status_code=422, detail="invalid_trigger")
-    if trigger == "goal_recovery" and not settings.goal_recovery_enabled:
-        raise HTTPException(status_code=409, detail="goal_recovery_disabled")
+    if trigger == "goal_recovery":
+        if not settings.goal_recovery_enabled:
+            raise HTTPException(status_code=409, detail="goal_recovery_disabled")
+        # A recovery run only makes sense against a goal that is actually
+        # critical — otherwise the finished run would raise a bogus STILL
+        # CRITICAL alarm for a healthy client.
+        if not await run_in_threadpool(_has_critical_goal, str(client_id)):
+            raise HTTPException(status_code=409, detail="no_critical_goal")
     try:
         review_id = strategist.enqueue_strategy_review(str(client_id), trigger=trigger)
     except Exception as exc:

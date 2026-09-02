@@ -1,6 +1,6 @@
 # SerMaStr Autonomous Recovery Plans — PRD v1.0
 
-**Status:** BUILT (owner-approved 2026-09-02). **PR 1** (the emit-truncation fix) merged as [#956](https://github.com/kssabraw/ar-tools/pull/956); **PR 2** (chronic-goal recovery runs) built the same day — see §12 for the as-built notes. Migration `20260902120000_strategy_reviews_goal_recovery.sql` applied live.
+**Status:** BUILT (owner-approved 2026-09-02). **PR 1** (the emit-truncation fix) merged as [#956](https://github.com/kssabraw/ar-tools/pull/956); **PR 2** (chronic-goal recovery runs) built the same day — see §12 for the as-built notes. Migration `20260902130000_strategy_reviews_goal_recovery.sql` applied live.
 **Owner rulings captured (2026-09-02, grilling session):** separate truncation PR first · a dedicated `goal_recovery` run **plus** a strengthened weekly prompt · proposals may reallocate the current monthly plan at proposal level, and over-budget work is offered as cumulative **+25% / +50% / +100%** tiers over deployable · **propose-only, no auto hand-off to PACE** (owner, 2026-09-02, from the implementation brief) · one run per client on the re-escalation cadence, capped at **5 runs per daily tick** · the finished run sends the one `goal_chronic` message · `goal_recovery_enabled` defaults **on**.
 **Repo:** `kssabraw/ar-tools` · backend `writer/platform-api/`. Builds on PR #949 (chronic-goal escalation + maps brief + notification-wipe fix, merged 2026-09-01).
 

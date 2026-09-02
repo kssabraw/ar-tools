@@ -268,13 +268,21 @@ def build_recovery_notification(client_name: str, goals: list[dict], review: dic
     goals = goals or []
     weeks = max([g.get("weeks_behind") or 0 for g in goals] or [0])
     first = goals[0] if goals else {}
-    label = first.get("label") or "goal"
-    more = f" (+{len(goals) - 1} more)" if len(goals) > 1 else ""
-    title = f"STILL CRITICAL (week {weeks}): {client_name or 'client'} — {label}{more}"
-    cur, tgt = first.get("current_value"), first.get("target_value")
-    gap = f" — now {cur:g} vs target {tgt:g}" if (isinstance(cur, (int, float)) and isinstance(tgt, (int, float))) else ""
-    status = first.get("status") or "behind"
-    parts = [f'"{label}" has been {status} for {weeks} week{"s" if weeks != 1 else ""}{gap}.']
+    if goals:
+        label = first.get("label") or "goal"
+        more = f" (+{len(goals) - 1} more)" if len(goals) > 1 else ""
+        title = f"STILL CRITICAL (week {weeks}): {client_name or 'client'} — {label}{more}"
+        cur, tgt = first.get("current_value"), first.get("target_value")
+        gap = (f" — now {cur:g} vs target {tgt:g}"
+               if (isinstance(cur, (int, float)) and not isinstance(cur, bool)
+                   and isinstance(tgt, (int, float)) and not isinstance(tgt, bool)) else "")
+        status = first.get("status") or "behind"
+        parts = [f'"{label}" has been {status} for {weeks} week{"s" if weeks != 1 else ""}{gap}.']
+    else:
+        # The run had no goal context (an on-demand run whose goals could not be
+        # re-derived) — never fabricate a "week 0" alarm around a nameless goal.
+        title = f"Recovery plan ready: {client_name or 'client'}"
+        parts = ["A chronic-goal recovery run completed for this client."]
     root = (budget.get("root_cause") or "").strip()
     if root:
         parts.append(f"Root cause: {root}")
@@ -536,10 +544,17 @@ def after_persist(client_id: str, review: dict, recovery: dict, budget: dict,
     from services import notifications
 
     review_id = review.get("id")
-    try:
-        supersede_prior_recovery(client_id, str(review_id), client_name)
-    except Exception as exc:
-        logger.warning("goal_recovery.supersede_failed", extra={"client_id": client_id, "error": str(exc)})
+    # Only a review that actually carries a plan may retire the previous one —
+    # a frozen (observation-only) or truncated run with zero proposals must not
+    # erase the plan the owner could still approve.
+    if review.get("proposals"):
+        try:
+            supersede_prior_recovery(client_id, str(review_id), client_name)
+        except Exception as exc:
+            logger.warning("goal_recovery.supersede_failed", extra={"client_id": client_id, "error": str(exc)})
+    else:
+        logger.info("goal_recovery.supersede_skipped_empty_plan",
+                    extra={"client_id": client_id, "review_id": str(review_id)})
     try:
         stamp_escalations(recovery.get("goals") or [], datetime.now(timezone.utc))
     except Exception as exc:

@@ -346,3 +346,26 @@ def test_after_persist_emits_one_goal_chronic_even_if_supersede_fails(monkeypatc
     e = emitted[0]
     assert e["kind"] == "goal_chronic" and e["severity"] == "critical" and e["client_id"] == "c1"
     assert e["payload"]["link"] == "clients/c1/action-plan"
+
+
+def test_after_persist_never_supersedes_with_an_empty_plan(monkeypatch):
+    """A frozen (observation-only) or truncated run carries zero proposals — it
+    must not retire the plan the owner could still approve."""
+    from services import notifications
+
+    calls = []
+    monkeypatch.setattr(gr, "supersede_prior_recovery", lambda *a, **k: calls.append(a))
+    monkeypatch.setattr(gr, "stamp_escalations", lambda goals, now: 0)
+    monkeypatch.setattr(notifications, "emit", lambda **kw: None)
+    goals = gr.goals_context([_row_goal()], date(2026, 9, 2))
+    gr.after_persist("c1", {"id": "r-1", "proposals": []}, {"goals": goals}, {"root_cause": ""}, "Acme")
+    assert calls == []
+    gr.after_persist("c1", {"id": "r-2", "proposals": [_p("a", 1)]}, {"goals": goals}, {"root_cause": ""}, "Acme")
+    assert len(calls) == 1
+
+
+def test_recovery_notification_without_goal_context_is_not_a_fake_alarm():
+    note = gr.build_recovery_notification("Acme", [], {"id": "r", "proposals": [_p("a", 1)]}, {"root_cause": ""}, "x")
+    assert note["title"] == "Recovery plan ready: Acme"
+    assert "week 0" not in note["title"] and "STILL CRITICAL" not in note["title"]
+    assert note["severity"] == "critical"
