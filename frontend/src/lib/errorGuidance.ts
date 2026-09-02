@@ -332,6 +332,20 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'Only {service} and {location} are substituted.',
     steps: ['Remove the unknown token or replace it with {service} / {location}.'],
   },
+  hub_pattern_missing_service_token: {
+    title: 'Service hub pattern must include {service}',
+    meaning:
+      'The top-level service page link is built from this pattern, so it needs ' +
+      '{service} to point at the right page (e.g. /roof-restoration/).',
+    steps: ['Use a pattern with {service}, e.g. /{service}/ or /services/{service}/.'],
+  },
+  hub_pattern_has_location_token: {
+    title: 'Service hub pattern can’t include {location}',
+    meaning:
+      'The top-level service page is location-agnostic — it’s the page every ' +
+      'location page links up to — so {location} doesn’t belong in it.',
+    steps: ['Remove {location}; use e.g. /{service}/ or /services/{service}/.'],
+  },
   url_pattern_empty: {
     title: 'URL pattern is empty',
     meaning: 'A pattern is needed to plan each page’s URL (it drives the sibling links).',

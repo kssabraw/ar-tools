@@ -58,12 +58,18 @@ def test_start_generate_enqueues_one_job_per_cell_with_matrix_payload():
     assert p0["keyword"] == "Roof restoration Melbourne" and p0["location_code"] == 1000567
     assert p1["keyword"] == "Roof restoration Hawthorn" and p1["location_code"] == 21030
     assert p0["matrix_id"] == "m1" and p0["matrix_cell_id"] == "cell-0" and p0["user_id"] == "user-1"
-    # Sibling links planned against the whole grid ride on the payload (Phase 2).
+    # Links planned against the whole grid ride on the payload (Phase 2): the
+    # up-links (service hub + home) come FIRST, then the siblings.
     assert p0["internal_links"] == [
+        {"anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": core.SERVICE_HUB},
+        {"anchor": "Home", "url": "https://fcr.com.au/", "relation": core.HOME},
         {"anchor": "Roof restoration in Hawthorn", "url": "https://fcr.com.au/roof-restoration-hawthorn/",
          "relation": core.SAME_SERVICE},
     ]
-    assert p1["internal_links"][0]["url"] == "https://fcr.com.au/roof-restoration-melbourne/"
+    assert p1["internal_links"][0] == {
+        "anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": core.SERVICE_HUB,
+    }
+    assert any(lk["url"] == "https://fcr.com.au/roof-restoration-melbourne/" for lk in p1["internal_links"])
     assert rows[0]["scheduled_at"] < rows[1]["scheduled_at"]  # staggered
     # Cells flipped to queued with their job ids.
     patched = [c[0][0][0] for c in apply.call_args_list]

@@ -40,6 +40,11 @@ class MatrixCreateRequest(BaseModel):
     entity_provider: Optional[str] = None
     publish_destination: PublishDestination = "google_docs"
     publish_status: PublishStatus = "draft"
+    # Internal linking: besides interlinking siblings, each page can also link UP
+    # to its top-level service page and the site root (both default on).
+    link_to_service_hub: bool = True
+    service_hub_pattern: Optional[str] = None
+    link_to_home: bool = True
 
 
 class MatrixUpdateRequest(BaseModel):
@@ -54,6 +59,9 @@ class MatrixUpdateRequest(BaseModel):
     entity_provider: Optional[str] = None
     publish_destination: Optional[PublishDestination] = None
     publish_status: Optional[PublishStatus] = None
+    link_to_service_hub: Optional[bool] = None
+    service_hub_pattern: Optional[str] = None
+    link_to_home: Optional[bool] = None
 
 
 class MatrixCell(BaseModel):
@@ -96,6 +104,9 @@ class MatrixSummary(BaseModel):
     entity_provider: Optional[str] = None
     publish_destination: str = "google_docs"
     publish_status: str = "draft"
+    link_to_service_hub: bool = True
+    service_hub_pattern: Optional[str] = None
+    link_to_home: bool = True
     release_enabled: bool = False
     release_mode: str = "daily"
     release_weekday: Optional[int] = None
