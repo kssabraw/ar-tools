@@ -736,10 +736,17 @@ async def run_strategy_review(
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]
-    from services import anthropic_failover
+    from services import anthropic_failover, prompt_cache
 
     clients = anthropic_failover.build_async_clients(timeout=_LLM_TIMEOUT)
-    messages: list[dict] = [{"role": "user", "content": user}]
+    # The first user message carries the whole run context — a client digest
+    # (up to `strategist_digest_budget_tokens`), the SOP corpus and the module
+    # cards, ~10k–40k tokens re-sent on every drill-down/emit round. Cache it so
+    # only the first round pays full price; later rounds read it at ≈10%. The
+    # (invariant) system prompt is cached too, so the weekly fan-out reuses
+    # tools+system across back-to-back client runs.
+    messages: list[dict] = [{"role": "user", "content": prompt_cache.cache_text(user)}]
+    cached_system = prompt_cache.cache_text(_SYSTEM)
     usage = {"input_tokens": 0, "output_tokens": 0}
     drilldowns: list[dict] = []
     paid_used = 0
@@ -762,7 +769,7 @@ async def run_strategy_review(
             lambda c: c.messages.create(
                 model=settings.strategist_model,
                 max_tokens=settings.strategist_max_tokens,
-                system=_SYSTEM,
+                system=cached_system,
                 tools=tools,
                 tool_choice={"type": "tool", "name": "emit_strategy_review"} if force_emit else {"type": "auto"},
                 messages=messages,

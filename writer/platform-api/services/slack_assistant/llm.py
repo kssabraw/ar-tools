@@ -673,11 +673,18 @@ async def _one_llm_call(
 
     `on_text` (an async callable taking a text delta) receives the answer as it
     generates — the dashboard chat's SSE path. The returned message is the same
-    final object either way, so callers are stream-agnostic."""
+    final object either way, so callers are stream-agnostic.
+
+    The (invariant) `system` prompt is wrapped in an ephemeral cache breakpoint
+    so `tools + system` is reused across the bursty, back-to-back calls of the
+    assistant/PACE/QA/DORA loops — every caller of this primitive gets that for
+    free. Transparent to output; a no-op when caching is disabled."""
+    from services import prompt_cache
+
     call_kwargs = {
         "model": settings.slack_assistant_model,
         "max_tokens": settings.slack_assistant_max_tokens,
-        "system": system,
+        "system": prompt_cache.cache_text(system),
         "messages": messages,
         **({"tools": tools} if tools else {}),
         **kwargs,
@@ -769,7 +776,7 @@ async def interpret(
                 "section):\n" + sops
             )
     user = "\n\n".join(blocks)
-    from services import anthropic_failover
+    from services import anthropic_failover, prompt_cache
 
     # One client per Anthropic account; each model call fails over to the
     # secondary account on a transient concurrency limit (same model, so the
@@ -778,7 +785,10 @@ async def interpret(
         timeout=_LLM_TIMEOUT,
         max_retries=_LLM_MAX_RETRIES,
     )
-    messages: list[dict] = [{"role": "user", "content": user}]
+    # The first user message carries the whole cross-module context (+ history +
+    # SOPs) and is re-sent on every tool-loop round; an ephemeral cache
+    # breakpoint lets rounds 2..N read it at ≈10% of input price.
+    messages: list[dict] = [{"role": "user", "content": prompt_cache.cache_text(user)}]
     tools = build_llm_tools() + [_read_sop_tool(), _LIVE_GSC_TOOL,
                                  _LIST_NONINDEXED_TOOL, _MEMORY_TOOL,
                                  _LEADOFF_FIND_TOOL, _MAPS_HISTORY_TOOL,

@@ -1808,7 +1808,13 @@ def _system_prompt_for(question: str, context=None, history=None) -> str:
     seen = {}
 
     async def _create(**kwargs):
-        seen["system"] = kwargs.get("system", "")
+        # The system prompt is now sent as an ephemeral-cached text-block list
+        # (services/prompt_cache); flatten it back to text so these prompt-
+        # assembly assertions read it the same either way.
+        sys_arg = kwargs.get("system", "")
+        if isinstance(sys_arg, list):
+            sys_arg = "".join(b.get("text", "") for b in sys_arg if isinstance(b, dict))
+        seen["system"] = sys_arg
         block = MagicMock()
         block.type = "text"
         block.text = "ok"

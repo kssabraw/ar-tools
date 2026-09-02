@@ -508,12 +508,14 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
         blocks.append(f"Scope: the client *{client.get('name') if client else 'this client'}*.")
     blocks.append("Board data (JSON):\n" + json.dumps(context, default=str, ensure_ascii=False))
     blocks.append(f"Latest message: {question}")
-    from services import anthropic_failover
+    from services import anthropic_failover, prompt_cache
 
     clients = anthropic_failover.build_async_clients(timeout=60.0, max_retries=2)
     drill_client_id = client.get("id") if client else None
     tools = build_pace_tools() + [pace_batch.DRILL_TOOL, pace_batch.BATCH_TOOL, HISTORY_TOOL]
-    messages = [{"role": "user", "content": "\n\n".join(blocks)}]
+    # The board-data context is re-sent on every drill-down round; cache it so
+    # rounds 2..N read it from cache rather than re-billing the full JSON.
+    messages = [{"role": "user", "content": prompt_cache.cache_text("\n\n".join(blocks))}]
 
     async def on_text(delta: str) -> None:
         await on_event({"type": "text", "text": delta})
