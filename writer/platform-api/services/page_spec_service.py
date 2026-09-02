@@ -111,6 +111,8 @@ def summarize_lengths(rows: list[dict[str, Any]], recent: int = 10) -> dict[str,
         if t > 0:
             overages.append((a - t) / t * 100.0)
     n = len(with_spec)
+    structured = [r for r in rows if r.get("structure_status")]
+    drift = sum(1 for r in structured if r.get("structure_status") == "drift")
     return {
         "pages": len(rows),
         "with_spec": n,
@@ -119,10 +121,14 @@ def summarize_lengths(rows: list[dict[str, Any]], recent: int = 10) -> dict[str,
         "under_length": counts.get("under_length", 0),
         "in_band_pct": round(counts.get("in_band", 0) / n * 100.0, 1) if n else None,
         "avg_overage_pct": round(sum(overages) / len(overages), 1) if overages else None,
+        # Structure (Phase 4): pages judged, and how many still drift.
+        "structure_checked": len(structured),
+        "structure_ok": len(structured) - drift,
+        "structure_drift": drift,
         "recent": [
             {"id": r.get("id"), "keyword": r.get("keyword"), "target_words": int(r["target_words"]),
              "actual_words": int(r["actual_words"]), "length_status": r.get("length_status") or "in_band",
-             "created_at": r.get("created_at")}
+             "structure_status": r.get("structure_status"), "created_at": r.get("created_at")}
             for r in with_spec[:recent]
         ],
     }
@@ -131,7 +137,7 @@ def summarize_lengths(rows: list[dict[str, Any]], recent: int = 10) -> dict[str,
 def length_report(client_id: str) -> dict[str, Any]:
     res = (
         get_supabase().table("local_seo_pages")
-        .select("id, keyword, target_words, actual_words, length_status, created_at")
+        .select("id, keyword, target_words, actual_words, length_status, structure_status, created_at")
         .eq("client_id", client_id).is_("deleted_at", "null")
         .order("created_at", desc=True).limit(200).execute()
     )

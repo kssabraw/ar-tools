@@ -93,6 +93,11 @@ Every step is a small pure function with unit tests (`tests/test_page_spec.py`):
 - Measure the generated page per section (`extract_outline_from_html` keyed by `<section id>`); any section over its `max_words` gets a **section-scoped trim** (`section_edit.apply_section_edits`), ≤ 2 passes, with the LENGTH TRIM OVERRIDE (#966) scoped to those sections. The measure-and-trim step never yields to the time budget; only optional passes do.
 - Any later pass (voice, SEO) is section-scoped, re-measured, and **rejected if it pushes a section or the page outside its band** (keep-best on length as well as score).
 
+### 5.4b After writing — structure enforcement + per-section intent/sentiment (Phase 4)
+- `page_spec.structure_verdict(measure, spec, audit)` (pure) checks: every required section present, spec order, `max_sections` + per-section `max_h3_per_h2`, block composition (a spec `list`/`table`/`quote` block must appear in that section), the `items` band (FAQ entries / list items), the services `subsections` band, and — from a cheap per-section audit — **intent** (does the section do its assigned job) and **sentiment** (must be `positive`; `neutral` and `negative` both fail — owner: strictly enforced). An extra section the spec doesn't know is advisory under the section cap, blocking over it.
+- nlp `_enforce_spec_structure` runs BEFORE the length trim (an added section is then trimmed into its band): reorder + drop extras deterministically, WRITE the missing required sections in at their spec position (business facts only), rewrite only the sections with a named issue; ≤ `PAGE_SPEC_STRUCTURE_PASSES` (2), keep-best by blocking-issue count, never gated on the time budget. The verdict is re-audited if a later voice/SEO pass changed the text.
+- The legacy `structure_gate` (whole-page regen vs the raw reference) is retired for spec-driven pages; it still runs when no spec resolved.
+
 ### 5.5 At save — hard ceiling + honest status
 - A page still over `total.max × 1.15` after trims is saved with `length_status = "over_length"` + a `content_over_length` warning notification, never as a clean page. Within band → `"in_band"`; under `total.min` → `"under_length"` (advisory).
 - The page row records `page_spec_id` + `spec_version`, `target_words`, `actual_words`, `length_status` so target vs actual is a column, not buried in `engine_scores`.
@@ -110,6 +115,7 @@ Every step is a small pure function with unit tests (`tests/test_page_spec.py`):
 | **1** | Persistence + API: `local_seo_page_specs` table (client × keyword × location, versioned, `edited_at`); build-on-analysis (`generate_page` builds/loads the spec and threads it), `GET/PUT/POST-rebuild …/local-seo/page-spec` + JSON download; spec id/version + target/actual/status columns on `local_seo_pages`. | Spec kept on file; visible via API; pages record target vs actual. |
 | **2** | Enforcement: nlp `GeneratePageRequest.page_spec` (rendered per-section bands + caps replace `reference_page_structure` + the budget line on the Local SEO path); per-section measure + section-scoped trim after writing and after every later pass; save gate + `over_length` notification. Reoptimize consumes the same spec. | Pages land in band by construction; over-length never ships silently. |
 | **3** | Frontend: spec viewer/editor + download on the page/New form; Saved Pages target-vs-actual column + status chip; per-client length report. | Team can see, edit, and monitor. |
+| **4** | Structure enforcement (§5.4b): `structure_verdict` + the nlp audit/add/fix loop; `structure_status` + `structure_issues` on `local_seo_pages` (`20260902160000`); `content_structure_drift` notification; legacy gate retired for spec pages; structure chip + issue panel + report counts. **Built 2026-09-02.** | Structure and per-section intent/sentiment land by construction; drift never ships silently. |
 
 Blog/service/ecommerce writers are out of scope for v1 (they keep `page_structure_render`/`structure_gate`); the schema is generic so they can adopt it later.
 
@@ -127,3 +133,4 @@ Measured with the eval CLI (`scripts/eval_page_structure.py`, extended to read t
 - 2026-09-02 — spec kept **per keyword × location** (SERP length differs per query); the per-client reference stays the layout input. Owner.
 - 2026-09-02 — edits stick until the user accepts a re-analysis diff. Owner.
 - 2026-09-02 — no new prompt rules; every guardrail is a deterministic check in code. Owner.
+- 2026-09-02 — Phase 4: per-section **sentiment is strictly enforced** — only `positive` passes; the audit is one Haiku call per pass, the verdict + fixes stay deterministic/section-scoped. Owner.

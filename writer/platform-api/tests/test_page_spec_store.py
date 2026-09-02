@@ -101,12 +101,14 @@ def test_save_edit_rejects_an_infeasible_spec_without_saving():
 def test_summarize_lengths_rolls_up_target_vs_actual():
     from services import page_spec_service as svc
     rows = [
-        {"id": "a", "keyword": "k1", "target_words": 1000, "actual_words": 1050, "length_status": "in_band", "created_at": "t1"},
-        {"id": "b", "keyword": "k2", "target_words": 1000, "actual_words": 1500, "length_status": "over_length", "created_at": "t2"},
+        {"id": "a", "keyword": "k1", "target_words": 1000, "actual_words": 1050, "length_status": "in_band", "structure_status": "ok", "created_at": "t1"},
+        {"id": "b", "keyword": "k2", "target_words": 1000, "actual_words": 1500, "length_status": "over_length", "structure_status": "drift", "created_at": "t2"},
         {"id": "c", "keyword": "k3", "target_words": None, "actual_words": None, "length_status": None, "created_at": "t3"},
     ]
     out = svc.summarize_lengths(rows)
     assert out["pages"] == 3 and out["with_spec"] == 2
+    assert out["structure_checked"] == 2 and out["structure_ok"] == 1 and out["structure_drift"] == 1
+    assert out["recent"][1]["structure_status"] == "drift"
     assert out["in_band"] == 1 and out["over_length"] == 1 and out["under_length"] == 0
     assert out["in_band_pct"] == 50.0
     assert out["avg_overage_pct"] == 27.5   # (+5% + 50%) / 2

@@ -656,6 +656,7 @@ def measure_page(html: str, spec: dict[str, Any]) -> dict[str, Any]:
         h3s = len(sec.find_all("h3"))
         max_h3 = max(max_h3, h3s)
         total += words
+        blocks = _section_blocks(sec)
         band = bands.get(key)
         if band is None:
             unknown.append(key)
@@ -665,6 +666,7 @@ def measure_page(html: str, spec: dict[str, Any]) -> dict[str, Any]:
             lo, hi = _int(band.get("min_words")), _int(band.get("max_words"))
             status = "over" if words > hi else ("under" if words < lo else "ok")
         rows.append({"key": key, "heading": heading, "words": words, "h3_count": h3s,
+                     "blocks": blocks, "items": _section_items(key, sec, blocks),
                      "min_words": lo, "max_words": hi, "status": status})
     if not rows:  # no <section> wrappers — measure the whole document
         total = _content_words(soup)
@@ -677,7 +679,144 @@ def measure_page(html: str, spec: dict[str, Any]) -> dict[str, Any]:
         "missing_required": missing,
         "section_count": len(rows),
         "max_h3_per_h2": max_h3,
+        "order": [r["key"] for r in rows],
     }
+
+
+def _section_blocks(sec: Any) -> dict[str, int]:
+    """Block-type counts inside one top-level section (list / table / quote /
+    paragraph), for the per-section composition check."""
+    return {
+        "list": len(sec.find_all(["ul", "ol"])),
+        "table": len(sec.find_all("table")),
+        "quote": len(sec.find_all("blockquote")),
+        "paragraph": len(sec.find_all("p")),
+    }
+
+
+_QUESTION_RE = re.compile(r"\?\s*$")
+
+
+def _section_items(key: str, sec: Any, blocks: dict[str, int]) -> int:
+    """Countable items in a section: FAQ entries (h3 / dt / details / bold
+    question paragraphs — whichever the writer used), else list items."""
+    if key == "faq":
+        h3 = len(sec.find_all("h3"))
+        dt = len(sec.find_all("dt"))
+        details = len(sec.find_all("details"))
+        strong_q = sum(
+            1 for st in sec.find_all(["strong", "b"]) if _QUESTION_RE.search(st.get_text(" ", strip=True) or "")
+        )
+        return max(h3, dt, details, strong_q)
+    if blocks.get("list"):
+        return len(sec.find_all("li"))
+    return 0
+
+
+# ── structure verdict (plan Phase 4) ────────────────────────────────────────
+
+def structure_verdict(measure: dict[str, Any], spec: dict[str, Any], audit: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+    """Deterministic structural verdict of a measured page vs its spec:
+    required sections present, spec order kept, page caps, per-section block
+    composition (a spec `list`/`table`/`faq` block must appear), FAQ entry
+    range, service-body sub-section band — plus, when an LLM section audit is
+    supplied (``{key: {intent_ok, sentiment, note}}``), a section whose copy
+    fails its assigned intent or is not positive/confident. Returns
+    ``{status: ok|drift, issues: [{key, code, detail, advisory?}], ...}``;
+    ``status`` reflects the non-advisory issues only. Pure."""
+    issues: list[dict[str, Any]] = []
+    bands = {s["key"]: s for s in spec.get("sections") or []}
+    structure = spec.get("structure") or {}
+    rows = {r["key"]: r for r in measure.get("sections") or []}
+
+    for key in measure.get("missing_required") or []:
+        issues.append({"key": key, "code": "missing_required", "detail": f"required section [{key}] is missing"})
+    max_sections = _int(structure.get("max_sections"))
+    over_cap = bool(max_sections and _int(measure.get("section_count")) > max_sections)
+    for key in measure.get("unknown_sections") or []:
+        # An extra section the spec doesn't know is removed when the page is over
+        # its section cap; under the cap it is kept and reported as ADVISORY (the
+        # spec editor can't add sections yet, so a harmless extra must not keep a
+        # page in permanent drift).
+        issues.append({"key": key, "code": "unexpected_section", "advisory": not over_cap,
+                       "detail": f"section [{key}] is not in the spec"
+                       + ("" if over_cap else " (kept — under the section cap)")})
+
+    spec_order = [s["key"] for s in spec.get("sections") or []]
+    page_order = [k for k in (measure.get("order") or []) if k in bands]
+    expected = [k for k in spec_order if k in set(page_order)]
+    if page_order != expected:
+        issues.append({"key": None, "code": "order", "detail": f"sections out of spec order: {page_order} vs {expected}"})
+
+    if over_cap:
+        issues.append({"key": None, "code": "cap_max_sections",
+                       "detail": f"{measure.get('section_count')} sections vs a cap of {max_sections}"})
+    max_h3 = _int(structure.get("max_h3_per_h2"))
+    if max_h3:
+        for row in measure.get("sections") or []:
+            if _int(row.get("h3_count")) > max_h3 and row["key"] in bands:
+                issues.append({"key": row["key"], "code": "cap_max_h3_per_h2",
+                               "detail": f"[{row['key']}] has {row.get('h3_count')} H3 sub-sections vs a cap of {max_h3}; merge to at most {max_h3}"})
+
+    for key, band in bands.items():
+        row = rows.get(key)
+        if row is None:
+            continue
+        blocks = row.get("blocks") or {}
+        for b in band.get("blocks") or []:
+            t = b.get("type")
+            if t == "list" and not blocks.get("list"):
+                issues.append({"key": key, "code": "block_missing", "detail": f"[{key}] should contain a list ({b.get('items') or ''} items) but has none".replace("( items)", "")})
+            elif t == "table" and not blocks.get("table"):
+                issues.append({"key": key, "code": "block_missing", "detail": f"[{key}] should contain a table but has none"})
+            elif t == "quote" and not (blocks.get("quote") or blocks.get("paragraph")):
+                issues.append({"key": key, "code": "block_missing", "detail": f"[{key}] should contain review quotes but has none"})
+        items = band.get("items")
+        if isinstance(items, dict):
+            n = _int(row.get("items"))
+            what = "entries" if key == "faq" else "list items"
+            if n < _int(items.get("min")):
+                issues.append({"key": key, "code": "items_low", "detail": f"[{key}] has {n} {what}; needs at least {items.get('min')}"})
+            elif _int(items.get("max")) and n > _int(items.get("max")):
+                issues.append({"key": key, "code": "items_high", "detail": f"[{key}] has {n} {what}; at most {items.get('max')}"})
+        subs = band.get("subsections")
+        if isinstance(subs, dict) and key == ABSORBER_KEY:
+            n = _int(row.get("h3_count"))
+            if n < _int(subs.get("min")):
+                issues.append({"key": key, "code": "subsections_low", "detail": f"[{key}] has {n} H3 sub-sections; needs at least {subs.get('min')}"})
+            elif _int(subs.get("max")) and n > _int(subs.get("max")):
+                issues.append({"key": key, "code": "subsections_high", "detail": f"[{key}] has {n} H3 sub-sections; at most {subs.get('max')}"})
+
+    for key, a in (audit or {}).items():
+        if key not in rows or not isinstance(a, dict):
+            continue
+        if a.get("intent_ok") is False:
+            issues.append({"key": key, "code": "intent_drift",
+                           "detail": f"[{key}] does not fulfil its intent ({bands.get(key, {}).get('intent')}): {a.get('note') or ''}".strip()})
+        sent = str(a.get("sentiment") or "").lower()
+        if sent and sent != "positive":
+            issues.append({"key": key, "code": "sentiment",
+                           "detail": f"[{key}] sentiment is {sent}, must be positive and confident: {a.get('note') or ''}".strip()})
+
+    blocking = [i for i in issues if not i.get("advisory")]
+    return {
+        "status": "ok" if not blocking else "drift",
+        "issues": issues,
+        "issue_codes": sorted({i["code"] for i in blocking}),
+        "section_keys_to_fix": sorted({i["key"] for i in blocking if i.get("key") and i["code"] not in ("missing_required", "unexpected_section")}),
+        "missing_required": list(measure.get("missing_required") or []),
+        "unexpected_sections": list(measure.get("unknown_sections") or []),
+        "order_ok": "order" not in {i["code"] for i in issues},
+        "audited": audit is not None,
+    }
+
+
+def structure_corrections(verdict: dict[str, Any]) -> str:
+    """Imperative corrections for a rewrite/regeneration pass, one line per
+    issue. Empty when the structure is fine. Pure."""
+    lines = [f"- {i['detail']}" for i in verdict.get("issues") or []]
+    return "\n".join(lines)
+
 
 
 def length_verdict(measure: dict[str, Any], spec: dict[str, Any]) -> dict[str, Any]:

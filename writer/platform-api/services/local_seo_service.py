@@ -325,6 +325,10 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         "target_words": result.get("target_words"),
         "actual_words": result.get("actual_words"),
         "length_status": result.get("length_status"),
+        # Structure verdict vs the spec (Phase 4): status + the issue list incl.
+        # the nlp per-section intent/sentiment audit. Null without a spec.
+        "structure_status": result.get("structure_status"),
+        "structure_issues": result.get("structure_issues"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -615,11 +619,43 @@ def _notify_over_length(client_id: str, keyword: str, page_id: Optional[str], ve
         logger.warning("local_seo.over_length_notify_failed", extra={"error": str(exc)})
 
 
+def _notify_structure_drift(client_id: str, keyword: str, page_id: Optional[str], verdict: Optional[dict]) -> None:
+    """Plan §5.4 Phase 4 — a page still structurally off its spec after the
+    fix passes (a required section missing, caps breached, block/FAQ shape
+    wrong, or a section failing its intent / not positive) is saved honestly
+    (structure_status=drift) AND surfaced. One notification per page.
+    Best-effort."""
+    if not verdict or verdict.get("status") != "drift":
+        return
+    try:
+        from services import notifications  # lazy
+
+        blocking = [i for i in verdict.get("issues") or [] if not i.get("advisory")]
+        lines = "; ".join(str(i.get("detail") or i.get("code")) for i in blocking[:6])
+        notifications.emit(
+            client_id,
+            kind="content_structure_drift",
+            title="Local SEO page saved off its structure spec",
+            summary=(
+                f"'{keyword}' still has {len(blocking)} structure issue(s) after the fix passes: {lines}"
+                f"{' …' if len(blocking) > 6 else ''}. Review the page spec or reoptimize the page before publishing."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "page_id": page_id,
+                     "issues": blocking, "issue_codes": verdict.get("issue_codes") or []},
+            dedupe_key=f"content_structure_drift:{page_id or keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never blocks generation
+        logger.warning("local_seo.structure_drift_notify_failed", extra={"error": str(exc)})
+
+
 def attach_length_verdict(result: dict, spec: Optional[dict]) -> dict:
-    """Measure the generated page against its spec and record the verdict on
-    the result: `length_verdict` (full), plus the flat fields `_persist_page`
-    writes to the page row. Pure apart from the HTML parse; a missing spec
-    leaves the result untouched."""
+    """Measure the generated page against its spec and record the verdicts on
+    the result: `length_verdict` (full) + `structure_verdict` (deterministic
+    checks re-measured here, merged with nlp's per-section intent + sentiment
+    audit when it returned one), plus the flat fields `_persist_page` writes
+    to the page row. Pure apart from the HTML parse; a missing spec leaves
+    the result untouched."""
     if not spec:
         return result
     try:
@@ -634,6 +670,16 @@ def attach_length_verdict(result: dict, spec: Optional[dict]) -> dict:
     result["target_words"] = verdict.get("target_words")
     result["actual_words"] = verdict.get("total_words")
     result["length_status"] = verdict.get("status")
+    try:
+        nlp_verdict = result.get("structure_verdict") if isinstance(result.get("structure_verdict"), dict) else {}
+        audit = nlp_verdict.get("audit") if isinstance(nlp_verdict.get("audit"), dict) else None
+        structure = page_spec.structure_verdict(measure, spec, audit)
+        structure["audit"] = audit or {}
+        result["structure_verdict"] = structure
+        result["structure_status"] = structure.get("status")
+        result["structure_issues"] = structure.get("issues") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("local_seo.structure_verdict_failed", extra={"error": str(exc)})
     return result
 
 
@@ -764,7 +810,13 @@ async def generate_page(
     if internal_links:
         payload["internal_links"] = internal_links
     result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT, on_progress=on_progress)
-    result = await _apply_structure_gate(result, payload, reference_analysis)
+    if spec is None:
+        # The legacy reference-structure gate (whole-page regeneration scored
+        # against the raw stored reference) is retired for spec-driven pages:
+        # the spec already folded the reference in, and nlp enforces structure
+        # section-by-section against it (plan §5.4 Phase 4). Two gates on two
+        # different structures would fight.
+        result = await _apply_structure_gate(result, payload, reference_analysis)
     coverage = _guarantee_internal_links(result, internal_links)
     result = attach_length_verdict(result, spec)
     # Record whether competitor analysis actually informed this page (it used
@@ -773,6 +825,9 @@ async def generate_page(
     if result.get("length_verdict") is not None:
         page["length_verdict"] = result["length_verdict"]  # not a column — rides the response
         _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
+    if result.get("structure_verdict") is not None:
+        page["structure_verdict"] = result["structure_verdict"]
+        _notify_structure_drift(client_id, keyword, page.get("id"), result["structure_verdict"])
     if coverage is not None:
         page["link_coverage"] = coverage
     return page
@@ -1366,6 +1421,9 @@ async def reoptimize_page(
     if result.get("length_verdict") is not None:
         page["length_verdict"] = result["length_verdict"]
         _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
+    if result.get("structure_verdict") is not None:
+        page["structure_verdict"] = result["structure_verdict"]
+        _notify_structure_drift(client_id, keyword, page.get("id"), result["structure_verdict"])
     if link_coverage is not None:
         page["link_coverage"] = link_coverage
     return page
@@ -1671,7 +1729,7 @@ _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
     "composite_status, voice_score, mode, created_at, deleted_at, "
     "published_doc_url, published_url, published_at, "
-    "target_words, actual_words, length_status"
+    "target_words, actual_words, length_status, structure_status"
 )
 
 

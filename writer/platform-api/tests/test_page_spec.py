@@ -230,3 +230,54 @@ def test_render_spec_block_carries_keys_bands_and_caps():
     assert "[intro]" in block and "[faq]" in block and "[services]" in block
     assert "HARD CEILING" in block
     assert "H3s under any H2" in block
+
+
+def _conforming_page(spec, omit=(), bodies=None, extra=""):
+    bodies = bodies or {}
+    parts = []
+    for s in spec["sections"]:
+        if s["key"] in omit:
+            continue
+        if s["key"] in bodies:
+            body = bodies[s["key"]]
+        elif s["key"] == "faq":
+            body = "<h2>FAQ</h2>" + "".join(f"<h3>Q{i}?</h3><p>" + " ".join(["a"] * 32) + "</p>" for i in range(5))
+        elif s.get("subsections"):
+            body = "<h2>s</h2>" + "".join(f"<h3>Sub {i}</h3><p>" + " ".join(["s"] * 80) + "</p>" for i in range(3))
+        elif any(b.get("type") == "list" for b in s.get("blocks") or []):
+            body = "<h2>h</h2><ul>" + "".join(f"<li>item {i}</li>" for i in range(4)) + "</ul><p>" + " ".join(["w"] * s["min_words"]) + "</p>"
+        else:
+            body = "<h2>h</h2><p>" + " ".join(["w"] * s["min_words"]) + "</p>"
+        parts.append(f'<section id="{s["key"]}">{body}</section>')
+    return "<article>" + "".join(parts) + extra + "</article>"
+
+
+def test_structure_verdict_ok_on_a_conforming_page_and_names_each_drift():
+    spec = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1, serp_analysis=_SERP,
+                         reference_entry=None, reference_page_type=None, fallback_target=1200)
+    ok = ps.structure_verdict(ps.measure_page(_conforming_page(spec), spec), spec)
+    assert ok["status"] == "ok" and ok["issues"] == [] and ok["order_ok"] and ok["audited"] is False
+    # missing cta-primary + faq with 2 entries + features without its list + services with 8 H3s
+    faq2 = "<h2>FAQ</h2>" + "".join(f"<h3>Q{i}?</h3><p>" + " ".join(["a"] * 80) + "</p>" for i in range(2))
+    svc8 = "<h2>s</h2>" + "".join(f"<h3>Sub {i}</h3><p>" + " ".join(["s"] * 30) + "</p>" for i in range(8))
+    feat = "<h2>h</h2><p>" + " ".join(["w"] * 90) + "</p>"
+    html = _conforming_page(spec, omit=("cta-primary",), bodies={"faq": faq2, "services": svc8, "features": feat})
+    v = ps.structure_verdict(ps.measure_page(html, spec), spec)
+    codes = {(i["key"], i["code"]) for i in v["issues"]}
+    assert ("cta-primary", "missing_required") in codes
+    assert ("faq", "items_low") in codes
+    assert ("features", "block_missing") in codes and ("features", "items_low") in codes
+    assert ("services", "subsections_high") in codes and ("services", "cap_max_h3_per_h2") in codes
+    assert v["status"] == "drift" and v["missing_required"] == ["cta-primary"]
+    assert v["section_keys_to_fix"] == ["faq", "features", "services"]
+    corrections = ps.structure_corrections(v)
+    assert corrections.startswith("- ") and "[faq] has 2 entries" in corrections
+    # out of spec order → an order issue, and the audit merges per section
+    swapped = _conforming_page(spec).replace('<section id="intro">', '<section id="intro-tmp">')
+    swapped = swapped.replace('<section id="usp">', '<section id="intro">', 1).replace('<section id="intro-tmp">', '<section id="usp">', 1)
+    v2 = ps.structure_verdict(ps.measure_page(swapped, spec), spec,
+                              audit={"local": {"intent_ok": True, "sentiment": "negative", "note": "gloomy"},
+                                     "faq": {"intent_ok": False, "sentiment": "positive", "note": "no real questions"}})
+    codes2 = {(i["key"], i["code"]) for i in v2["issues"]}
+    assert (None, "order") in codes2 and ("local", "sentiment") in codes2 and ("faq", "intent_drift") in codes2
+    assert v2["audited"] is True and not v2["order_ok"]
