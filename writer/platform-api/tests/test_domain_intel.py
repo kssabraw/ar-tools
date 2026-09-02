@@ -268,6 +268,9 @@ def test_build_domain_intel_actions_filters_navigational_and_brand():
         # comparison term — KEPT (competitor content a challenger should write)
         {"keyword": "sedgwick alternatives", "competitor_domain": "sedgwick.com",
          "competitor_position": 4, "client_position": None, "volume": 300, "opportunity_score": 100},
+        # street address — dropped (single-location lookup, never a content page)
+        {"keyword": "190 bowery new york ny 10012", "competitor_domain": "rival.com",
+         "competitor_position": 8, "client_position": None, "volume": 320, "opportunity_score": 85},
         # genuine topical gap — kept
         {"keyword": "claims outsourcing", "competitor_domain": "rival.com",
          "competitor_position": 6, "client_position": None, "volume": 500, "opportunity_score": 90},

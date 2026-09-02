@@ -86,6 +86,19 @@ def _phrase_regex(terms) -> re.Pattern:
 _NAVIGATIONAL_RE = _phrase_regex(_NAVIGATIONAL_TERMS)
 _COMPARISON_RE = _phrase_regex(_COMPARISON_TERMS)
 
+# US state postal abbreviations + street-type words, for the address guard. A
+# keyword that is really a street address ("190 bowery new york ny 10012") is
+# never a content-SEO target. (Some abbreviations — in / or / me — are dropped by
+# the tokenizer as stopwords; that only costs coverage, never correctness.)
+_US_STATE_ABBR = frozenset(
+    "al ak az ar ca co ct de fl ga hi id il in ia ks ky la me md ma mi mn ms mo "
+    "mt ne nv nh nj nm ny nc nd oh ok or pa ri sc sd tn tx ut vt va wa wv wi wy dc".split()
+)
+_STREET_TYPES = frozenset(
+    "st street ave avenue rd road blvd boulevard ln lane dr drive ct court way pl "
+    "place ste suite unit apt hwy highway pkwy parkway cir circle ter terrace".split()
+)
+
 
 # ---------------------------------------------------------------------------
 # Pure helpers — independently unit-tested.
@@ -100,6 +113,29 @@ def is_comparison(keyword: Optional[str]) -> bool:
     """Whether a keyword carries comparison / research intent (rescues a
     competitor-brand keyword). Pure."""
     return bool(_COMPARISON_RE.search(keyword_research.normalize_keyword(keyword)))
+
+
+def is_address(keyword: Optional[str]) -> bool:
+    """Whether a keyword is really a street address / location string — a
+    navigational lookup for one place, never a content-SEO target ("190 bowery new
+    york ny 10012", "123 main street"). Conservative by design (precise over
+    broad): matches on a US "<state> <zip>" tail, or a leading street number paired
+    with a street-type word or an explicit state+zip — so "24 hour plumber" and
+    "50000 btu heater" (a leading number with no address signal) are NOT flagged.
+    Pure."""
+    toks = keyword_research.tokenize(keyword or "")
+    if not toks:
+        return False
+    # "<state> <zip>" adjacency — an unambiguous US address tail.
+    for a, b in zip(toks, toks[1:]):
+        if a in _US_STATE_ABBR and len(b) == 5 and b.isdigit():
+            return True
+    # A leading street number ("190 …") plus an explicit address signal.
+    if not (toks[0].isdigit() and len(toks[0]) <= 6):
+        return False
+    rest = set(toks[1:])
+    has_zip = any(len(t) == 5 and t.isdigit() for t in toks[1:])
+    return bool(rest & _STREET_TYPES) or (bool(rest & _US_STATE_ABBR) and has_zip)
 
 
 def brand_matchers(competitors: list[dict]) -> list[set[str]]:

@@ -1133,10 +1133,11 @@ def build_domain_intel_actions(
     'create/strengthen a page' actions deep-linking into Domain Intelligence.
 
     When ``filter_intent`` (config-gated by the caller), navigational/support
-    lookups ("sedgwick phone number") and competitor-brand terms ("my sedgwick")
-    are dropped BEFORE the top-N cap — a competitor lookup or portal login is
-    never a page a challenger should build, and letting them occupy the cap
-    starves the real opportunities beneath them. Comparison terms ("sedgwick
+    lookups ("sedgwick phone number"), competitor-brand terms ("my sedgwick") and
+    street-address / location strings ("190 bowery new york ny 10012") are dropped
+    BEFORE the top-N cap — a competitor lookup, portal login or single-address
+    search is never a page a challenger should build, and letting them occupy the
+    cap starves the real opportunities beneath them. Comparison terms ("sedgwick
     alternatives") are kept — that's competitor content worth writing. ``matchers``
     are the client's competitor brand token-sets (empty → navigational-only)."""
     from config import settings
@@ -1149,7 +1150,10 @@ def build_domain_intel_actions(
         kw = g.get("keyword")
         if not kw:
             continue
-        if filter_intent and krn.classify_intent(kw, matchers) in ("navigational", "competitor"):
+        if filter_intent and (
+            krn.classify_intent(kw, matchers) in ("navigational", "competitor")
+            or krn.is_address(kw)
+        ):
             continue
         eligible.append(g)
 
