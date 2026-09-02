@@ -275,6 +275,9 @@ def test_client_mode_keeps_the_clients_sections_and_order_and_inserts_nothing():
     assert all(s["source"] == "reference" for s in spec["sections"])
     assert secs["ref-recurring-problem-pattern-introduction"]["intent"] == "objection"
     assert secs["ref-recurring-problem-pattern-introduction"]["subsections"] == {"min": 1, "max": 3}
+    # a lone H3 inside a short block (the 16-word industries prose, the CTA
+    # tagline) is markup, not structure: no sub-section band from one H3
+    assert "subsections" not in secs["local"]
     assert secs["ref-recurring-problem-pattern-introduction"]["heading_pattern"].startswith("Recurring Problem Pattern")
     # the client's proportions rule the bands (no template floor on a prose section)
     assert secs["local"]["max_words"] < 60 and secs["local"]["items"] == {"min": 2, "max": 5}

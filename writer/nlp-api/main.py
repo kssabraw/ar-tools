@@ -5505,6 +5505,8 @@ async def _enforce_spec_length(
 
 _SECTION_AUDIT_SYSTEM = """You are auditing the body sections of a local service page against its PAGE SPEC. Each section is shown as `[key] heading: <inner HTML>`, and for each key you are told the INTENT that section must fulfil (what it is for) and its heading pattern.
 
+Each section also carries its WORD BAND from the spec. Judge the section against ITS OWN budget: a section whose band is small fulfils its intent with correspondingly little — two short quotes are a complete testimonials block when the band is ~50 words; a 60-word CTA is not "thin". Never fail intent for "not enough" / "too brief" / "insufficient" when the copy is at or near its band; fail it only when the copy does the WRONG job or does not do the job at all.
+
 For EVERY section listed, judge two things:
 1. INTENT — does the section's copy actually do the job its intent describes? (An "intro / direct answer" must answer who/what/where in its first lines; a "cta" must ask for the call/booking with the phone number; "features" must state concrete benefits; "faq" must be real Q&A; "local" must anchor the city/areas; "getting-started" must lay out the process.) Copy that is on-topic but does NOT deliver the intent — a CTA that never asks, an FAQ of marketing prose, a process section with no steps — FAILS. Judge by what the COPY DOES, never by heading wording: the heading pattern you are given is a description of the section's role (often a generalized label from the client's reference page), not a title to match — a section whose heading reads differently but whose body does the job PASSES on intent.
 2. SENTIMENT — the copy must be POSITIVE and CONFIDENT throughout: reassuring, capable, forward-looking. A section is NOT positive when it dwells on fear, blame or problems without resolving them, hedges its own ability ("we try our best", "may be able to"), apologises, disparages competitors or customers, or reads flat and unsure. Naming a customer's problem is fine ONLY when the section immediately turns it into the confident solution. Report the sentiment as "positive", "neutral" (flat / uncommitted / merely descriptive) or "negative".
@@ -5521,7 +5523,10 @@ def _spec_audit_prompt(spec: dict, sections: List[dict], business_name: str, key
         b = bands.get(sec["key"])
         if b is None:
             continue
-        intents.append(f"[{sec['key']}] intent: {b.get('intent')} — heading pattern: {b.get('heading_pattern') or '(free)'}")
+        intents.append(
+            f"[{sec['key']}] intent: {b.get('intent')} — band: {b.get('min_words')}–{b.get('max_words')} words"
+            f" — heading pattern: {b.get('heading_pattern') or '(free)'}"
+        )
     digest = section_edit.section_digest([sec for sec in sections if sec["key"] in bands], max_inner_chars=1400)
     return (
         f"BUSINESS: {business_name}\nKEYWORD: {keyword} | CITY: {city}\n\n"

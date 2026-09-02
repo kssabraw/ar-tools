@@ -389,6 +389,10 @@ def ensure_required(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 STRUCTURE_MODE_CLIENT = "client"
 STRUCTURE_MODE_TEMPLATE = "template"
+# Client mode: a reference section needs at least this many H3s with prose
+# before the spec carries a sub-section band for it (one H3 in a 22-word
+# testimonials block is markup, not a structure the writer must reproduce).
+CLIENT_SUBSECTIONS_MIN_REF = 2
 
 
 def build_client_sections(groups: list[dict[str, Any]], has_reviews: Optional[bool] = None) -> list[dict[str, Any]]:
@@ -697,7 +701,9 @@ def build_spec(
                 entry["heading_pattern"] = (entry["heading_pattern"] + " — OMIT: no client reviews on file (never invent quotes)").strip(" —")
             ref_sub = int(s.get("subsections") or 0)
             max_ref_h3 = max(max_ref_h3, ref_sub)
-            if ref_sub:
+            if ref_sub >= CLIENT_SUBSECTIONS_MIN_REF:
+                # A single H3 inside a short block is markup, not structure — a
+                # sub-section band is derived only from a real run of H3s.
                 entry["subsections"] = {"min": max(1, ref_sub - 1), "max": ref_sub + 1}
             if s["key"] == "faq":
                 entry["items"] = dict(_template("faq")["items"])
