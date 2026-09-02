@@ -44,7 +44,10 @@ _NAVIGATIONAL_TERMS = (
     "phone number", "phone no", "telephone number",
     "customer service", "customer service number", "customer support",
     "contact number", "contact info", "toll free number", "800 number",
-    "login", "log in", "sign in", "signin", "portal login", "member login",
+    "login", "log in", "log on", "logon", "sign in", "signin",
+    "portal", "portal login", "member login", "member portal", "customer portal",
+    "client portal", "employee portal", "provider portal", "patient portal",
+    "my account", "account login",
     "claim status", "claims status", "check claim status", "claim number",
     "tracking number", "track my claim", "track claim",
     "email address", "mailing address", "corporate office", "fax number",
@@ -166,12 +169,31 @@ def brand_matchers(competitors: list[dict]) -> list[set[str]]:
 
 
 def is_competitor_brand(keyword: Optional[str], matchers: list[set[str]]) -> bool:
-    """Whether a keyword is dominated by a competitor's brand (all of a matcher's
-    tokens are present in the keyword). Pure."""
+    """Whether a keyword is dominated by a competitor's brand. A match is either:
+
+    * exact — ALL of a matcher's tokens are present as tokens in the keyword
+      ("gold star adjusters reviews" ⊇ {gold, star}); or
+    * glued — a SINGLE distinctive brand label (≥6 chars — every single-token
+      matcher is built that way) appears as a substring of one of the keyword's
+      tokens ("mysedgwick portal" → the token "mysedgwick" contains "sedgwick").
+      This catches the run-together brand forms exact-token matching misses.
+
+    The glued rule is single-token-only and ≥6-char-gated so a distinctive label
+    ("sedgwick") can't collide with an ordinary word; multi-token name matchers
+    stay exact (no substring), so "gold" alone never matches. Pure."""
     kt = keyword_research.token_set(keyword)
     if not kt:
         return False
-    return any(m and m <= kt for m in matchers)
+    for m in matchers:
+        if not m:
+            continue
+        if m <= kt:
+            return True
+        if len(m) == 1:
+            (label,) = tuple(m)
+            if len(label) >= 6 and any(label in t and t != label for t in kt):
+                return True
+    return False
 
 
 def classify_intent(
