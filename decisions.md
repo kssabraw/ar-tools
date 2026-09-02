@@ -188,3 +188,34 @@ what (if anything) to build next. The one thing worth watching regardless is **u
 unknown `source`) + E2 (Recipe-Engine monthly push now routes through `pm_assign.place_task`)
 in #885 closed the known gap, but it's what would quietly degrade DORA's collision detection as
 the suite grows.
+
+---
+
+## SerMaStr — autonomous recovery plans for chronically-behind goals
+
+**Status: DECIDED** (owner, 2026-09-02, grilling session). PRD:
+`docs/modules/sermastr-autonomous-recovery-plans-prd-v1_0.md` (full 20-ruling log in §11).
+
+**Context.** Every scheduled strategist review from 2026-07-14 to 2026-09-01 emitted 0 proposals
+while the assessment called First Class Roofing's local-pack goal a critical emergency; the
+owner had to extract a recovery plan by chat. Measured root cause: the emit tool call is
+truncated at `strategist_max_tokens`=4096 (findings are written before proposals), and the run
+loop never checks `stop_reason` — portfolio-wide, not FCR-specific.
+
+**Decided.**
+- Ship the truncation fix as its own PR first (16k cap, proposals before findings in the emit
+  schema, a `stop_reason` retry, a `truncated` flag rather than a silent `complete`).
+- Then a dedicated `goal_recovery` strategist run, fired by the #949 escalation sweep on its
+  14-day cadence, one per client, capped at 5 per daily tick; the finished run sends the one
+  `goal_chronic` message carrying root cause + a costed, tiered, approvable plan.
+- **Propose-only. No auto hand-off to PACE.** A human approves each proposal; only then does
+  the existing approve → PACE path run. No autonomy guardrail is loosened.
+- Unfundable work: proposals may reallocate this month's plan at proposal level (the stored plan
+  is never rewritten), and over-budget work is offered as cumulative +25/+50/+100% tiers over
+  deployable, computed deterministically. Budget is set only on the client card; the review row
+  snapshots what the plan was costed against.
+- Prior recovery proposals are superseded (own ledger value); the strategist card lists open
+  proposals across 60 days / 5 reviews so a plan stays approvable after the next weekly review.
+
+**Deferred.** A "Generate recovery plan" button (after the FCR validation run); raising
+drill-down caps for recovery runs (only with evidence); per-goal runs.
