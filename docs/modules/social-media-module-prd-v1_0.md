@@ -19,6 +19,8 @@ data-model, token-ownership, scope, and failure/edge-path clarifications
 - `docs/adr/0001-postpeer-posting-provider-behind-adapter.md`
 - `docs/adr/0002-analyze-in-place-never-rehost-competitor-media.md`
 - `docs/adr/0003-social-autonomy-is-a-domain-executor.md`
+- `docs/modules/social-media-cost-model-v1_0.md` — worked cost model (§11).
+- `docs/modules/social-media-failure-handling-v1_0.md` — failure/edge-path spec (§14).
 
 **Sibling modules this builds on / mirrors:** GBP Posts
 (`gbp-posts-module-prd-v1_0.md` — the publish-lifecycle template), the autonomy
@@ -245,12 +247,17 @@ not an extension of the existing executor. Not a new persona.
 - X's **$0.20/link-post tax** surfaced as a cost warning at schedule time, plus an
   optional per-client "avoid links on X" toggle.
 - PostPeer's per-post fee tracked but trivial.
-- **nano-banana Pro** per-image cost (~$0.134 at 1K/2K) is the largest per-Draft line.
-- **Model the autonomous-volume economics before P4.** At scale the X link tax
-  dominates: e.g. 20 clients × 5 posts/day, half with links ≈ 3,000 link-posts/mo ×
-  $0.20 ≈ **$600/mo in X link tax alone**, before Apify/TwelveLabs/image spend — it can
-  exceed retainer margin on small accounts once autonomy is on. The **Social Policy
-  carries a per-client monthly hard ceiling**, enforced by the fail-closed meter.
+- **Full worked model: `social-media-cost-model-v1_0.md`.** Headline: at realistic
+  volume the **nano-banana Pro image (~$0.11/post) and competitor research
+  (~$20/client/mo) dominate — not the X link tax.** Base scenario (20 clients × 5
+  posts/day) ≈ **$900/mo (~$45/client)**. The **X link tax is ~$60/mo at a realistic
+  ~10% X-link-post share** — *not* the ~$600 an earlier draft overstated (it counted all
+  3,000 monthly posts as link-posts; even "half with links" is 1,500 → $300, and X is
+  one of ~5 platforms). Largest cost lever: a **mixed 2.5-Flash/Pro image path** (Flash
+  for square platforms, Pro only for aspect-ratio/text-heavy graphics) roughly halves
+  the dominant line.
+- The **Social Policy carries a per-client monthly hard ceiling**, enforced by the
+  fail-closed meter — the backstop against a runaway autonomous loop.
 
 ## 12. Agent integration
 
@@ -289,13 +296,14 @@ not an extension of the existing executor. Not a new persona.
   reviewed Meta/X apps? if not, ADR-0001's low-friction basis inverts) + X link-tax
   handling; PostPeer Instagram Stories support; current TwelveLabs / nano-banana **Pro**
   pricing. cobalt self-host is a **P5** concern, not P0.
-- **Failure & edge paths to specify in the build spec** (the PRD above specifies the
-  happy path): a **Social Account token revoked between approval and scheduled publish**
-  (publish-job behavior + a connection-health model — retry / notify / hold / pause the
-  schedule); a **Source edited or unpublished after its Draft is approved** (stale
-  content on a queued Post); **partial fan-out failure** (one platform's Draft fails —
-  e.g. image gen no-ops — while the rest succeed); **empty states** (a competitor with
-  no public posts; a client with zero connected accounts entering the autonomous loop).
+- **Failure & edge paths — specified in `social-media-failure-handling-v1_0.md`** (the
+  PRD above specifies the happy path). It covers the connection-health state machine,
+  a **token revoked between approval and scheduled publish** (`blocked_account` hold +
+  pause the platform's Cadence, never silent-fail), a **Source edited/unpublished after
+  its Draft is approved** (`source_version` stamp → `source_changed` re-review hold),
+  **partial fan-out failure** (per-platform independent Drafts + retry), **empty states**
+  (competitor with no posts; client with zero connected accounts), and the reused
+  GBP-Posts idempotency guards. The new Post statuses it introduces feed the §5 model.
 - **Platform onboarding realities:** Instagram Business/Creator requirement; X link
   economics can dominate cost for link-heavy clients — model a realistic client-volume
   scenario before committing budgets.
