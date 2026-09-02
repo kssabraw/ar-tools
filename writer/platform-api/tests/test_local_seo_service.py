@@ -597,9 +597,70 @@ async def test_generate_over_ceiling_is_saved_honestly_and_notified():
     persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
     assert persisted["length_status"] == "over_length" and persisted["actual_words"] == 3000
     assert page["length_verdict"]["over_ceiling"] is True
-    emit.assert_called_once()
-    assert emit.call_args.kwargs["kind"] == "content_over_length"
-    assert emit.call_args.kwargs["dedupe_key"] == "content_over_length:page-x"
+    over = [c for c in emit.call_args_list if c.kwargs["kind"] == "content_over_length"]
+    assert len(over) == 1
+    assert over[0].kwargs["dedupe_key"] == "content_over_length:page-x"
+
+
+@pytest.mark.asyncio
+async def test_generate_with_a_spec_skips_the_legacy_gate_and_records_structure_drift():
+    # Phase 4: a spec-driven page is never run through the old reference
+    # structure gate (nlp enforces structure against the spec section by
+    # section); a page still off its spec is saved structure_status=drift with
+    # its issue list (incl. nlp's per-section sentiment audit) AND notified.
+    from services import page_spec as ps
+    inserted = {"id": "page-s", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-4", 4
+    # every section present at its min band … but cta-primary is missing and
+    # nlp's audit read the usp as negative
+    html = "<article>" + "".join(
+        f'<section id="{s["key"]}"><h2>{s["key"]}</h2><p>' + " ".join(["w"] * s["min_words"]) + "</p></section>"
+        for s in spec["sections"] if s["key"] != "cta-primary"
+    ) + "</article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "content_gaps": [],
+                  "structure_verdict": {"status": "drift", "issues": [],
+                                        "audit": {"usp": {"intent_ok": True, "sentiment": "negative", "note": "gloomy"}}}}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec), \
+         patch.object(local_seo_service, "_apply_structure_gate", new=AsyncMock(side_effect=AssertionError("legacy gate must not run"))), \
+         patch("services.notifications.emit") as emit, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)):
+        page = await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["structure_status"] == "drift"
+    codes = {(i.get("key"), i["code"]) for i in persisted["structure_issues"]}
+    assert ("cta-primary", "missing_required") in codes and ("usp", "sentiment") in codes
+    assert page["structure_verdict"]["audit"]["usp"]["sentiment"] == "negative"
+    kinds = [c.kwargs["kind"] for c in emit.call_args_list]
+    assert "content_structure_drift" in kinds
+    drift = next(c for c in emit.call_args_list if c.kwargs["kind"] == "content_structure_drift")
+    assert drift.kwargs["dedupe_key"] == "content_structure_drift:page-s"
+    assert "structure issue(s)" in drift.kwargs["summary"]
+    assert any(i["code"] == "sentiment" for i in drift.kwargs["payload"]["issues"])
+
+
+@pytest.mark.asyncio
+async def test_generate_without_a_spec_still_runs_the_legacy_gate():
+    inserted = {"id": "page-l", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp_word_target": 1000})), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=None), \
+         patch.object(local_seo_service, "_apply_structure_gate", new=AsyncMock(side_effect=lambda r, p, a: r)) as gate, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)):
+        await local_seo_service.generate_page("client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1")
+    gate.assert_awaited_once()
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["structure_status"] is None and persisted["structure_issues"] is None
 
 
 @pytest.mark.asyncio

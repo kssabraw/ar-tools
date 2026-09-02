@@ -9,6 +9,7 @@ import { MatrixAxesEditor } from './MatrixAxesEditor'
 import { MatrixGrid } from './MatrixGrid'
 import { composeLocations, pinsFromRows, type LocationPins } from './locationPins'
 import { MatrixLocationPins } from './MatrixLocationPins'
+import { MatrixLinkSettings } from './MatrixLinkSettings'
 import { MatrixPublishBar } from './MatrixPublishBar'
 import { MatrixReleaseCard } from './MatrixReleaseCard'
 import { MatrixRunBar } from './MatrixRunBar'
@@ -220,6 +221,8 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
       <MatrixPublishBar clientId={clientId} matrix={matrix} onStarted={refresh} />
 
       <MatrixReleaseCard clientId={clientId} matrix={matrix} onChanged={refresh} />
+
+      <MatrixLinkSettings clientId={clientId} matrix={matrix} onChanged={refresh} />
     </div>
   )
 }

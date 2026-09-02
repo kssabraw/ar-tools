@@ -70,6 +70,7 @@ from routers.syndication import router as syndication_router
 from routers.tasks import router as tasks_router
 from routers.users import router as users_router
 from routers.websites import router as websites_router
+from routers.worker_lanes import router as worker_lanes_router
 from services.gsc_scheduler import gsc_scheduler
 from services import job_priority
 from services.job_worker import drain_inflight_jobs, job_worker
@@ -195,7 +196,8 @@ async def lifespan(app: FastAPI):
     bulk_worker_tasks = [
         asyncio.create_task(
             job_worker(lane="bulk", exclude_types=_fanout_types or None,
-                       priority_max=job_priority.BACKGROUND)
+                       priority_max=job_priority.BACKGROUND,
+                       max_per_client=settings.bulk_lane_max_per_client)
         )
         for _ in range(max(0, settings.bulk_lane_workers))
     ]
@@ -374,6 +376,7 @@ app.include_router(pulse_router)
 _FANOUT_PREFIX = "/fanout"
 app.include_router(fanout_health.router, prefix=_FANOUT_PREFIX)
 app.include_router(websites_router)
+app.include_router(worker_lanes_router)
 
 app.include_router(fanout_projects.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_sessions.router, prefix=_FANOUT_PREFIX)

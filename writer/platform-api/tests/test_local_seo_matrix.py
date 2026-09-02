@@ -397,3 +397,76 @@ def test_publishes_externally():
     assert core.publishes_externally("app_only") is False
     assert core.publishes_externally("") is False
     assert core.publishes_externally(None) is False
+
+
+# ── up-links: link to the top-level service page + the home page ──────────────
+
+def _uplink_cells():
+    cells = m.build_cells(
+        ["Roof restoration", "Gutters"], ["Melbourne", "Hawthorn"], seed_city="Melbourne",
+    )
+    for i, c in enumerate(cells):
+        c["id"] = f"cell-{i}"
+    return cells
+
+
+def test_service_hub_url_and_home_url():
+    assert m.service_hub_url("roof-restoration", "https://x.com") == "https://x.com/roof-restoration/"
+    assert m.service_hub_url("roof-restoration") == "/roof-restoration/"
+    assert m.service_hub_url("roof-restoration", "https://x.com", "/services/{service}/") == "https://x.com/services/roof-restoration/"
+    assert m.home_url("https://x.com/") == "https://x.com/"
+    assert m.home_url("") == "/"
+
+
+def test_validate_hub_pattern():
+    assert m.validate_hub_pattern("/{service}/") == []
+    assert m.validate_hub_pattern("/services/{service}/") == []
+    assert m.validate_hub_pattern("/no-token/") == ["hub_pattern_missing_service_token"]
+    assert m.validate_hub_pattern("/{service}/{location}/") == ["hub_pattern_has_location_token"]
+
+
+def test_up_links_service_hub_and_home():
+    cell = _uplink_cells()[0]  # Roof restoration, Melbourne
+    links = m.up_links(cell, "https://fcr.com.au", home_anchor="First Class Roofing")
+    assert links == [
+        {"anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": m.SERVICE_HUB},
+        {"anchor": "First Class Roofing", "url": "https://fcr.com.au/", "relation": m.HOME},
+    ]
+    # Each is independently switchable; a custom hub pattern is honoured.
+    assert m.up_links(cell, "https://x.com", service_hub=False) == [
+        {"anchor": "Home", "url": "https://x.com/", "relation": m.HOME},
+    ]
+    assert m.up_links(cell, "https://x.com", home=False, service_hub_pattern="/services/{service}/")[0]["url"] == "https://x.com/services/roof-restoration/"
+
+
+def test_plan_cell_links_up_links_first_then_siblings_deduped_and_capped():
+    cells = _uplink_cells()
+    me = cells[0]  # Roof restoration Melbourne
+    links = m.plan_cell_links(me, cells, "https://fcr.com.au")
+    # Up-links come first, in order.
+    assert [lk["relation"] for lk in links[:2]] == [m.SERVICE_HUB, m.HOME]
+    # Then the siblings (other service here + this service elsewhere), and never
+    # the cell itself.
+    urls = [lk["url"] for lk in links]
+    assert "https://fcr.com.au/roof-restoration-melbourne/" not in urls  # self excluded
+    assert "https://fcr.com.au/gutters-melbourne/" in urls               # other service, here
+    assert "https://fcr.com.au/roof-restoration-hawthorn/" in urls       # this service, elsewhere
+    # The overall cap counts the up-links too.
+    capped = m.plan_cell_links(me, cells, "https://fcr.com.au", max_links=2)
+    assert len(capped) == 2 and [lk["relation"] for lk in capped] == [m.SERVICE_HUB, m.HOME]
+    # Turning both up-links off falls back to siblings only.
+    sib_only = m.plan_cell_links(me, cells, "https://fcr.com.au", service_hub=False, home=False)
+    assert all(lk["relation"] in (m.SAME_LOCATION, m.SAME_SERVICE) for lk in sib_only)
+
+
+def test_render_links_block_renders_up_links_so_the_guarantee_keeps_them():
+    links = [
+        {"anchor": "Roof restoration", "url": "https://x.com/roof-restoration/", "relation": m.SERVICE_HUB},
+        {"anchor": "Home", "url": "https://x.com/", "relation": m.HOME},
+    ]
+    block = m.render_links_block(links)
+    assert "https://x.com/roof-restoration/" in block and "https://x.com/" in block
+    # And the guarantee appends a dropped up-link rather than silently losing it.
+    out, cov = m.ensure_internal_links("<article><p>no links</p></article>", links)
+    assert cov["missing"] == [] and cov["appended"] == 2
+    assert "roof-restoration/" in out

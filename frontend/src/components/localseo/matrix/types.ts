@@ -60,6 +60,9 @@ export interface MatrixSummary {
   entity_provider?: string | null
   publish_destination: 'app_only' | 'google_docs' | 'wordpress' | 'github'
   publish_status: 'draft' | 'publish'
+  link_to_service_hub: boolean
+  service_hub_pattern?: string | null
+  link_to_home: boolean
   release_enabled: boolean
   release_mode: 'daily' | 'weekly' | 'monthly'
   release_weekday?: number | null
@@ -107,6 +110,9 @@ export interface MatrixCreateBody {
   entity_provider?: string | null
   publish_destination?: 'app_only' | 'google_docs' | 'wordpress' | 'github'
   publish_status?: 'draft' | 'publish'
+  link_to_service_hub?: boolean
+  service_hub_pattern?: string | null
+  link_to_home?: boolean
 }
 
 export type MatrixUpdateBody = Partial<Omit<MatrixCreateBody, 'location' | 'location_code'>>

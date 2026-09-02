@@ -198,12 +198,24 @@ class Settings(BaseSettings):
     # BULK lanes (2026-09-02): dedicated workers that claim ONLY background-
     # priority async_jobs (bulk-create / matrix / reoptimize-bulk items, stamped
     # `job_priority.BACKGROUND` at enqueue). Each lane runs one ~10-min page
-    # generation at a time, so this is the batch-throughput knob: 1 keeps
-    # today's two-in-flight (this lane + the MAIN lane, which still picks bulk
-    # up when nothing else is pending); 4 runs four pages at once. The nlp
-    # container serves every lane, so watch its memory when raising this, and
-    # size the Anthropic key pool (`anthropic_api_keys`) to match. 0 disables.
-    bulk_lane_workers: int = 1
+    # generation at a time, so this is the batch-throughput knob: 3 runs three
+    # bulk pages at once (plus the MAIN lane, which still picks a bulk row up when
+    # nothing else is pending). The nlp container serves every lane, so watch its
+    # memory when raising this, and size the Anthropic key pool
+    # (`ANTHROPIC_API_KEY_SECONDARY` on nlp + PLATFORM) to match — 3 concurrent
+    # multi-pass generations lean hard on the single Anthropic account, so pair
+    # this with the second key or watch for 429 backoff (see the HANDOFF
+    # bulk-throughput tuning recipe). 0 disables. Owner ruling 2026-09-02: 3.
+    bulk_lane_workers: int = 3
+    # Soft per-client fairness cap on the BULK lanes: at most this many of a
+    # single client's background jobs run CONCURRENTLY while another client also
+    # has bulk work pending — so one client's 40-page batch can't hold every bulk
+    # slot and make another client's batch wait. Contention-only (a client alone
+    # still uses every slot; the cap only yields to a DIFFERENT client) and
+    # best-effort (a brief overshoot self-corrects). Only ENGAGES when
+    # bulk_lane_workers > 1 — at the default single bulk worker a client can hold
+    # at most one slot, so the cap is a no-op. Keep < bulk_lane_workers. 0 disables.
+    bulk_lane_max_per_client: int = 2
     # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
     # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
     # reads it via fanout.config.get_settings(), a different Settings class, so a
@@ -1325,6 +1337,13 @@ class Settings(BaseSettings):
     # specific corrections fed back — keep-best by structural composite, capped at
     # `max_passes`. Only fires when a reference structure actually drove the page;
     # fully best-effort (a scoring/regen failure keeps the best page so far).
+    # Page spec (docs/modules/local-seo-page-spec-plan-v1_0.md): when the client
+    # has a usable reference page layout, that layout IS the page structure —
+    # its sections, order, blocks and sub-section counts override the app's
+    # default 12-section template (which is used only when no reference is on
+    # file). Off = the older behaviour (the reference is mapped ONTO the
+    # template's skeleton and missing template sections are inserted).
+    local_seo_client_structure_overrides: bool = True
     local_seo_structure_gate_enabled: bool = True
     local_seo_structure_min_composite: float = 85.0
     local_seo_structure_max_passes: int = 2

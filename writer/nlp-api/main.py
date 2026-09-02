@@ -288,6 +288,17 @@ LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
 # Page-spec enforcement (plan §5.4): section-scoped trim passes per generation /
 # reoptimization when sections are over their band. Not time-budget gated.
 PAGE_SPEC_TRIM_PASSES = int(os.environ.get("PAGE_SPEC_TRIM_PASSES", "2"))
+# Structure enforcement (plan §5.4 Phase 4): passes of deterministic fixes
+# (reorder / drop extras over the cap) + section-scoped rewrites (missing
+# required sections written in, block/FAQ/sub-section composition, intent and
+# sentiment) against the kept spec, and the cheap per-section audit (one Haiku
+# call) that judges each section's assigned INTENT + its SENTIMENT (must be
+# positive/confident — a hedging or negative section is drift).
+PAGE_SPEC_STRUCTURE_PASSES = int(os.environ.get("PAGE_SPEC_STRUCTURE_PASSES", "2"))
+PAGE_SPEC_AUDIT_MODEL = os.environ.get("PAGE_SPEC_AUDIT_MODEL", "claude-haiku-4-5-20251001")
+PAGE_SPEC_AUDIT_ENABLED = os.environ.get(
+    "PAGE_SPEC_AUDIT_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
 
 # Wall-clock budget for generate-page's post-generation improvement passes. The
 # initial page generation + its first score always run (that's the page + its
@@ -5479,6 +5490,428 @@ async def _enforce_spec_length(
     return content_html, tok, verdict, changed
 
 
+# ── page-spec STRUCTURE enforcement (plan §5.4, Phase 4) ─────────────────────
+# Deterministic verdict (page_spec.structure_verdict) over required sections,
+# spec order, caps, block composition, FAQ entry range and the services
+# sub-section band, plus a cheap per-section audit of INTENT + SENTIMENT.
+# Fixes are section-scoped and keep-best: reorder + drop extras (no LLM),
+# write MISSING required sections in at their spec position, rewrite ONLY the
+# sections with a named issue. Runs BEFORE the length trim so an added section
+# is trimmed into its band rather than pushing the page over. Not gated on the
+# time budget; best-effort at every step.
+
+_SECTION_AUDIT_SYSTEM = """You are auditing the body sections of a local service page against its PAGE SPEC. Each section is shown as `[key] heading: <inner HTML>`, and for each key you are told the INTENT that section must fulfil (what it is for) and its heading pattern.
+
+For EVERY section listed, judge two things:
+1. INTENT — does the section's copy actually do the job its intent describes? (An "intro / direct answer" must answer who/what/where in its first lines; a "cta" must ask for the call/booking with the phone number; "features" must state concrete benefits; "faq" must be real Q&A; "local" must anchor the city/areas; "getting-started" must lay out the process.) Copy that is on-topic but does NOT deliver the intent — a CTA that never asks, an FAQ of marketing prose, a process section with no steps — FAILS.
+2. SENTIMENT — the copy must be POSITIVE and CONFIDENT throughout: reassuring, capable, forward-looking. A section is NOT positive when it dwells on fear, blame or problems without resolving them, hedges its own ability ("we try our best", "may be able to"), apologises, disparages competitors or customers, or reads flat and unsure. Naming a customer's problem is fine ONLY when the section immediately turns it into the confident solution. Report the sentiment as "positive", "neutral" (flat / uncommitted / merely descriptive) or "negative".
+
+Return ONLY a JSON object: {"sections": [{"key": "<section key>", "intent_ok": true|false, "sentiment": "positive"|"neutral"|"negative", "note": "<one concrete phrase quoting or naming what fails; empty when both pass>"}, ...]} with one entry per section you were given, in the same order. No markdown fences, no commentary."""
+
+
+def _spec_audit_prompt(spec: dict, sections: List[dict], business_name: str, keyword: str, city: str) -> str:
+    """Pure: the user prompt for the per-section intent + sentiment audit —
+    each section's spec intent + heading pattern, then the page digest."""
+    bands = {sec["key"]: sec for sec in spec.get("sections") or []}
+    intents = []
+    for sec in sections:
+        b = bands.get(sec["key"])
+        if b is None:
+            continue
+        intents.append(f"[{sec['key']}] intent: {b.get('intent')} — heading pattern: {b.get('heading_pattern') or '(free)'}")
+    digest = section_edit.section_digest([sec for sec in sections if sec["key"] in bands], max_inner_chars=1400)
+    return (
+        f"BUSINESS: {business_name}\nKEYWORD: {keyword} | CITY: {city}\n\n"
+        "SECTION INTENTS (from the page spec):\n" + "\n".join(intents)
+        + "\n\nPAGE SECTIONS:\n\n" + digest
+    )
+
+
+_SENTIMENTS = ("positive", "neutral", "negative")
+
+
+def _parse_section_audit(raw, section_keys) -> dict:
+    """Pure: normalise the audit model's output into ``{key: {intent_ok,
+    sentiment, note}}`` for keys that exist on the page. Accepts the wrapped
+    ``{"sections": [...]}`` object or a bare list. Anything unparseable for a
+    key is dropped (never a verdict) — a missing audit entry means "not
+    judged", not "failed"."""
+    items = raw.get("sections") if isinstance(raw, dict) else raw
+    if not isinstance(items, list):
+        return {}
+    keys = set(section_keys or [])
+    out: dict = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key or key not in keys or key in out:
+            continue
+        intent_ok = item.get("intent_ok")
+        if isinstance(intent_ok, str):
+            word = intent_ok.strip().lower()
+            intent_ok = True if word in ("true", "yes", "ok", "pass") else (False if word in ("false", "no", "fail") else None)
+        elif not isinstance(intent_ok, bool):
+            intent_ok = None
+        sentiment = str(item.get("sentiment") or "").strip().lower()
+        if sentiment not in _SENTIMENTS:
+            sentiment = ""
+        entry = {"intent_ok": intent_ok, "sentiment": sentiment or None,
+                 "note": str(item.get("note") or "").strip()[:300]}
+        if entry["intent_ok"] is None and not entry["sentiment"]:
+            continue
+        out[key] = entry
+    return out
+
+
+async def _audit_sections(sections: List[dict], spec: dict, business_name: str, keyword: str, city: str, client) -> tuple:
+    """Best-effort per-section intent + sentiment audit (one cheap Haiku call).
+    Returns ``(audit, token_rec)``; ``(None, None)`` when disabled / nothing to
+    audit / the call failed — the structural verdict then rests on the
+    deterministic checks alone. Never raises."""
+    if not (PAGE_SPEC_AUDIT_ENABLED and spec and sections):
+        return None, None
+    try:
+        user_prompt = _spec_audit_prompt(spec, sections, business_name, keyword, city)
+        msg = await client.messages.create(
+            model=PAGE_SPEC_AUDIT_MODEL,
+            max_tokens=1600,
+            temperature=0,
+            system=[{"type": "text", "text": _SECTION_AUDIT_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record("spec-audit", PAGE_SPEC_AUDIT_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        audit = _parse_section_audit(_parse_claude_json(msg.content[0].text), [sec["key"] for sec in sections])
+        return audit, token_rec
+    except Exception as _sae:
+        logger.warning("spec-audit: failed (deterministic structure checks only): %s", _sae)
+        return None, None
+
+
+def _structure_verdict(content_html: str, spec: Optional[dict], audit: Optional[dict]) -> Optional[dict]:
+    """Measure + structural verdict against the spec; None without a spec."""
+    if not spec:
+        return None
+    try:
+        measure = pspec.measure_page(content_html, spec)
+        verdict = pspec.structure_verdict(measure, spec, audit)
+        verdict["measure"] = measure
+        verdict["audit"] = audit or {}
+        return verdict
+    except Exception as _sve:
+        logger.warning("page-spec: structure measurement failed: %s", _sve)
+        return None
+
+
+def _spec_fix_targets(verdict: dict, spec: dict) -> List[dict]:
+    """Pure: the sections a structure-fix pass must rewrite —
+    ``[{key, words, min_words, max_words, corrections: [...]}]`` — one entry
+    per section carrying a non-advisory, section-keyed issue other than
+    missing/unexpected (those are handled by the add/remove steps)."""
+    bands = {sec["key"]: sec for sec in spec.get("sections") or []}
+    rows = {r["key"]: r for r in (verdict.get("measure") or {}).get("sections") or []}
+    by_key: dict = {}
+    for issue in verdict.get("issues") or []:
+        key = issue.get("key")
+        if not key or issue.get("advisory") or issue.get("code") in ("missing_required", "unexpected_section"):
+            continue
+        if key not in bands:
+            continue
+        band = bands[key]
+        entry = by_key.setdefault(key, {
+            "key": key, "words": int((rows.get(key) or {}).get("words") or 0),
+            "min_words": int(band.get("min_words") or 0), "max_words": int(band.get("max_words") or 0),
+            "intent": band.get("intent"), "corrections": [],
+        })
+        entry["corrections"].append(str(issue.get("detail") or issue.get("code")))
+    return list(by_key.values())
+
+
+_SECTION_FIX_SYSTEM = """You are REWRITING specific sections of an already-written local service page so each one meets its PAGE SPEC. You will be given the page's BRAND VOICE guide and, for each section to fix, its `[key]`, its intent, its word band, the CORRECTIONS it must satisfy, and its current inner HTML.
+
+Return ONLY a JSON object mapping each given `[key]` to that section's NEW inner HTML (the content INSIDE its <section> tag). Include every section you were given; include no others.
+
+Rules for each section:
+- Satisfy EVERY listed correction. Typical corrections: add the list/table the spec calls for; bring the FAQ entry count into range; merge or split the H3 sub-sections to the stated band; make the copy actually deliver the section's INTENT (a CTA asks for the call with the phone number; an FAQ is real question + answer-first answers; a process section is numbered steps); and SENTIMENT — the section must read POSITIVE and CONFIDENT throughout: capable, reassuring, forward-looking. Remove hedging ("we try", "may be able to"), apologies, fear-mongering, blame and competitor/customer disparagement; when a customer problem is named, turn it into the confident solution in the same breath.
+- Land INSIDE the word band (count the visible text; headings don't count). Never pad to reach the minimum: if real substance runs short, come in at the minimum with what is true.
+- Keep the section's heading level and its role. Keep every fact, phone number, address, price and named service that is accurate; NEVER invent facts, times, prices, credentials, reviews or guarantees — if a correction would need a fact you don't have, satisfy it with what IS in the business data.
+- Preserve the client's brand voice, grammatical person and required phrasing.
+- Do NOT touch sections you were not given. Write clean semantic HTML; no RDFa, no re-linking phone numbers (applied automatically). No markdown fences, no commentary — valid JSON with valid HTML fragments only."""
+
+
+def _spec_fix_prompt(targets: List[dict], sections: List[dict], business_name: str, keyword: str, city: str,
+                     phone: Optional[str], voice_block: str) -> str:
+    """Pure: the user prompt for a section-scoped structure-fix pass."""
+    by_key = {sec["key"]: sec for sec in sections}
+    parts = []
+    for t in targets:
+        sec = by_key.get(t["key"])
+        if sec is None:
+            continue
+        corrections = "\n".join(f"  - {c}" for c in t.get("corrections") or [])
+        parts.append(
+            f"[{t['key']}] heading: {sec.get('heading') or '(no heading)'}\n"
+            f"INTENT: {t.get('intent')} · BAND: {t['min_words']}–{t['max_words']} words (currently ~{t['words']})\n"
+            f"CORRECTIONS:\n{corrections}\n"
+            f"{sec.get('inner') or ''}"
+        )
+    voice_section = f"\n{voice_block}\n" if voice_block else ""
+    return (
+        f"BUSINESS: {business_name}\nKEYWORD: {keyword} | CITY: {city}\nPHONE: {phone or '(not provided)'}\n{voice_section}\n"
+        "SECTIONS TO FIX — return the new inner HTML for EACH, keyed by [key]:\n\n"
+        + "\n\n".join(parts)
+    )
+
+
+async def _spec_fix_inline(
+    content_html: str, spec: dict, verdict: dict, keyword: str, city: str, business_name: str,
+    phone: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict], client,
+) -> Optional[tuple]:
+    """One section-scoped structure-fix pass. Returns ``(new_html, token_rec,
+    applied_keys)`` or None when nothing to fix / no addressable sections / the
+    model returned nothing usable / the call failed. Never raises."""
+    try:
+        targets = _spec_fix_targets(verdict, spec)
+        if not targets:
+            return None
+        sections = section_edit.split_sections(content_html)
+        if not sections:
+            return None
+        user_prompt = _spec_fix_prompt(targets, sections, business_name, keyword, city, phone, voice_block)
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=8000,
+            temperature=0,
+            system=[{"type": "text", "text": _SECTION_FIX_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record("section-fix-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        edits = _parse_claude_json(msg.content[0].text)
+        if not isinstance(edits, dict):
+            return None
+        wanted = {t["key"] for t in targets}
+        edits = {k: v for k, v in edits.items() if k in wanted and isinstance(v, str) and v.strip()}
+        if not edits:
+            return None
+        entities = (serp_analysis_dict or {}).get("google_entities", [])
+        edits = {k: _apply_rdfa_markup(_linkify_phones(v, phone), entities) for k, v in edits.items()}
+        new_html, applied, skipped = section_edit.apply_section_edits(content_html, edits)
+        if not applied:
+            return None
+        if skipped:
+            logger.info("section-fix: applied %s; skipped unresolved %s", applied, skipped)
+        return new_html, token_rec, applied
+    except Exception as _sfe:
+        logger.warning("section-fix: failed (keeping page): %s", _sfe)
+        return None
+
+
+_SECTION_ADD_SYSTEM = """You are WRITING the sections a local service page is MISSING against its PAGE SPEC. You will be given the business facts, the BRAND VOICE guide, a digest of the page as it stands (for context and to avoid repeating it), and for each missing section its `[key]`, intent, heading pattern, word band and block composition.
+
+Return ONLY a JSON object mapping each given `[key]` to that section's inner HTML (the content that goes INSIDE a <section id="KEY"> tag — start with the heading at the stated level). Include every section you were given; include no others.
+
+Rules for each section:
+- Fulfil the INTENT exactly (a CTA asks for the call with the phone number; an FAQ is real question + answer-first answers in the stated entry range; a process section is numbered steps; a local section anchors the city and areas served). Include the listed blocks (list / table / quotes) when given.
+- Land INSIDE the word band (visible text; headings don't count). Never pad: if real substance runs short, come in at the minimum with what is true.
+- SENTIMENT: positive and confident throughout — capable, reassuring, forward-looking. No hedging, apologies, fear-mongering or disparagement.
+- Use ONLY the business facts provided. NEVER invent phone numbers, addresses, prices, response times, credentials, reviews or guarantees; where a fact is missing, write around it.
+- Preserve the client's brand voice, grammatical person and required phrasing. Do not repeat copy already on the page.
+- Clean semantic HTML; no RDFa, no re-linking phone numbers (applied automatically). No markdown fences, no commentary — valid JSON with valid HTML fragments only."""
+
+
+def _spec_add_prompt(missing: List[dict], sections: List[dict], business_name: str, keyword: str, city: str,
+                     phone: Optional[str], address: Optional[str], voice_block: str) -> str:
+    """Pure: the user prompt for writing the missing required sections."""
+    parts = []
+    for m in missing:
+        blocks = ", ".join(
+            f"{b.get('count', 1)}× {b.get('type')}" + (f" ({b['items']} items)" if b.get("items") else "")
+            for b in m.get("blocks") or []
+        )
+        extras = []
+        if m.get("items"):
+            extras.append(f"{m['items'].get('min')}–{m['items'].get('max')} entries")
+        if m.get("subsections"):
+            extras.append(f"{m['subsections'].get('min')}–{m['subsections'].get('max')} H3 sub-sections")
+        parts.append(
+            f"[{m['key']}] level {m.get('level')} · intent: {m.get('intent')} · heading pattern: {m.get('heading_pattern') or '(free)'}\n"
+            f"BAND: {m.get('min_words')}–{m.get('max_words')} words"
+            + (f" · blocks: {blocks}" if blocks else "") + (f" · {'; '.join(extras)}" if extras else "")
+        )
+    digest = section_edit.section_digest(sections, max_inner_chars=600)
+    voice_section = f"\n{voice_block}\n" if voice_block else ""
+    return (
+        f"BUSINESS: {business_name}\nKEYWORD: {keyword} | CITY: {city}\n"
+        f"PHONE: {phone or '(not provided)'}\nADDRESS: {address or '(not provided)'}\n{voice_section}\n"
+        "MISSING SECTIONS TO WRITE — return the inner HTML for EACH, keyed by [key]:\n\n"
+        + "\n\n".join(parts)
+        + "\n\nTHE PAGE AS IT STANDS (context only — do not repeat it, do not return these keys):\n\n" + digest
+    )
+
+
+async def _spec_add_inline(
+    content_html: str, spec: dict, verdict: dict, keyword: str, city: str, business_name: str,
+    phone: Optional[str], address: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict], client,
+) -> Optional[tuple]:
+    """Write the missing REQUIRED sections and insert them at their spec
+    position. Returns ``(new_html, token_rec, inserted_keys)`` or None. Never
+    raises."""
+    try:
+        bands = {sec["key"]: sec for sec in spec.get("sections") or []}
+        missing = [bands[k] for k in verdict.get("missing_required") or [] if k in bands]
+        if not missing:
+            return None
+        sections = section_edit.split_sections(content_html)
+        user_prompt = _spec_add_prompt(missing, sections, business_name, keyword, city, phone, address, voice_block)
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=6000,
+            temperature=0,
+            system=[{"type": "text", "text": _SECTION_ADD_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record("section-add-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        additions = _parse_claude_json(msg.content[0].text)
+        if not isinstance(additions, dict):
+            return None
+        wanted = {m["key"] for m in missing}
+        additions = {k: v for k, v in additions.items() if k in wanted and isinstance(v, str) and v.strip()}
+        if not additions:
+            return None
+        entities = (serp_analysis_dict or {}).get("google_entities", [])
+        additions = {k: _apply_rdfa_markup(_linkify_phones(v, phone), entities) for k, v in additions.items()}
+        new_html, inserted, skipped = section_edit.insert_sections(content_html, additions, list(bands.keys()))
+        if not inserted:
+            return None
+        if skipped:
+            logger.info("section-add: inserted %s; skipped %s", inserted, skipped)
+        return new_html, token_rec, inserted
+    except Exception as _sadd:
+        logger.warning("section-add: failed (keeping page): %s", _sadd)
+        return None
+
+
+def _structure_rank(verdict: Optional[dict]) -> tuple:
+    """Pure: keep-best key for the structure loop — fewer blocking issues, then
+    fewer issues overall. Higher is better."""
+    if not verdict:
+        return (-10 ** 6, -10 ** 6)
+    issues = verdict.get("issues") or []
+    blocking = sum(1 for i in issues if not i.get("advisory"))
+    return (-blocking, -len(issues))
+
+
+def _blocking_count(verdict: Optional[dict]) -> int:
+    return sum(1 for i in (verdict or {}).get("issues") or [] if not i.get("advisory"))
+
+
+async def _enforce_spec_structure(
+    content_html: str, spec: Optional[dict], q, *, keyword: str, city: str, business_name: str,
+    phone: Optional[str], address: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict],
+    client, label: str,
+) -> tuple:
+    """The structure guarantee: audit + verdict against the spec, then up to
+    ``PAGE_SPEC_STRUCTURE_PASSES`` passes of deterministic fixes (spec order;
+    extras dropped when over the section cap), missing required sections
+    written in, and section-scoped rewrites of every section with a named
+    block / FAQ-range / sub-section / H3-cap / intent / sentiment issue —
+    keep-best by blocking-issue count. Returns ``(html, token_rec_delta,
+    verdict, changed)``; the verdict's ``audit`` is the per-section intent +
+    sentiment read of the html returned. Best-effort throughout."""
+    tok = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+
+    def _add(rec):
+        if rec:
+            tok["input_tokens"] += rec["input_tokens"]
+            tok["output_tokens"] += rec["output_tokens"]
+            tok["cost_usd"] = round(tok["cost_usd"] + rec["cost_usd"], 6)
+
+    async def _judge(html: str):
+        sections = section_edit.split_sections(html)
+        audit, rec = await _audit_sections(sections, spec, business_name, keyword, city, client)
+        _add(rec)
+        return _structure_verdict(html, spec, audit)
+
+    if not spec:
+        return content_html, tok, None, False
+    verdict = await _judge(content_html)
+    if verdict is None:
+        return content_html, tok, None, False
+    changed = False
+    order = [sec["key"] for sec in spec.get("sections") or []]
+    for _pass in range(1, PAGE_SPEC_STRUCTURE_PASSES + 1):
+        if verdict.get("status") == "ok":
+            break
+        await q.put({"step": "progress", "progress": 90,
+                     "message": f"Fixing {_blocking_count(verdict)} structure issue(s) against the page spec (pass {_pass})…"})
+        html = content_html
+        # Deterministic first — no model needed.
+        if not verdict.get("order_ok"):
+            html, _ = section_edit.reorder_sections(html, order)
+        to_drop = [i["key"] for i in verdict.get("issues") or []
+                   if i.get("code") == "unexpected_section" and not i.get("advisory") and i.get("key")]
+        if to_drop:
+            # Over the section cap, or the client's layout is the structure and
+            # the writer added a template section the client's page lacks.
+            html, removed = section_edit.remove_sections(html, to_drop)
+            if removed:
+                logger.info("%s: dropped sections the spec doesn't carry: %s", label, removed)
+        if verdict.get("missing_required"):
+            out = await _spec_add_inline(html, spec, verdict, keyword, city, business_name, phone, address,
+                                         voice_block, serp_analysis_dict, client)
+            if out is not None:
+                html, rec, inserted = out
+                _add(rec)
+                logger.info("%s: wrote missing required sections %s", label, inserted)
+        if verdict.get("section_keys_to_fix"):
+            out = await _spec_fix_inline(html, spec, verdict, keyword, city, business_name, phone,
+                                         voice_block, serp_analysis_dict, client)
+            if out is not None:
+                html, rec, applied = out
+                _add(rec)
+                logger.info("%s: structure-fixed sections %s", label, applied)
+        if html == content_html:
+            break  # nothing could be applied — ship the honest verdict
+        new_verdict = await _judge(html)
+        if new_verdict is None or _structure_rank(new_verdict) <= _structure_rank(verdict):
+            logger.info("%s: structure pass %d did not improve (%s → %s blocking); keeping previous", label, _pass,
+                        _blocking_count(verdict), _blocking_count(new_verdict))
+            break
+        content_html, verdict, changed = html, new_verdict, True
+        logger.info("%s: structure pass %d → %s (%s blocking issue(s) left)", label, _pass,
+                    verdict.get("status"), _blocking_count(verdict))
+    return content_html, tok, verdict, changed
+
+
+def _public_structure_verdict(verdict: Optional[dict]) -> Optional[dict]:
+    """Strip the per-section measure (the platform re-measures) but keep the
+    audit, which only nlp can produce."""
+    if not verdict:
+        return None
+    return {k: v for k, v in verdict.items() if k != "measure"}
+
+
+async def _final_structure_verdict(
+    content_html: str, spec: Optional[dict], enforced_html: Optional[str], enforced_verdict: Optional[dict],
+    *, keyword: str, city: str, business_name: str, client,
+) -> tuple:
+    """The structure verdict for the page that SHIPS: the enforcement loop's
+    verdict when the html is unchanged since, else a fresh audit + verdict
+    (the later voice/SEO passes rewrite sections, so intent/sentiment must be
+    re-read on the final text — never a stale pass). Returns
+    ``(verdict, token_rec_delta)``."""
+    tok = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
+    if not spec:
+        return None, tok
+    if enforced_verdict is not None and enforced_html == content_html:
+        return enforced_verdict, tok
+    sections = section_edit.split_sections(content_html)
+    audit, rec = await _audit_sections(sections, spec, business_name, keyword, city, client)
+    if rec:
+        tok = {k: rec[k] for k in ("input_tokens", "output_tokens", "cost_usd")}
+    return _structure_verdict(content_html, spec, audit), tok
+
+
 def _sse(data: dict) -> str:
     """Format a dict as a Server-Sent Event line."""
     return f"data: {json.dumps(data)}\n\n"
@@ -7549,6 +7982,8 @@ _INTERNAL_LINKS_MAX = 12
 _INTERNAL_LINK_RELATIONS = {
     "same_location_other_service": "another service in this location",
     "same_service_other_location": "this service in a nearby location",
+    "service_hub": "the main service page (link up to it)",
+    "home": "the homepage (link up to it)",
 }
 
 
@@ -8221,10 +8656,25 @@ Full location: {body.location}
         length_engine = (inline_scores or {}).get("length_fit")
         length_def = _length_trim_deficiency(inline_scores, inline_defs, LENGTH_TRIM_MIN_RATIO)
         spec_verdict = None
+        structure_verdict = None
+        _structure_html = None
         if page_spec_dict:
-            # Page-spec enforcement (plan §5.4): measure per section, trim only
-            # the over-band sections, re-score when anything changed. Supersedes
-            # the whole-page length_fit trim below for spec-driven pages.
+            # Page-spec enforcement (plan §5.4): STRUCTURE first (Phase 4 —
+            # required sections written in, spec order, caps, block/FAQ/
+            # sub-section composition, per-section intent + sentiment), then
+            # LENGTH (measure per section, trim only the over-band sections),
+            # re-score when anything changed. Supersedes the whole-page
+            # length_fit trim below for spec-driven pages.
+            content_html, _struct_tok, structure_verdict, _struct_changed = await _enforce_spec_structure(
+                content_html, page_spec_dict, q, keyword=body.keyword, city=city,
+                business_name=body.business_name, phone=body.phone, address=body.address,
+                voice_block=voice_block, serp_analysis_dict=serp_analysis_dict, client=client,
+                label="generate-page",
+            )
+            token_rec["input_tokens"]  += _struct_tok["input_tokens"]
+            token_rec["output_tokens"] += _struct_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _struct_tok["cost_usd"], 6)
+            _structure_html = content_html
             content_html, _spec_tok, spec_verdict, _spec_changed = await _enforce_spec_length(
                 content_html, page_spec_dict, q, keyword=body.keyword, city=city,
                 business_name=body.business_name, phone=body.phone, voice_block=voice_block,
@@ -8233,7 +8683,7 @@ Full location: {body.location}
             token_rec["input_tokens"]  += _spec_tok["input_tokens"]
             token_rec["output_tokens"] += _spec_tok["output_tokens"]
             token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _spec_tok["cost_usd"], 6)
-            if _spec_changed:
+            if _spec_changed or _struct_changed:
                 try:
                     inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard = await _score_html_inline(
                         content_html, body.keyword, body.location, body.business_name,
@@ -8431,11 +8881,20 @@ Full location: {body.location}
                 )
 
         # Final deterministic verdict vs the page spec (measured BEFORE the
-        # injected contact/trust blocks, which are not authored content).
+        # injected contact/trust blocks, which are not authored content), plus
+        # the structure verdict for the text that ships (re-audited when a
+        # later pass changed the page).
         if page_spec_dict:
             spec_verdict = _spec_verdict(content_html, page_spec_dict)
             if spec_verdict:
                 spec_verdict.pop("measure", None)
+            structure_verdict, _fsv_tok = await _final_structure_verdict(
+                content_html, page_spec_dict, _structure_html, structure_verdict,
+                keyword=body.keyword, city=city, business_name=body.business_name, client=client,
+            )
+            token_rec["input_tokens"]  += _fsv_tok["input_tokens"]
+            token_rec["output_tokens"] += _fsv_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _fsv_tok["cost_usd"], 6)
 
         # ── Deterministic Contact / Find-Us block ────────────────────────────
         # NAP + address-keyed GBP map embed + driving-directions link + a
@@ -8487,8 +8946,10 @@ Full location: {body.location}
                 # breakdown, persisted by platform-api and shown alongside (not
                 # inside) the SEO score.
                 "voice_compliance": voice_scorecard,
-                # Deterministic page-spec verdict (None without a spec).
+                # Deterministic page-spec verdicts (None without a spec): length,
+                # and structure incl. the per-section intent + sentiment audit.
                 "length_verdict": spec_verdict,
+                "structure_verdict": _public_structure_verdict(structure_verdict),
             },
         })
 
@@ -8836,9 +9297,22 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         # LENGTH_TRIM_MIN_RATIO, NOT gated on the time budget, then re-scores so
         # the verdict describes the page that ships. Best-effort.
         spec_verdict = None
+        structure_verdict = None
+        _structure_html = None
         _trim_def = _length_trim_deficiency(inline_scores, inline_defs, LENGTH_TRIM_MIN_RATIO)
         if page_spec_dict:
-            # Page-spec enforcement (plan §5.4) — supersedes the whole-page trim.
+            # Page-spec enforcement (plan §5.4) — structure then length;
+            # supersedes the whole-page trim.
+            content_html, _struct_tok, structure_verdict, _struct_changed = await _enforce_spec_structure(
+                content_html, page_spec_dict, q, keyword=body.keyword, city=city,
+                business_name=body.business_name, phone=body.phone, address=body.address,
+                voice_block=voice_block, serp_analysis_dict=body.serp_analysis, client=client,
+                label="reoptimize-page",
+            )
+            token_rec["input_tokens"]  += _struct_tok["input_tokens"]
+            token_rec["output_tokens"] += _struct_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _struct_tok["cost_usd"], 6)
+            _structure_html = content_html
             content_html, _spec_tok, spec_verdict, _spec_changed = await _enforce_spec_length(
                 content_html, page_spec_dict, q, keyword=body.keyword, city=city,
                 business_name=body.business_name, phone=body.phone, voice_block=voice_block,
@@ -8847,7 +9321,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             token_rec["input_tokens"]  += _spec_tok["input_tokens"]
             token_rec["output_tokens"] += _spec_tok["output_tokens"]
             token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _spec_tok["cost_usd"], 6)
-            if _spec_changed:
+            if _spec_changed or _struct_changed:
                 try:
                     (
                         inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
@@ -9006,6 +9480,20 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     f"(best score={voice_scorecard.get('score')})"
                 )
 
+        # Final page-spec verdicts for the page that ships (length is
+        # deterministic; structure re-audits when a later pass changed the text).
+        if page_spec_dict:
+            spec_verdict = _spec_verdict(content_html, page_spec_dict)
+            if spec_verdict:
+                spec_verdict.pop("measure", None)
+            structure_verdict, _fsv_tok = await _final_structure_verdict(
+                content_html, page_spec_dict, _structure_html, structure_verdict,
+                keyword=body.keyword, city=city, business_name=body.business_name, client=client,
+            )
+            token_rec["input_tokens"]  += _fsv_tok["input_tokens"]
+            token_rec["output_tokens"] += _fsv_tok["output_tokens"]
+            token_rec["cost_usd"]       = round(token_rec["cost_usd"] + _fsv_tok["cost_usd"], 6)
+
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
         await q.put({
             "step": "done",
@@ -9025,6 +9513,9 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 "html_css_notes": [],
                 "original_html": original_content_html,
                 "voice_compliance": voice_scorecard,
+                # Page-spec verdicts (None without a spec) — same contract as generate.
+                "length_verdict": spec_verdict,
+                "structure_verdict": _public_structure_verdict(structure_verdict),
             },
         })
 

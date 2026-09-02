@@ -108,3 +108,89 @@ def section_digest(sections: list[dict], max_inner_chars: int = 4000) -> str:
             f'[{s["key"]}] heading: {s.get("heading") or "(no heading)"}\n{inner}'
         )
     return "\n\n".join(lines)
+
+
+def remove_sections(html: str, keys) -> tuple[str, list[str]]:
+    """Drop whole top-level ``<section>`` blocks by key (plan §5.4 Phase 4:
+    a section the spec doesn't know, when the page is over its section cap).
+    Unknown keys are ignored. Returns ``(new_html, removed_keys)``."""
+    wanted = {k for k in (keys or []) if isinstance(k, str) and k.strip()}
+    if not wanted or not (html or "").strip():
+        return html or "", []
+    soup = BeautifulSoup(html, "html.parser")
+    removed: list[str] = []
+    for key, sec in list(_iter_top_sections(soup)):
+        if key in wanted:
+            sec.decompose()
+            removed.append(key)
+    return str(soup), removed
+
+
+def insert_sections(html: str, additions: dict, order: list[str]) -> tuple[str, list[str], list[str]]:
+    """Insert NEW top-level ``<section id="KEY">`` blocks at their spec
+    position. ``additions`` maps a key to the section's inner HTML; ``order``
+    is the spec's section key order. Each new section is placed right after
+    the nearest preceding key (in ``order``) that already exists on the page,
+    else before the nearest following one, else appended to the article. A key
+    that already exists on the page, or a non-string/empty body, is SKIPPED —
+    this helper only ever ADDS sections the page lacks. Returns
+    ``(new_html, inserted_keys, skipped_keys)``."""
+    if not additions or not (html or "").strip():
+        return html or "", [], list((additions or {}).keys())
+    soup = BeautifulSoup(html, "html.parser")
+    inserted: list[str] = []
+    skipped: list[str] = []
+    order = [k for k in (order or []) if isinstance(k, str)]
+    for key in [k for k in order if k in additions] + [k for k in additions if k not in order]:
+        body = additions.get(key)
+        present = {k: sec for k, sec in _iter_top_sections(soup)}
+        if key in present or not isinstance(body, str) or not body.strip():
+            skipped.append(key)
+            continue
+        new_sec = soup.new_tag("section", id=key)
+        frag = BeautifulSoup(body, "html.parser")
+        for child in list(frag.contents):
+            new_sec.append(child)
+        pos = order.index(key) if key in order else len(order)
+        anchor_after = next((present[k] for k in reversed(order[:pos]) if k in present), None)
+        if anchor_after is not None:
+            anchor_after.insert_after(new_sec)
+        else:
+            anchor_before = next((present[k] for k in order[pos + 1:] if k in present), None)
+            if anchor_before is not None:
+                anchor_before.insert_before(new_sec)
+            else:
+                container = (next(iter(present.values())).parent if present else None) or soup.find("article") or soup
+                container.append(new_sec)
+        inserted.append(key)
+    return str(soup), inserted, skipped
+
+
+def reorder_sections(html: str, order: list[str]) -> tuple[str, bool]:
+    """Put the top-level ``<section>`` blocks whose keys the spec knows into
+    spec order, leaving unknown sections where they are relative to their
+    neighbours. Returns ``(new_html, changed)``. Deterministic; the cheapest
+    structural fix there is, so it never needs an LLM."""
+    known = [k for k in (order or []) if isinstance(k, str)]
+    if not known or not (html or "").strip():
+        return html or "", False
+    soup = BeautifulSoup(html, "html.parser")
+    entries = list(_iter_top_sections(soup))
+    slots = [(k, sec) for k, sec in entries if k in known]
+    if len(slots) < 2:
+        return html, False
+    current = [k for k, _ in slots]
+    wanted = sorted(current, key=known.index)
+    if current == wanted:
+        return html, False
+    by_key = {k: sec for k, sec in slots}
+    # Re-fill the same DOM positions with the sections in spec order, so the
+    # unknown sections between them keep their relative place.
+    placeholders = []
+    for k, sec in slots:
+        marker = soup.new_tag("span", **{"data-reorder": k})
+        sec.replace_with(marker)
+        placeholders.append(marker)
+    for marker, k in zip(placeholders, wanted):
+        marker.replace_with(by_key[k])
+    return str(soup), True

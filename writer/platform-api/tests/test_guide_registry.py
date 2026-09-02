@@ -12,7 +12,7 @@ def test_ignored_paths_are_not_user_facing():
     for path in [
         "docs/dora-user-guide.md",
         ".github/workflows/guide-sync.yml",
-        "writer/supabase/migrations/20260902170000_guide_sync.sql",
+        "writer/supabase/migrations/20260902180000_guide_sync.sql",
         "writer/platform-api/tests/test_guide_sync.py",
         "writer/nlp-api/tests/test_voice_localize.py",
         "writer/platform-api/agent_docs/sops/x.md",

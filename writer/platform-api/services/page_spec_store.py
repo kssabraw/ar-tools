@@ -49,6 +49,7 @@ def _band_signature(spec: dict[str, Any]) -> Any:
     flag. Provenance timestamps and generated_at are deliberately excluded."""
     total = spec.get("total") or {}
     return (
+        spec.get("structure_mode") or "template",
         (total.get("min"), total.get("target"), total.get("max"), total.get("basis")),
         tuple(sorted((k, v if not isinstance(v, dict) else tuple(sorted(v.items())))
                      for k, v in (spec.get("structure") or {}).items())),
@@ -165,6 +166,17 @@ def save_new_version(
     return inserted
 
 
+def client_structure_overrides() -> bool:
+    """Whether a usable client reference layout IS the page structure (config
+    ``local_seo_client_structure_overrides``, default on)."""
+    try:
+        from config import settings  # lazy: keep the pure helpers importable alone
+
+        return bool(getattr(settings, "local_seo_client_structure_overrides", True))
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def resolve_spec(
     client: dict[str, Any],
     keyword: str,
@@ -189,6 +201,7 @@ def resolve_spec(
         client_id=client_id, keyword=keyword, location=location, location_code=location_code,
         serp_analysis=serp_analysis, reference_entry=reference, reference_page_type=ref_type,
         fallback_target=fallback_target,
+        client_structure_overrides=client_structure_overrides(),
     )
     if active and not materially_different(active.get("spec"), fresh):
         return public_spec(active)

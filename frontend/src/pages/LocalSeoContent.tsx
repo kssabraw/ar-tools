@@ -12,7 +12,7 @@ import { LocationAutocomplete } from '../components/localseo/LocationAutocomplet
 import type { AnalysisResult, ExistingMatch, LocalSeoPageDetail, LocalSeoPageListItem, PrecheckResult, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
-import { LengthChip, LengthSummary, PageSpecPanel } from '../components/localseo/PageSpecPanel'
+import { LengthChip, LengthSummary, PageSpecPanel, StructureChip } from '../components/localseo/PageSpecPanel'
 import { BulkCreateBar } from '../components/localseo/BulkCreateBar'
 import { CustomTargetsPanel } from '../components/localseo/CustomTargetsPanel'
 import { MatrixTab } from '../components/localseo/matrix/MatrixTab'
@@ -878,6 +878,7 @@ function SavedPagesList({ clientId, pages, loading, onOpen, onDelete, wordpressC
                 <span style={{ fontSize: 11, fontWeight: 700, color: scoreColor(p.composite_score) }}>{Math.round(p.composite_score)}/100</span>
               )}
               <LengthChip target={p.target_words} actual={p.actual_words} status={p.length_status} />
+              <StructureChip status={p.structure_status} />
             </div>
             <p style={{ fontSize: 12, color: '#94a3b8', margin: '2px 0 0' }}>
               {p.keyword} · {p.location.split(',')[0]} <span style={{ marginLeft: 6, opacity: 0.7 }}>{relativeTime(p.created_at)}</span>

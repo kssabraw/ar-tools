@@ -244,6 +244,19 @@ def select_release_batch(cells: Iterable[dict], count: int) -> list[dict]:
 
 SAME_LOCATION = "same_location_other_service"
 SAME_SERVICE = "same_service_other_location"
+# The "up" links every location page also carries (plan §4.1): its top-level
+# (location-agnostic) service page and the site root.
+SERVICE_HUB = "service_hub"
+HOME = "home"
+DEFAULT_SERVICE_HUB_PATTERN = "/{service}/"
+
+
+def service_hub_anchor(cell: dict) -> str:
+    """"Roof restoration" — the service in natural case, no location."""
+    label = (cell.get("service_label") or "").strip()
+    if label:
+        return f"{label[:1].upper()}{label[1:]}"
+    return (cell.get("service_slug") or "").replace("-", " ").strip().title() or "Our services"
 
 
 def anchor_text(cell: dict) -> str:
@@ -329,6 +342,100 @@ def sibling_links(
     return out
 
 
+def validate_hub_pattern(pattern: str) -> list[str]:
+    """A service-hub pattern must contain ``{service}`` and must NOT contain
+    ``{location}`` — the top-level service page is location-agnostic."""
+    p = (pattern or "").strip()
+    errors: list[str] = []
+    if "{service}" not in p:
+        errors.append("hub_pattern_missing_service_token")
+    if "{location}" in p:
+        errors.append("hub_pattern_has_location_token")
+    return errors
+
+
+def service_hub_url(service_slug: str, base_url: str = "", pattern: str = DEFAULT_SERVICE_HUB_PATTERN) -> str:
+    """The URL of the top-level (location-agnostic) service page, e.g.
+    ``/roof-restoration/``. `pattern` carries a single ``{service}`` token."""
+    path = (pattern or DEFAULT_SERVICE_HUB_PATTERN).replace("{service}", (service_slug or "").strip("/"))
+    if not path.startswith("/"):
+        path = "/" + path
+    base = (base_url or "").strip().rstrip("/")
+    return f"{base}{path}" if base else path
+
+
+def home_url(base_url: str = "") -> str:
+    """The site root."""
+    base = (base_url or "").strip().rstrip("/")
+    return f"{base}/" if base else "/"
+
+
+def up_links(
+    cell: dict,
+    base_url: str = "",
+    *,
+    service_hub: bool = True,
+    service_hub_pattern: str = DEFAULT_SERVICE_HUB_PATTERN,
+    home: bool = True,
+    home_anchor: str = "Home",
+) -> list[dict]:
+    """The "up" links a location page carries in addition to its siblings
+    (plan §4.1): the top-level service page (``service_hub``) and the site root
+    (``home``). Both are silo-spine links pointing above the cell in the site
+    hierarchy — the enhancement that makes ``/roof-restoration/melbourne/`` link
+    up to ``/roof-restoration/`` and ``/`` as well as across to its siblings."""
+    out: list[dict] = []
+    if service_hub:
+        out.append({
+            "anchor": service_hub_anchor(cell),
+            "url": service_hub_url(cell.get("service_slug") or "", base_url, service_hub_pattern),
+            "relation": SERVICE_HUB,
+        })
+    if home:
+        out.append({
+            "anchor": (home_anchor or "Home").strip() or "Home",
+            "url": home_url(base_url),
+            "relation": HOME,
+        })
+    return out
+
+
+def plan_cell_links(
+    cell: dict,
+    cells: Iterable[dict],
+    base_url: str = "",
+    *,
+    location_cap: int = 4,
+    max_links: int = 10,
+    coords: Optional[dict[str, tuple]] = None,
+    service_hub: bool = True,
+    service_hub_pattern: str = DEFAULT_SERVICE_HUB_PATTERN,
+    home: bool = True,
+    home_anchor: str = "Home",
+) -> list[dict]:
+    """Every internal link a cell page should carry: the up-links (service hub +
+    home) FIRST so they always survive the cap, then the siblings. Deduped by
+    URL path and never linking to the cell's own page; capped at `max_links`."""
+    ups = up_links(
+        cell, base_url,
+        service_hub=service_hub, service_hub_pattern=service_hub_pattern,
+        home=home, home_anchor=home_anchor,
+    )
+    sibs = sibling_links(cell, cells, base_url, location_cap=location_cap, max_links=max_links, coords=coords)
+    out: list[dict] = []
+    seen: set[str] = set()
+    self_path = _path_key(cell_url(cell, base_url))
+    for link in [*ups, *sibs]:
+        if len(out) >= max_links:
+            break
+        key = _path_key(link["url"])
+        if key in seen or key == self_path:
+            continue
+        seen.add(key)
+        out.append(link)
+    return out
+
+
 # ── deterministic link guarantee ──────────────────────────────────────────────
 
 _HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
@@ -378,7 +485,12 @@ def render_links_block(
     for link in links:
         groups.setdefault(link.get("relation") or SAME_LOCATION, []).append(link)
     parts: list[str] = []
-    for relation, heading in ((SAME_LOCATION, services_heading), (SAME_SERVICE, areas_heading)):
+    for relation, heading in (
+        (SAME_LOCATION, services_heading),
+        (SAME_SERVICE, areas_heading),
+        (SERVICE_HUB, "Main service page"),
+        (HOME, "Home"),
+    ):
         items = groups.get(relation) or []
         if not items:
             continue
