@@ -147,8 +147,12 @@ async def test_run_generate_job_records_cell_link_coverage():
         "matrix_id": "m1", "matrix_cell_id": "cell-0",
         "internal_links": [{"anchor": "a", "url": "/a/", "relation": core.SAME_LOCATION}],
     }}
+    # The MagicMock Supabase answers EVERY read with a truthy mock, which the
+    # resume guard (`_page_for_job`) would read as "this job already has a page".
+    # Pin it to a fresh job so the generate path under test actually runs.
     with patch.object(svc, "generate_page", new=_gen), \
          patch.object(svc, "get_supabase", return_value=sb), \
+         patch.object(svc, "_page_for_job", return_value=None), \
          patch.object(store, "record_link_coverage") as record:
         await svc.run_generate_job(job)
     assert fake_generate.call_args.kwargs["internal_links"] == job["payload"]["internal_links"]

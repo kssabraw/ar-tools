@@ -152,8 +152,10 @@ def test_failover_client_builds_one_client_per_key(monkeypatch):
             self.messages = _FakeMessages(fail_transient=False)
 
     monkeypatch.setattr(anthropic, "AsyncAnthropic", _FakeAsyncAnthropic)
+    af.clear_client_cache()
     client = af.FailoverAsyncAnthropic(keys=["a", "b"], max_retries=5)
     assert built == ["a", "b"]  # one underlying client per account key
+    af.clear_client_cache()
     out = _run(client.messages.create(model="m"))
     assert out["ok"] is True
 
@@ -242,6 +244,7 @@ def test_client_uses_rotated_keys(monkeypatch):
             self.messages = _FakeMessages(fail_transient=False)
 
     monkeypatch.setattr(anthropic, "AsyncAnthropic", _Stub)
+    af.clear_client_cache()
 
     def one_request():
         af.begin_request_slot()
@@ -249,7 +252,8 @@ def test_client_uses_rotated_keys(monkeypatch):
 
     orders = [contextvars.copy_context().run(one_request) for _ in range(3)]
     assert {o[0] for o in orders} == {"a", "b", "c"}
-    assert len(built) == 9  # one SDK client per key per construction
+    assert sorted(built) == ["a", "b", "c"]  # cached: one SDK client per key, not per construction
+    af.clear_client_cache()
 
 
 # ── 429 diagnostics ──────────────────────────────────────────────────────────
@@ -295,3 +299,68 @@ def test_pool_exhausted_reraises_last_transient():
     with pytest.raises(anthropic.RateLimitError):
         _run(mf.create(model="m"))
     assert (a.calls, b.calls) == (1, 1)
+
+
+# ── rotation only on generation paths (review fix) ───────────────────────────
+def test_should_rotate_path_only_for_generation_routes():
+    assert af.should_rotate_path("/generate-page")
+    assert af.should_rotate_path("/reoptimize-page")
+    assert af.should_rotate_path("/generate-ecommerce-page")
+    assert af.should_rotate_path("/reoptimize-ecommerce-page")
+    assert not af.should_rotate_path("/score-page")
+    assert not af.should_rotate_path("/healthz")
+    assert not af.should_rotate_path("/")
+    assert not af.should_rotate_path("")
+    assert not af.should_rotate_path(None)
+
+
+# ── per-key client cache (review fix) ─────────────────────────────────────────
+def test_sdk_clients_are_cached_per_key_and_kwargs(monkeypatch):
+    built = []
+
+    class _Stub:
+        def __init__(self, *, api_key=None, **kw):
+            built.append((api_key, kw.get("max_retries")))
+            self.messages = _FakeMessages(fail_transient=False)
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", _Stub)
+    monkeypatch.setenv("ANTHROPIC_KEY_ROTATION_ENABLED", "false")
+    af.clear_client_cache()
+    c1 = af.FailoverAsyncAnthropic(keys=["a"], max_retries=5)
+    c2 = af.FailoverAsyncAnthropic(keys=["a"], max_retries=5)
+    assert built == [("a", 5)]                       # second construction reused the client
+    assert c1.messages._clients[0] is c2.messages._clients[0]
+    af.FailoverAsyncAnthropic(keys=["a"], max_retries=1)
+    assert len(built) == 2                           # different transport kwargs ⇒ new client
+    af.clear_client_cache()
+
+
+# ── pool retry budget (review fix) ───────────────────────────────────────────
+def test_effective_client_kwargs_clamps_retries_only_for_a_pool(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_POOL_MAX_RETRIES", "2")
+    assert af.effective_client_kwargs({"max_retries": 5}, pool_size=1) == {"max_retries": 5}
+    assert af.effective_client_kwargs({"max_retries": 5}, pool_size=3) == {"max_retries": 2}
+    assert af.effective_client_kwargs({"max_retries": 1}, pool_size=3) == {"max_retries": 1}
+    assert af.effective_client_kwargs({}, pool_size=3) == {}          # nothing to clamp
+    monkeypatch.setenv("ANTHROPIC_POOL_MAX_RETRIES", "garbage")
+    assert af.pool_max_retries() == 2
+
+
+def test_pool_clients_get_the_clamped_retry_budget(monkeypatch):
+    built = []
+
+    class _Stub:
+        def __init__(self, *, api_key=None, **kw):
+            built.append(kw.get("max_retries"))
+            self.messages = _FakeMessages(fail_transient=False)
+
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", _Stub)
+    monkeypatch.setenv("ANTHROPIC_KEY_ROTATION_ENABLED", "false")
+    monkeypatch.setenv("ANTHROPIC_POOL_MAX_RETRIES", "2")
+    af.clear_client_cache()
+    af.FailoverAsyncAnthropic(keys=["a", "b"], max_retries=5)
+    assert built == [2, 2]
+    af.clear_client_cache()
+    af.FailoverAsyncAnthropic(keys=["a"], max_retries=5)
+    assert built[-1] == 5                            # single account keeps the full budget
+    af.clear_client_cache()

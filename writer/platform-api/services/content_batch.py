@@ -29,6 +29,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import job_priority
 from services import content_schedule_store as store
 from services import run_retry
 
@@ -100,6 +101,7 @@ def _enqueue_one(batch: dict, item: dict, index: int) -> Optional[str]:
         "job_type": "content_batch_item",
         "entity_id": batch["client_id"],
         "scheduled_at": _staggered_at(index),
+        "priority": job_priority.BACKGROUND,
         "payload": _job_payload(batch, item),
     }).execute()
     job_id = res.data[0]["id"]

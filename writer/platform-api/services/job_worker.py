@@ -349,6 +349,11 @@ def plan_job_retry(
         "started_at": None,
         "scheduled_at": when.isoformat(),
         "error": f"transient (attempt {attempts}/{max_attempts}, retrying in {delay}m): {error}"[:500],
+        # Reset the progress the failed attempt left behind ("Scoring your page…
+        # 90%") so a poller doesn't show a frozen near-done spinner through the
+        # backoff; the message names the wait instead.
+        "progress": None,
+        "progress_message": f"Temporary provider error — retrying in {delay} min",
     }, "requeued"
 
 

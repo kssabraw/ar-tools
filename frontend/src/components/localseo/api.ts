@@ -55,7 +55,7 @@ export const localSeoApi = {
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/generate-async`, body),
 
   getGenerateJob: (clientId: string, jobId: string) =>
-    api.get<{ status: string; page_id?: string | null; error?: string | null }>(
+    api.get<{ status: string; page_id?: string | null; error?: string | null; retrying?: boolean; progress_message?: string | null }>(
       `/clients/${clientId}/local-seo/generate/${jobId}`,
     ),
 

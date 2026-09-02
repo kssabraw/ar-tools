@@ -99,6 +99,9 @@ export function LocalSeoContent() {
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
   const [savingTemplateDefault, setSavingTemplateDefault] = useState(false)
   const [error, setError] = useState('')
+  // A transient nlp failure re-queues the generate job with a backoff; the
+  // poll surfaces that instead of a silent spinner through the wait.
+  const [genNotice, setGenNotice] = useState('')
   // Advanced options (page template + cache refresh) collapse, hidden by default.
   const [showAdvanced, setShowAdvanced] = useState(false)
 
@@ -196,6 +199,7 @@ export function LocalSeoContent() {
     const kw = (typeof kwOverride === 'string' ? kwOverride : keyword).trim()
     if (!kw || !location.trim()) return
     setError('')
+    setGenNotice('')
     setView({ kind: 'creating' })
     startTicker()
     genCancelledRef.current = false
@@ -212,6 +216,7 @@ export function LocalSeoContent() {
         try {
           const res = await localSeoApi.getGenerateJob(clientId, job_id)
           if (genCancelledRef.current) return
+          setGenNotice(res.retrying ? (res.progress_message || 'Temporary provider error — retrying shortly') : '')
           if (res.status === 'complete' && res.page_id) {
             stopTicker()
             refreshSaved() // page appears in Saved Pages even if the user left
@@ -396,7 +401,7 @@ export function LocalSeoContent() {
 
   // ── Sub-view routing ─────────────────────────────────────────────────────
 
-  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} onLeave={leaveGenerating} />
+  if (view.kind === 'creating') return <CreatingView elapsed={elapsed} onLeave={leaveGenerating} notice={genNotice} />
 
   if (view.kind === 'prechecking') {
     return (
@@ -1113,7 +1118,7 @@ function ExistingPageChoiceView({
   )
 }
 
-function CreatingView({ elapsed, onLeave }: { elapsed: number; onLeave?: () => void }) {
+function CreatingView({ elapsed, onLeave, notice }: { elapsed: number; onLeave?: () => void; notice?: string }) {
   const pct = Math.min(95, Math.round((elapsed / 660) * 100))
   // Analysis always runs first, so the progress steps always include it.
   const steps = [
@@ -1129,6 +1134,11 @@ function CreatingView({ elapsed, onLeave }: { elapsed: number; onLeave?: () => v
     <div style={{ padding: 32, maxWidth: 640, margin: '0 auto' }}>
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 2px' }}>Creating your page</h1>
       <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 20px' }}>Hang tight — this usually takes 10–12 minutes.</p>
+      {notice && (
+        <div style={{ fontSize: 13, color: '#92400e', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px', marginBottom: 16 }}>
+          {notice} — the page will still land in Saved Pages when it finishes.
+        </div>
+      )}
       <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#64748b' }}>
           <span style={{ fontWeight: 600 }}>Building your page… {elapsedLabel}</span>

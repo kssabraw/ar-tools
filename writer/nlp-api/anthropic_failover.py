@@ -32,9 +32,11 @@ Config (env on the ``nlp`` service):
 ``ANTHROPIC_API_KEYS`` (comma-separated pool of further account keys, any
 length — the canonical form), ``ANTHROPIC_API_KEY_SECONDARY`` (the original
 two-account form, still honoured and merged into the pool),
-``ANTHROPIC_KEY_FAILOVER_ENABLED`` (default true; false ⇒ primary only) and
+``ANTHROPIC_KEY_FAILOVER_ENABLED`` (default true; false ⇒ primary only),
 ``ANTHROPIC_KEY_ROTATION_ENABLED`` (default true; false ⇒ every request starts
-at the primary, i.e. reactive failover only — the pre-2026-09-02 behaviour).
+at the primary, i.e. reactive failover only — the pre-2026-09-02 behaviour) and
+``ANTHROPIC_POOL_MAX_RETRIES`` (default 2; the per-account SDK retry budget
+once the pool has more than one account).
 """
 
 from __future__ import annotations
@@ -110,6 +112,23 @@ def current_slot() -> int | None:
 
 def rotation_enabled() -> bool:
     return os.environ.get("ANTHROPIC_KEY_ROTATION_ENABLED", "true").lower() != "false"
+
+
+# Only the long, many-call generation/reoptimize requests take a rotation slot.
+# Health checks, scoring and the short precheck actions would otherwise burn
+# slots between two page generations and land both on the same account.
+ROTATION_PATH_PREFIXES = (
+    "/generate-page",
+    "/reoptimize-page",
+    "/generate-ecommerce-page",
+    "/reoptimize-ecommerce-page",
+)
+
+
+def should_rotate_path(path: str | None) -> bool:
+    """True for the request paths that should start the pool at a fresh slot.
+    Pure."""
+    return bool(path) and any(path.startswith(prefix) for prefix in ROTATION_PATH_PREFIXES)
 
 
 def rotate(keys: list[str], slot: int | None) -> list[str]:
@@ -197,20 +216,64 @@ class _MessagesFailover:
         raise last_exc  # unreachable: the last account re-raises above
 
 
+# One SDK client per (account key, transport kwargs), shared by every call site
+# and request. Each ``AsyncAnthropic`` owns an httpx connection pool, and the 16
+# call sites in ``main`` used to build a fresh one per key per call — with an
+# N-key pool that was N× the churn and none were ever closed. The SDK client is
+# safe to share across concurrent requests; only the ORDER is per request.
+_client_cache: dict[tuple, object] = {}
+
+
+def clear_client_cache() -> None:
+    _client_cache.clear()
+
+
+def _sdk_client(key: str, client_kwargs: dict):
+    import anthropic
+
+    cache_key = (key, repr(sorted(client_kwargs.items())))
+    client = _client_cache.get(cache_key)
+    if client is None:
+        client = anthropic.AsyncAnthropic(api_key=key, **client_kwargs)
+        _client_cache[cache_key] = client
+    return client
+
+
+def pool_max_retries() -> int:
+    """Per-account SDK retry budget when the pool has MORE than one account. The
+    single-account default (``ANTHROPIC_MAX_RETRIES``, 5) is right when there is
+    nowhere else to go; with N accounts a call whose every account is limited
+    would otherwise spend N full backoff sequences before failing and eat the
+    generation time budget. Lower, so a saturated account yields to the next one
+    quickly (the platform service does the same with 2)."""
+    try:
+        return max(0, int(os.environ.get("ANTHROPIC_POOL_MAX_RETRIES", "2")))
+    except ValueError:
+        return 2
+
+
+def effective_client_kwargs(client_kwargs: dict, pool_size: int) -> dict:
+    """The SDK kwargs to build the per-account clients with: unchanged for a
+    single account; ``max_retries`` clamped to ``pool_max_retries`` for a pool.
+    Pure."""
+    kwargs = dict(client_kwargs)
+    if pool_size > 1 and "max_retries" in kwargs:
+        kwargs["max_retries"] = min(int(kwargs["max_retries"]), pool_max_retries())
+    return kwargs
+
+
 class FailoverAsyncAnthropic:
     """Drop-in for ``AsyncAnthropic`` exposing ``.messages.create`` with
     multi-account failover. Construction mirrors the SDK (``api_key`` ignored —
     account keys come from the environment) so call sites change only the
     constructor name. ``keys`` is injectable for tests. The pool is rotated to
-    the current request's slot (see ``ordered_keys``)."""
+    the current request's slot (see ``ordered_keys``); the underlying SDK
+    clients are cached per key (see ``_sdk_client``)."""
 
     def __init__(self, *, api_key=None, keys: list | None = None, **client_kwargs):
-        import anthropic
-
         self.keys = ordered_keys(keys)
-        self.messages = _MessagesFailover(
-            [anthropic.AsyncAnthropic(api_key=key, **client_kwargs) for key in self.keys]
-        )
+        kwargs = effective_client_kwargs(client_kwargs, len(self.keys))
+        self.messages = _MessagesFailover([_sdk_client(key, kwargs) for key in self.keys])
 
 
 def client(**client_kwargs) -> FailoverAsyncAnthropic:
