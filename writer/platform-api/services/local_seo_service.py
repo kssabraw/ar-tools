@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
@@ -438,6 +439,52 @@ async def _compute_and_store(
     return result
 
 
+def fallback_word_target(targets: list[int], default: int) -> int:
+    """Pure: the standing length target for a market when a keyword's own SERP
+    analysis is unavailable — the median of the newest cached targets at the
+    same location (robust to one unusually long/short SERP), else `default`.
+    Never below 1."""
+    clean = [int(t) for t in (targets or []) if isinstance(t, (int, float)) and t > 0]
+    if not clean:
+        return max(1, int(default))
+    return max(1, int(round(statistics.median(clean))))
+
+
+def _resolve_fallback_length_target(location_code: Optional[int], location: str) -> int:
+    """Impure: the market's standing word target (see `fallback_word_target`)."""
+    targets = analysis_cache.recent_word_targets(
+        location_code, location, limit=settings.local_seo_fallback_target_samples
+    )
+    return fallback_word_target(targets, settings.local_seo_fallback_word_target)
+
+
+def _notify_analysis_degraded(client_id: str, keyword: str, location: str, target: int) -> None:
+    """Surface a generate that ran WITHOUT competitor analysis. Before this the
+    degrade was invisible — the job completed, the page looked normal, and only
+    the SERP-coverage engine's neutral 50 hinted anything was missing. One
+    notification per client+keyword (a bulk batch must not fire N)."""
+    try:
+        from services import notifications  # lazy: keep this module's import graph small
+
+        notifications.emit(
+            client_id,
+            kind="content_no_serp_analysis",
+            title="Local SEO page written without competitor analysis",
+            summary=(
+                f"The competitor SERP analysis for '{keyword}' ({location}) could not be "
+                f"run (provider unavailable), so the page was written from business data "
+                f"alone with a fallback length target of ~{target} words. Its SERP-coverage "
+                f"score is neutral. Once the provider is back, reoptimize the page from "
+                f"Saved Pages to write it against the real competitor set."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "location": location, "length_target": target},
+            dedupe_key=f"content_no_serp_analysis:{client_id}:{keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — a notification failure never blocks generation
+        logger.warning("local_seo.analysis_degraded_notify_failed", extra={"error": str(exc)})
+
+
 async def _get_or_compute_analysis(
     keyword: str,
     location: str,
@@ -561,11 +608,39 @@ async def generate_page(
         keyword, location, location_code, force_refresh, user_id, required=False,
         entity_provider=entity_provider,
     )
-    if serp is not None:
+    if serp is None and settings.local_seo_analysis_retry_delay_seconds > 0:
+        # One retry: the failure seen in practice is a seconds-long nlp restart
+        # window (a redeploy), not a lasting provider outage.
+        logger.warning(
+            "local_seo.analysis_retry",
+            extra={"client_id": client_id, "keyword": keyword,
+                   "delay_s": settings.local_seo_analysis_retry_delay_seconds},
+        )
+        await asyncio.sleep(settings.local_seo_analysis_retry_delay_seconds)
+        serp = await _get_or_compute_analysis(
+            keyword, location, location_code, force_refresh, user_id, required=False,
+            entity_provider=entity_provider,
+        )
+    analysis_ok = serp is not None
+    if analysis_ok:
         payload["serp_analysis"] = serp
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     serp_target = (serp or {}).get("serp_word_target")
+    if not serp_target:
+        # No measured SERP length (analysis failed, or too few competitor pages
+        # to average): the page must still be budgeted + graded on length, else
+        # the writer falls back to the template's per-section counts and ships
+        # 2–3× the market's length. Use the market's standing target.
+        serp_target = _resolve_fallback_length_target(location_code, location)
+        payload["length_target"] = serp_target
+        logger.warning(
+            "local_seo.length_target_fallback",
+            extra={"client_id": client_id, "keyword": keyword, "target": serp_target,
+                   "analysis_ok": analysis_ok},
+        )
+        if not analysis_ok:
+            _notify_analysis_degraded(client_id, keyword, location, serp_target)
 
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
@@ -603,7 +678,9 @@ async def generate_page(
     result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT, on_progress=on_progress)
     result = await _apply_structure_gate(result, payload, reference_analysis)
     coverage = _guarantee_internal_links(result, internal_links)
-    page = _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
+    # Record whether competitor analysis actually informed this page (it used
+    # to be hard-coded True, so a degraded page was indistinguishable on read).
+    page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes)
     if coverage is not None:
         page["link_coverage"] = coverage
     return page

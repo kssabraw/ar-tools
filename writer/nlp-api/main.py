@@ -4584,29 +4584,107 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     }
 
 
-def _compute_length_fit(page_html: str, serp_analysis: Optional[dict]) -> Optional[dict]:
+def _resolve_length_target(
+    serp_analysis: Optional[dict], fallback_target: Optional[int] = None
+) -> Optional[int]:
+    """The word target that governs a page. The SERP-measured target (avg + 20%)
+    wins when the analysis carries one; otherwise the caller's `fallback_target`
+    (platform-api sends one when its SERP analysis failed — a provider outage
+    used to mean NO target at all, so the writer fell back to the template's
+    per-section counts and the page shipped at 3,000+ words with length neither
+    budgeted nor graded); otherwise None (length is not graded)."""
+    target = (serp_analysis or {}).get("serp_word_target")
+    if target and int(target) > 0:
+        return int(target)
+    if fallback_target and int(fallback_target) > 0:
+        return int(fallback_target)
+    return None
+
+
+def _length_trim_deficiency(
+    inline_scores: Optional[dict], inline_defs: Optional[list], min_ratio: float
+) -> Optional[dict]:
+    """Pure: the length_fit deficiency to feed a trim pass when the page is over
+    its target by at least `min_ratio` (page_words >= target × min_ratio), else
+    None. Shared by generate-page and reoptimize-page so both decide the same way.
+    Under-length never returns a deficiency (a trim must never ask for padding)."""
+    length_engine = (inline_scores or {}).get("length_fit")
+    length_def = next(
+        (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
+    )
+    if not length_def or not length_fit.is_over_length(length_engine, min_ratio):
+        return None
+    return length_def
+
+
+def _length_trim_block(length_engine: Optional[dict]) -> str:
+    """The LENGTH TRIM OVERRIDE injected into a trim pass's prompt. The shared
+    reoptimize system prompt is add-oriented ("insert new content", "do not
+    remove or reorder existing elements") — exactly wrong for a trim, which is
+    why trim passes asked to cut ~1,000 words returned pages barely shorter.
+    This block explicitly authorises removal/merging and names the number.
+    Empty when the engine carries no measured overage."""
+    e = length_engine or {}
+    if not e.get("measured"):
+        return ""
+    words = int(e.get("page_words") or 0)
+    target = int(e.get("target_words") or 0)
+    if not target or words <= target:
+        return ""
+    ceiling = int(round(target * 1.05))
+    cut = words - target
+    return (
+        "LENGTH TRIM OVERRIDE — THIS PASS IS A CUT, NOT AN EXPANSION (HIGHEST PRIORITY):\n"
+        f"The page body is ~{words} words against a target of ~{target}. Cut at least ~{cut} words "
+        f"so the visible <article> body lands at or below ~{target} words (HARD CEILING: {ceiling}). "
+        "For this pass ONLY, the usual 'do not remove or reorder existing elements' rule is "
+        "LIFTED for body content: you MAY delete paragraphs, list items, table rows and whole H3 "
+        "sub-sections, and MERGE overlapping H2/H3 sections. Take the cut primarily from the main "
+        "service body — drop repeated points, generic filler, and net-new topics competitors don't "
+        "cover; keep every fact, phone number, address and CTA that remains accurate. NEVER remove "
+        "the intro answer block, the CTA blocks, the geographic section, the FAQ (keep ≥4 entries) "
+        "or the JSON-LD schema. Do NOT add new sections, paragraphs or FAQ entries in this pass. "
+        "A shorter page that keeps the required structure is the correct output."
+    )
+
+
+def _compute_length_fit(
+    page_html: str, serp_analysis: Optional[dict], fallback_target: Optional[int] = None
+) -> Optional[dict]:
     """Deterministic length-fit engine (Python, not Claude). Scores the page's
     body length against the SERP target (avg + 20%) carried on the serp_analysis
     dict. Returns None when there is no target (external-URL scoring or an older
     analysis) or no body prose; callers omit the engine on None so the composite
     renormalizes and length_fit never distorts a score it cannot measure."""
-    target = (serp_analysis or {}).get("serp_word_target")
-    return length_fit.compute_length_fit(page_html, target)
+    return length_fit.compute_length_fit(
+        page_html, _resolve_length_target(serp_analysis, fallback_target)
+    )
 
 
-def _length_budget_line(serp_analysis: Optional[dict]) -> str:
+def _length_budget_line(
+    serp_analysis: Optional[dict], fallback_target: Optional[int] = None
+) -> str:
     """The 'TOTAL WORD BUDGET' line injected into a writer/reoptimizer prompt so
-    the page targets the SERP average + 20%. Empty string when no target was
-    measured (too few competitor pages) — the prompt then falls back to the
-    template's per-section counts."""
+    the page targets the SERP average + 20%. Falls back to `fallback_target`
+    (the market's standing target, sent by platform-api when the SERP analysis
+    failed) so an analysis outage no longer leaves the writer with no budget at
+    all. Empty string only when neither exists — the prompt then falls back to
+    the template's per-section counts."""
     sa = serp_analysis or {}
-    target = sa.get("serp_word_target")
+    target = _resolve_length_target(sa, fallback_target)
     if not target:
         return ""
-    avg = sa.get("serp_avg_word_count") or int(round(target / length_fit.OVERAGE_MULTIPLIER))
+    if sa.get("serp_word_target"):
+        avg = sa.get("serp_avg_word_count") or int(round(target / length_fit.OVERAGE_MULTIPLIER))
+        basis = f"(competitor SERP average ~{avg} + 20%)"
+    else:
+        basis = (
+            "(no competitor SERP could be measured for this query — this is the standing "
+            "length target for pages in this market)"
+        )
     return (
         f"TOTAL WORD BUDGET: ~{target} words for the whole <article> body "
-        f"(competitor SERP average ~{avg} + 20%). This is AUTHORITATIVE — scale the section "
+        f"{basis}. This is AUTHORITATIVE — scale the section "
         f"guidance so the page lands within ±10% of it (see the LENGTH BUDGET rule). Do not "
         f"exceed it to chase extra coverage, and never pad or fabricate to reach it."
     )
@@ -4753,8 +4831,12 @@ async def _score_html_inline(
     serp_analysis_dict: Optional[dict],
     client,
     voice_card: Optional[dict] = None,
+    length_target: Optional[int] = None,
 ) -> tuple:
-    """Score a page in-process (no HTTP). Returns (composite_score, deficiencies, scores, token_rec)."""
+    """Score a page in-process (no HTTP). Returns (composite_score, deficiencies, scores, token_rec).
+
+    `length_target` is the fallback word target used for length_fit when the
+    serp_analysis carries none (see `_resolve_length_target`)."""
     from bs4 import BeautifulSoup as _BS
     html_structure = _detect_html_structure(page_html)
     page_text = _BS(page_html, "html.parser").get_text(separator="\n", strip=True)
@@ -4782,7 +4864,7 @@ async def _score_html_inline(
     if not scores:
         raise Exception("Inline scoring returned invalid JSON")
     scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
-    _lf = _compute_length_fit(page_html, serp_analysis_dict)
+    _lf = _compute_length_fit(page_html, serp_analysis_dict, length_target)
     if _lf is not None:
         scores["length_fit"] = _lf
     composite, _ = _composite_from_scores(scores, _ENGINE_WEIGHTS)
@@ -4848,8 +4930,16 @@ async def _reoptimize_html_inline(
     client,
     voice_block: str = "",
     voice_corrections: str = "",
+    length_target: Optional[int] = None,
+    trim_block: str = "",
 ) -> tuple:
     """Reoptimize HTML in-process. Returns (content_html, schema_json, page_title, token_rec).
+
+    `length_target` puts the TOTAL WORD BUDGET line into the rewrite prompt (the
+    system prompt's LENGTH BUDGET rule then applies) so a rewrite pass can't
+    re-inflate a page the budget already bounded. `trim_block` is the LENGTH TRIM
+    OVERRIDE (see `_length_trim_block`) for a dedicated trim pass — it lifts the
+    system prompt's "never remove elements" rule for body content.
 
     `voice_block` is the client's brand-guide card; without it every rewrite
     pass stripped the voice back out of a page that had it at generation.
@@ -4867,11 +4957,15 @@ async def _reoptimize_html_inline(
     )
     voice_section = f"\n{voice_block}\n" if voice_block else ""
     corrections_section = f"\n{voice_corrections}\n" if voice_corrections else ""
+    budget_line = _length_budget_line(serp_analysis_dict, length_target)
+    length_section = "\n".join(part for part in (budget_line, trim_block) if part)
+    length_section = f"\n{length_section}\n" if length_section else ""
 
     user_prompt = f"""BUSINESS: {business_name} | CATEGORY: {gbp_category}
 KEYWORD: {keyword} | CITY: {city}
 PHONE: {phone or "[PHONE]"}
 ADDRESS: {address or "Not provided"}
+{length_section}
 {serp_ctx}
 
 {seo_checklist}
@@ -7324,6 +7418,12 @@ class GeneratePageRequest(BaseModel):
     voice_card: Optional[dict] = None
     reviews: Optional[List[dict]] = None
     serp_analysis: Optional[dict] = None
+    # Fallback word target (whole <article> body) used ONLY when serp_analysis
+    # carries no serp_word_target — platform-api sends the market's standing
+    # target when its SERP analysis failed, so length is still budgeted and
+    # graded (length_fit) instead of silently falling back to the template's
+    # per-section counts.
+    length_target: Optional[int] = None
     # Phase 3 — "page template": mirror the section structure of a reference page.
     # Provide a URL (scraped here) or raw HTML; the writer follows that section
     # layout/heading hierarchy instead of the default 13-section structure, while
@@ -7457,6 +7557,15 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 serp_analysis_dict = None
 
         serp_ctx = _serp_context(serp_analysis_dict)
+        # The word target that governs this page: SERP-measured when the analysis
+        # carries one, else the caller's fallback. Threaded into the writer budget,
+        # every inline score (length_fit) and every rewrite/trim pass below.
+        length_target = _resolve_length_target(serp_analysis_dict, body.length_target)
+        if length_target and not (serp_analysis_dict or {}).get("serp_word_target"):
+            logger.info(
+                "generate-page: no SERP length target for '%s' — using fallback target %s words",
+                body.keyword, length_target,
+            )
 
         # Max-Cosine Synthesis (the SRT's "real cosine vs the AIO answer"): aim the
         # main entity + H2/H3 headings at the live AI Overview via Gemini cosine
@@ -7718,7 +7827,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
                 f"User notes: {body.notes.strip()}\n"
             )
 
-        length_budget_text = _length_budget_line(serp_analysis_dict)
+        length_budget_text = _length_budget_line(serp_analysis_dict, body.length_target)
         internal_links_text = _internal_links_block(body.internal_links)
 
         user_prompt = f"""BUSINESS DATA
@@ -7870,6 +7979,7 @@ Full location: {body.location}
                     content_html, body.keyword, body.location, body.business_name,
                     body.gbp_category, body.address, serp_analysis_dict, client,
                     voice_card=voice_card,
+                    length_target=length_target,
                 )
                 token_rec["input_tokens"]  += score_tok["input_tokens"]
                 token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -7892,23 +8002,28 @@ Full location: {body.location}
         # (the same mechanism the voice loop uses) trims it. Runs before the voice
         # loop so voice is judged on the page that ships. Best-effort: any failure
         # keeps the generated page. Under-length never triggers a trim.
+        # NOT gated on the time budget (unlike the voice/SEO passes below): a
+        # slow run under provider backoff used to spend the whole budget on the
+        # first draft + score, skip this pass, and ship a page 60–80% over
+        # target — the most visible defect a client sees. One trim always runs
+        # when the overage is large enough; only the later optional passes yield
+        # to the clock.
         length_engine = (inline_scores or {}).get("length_fit")
-        length_def = next(
-            (d for d in (inline_defs or []) if d.get("engine_key") == "length_fit"), None
-        )
-        _needs_trim = bool(length_def) and length_fit.is_over_length(length_engine, LENGTH_TRIM_MIN_RATIO)
-        if _needs_trim and not _within_time_budget():
-            logger.info(
-                "generate-page: over target but the %ss time budget is spent — "
-                "shipping without the length-trim pass", GENERATION_TIME_BUDGET_SECONDS
-            )
-        elif _needs_trim:
+        length_def = _length_trim_deficiency(inline_scores, inline_defs, LENGTH_TRIM_MIN_RATIO)
+        if length_def:
+            if not _within_time_budget():
+                logger.info(
+                    "generate-page: %ss time budget already spent — running the length-trim "
+                    "pass anyway (page is over target by ≥%.0f%%)",
+                    GENERATION_TIME_BUDGET_SECONDS, (LENGTH_TRIM_MIN_RATIO - 1) * 100,
+                )
             await q.put({"step": "progress", "progress": 91, "message": "Trimming to match the top pages…"})
             try:
                 trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
                     content_html, body.keyword, body.location, city, body.business_name,
                     body.gbp_category, body.address, body.phone, [length_def],
                     serp_analysis_dict, seo_checklist, client, voice_block=voice_block,
+                    length_target=length_target, trim_block=_length_trim_block(length_engine),
                 )
                 token_rec["input_tokens"]  += trim_tok["input_tokens"]
                 token_rec["output_tokens"] += trim_tok["output_tokens"]
@@ -7923,6 +8038,7 @@ Full location: {body.location}
                             content_html, body.keyword, body.location, body.business_name,
                             body.gbp_category, body.address, serp_analysis_dict, client,
                             voice_card=voice_card,
+                            length_target=length_target,
                         )
                         token_rec["input_tokens"]  += rescore_tok["input_tokens"]
                         token_rec["output_tokens"] += rescore_tok["output_tokens"]
@@ -8013,6 +8129,7 @@ Full location: {body.location}
                             deficiencies=_seo_defs, serp_analysis_dict=serp_analysis_dict,
                             seo_checklist=seo_checklist, client=client,
                             voice_block=voice_block, voice_corrections=corrections,
+                            length_target=length_target,
                         )
                         if (fixed_html or "").strip():
                             schema_json = _fs or schema_json
@@ -8036,6 +8153,7 @@ Full location: {body.location}
                         content_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, serp_analysis_dict, client,
                         voice_card=voice_card,
+                        length_target=length_target,
                     )
                     token_rec["input_tokens"]  += rescore_tok["input_tokens"]
                     token_rec["output_tokens"] += rescore_tok["output_tokens"]
@@ -8139,6 +8257,9 @@ class ReoptimizePageRequest(BaseModel):
     address: Optional[str] = None
     phone: Optional[str] = None
     serp_analysis: Optional[dict] = None
+    # Fallback word target when serp_analysis carries none (mirrors
+    # GeneratePageRequest.length_target).
+    length_target: Optional[int] = None
     # Brand voice + ICP. Previously absent here, which meant every reoptimize
     # pass rewrote the page with the client's guide missing from the prompt —
     # so voice present at generation was diluted by each later pass.
@@ -8214,6 +8335,9 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         # Parse existing page zones and compute delta-based SERP context
         page_zones = _parse_page_zones(existing_html)
         serp_ctx = _reopt_serp_context(page_zones, body.serp_analysis)
+        # The word target that governs this page (SERP-measured, else the
+        # caller's fallback) — threaded into every score + rewrite pass below.
+        length_target = _resolve_length_target(body.serp_analysis, body.length_target)
 
         # Max-Cosine Synthesis against the live AI Overview (best-effort; '' when the
         # supplied serp_analysis carried no AIO / on failure).
@@ -8265,7 +8389,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             "Still keep every paragraph short per rule 2 (1–2 sentences)."
         )
 
-        length_budget_text = _length_budget_line(body.serp_analysis)
+        length_budget_text = _length_budget_line(body.serp_analysis, body.length_target)
 
         internal_links_text = _internal_links_block(body.internal_links)
         user_prompt = f"""BUSINESS DATA
@@ -8355,6 +8479,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 current_html, body.keyword, body.location, body.business_name,
                 body.gbp_category, body.address, body.serp_analysis, client,
                 voice_card=voice_card,
+                length_target=length_target,
             )
             token_rec["input_tokens"]  += score_tok["input_tokens"]
             token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -8399,7 +8524,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         current_html, body.keyword, body.location, city,
                         body.business_name, body.gbp_category, body.address, body.phone,
                         inline_defs, body.serp_analysis, seo_checklist, client,
-                        voice_block=voice_block,
+                        voice_block=voice_block, length_target=length_target,
                     )
                     token_rec["input_tokens"]  += reopt_tok["input_tokens"]
                     token_rec["output_tokens"] += reopt_tok["output_tokens"]
@@ -8422,6 +8547,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         current_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, body.serp_analysis, client,
                         voice_card=voice_card,
+                        length_target=length_target,
                     )
                     token_rec["input_tokens"]  += score_tok["input_tokens"]
                     token_rec["output_tokens"] += score_tok["output_tokens"]
@@ -8439,6 +8565,61 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
 
         if not content_html:
             raise Exception("Reoptimization produced empty content. Please try again.")
+
+        # ── Length enforcement (same contract as generate-page) ─────────────
+        # The score loop above is gated on the composite (≥90 → done) and
+        # rewrites the whole page against ALL deficiencies, so a page 80% over
+        # its target routinely came out of it still 80% over — length_fit's
+        # 10% weight can't move the composite enough to keep the loop going,
+        # and the rewrite prompt is add-oriented. One dedicated trim pass now
+        # runs whenever the shipped page is still over target by
+        # LENGTH_TRIM_MIN_RATIO, NOT gated on the time budget, then re-scores so
+        # the verdict describes the page that ships. Best-effort.
+        _trim_def = _length_trim_deficiency(inline_scores, inline_defs, LENGTH_TRIM_MIN_RATIO)
+        if _trim_def:
+            _trim_engine = (inline_scores or {}).get("length_fit")
+            if not seo_checklist:
+                try:
+                    seo_checklist = await _build_seo_checklist(
+                        keyword=body.keyword, location=body.location, address=body.address,
+                        phone=body.phone, gbp_category=body.gbp_category,
+                        serp_analysis=body.serp_analysis, client=client, voice_card=voice_card,
+                    )
+                except Exception as _ce:
+                    logger.warning(f"reoptimize-page: checklist build for length trim failed: {_ce}")
+                    seo_checklist = ""
+            await q.put({"step": "progress", "progress": 92, "message": "Trimming to match the top pages…"})
+            try:
+                trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
+                    content_html, body.keyword, body.location, city, body.business_name,
+                    body.gbp_category, body.address, body.phone, [_trim_def],
+                    body.serp_analysis, seo_checklist, client, voice_block=voice_block,
+                    length_target=length_target, trim_block=_length_trim_block(_trim_engine),
+                )
+                token_rec["input_tokens"]  += trim_tok["input_tokens"]
+                token_rec["output_tokens"] += trim_tok["output_tokens"]
+                token_rec["cost_usd"]       = round(token_rec["cost_usd"] + trim_tok["cost_usd"], 6)
+                if (trimmed_html or "").strip():
+                    content_html = trimmed_html
+                    schema_json  = trimmed_schema if trimmed_schema is not None else schema_json
+                    page_title   = trimmed_title or page_title
+                    try:
+                        (
+                            inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
+                        ) = await _score_html_inline(
+                            content_html, body.keyword, body.location, body.business_name,
+                            body.gbp_category, body.address, body.serp_analysis, client,
+                            voice_card=voice_card, length_target=length_target,
+                        )
+                        token_rec["input_tokens"]  += rescore_tok["input_tokens"]
+                        token_rec["output_tokens"] += rescore_tok["output_tokens"]
+                        token_rec["cost_usd"]       = round(token_rec["cost_usd"] + rescore_tok["cost_usd"], 6)
+                    except Exception as _lse:
+                        logger.warning(f"reoptimize-page: re-score after length trim failed: {_lse}")
+                else:
+                    logger.warning("reoptimize-page: length trim returned empty HTML; keeping previous")
+            except Exception as _lte:
+                logger.warning(f"reoptimize-page: length trim pass failed (keeping page): {_lte}")
 
         # ── Brand-voice enforcement, same contract as generate-page ─────────
         # Runs on the FINAL page whatever the score loop did: a rewrite can
@@ -8492,6 +8673,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         body.business_name, body.gbp_category, body.address, body.phone,
                         [], body.serp_analysis, seo_checklist, client,
                         voice_block=voice_block, voice_corrections=corrections,
+                        length_target=length_target,
                     )
                 except Exception as _ve:
                     logger.warning(f"reoptimize-page: voice pass {_fix_pass} failed: {_ve}")
@@ -8512,6 +8694,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         content_html, body.keyword, body.location, body.business_name,
                         body.gbp_category, body.address, body.serp_analysis, client,
                         voice_card=voice_card,
+                        length_target=length_target,
                     )
                     token_rec["input_tokens"]  += rescore_tok["input_tokens"]
                     token_rec["output_tokens"] += rescore_tok["output_tokens"]
