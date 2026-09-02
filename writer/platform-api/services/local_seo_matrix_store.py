@@ -427,8 +427,16 @@ def start_generate(
         return {"job_ids": [], "cell_ids": [], "estimate": est}
 
     rows = []
+    base_url = matrix.get("base_url") or ""
     for i, cell in enumerate(selected):
         location, code = _location_for_cell(matrix, cell)
+        # Sibling links are planned against the WHOLE grid (plan §4.1), so a cell
+        # generated before its siblings still links to their planned URLs.
+        links = core.sibling_links(
+            cell, cells, base_url,
+            location_cap=settings.local_seo_matrix_sibling_location_cap,
+            max_links=settings.local_seo_matrix_max_links,
+        )
         rows.append(
             {
                 "job_type": "local_seo_generate",
@@ -445,6 +453,7 @@ def start_generate(
                     "entity_provider": matrix.get("entity_provider") or None,
                     "matrix_id": matrix_id,
                     "matrix_cell_id": cell["id"],
+                    "internal_links": links,
                 },
             }
         )
@@ -458,6 +467,14 @@ def start_generate(
         extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids)},
     )
     return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected], "estimate": est}
+
+
+def record_link_coverage(cell_id: str, coverage: dict) -> None:
+    """Store a cell page's sibling-link coverage (`{expected, present, missing,
+    appended}`) — written by the generate job after the link guarantee ran."""
+    get_supabase().table("local_seo_matrix_cells").update(
+        {"link_coverage": coverage, "updated_at": "now()"}
+    ).eq("id", cell_id).execute()
 
 
 # ── suggestions (async job) ───────────────────────────────────────────────────

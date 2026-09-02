@@ -58,6 +58,12 @@ def test_start_generate_enqueues_one_job_per_cell_with_matrix_payload():
     assert p0["keyword"] == "Roof restoration Melbourne" and p0["location_code"] == 1000567
     assert p1["keyword"] == "Roof restoration Hawthorn" and p1["location_code"] == 21030
     assert p0["matrix_id"] == "m1" and p0["matrix_cell_id"] == "cell-0" and p0["user_id"] == "user-1"
+    # Sibling links planned against the whole grid ride on the payload (Phase 2).
+    assert p0["internal_links"] == [
+        {"anchor": "Roof restoration in Hawthorn", "url": "https://fcr.com.au/roof-restoration-hawthorn/",
+         "relation": core.SAME_SERVICE},
+    ]
+    assert p1["internal_links"][0]["url"] == "https://fcr.com.au/roof-restoration-melbourne/"
     assert rows[0]["scheduled_at"] < rows[1]["scheduled_at"]  # staggered
     # Cells flipped to queued with their job ids.
     patched = [c[0][0][0] for c in apply.call_args_list]
@@ -96,3 +102,49 @@ def test_validate_pattern_400s():
         store._validate_pattern("/{service}/")
     assert exc.value.status_code == 400 and exc.value.detail == "url_pattern_missing_location_token"
     assert store._validate_pattern("") == core.DEFAULT_URL_PATTERN
+
+
+# ── the link guarantee at the generate seam (Phase 2) ─────────────────────────
+
+def test_guarantee_internal_links_appends_missing_and_reports_coverage():
+    from services import local_seo_service as svc
+
+    links = [
+        {"anchor": "Roof restoration in Hawthorn", "url": "https://fcr.com.au/roof-restoration-hawthorn/", "relation": core.SAME_LOCATION},
+        {"anchor": "Tile roof restoration in Melbourne", "url": "https://fcr.com.au/tile-roof-restoration-melbourne/", "relation": core.SAME_SERVICE},
+    ]
+    result = {"content_html": '<article><p><a href="/roof-restoration-hawthorn/">Hawthorn</a></p></article>'}
+    coverage = svc._guarantee_internal_links(result, links)
+    assert coverage["expected"] == 2 and coverage["missing"] == [] and coverage["appended"] == 1
+    assert "tile-roof-restoration-melbourne" in result["content_html"]
+    assert result["content_html"].count("roof-restoration-hawthorn/") == 1
+    # No links → nothing touched, no coverage.
+    untouched = {"content_html": "<p>x</p>"}
+    assert svc._guarantee_internal_links(untouched, None) is None
+    assert untouched["content_html"] == "<p>x</p>"
+
+
+@pytest.mark.asyncio
+async def test_run_generate_job_records_cell_link_coverage():
+    from services import local_seo_service as svc
+
+    coverage = {"expected": 1, "present": ["/a/"], "missing": [], "appended": 0}
+    fake_generate = MagicMock()
+
+    async def _gen(**kw):
+        fake_generate(**kw)
+        return {"id": "page-1", "link_coverage": coverage}
+
+    sb = MagicMock()
+    job = {"id": "job-1", "payload": {
+        "client_id": "c1", "keyword": "k", "location": "l", "user_id": "u",
+        "matrix_id": "m1", "matrix_cell_id": "cell-0",
+        "internal_links": [{"anchor": "a", "url": "/a/", "relation": core.SAME_LOCATION}],
+    }}
+    with patch.object(svc, "generate_page", new=_gen), \
+         patch.object(svc, "get_supabase", return_value=sb), \
+         patch.object(store, "record_link_coverage") as record:
+        await svc.run_generate_job(job)
+    assert fake_generate.call_args.kwargs["internal_links"] == job["payload"]["internal_links"]
+    record.assert_called_once_with("cell-0", coverage)
+    assert sb.table.return_value.update.call_args[0][0]["result"] == {"page_id": "page-1"}

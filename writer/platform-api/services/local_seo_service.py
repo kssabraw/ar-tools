@@ -520,8 +520,15 @@ async def generate_page(
     notes: Optional[str] = None,
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+    internal_links: Optional[list[dict]] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
+
+    `internal_links` (``[{anchor, url, relation}]``, from the service × location
+    matrix) is handed to the writer as a prompt block AND guaranteed afterwards:
+    any link the writer dropped is appended deterministically
+    (`local_seo_matrix.ensure_internal_links`) and the coverage is returned on
+    the page dict as ``link_coverage`` (not a page column — the matrix cell keeps it).
 
     The location is resolved/validated first: a mistyped area (no picked code)
     that can't be matched fails loudly (400). Competitor SERP analysis always
@@ -591,9 +598,30 @@ async def generate_page(
                 break
     if (notes or "").strip():
         payload["notes"] = notes.strip()  # per-page writing guidance the writer follows
+    if internal_links:
+        payload["internal_links"] = internal_links
     result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT, on_progress=on_progress)
     result = await _apply_structure_gate(result, payload, reference_analysis)
-    return _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
+    coverage = _guarantee_internal_links(result, internal_links)
+    page = _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
+    if coverage is not None:
+        page["link_coverage"] = coverage
+    return page
+
+
+def _guarantee_internal_links(result: dict, internal_links: Optional[list[dict]]) -> Optional[dict]:
+    """The matrix's link guarantee: after the writer (and every scoring /
+    corrective pass) is done, append any sibling link it dropped as a compact
+    block and return the coverage. Runs AFTER the structural gate so the appended
+    list never counts against the reference-layout score. None when there were
+    no links to guarantee."""
+    if not internal_links:
+        return None
+    from services import local_seo_matrix
+
+    html, coverage = local_seo_matrix.ensure_internal_links(result.get("content_html") or "", internal_links)
+    result["content_html"] = html
+    return coverage
 
 
 # ── background generation (async job) ────────────────────────────────────────
@@ -653,11 +681,22 @@ async def run_generate_job(job: dict) -> None:
             page_template_url=payload.get("page_template_url"),
             entity_provider=payload.get("entity_provider"),
             on_progress=_job_progress_writer(job_id),
+            internal_links=payload.get("internal_links") or None,
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
         ).eq("id", job_id).execute()
         logger.info("local_seo.generate_job_complete", extra={"job_id": job_id, "page_id": page["id"]})
+        # A matrix cell keeps the sibling-link coverage (plan §4.3). Best-effort:
+        # the matrix reconciles the cell's status from this job row on read, so a
+        # failed coverage write costs only the coverage detail, never the page.
+        if payload.get("matrix_cell_id") and page.get("link_coverage") is not None:
+            try:
+                from services.local_seo_matrix_store import record_link_coverage
+
+                record_link_coverage(payload["matrix_cell_id"], page["link_coverage"])
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("local_seo.matrix_link_coverage_failed", extra={"job_id": job_id, "error": str(exc)})
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.generate_job_failed", extra={"job_id": job_id, "error": str(detail)})
@@ -848,6 +887,7 @@ async def enqueue_reoptimize_page(
     existing_page_html: Optional[str], existing_page_url: Optional[str],
     deficiencies: list[dict], serp_analysis: Optional[dict], user_id: str,
     entity_provider: Optional[str] = None,
+    internal_links: Optional[list[dict]] = None,
 ) -> str:
     """Enqueue a background reoptimize-by-page job (the score→reoptimize flow).
     Returns the job id. A single interactive reoptimize, so it's NOT staggered —
@@ -871,6 +911,7 @@ async def enqueue_reoptimize_page(
                     "serp_analysis": serp_analysis,
                     "user_id": user_id,
                     "entity_provider": entity_provider,
+                    "internal_links": internal_links or None,
                 },
             }
         )
@@ -898,6 +939,7 @@ async def run_reoptimize_page_job(job: dict) -> None:
             user_id=payload["user_id"],
             entity_provider=payload.get("entity_provider"),
             on_progress=_job_progress_writer(job_id),
+            internal_links=payload.get("internal_links") or None,
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
@@ -1040,9 +1082,12 @@ async def reoptimize_page(
     user_id: str,
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+    internal_links: Optional[list[dict]] = None,
 ) -> dict:
     """Reoptimize an existing page to lift its score, re-score the result, and
-    persist it as a `mode='reoptimize'` row."""
+    persist it as a `mode='reoptimize'` row. `internal_links` (matrix sibling
+    pages) are kept through the rewrite and guaranteed afterwards, exactly as on
+    generate — a reoptimize pass must not strip the silo."""
     client = _get_client(client_id)
     fields = _business_fields(client)
     if not existing_page_html and not existing_page_url:
@@ -1070,7 +1115,9 @@ async def reoptimize_page(
         "voice_card": voice_card,
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
+        "internal_links": internal_links or None,
     }, on_progress=on_progress)
+    link_coverage = _guarantee_internal_links(result, internal_links)
 
     # Newer nlp builds surface the score the reoptimize loop already computed.
     # Only re-score when it's absent (older nlp) so the persisted page still
@@ -1099,7 +1146,10 @@ async def reoptimize_page(
             # (Catches HTTPException from the proxy AND any decode/unexpected error.)
             logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
-    return _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
+    page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
+    if link_coverage is not None:
+        page["link_coverage"] = link_coverage
+    return page
 
 
 # Pages scoring at/above this are already strong enough that a rewrite isn't

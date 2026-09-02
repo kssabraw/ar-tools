@@ -7259,6 +7259,49 @@ async def _extract_template_outline(url: Optional[str], html: Optional[str]) -> 
     return _outline_from_html(raw_html)
 
 
+# ── sibling internal links (service × location matrix) ────────────────────────
+# platform-api's matrix (services/local_seo_matrix.py) plans every cell's
+# sibling pages up front and hands the writer their planned URLs, so the pages
+# form a silo from the first draft. The block is a LATE, high-priority prompt
+# section; platform-api then verifies the links deterministically and appends
+# any the writer dropped, so this only has to steer, never guarantee.
+_INTERNAL_LINKS_MAX = 12
+_INTERNAL_LINK_RELATIONS = {
+    "same_location_other_service": "another service in this location",
+    "same_service_other_location": "this service in a nearby location",
+}
+
+
+def _internal_links_block(links: Optional[List[dict]]) -> str:
+    """Render the INTERNAL LINKS prompt block for `links`
+    (``[{anchor, url, relation}]``), or "" when there are none. Unknown relations
+    are kept (labelled generically); entries without a URL are dropped; capped at
+    `_INTERNAL_LINKS_MAX` so a wide matrix can't turn the block into link stuffing."""
+    rows: List[str] = []
+    for link in links or []:
+        if not isinstance(link, dict):
+            continue
+        url = str(link.get("url") or "").strip()
+        if not url:
+            continue
+        anchor = str(link.get("anchor") or "").strip() or url
+        relation = _INTERNAL_LINK_RELATIONS.get(str(link.get("relation") or ""), "a related page")
+        rows.append(f"- {anchor} → {url}  ({relation})")
+        if len(rows) >= _INTERNAL_LINKS_MAX:
+            break
+    if not rows:
+        return ""
+    return (
+        "\nINTERNAL LINKS — HIGH PRIORITY. This page is part of a service × location silo. "
+        "Link to EACH of the following exactly once, as a natural contextual link inside the "
+        "body copy, the related-services section, or a short \"Also serving nearby\" paragraph. "
+        "Use the URL verbatim; the anchor text may be lightly rephrased to read naturally. "
+        "Never place these in the H1 or the title. Do NOT invent any other internal links.\n"
+        + "\n".join(rows)
+        + "\n"
+    )
+
+
 class GeneratePageRequest(BaseModel):
     keyword: str
     entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
@@ -7313,6 +7356,9 @@ class GeneratePageRequest(BaseModel):
     # Scheduler "Notes" column / single-page notes). Followed exactly, but never
     # licence to fabricate business facts (phone, address, services not offered).
     notes: Optional[str] = None
+    # Sibling pages this page must link to — [{anchor, url, relation}] — planned
+    # by platform-api's service × location matrix (see `_internal_links_block`).
+    internal_links: Optional[List[dict]] = None
 
 class GeneratePageResponse(BaseModel):
     content_html: str
@@ -7673,6 +7719,7 @@ async def generate_page(request: Request, body: GeneratePageRequest):
             )
 
         length_budget_text = _length_budget_line(serp_analysis_dict)
+        internal_links_text = _internal_links_block(body.internal_links)
 
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
@@ -7698,6 +7745,7 @@ Full location: {body.location}
 
 {decision_map_text}
 {notes_text}
+{internal_links_text}
 {seo_checklist}
 
 {template_text}
@@ -8100,6 +8148,9 @@ class ReoptimizePageRequest(BaseModel):
     # Mirror of GeneratePageRequest — keep the condition->option decision-fit
     # treatment (default) or suppress it on reoptimization.
     include_decision_map: bool = True
+    # Sibling pages the rewrite must keep linking to (a reoptimize pass without
+    # them would strip the silo the page was generated into).
+    internal_links: Optional[List[dict]] = None
 
 class ReoptimizePageResponse(BaseModel):
     content_html: str
@@ -8216,6 +8267,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
 
         length_budget_text = _length_budget_line(body.serp_analysis)
 
+        internal_links_text = _internal_links_block(body.internal_links)
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -8236,6 +8288,7 @@ Full location: {body.location}
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}
 {voice_block}
+{internal_links_text}
 EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT invent any facts not present here):
 {existing_page_text[:4000]}"""
 
