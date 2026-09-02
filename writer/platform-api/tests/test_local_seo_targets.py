@@ -45,6 +45,43 @@ def test_matrix_empty_axis_returns_nothing():
     assert lt.build_matrix_silos("Roofing", "") == []
 
 
+def test_matrix_omits_location_name_on_the_seed_city_cell_only():
+    # The seed-city base cell must NOT carry a location_name: the marking's
+    # Option B scoping never lets a national /roof-restoration/ page cover a
+    # target that carries one, which is right for a suburb and wrong for the
+    # seed city (a single-city business would be offered a duplicate page).
+    silos = lt.build_matrix_silos(
+        "Roof Restoration", "Melbourne\nHawthorn\nmelbourne, victoria", seed_city="Melbourne"
+    )
+    pages = silos[0]["pages"]
+    assert [p["keyword"] for p in pages] == [
+        "Roof Restoration Melbourne",
+        "Roof Restoration Hawthorn",
+        "Roof Restoration melbourne, victoria",
+    ]
+    assert "location_name" not in pages[0]
+    assert pages[1]["location_name"] == "Hawthorn"
+    assert pages[2]["location_name"] == "melbourne, victoria"  # a different place string
+    # No seed city → unchanged behaviour (every page carries its place).
+    assert all("location_name" in p for p in lt.build_matrix_silos("Roofing", "Melbourne\nHawthorn")[0]["pages"])
+
+
+def test_seed_city_matrix_cell_is_covered_by_a_national_service_page():
+    # End-to-end through the marking: with the seed city's location_name
+    # omitted, /roof-restoration/ covers the Melbourne cell (on_site) but not the
+    # Hawthorn cell (missing) — the Option B split, now correct for a matrix.
+    silos = lt.build_matrix_silos("Roof Restoration", "Melbourne\nHawthorn", seed_city="Melbourne")
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.is_.return_value.execute.return_value.data = []
+    with patch.object(local_seo_silo, "get_supabase", return_value=sb):
+        items = local_seo_silo._to_items(
+            silos, "client-1", ["https://fcr.com/roof-restoration/"], seed_city="Melbourne"
+        )
+    by_kw = {i["keyword"]: i for i in items}
+    assert by_kw["Roof Restoration Melbourne"]["status"] == "on_site"
+    assert by_kw["Roof Restoration Hawthorn"]["status"] == "missing"
+
+
 # ── parse_list_rows ───────────────────────────────────────────────────────────
 
 def test_list_plain_one_keyword_per_line():

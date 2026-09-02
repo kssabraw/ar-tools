@@ -46,6 +46,7 @@ from routers.leadoff import router as leadoff_router
 from routers.ecommerce import router as ecommerce_router
 from routers.wheelhouse import router as wheelhouse_router
 from routers.local_seo import router as local_seo_router
+from routers.local_seo_matrix import router as local_seo_matrix_router
 from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
 from routers.outreach import router as outreach_router
@@ -327,6 +328,7 @@ app.include_router(icp_router)
 app.include_router(internal_linking_router)
 app.include_router(leadoff_router)
 app.include_router(local_seo_router)
+app.include_router(local_seo_matrix_router)
 app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(outreach_router)

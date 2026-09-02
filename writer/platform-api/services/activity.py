@@ -78,6 +78,7 @@ SINGLE_JOB_REGISTRY: dict[str, dict[str, Any]] = {
     "keyword_gap":             {"label": "Keyword gap",             "path": "clients/{cid}/domain-intel",     "notify": True},
     "link_gap":                {"label": "Backlink gap",            "path": "clients/{cid}/domain-intel",     "notify": True},
     "local_seo_silo":          {"label": "Silo plan",               "path": "clients/{cid}/local-seo",        "notify": True},
+    "local_seo_matrix_suggest": {"label": "Matrix suggestions",     "path": "clients/{cid}/local-seo",        "notify": True},
     "service_page_plan":       {"label": "Service page plan",       "path": "clients/{cid}/service-pages",    "notify": True},
     "gsc_research":            {"label": "GSC research",            "path": "clients/{cid}/gsc-research",     "notify": True},
     "client_report":          {"label": "Client report",           "path": "clients/{cid}/reports",          "notify": True},

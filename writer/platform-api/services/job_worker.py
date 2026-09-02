@@ -819,6 +819,10 @@ async def _process_job(job: dict) -> None:
         await run_local_relevance_job(job)
     elif job_type == "local_seo_silo":
         await run_silo_plan_job(job)
+    elif job_type == "local_seo_matrix_suggest":
+        from services.local_seo_matrix_store import run_suggest_job
+
+        await run_suggest_job(job)
     elif job_type == "local_seo_generate":
         await run_generate_job(job)
     elif job_type == "local_seo_reoptimize_url":
