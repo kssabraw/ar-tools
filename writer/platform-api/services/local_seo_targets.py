@@ -64,18 +64,29 @@ def _clean_lines(text: str) -> list[str]:
     return out
 
 
-def build_matrix_silos(services_text: str, locations_text: str) -> list[dict]:
+def build_matrix_silos(
+    services_text: str, locations_text: str, seed_city: str = ""
+) -> list[dict]:
     """Cartesian product of services × locations → one silo per service, each
     holding "<service> <location>" page targets.
 
     Each page carries the bare `location_name` so the on_site check matches a
     generic location page for the place, exactly like the AI planner's
-    Neighborhoods silo. Empty when either axis is empty. Composed keywords are
-    deduped globally (first wins)."""
+    Neighborhoods silo — EXCEPT the page whose location IS the `seed_city`. The
+    marking's national-page fallback (Option B, `local_seo_silo._match_page_on_site`)
+    deliberately never lets a city-less ``/roof-restoration/`` cover a target that
+    carries a `location_name`; that is right for a suburb and wrong for the
+    seed-city base page, which the AI planner emits without one precisely so the
+    national page counts. Omitting it here keeps a single-city business with a
+    national service page from being offered a duplicate Melbourne page. Empty when
+    either axis is empty. Composed keywords are deduped globally (first wins)."""
+    from services.site_page_index import slugify_place
+
     services = _clean_lines(services_text)
     locations = _clean_lines(locations_text)
     if not services or not locations:
         return []
+    seed_slug = slugify_place(seed_city or "")
     silos: list[dict] = []
     seen: set[str] = set()
     for service in services:
@@ -86,9 +97,10 @@ def build_matrix_silos(services_text: str, locations_text: str) -> list[dict]:
             if not keyword or key in seen:
                 continue
             seen.add(key)
-            pages.append(
-                {"keyword": keyword, "supporting_keywords": [], "location_name": location}
-            )
+            page: dict = {"keyword": keyword, "supporting_keywords": []}
+            if not seed_slug or slugify_place(location) != seed_slug:
+                page["location_name"] = location
+            pages.append(page)
         if pages:
             silos.append({"silo": service, "pages": pages})
     return silos
@@ -181,11 +193,12 @@ def build_list_silos(text: str, default_group: str = _DEFAULT_LIST_GROUP) -> lis
 
 
 def build_silos(
-    input_mode: str, services: str, locations: str, targets: str
+    input_mode: str, services: str, locations: str, targets: str, seed_city: str = ""
 ) -> list[dict]:
-    """Dispatch to the matrix or list builder by `input_mode`."""
+    """Dispatch to the matrix or list builder by `input_mode`. `seed_city` only
+    affects the matrix (see `build_matrix_silos`)."""
     if input_mode == "matrix":
-        return build_matrix_silos(services, locations)
+        return build_matrix_silos(services, locations, seed_city=seed_city)
     return build_list_silos(targets)
 
 
@@ -231,13 +244,13 @@ async def plan_custom_targets(
     Returns ``{"items": [...], "degraded_notes": [...]}``. No LLM / no paid calls
     beyond the site-discovery the marking already does (sitemap first, one
     DataForSEO ``site:`` fallback)."""
-    per_silo = build_silos(input_mode, services, locations, targets)
+    seed_city = local_seo_silo._parse_area(location)[0] or (location or "").strip()
+    per_silo = build_silos(input_mode, services, locations, targets, seed_city=seed_city)
     if not per_silo:
         return {"items": [], "degraded_notes": ["No targets were provided."]}
     per_silo, cap_note = cap_silos(per_silo)
 
     site_urls, site_note = await local_seo_silo._build_site_url_list(client_id, location_code)
-    seed_city = local_seo_silo._parse_area(location)[0] or (location or "").strip()
     items = local_seo_silo._to_items(per_silo, client_id, site_urls, seed_city)
     notes = [n for n in (cap_note, site_note) if n]
     return {"items": items, "degraded_notes": notes}
