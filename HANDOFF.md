@@ -1,5 +1,17 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-02 · **Local SEO writer: the day's adherence fixes are SUITE-WIDE, not Wheelhouse-specific (PRs [#975](https://github.com/kssabraw/ar-tools/pull/975) [#976](https://github.com/kssabraw/ar-tools/pull/976) [#983](https://github.com/kssabraw/ar-tools/pull/983) [#984](https://github.com/kssabraw/ar-tools/pull/984) [#986](https://github.com/kssabraw/ar-tools/pull/986) [#990](https://github.com/kssabraw/ar-tools/pull/990) [#992](https://github.com/kssabraw/ar-tools/pull/992), all merged + deployed)**
+
+Owner question, answered so nobody re-asks it: *"all the fixes we just did with Wheelhouse — the tuning, tightening, optimizing — are those implemented on the Local SEO writer as a whole?"* **Yes — every one of them.** None of the day's changes lives on the Wheelhouse client record; they are all code in the Local SEO writer (`services/page_spec*.py`, `local_seo_service.py`, nlp `main.py` enforcement loops, `review_analytics.py`) and fire for **every client** on every `/generate-page` and `/reoptimize-page` run (so bulk-create, matrix cells and reoptimize-by-URL too). Wheelhouse IT Fort Lauderdale was the test bench (five live runs; trajectory in `docs/modules/local-seo-adherence-learnings-2026-09-02.md`).
+
+What every client now gets, unconditionally: a kept page spec (page band + per-section bands, suspect-SERP clamp) measured after writing with section-scoped trims; structure checked per section and fixed in place (reorder, drop extras, write missing required sections in, rewrite only the drifting ones), saved honestly + notified on drift; a per-section intent + sentiment audit within each section's own band (only `positive` passes); the client's own list items handed to the writer by name; testimonials omitted (never faked) when no reviews are on file; the review pull storing ratings correctly and backfilling `clients.gbp.reviews`.
+
+**Two prerequisites the code cannot supply — per client, operational:**
+1. **A usable reference page** (live host, ≥300 words, ≥4 sections) on the client's Setup page → the client's OWN layout becomes the structure (`structure_mode: client`). Without one the page runs in template mode. **First Class Roofing's reference points at `staging3.firstclassroofing.com.au` → template mode until it is repointed at the live page.** The spec panel says which mode is in force.
+2. **Reviews pulled once** (`review_intel` job — on-demand from Setup/the Reviews card) → real quotes in the testimonials block. Done today for Wheelhouse FL; queued for Wheelhouse Orlando.
+
+Open (evidence-gated, see the learnings doc §3): an under-band "deepen" pass (four of four FL runs landed 0–2% under the band minimum; the loop only trims — decide after the cross-client batch), capturing list-item TEXT at reference-scrape time, and a cross-client acceptance rollup for plan §7.
+
 ## ⏩ Update — 2026-09-02 · **Bulk-throughput review fixes: idempotent Local SEO job retries, visible backoff, path-gated key rotation, cached SDK clients, pool retry budget (migration applied live)** (latest)
 
 An adversarial re-read of #970 found eight issues; all fixed here. None changes the activation steps.
