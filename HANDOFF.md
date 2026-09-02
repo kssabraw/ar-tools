@@ -1,6 +1,13 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-02 · **Bulk throughput: async_jobs priority + bulk lanes + Anthropic key pool + Local SEO transient retries (migration applied live; defaults = today's behaviour)** (latest)
+## ⏩ Update — 2026-09-02 · **SerMaStr recovery-plan follow-ups closed — HTML-entity unescape MERGED [#971](https://github.com/kssabraw/ar-tools/pull/971) (squash `13ac405`); the worker-lane follow-up needed no change** (latest)
+
+The two loose ends flagged after the live First Class Roofing `goal_recovery` run are both resolved.
+
+- **Fix 2 — HTML-escaped ampersand in recovery prose (MERGED #971).** The strategy digest carries scraped competitor names HTML-escaped (`Melbourne Roof Restoration &amp;amp; Repair`), and the model echoes them verbatim into its `assessment` / `root_cause` / findings `synthesis` / proposal `title`/`action`/`rationale`, so a persisted review — and the `goal_chronic` recovery notification built from it — read `&amp;amp;` instead of `&amp;`. A pure `_clean_prose` helper (strip + `html.unescape`) now runs over those free-text fields in `strategist.sanitize_review`, the single persist choke point, so both the stored review and every downstream notification/digest read clean text (handles named `&amp;` and numeric `&#215;` entities). New test `test_sanitize_unescapes_html_entities_in_prose`; ruff clean. CI green (platform-api tests + lint/typecheck + Netlify preview).
+- **Fix 1 — worker-lane contention (NO code change; already fixed by #970).** The bulk `local_seo_generate` batch that delayed the FCR `goal_chronic` alert ~2 h can no longer starve it: #970 stamps bulk items `job_priority.BACKGROUND`, the INTERACTIVE lane claims only `priority >= 0` (fencing bulk out), and both the MAIN and interactive lanes order `priority DESC` so `notification_dispatch` (default priority 0) jumps ahead of every background bulk row. Verified both halves in code (the claim ordering/lane fences and the six BACKGROUND enqueue sites) — the exact scenario cannot recur.
+
+## ⏩ Update — 2026-09-02 · **Bulk throughput: async_jobs priority + bulk lanes + Anthropic key pool + Local SEO transient retries (migration applied live; defaults = today's behaviour)**
 
 Found while a First Class Roofing reference-page scrape sat `pending` behind a 32-page Local SEO bulk batch for what would have been ~3 hours. Four fixes, one PR; every piece is defaulted so deploying it changes nothing until the env vars are set.
 
