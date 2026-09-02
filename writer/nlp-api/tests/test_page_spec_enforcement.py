@@ -336,3 +336,15 @@ def test_final_structure_verdict_reaudits_only_when_the_page_changed():
                                                            business_name="A", client=client))
     assert len(client.calls) == 1 and tok["input_tokens"] == 10
     assert any(i["code"] == "sentiment" and i["key"] == "intro" for i in fresh["issues"])
+
+
+def test_enforce_spec_structure_drops_a_template_section_the_client_layout_lacks():
+    spec = _spec()
+    spec["structure_mode"] = "client"
+    extra = '<section id="ref-extra-faq"><h2>FAQ</h2><h3>Q?</h3><p>a a a</p></section>'
+    html = _full_page(spec, extra=extra)
+    client = _ScriptedClient({"auditing the body sections": lambda _: json.dumps({"sections": []})})
+    new_html, _tok, verdict, changed = asyncio.run(main._enforce_spec_structure(
+        html, spec, _Q(), keyword="k", city="C", business_name="A", phone=None, address=None,
+        voice_block="", serp_analysis_dict=None, client=client, label="t"))
+    assert changed and "ref-extra-faq" not in new_html and verdict["status"] == "ok"

@@ -378,11 +378,88 @@ def ensure_required(sections: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+# ── 3b. client-first structure (the reference IS the layout) ────────────────
+
+STRUCTURE_MODE_CLIENT = "client"
+STRUCTURE_MODE_TEMPLATE = "template"
+
+
+def build_client_sections(groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The client's reference layout as the page structure, verbatim: every
+    folded reference group becomes a section IN THE CLIENT'S ORDER, keeping its
+    own level, intent, heading and blocks. Nothing is merged into an absorber
+    and no template section is inserted — the template is NOT the frame here.
+
+    Keys: a group whose intent maps cleanly to a free template key takes it
+    (the first hero → ``intro`` always, so the page keeps the H1 direct-answer
+    block the scorers and the contact injection expect; value_prop → usp then
+    features; cta → primary then secondary; the first service_detail →
+    ``services``; process/coverage/faq/pricing/real reviews → their slots), so
+    downstream logic keyed on those ids (FAQ entry counting, the services
+    sub-section band) still applies; every other group — objections,
+    comparisons, about, a second service body, overflow — is its own
+    ``ref-<slug>`` section with its reference intent preserved. Tiny stubs
+    (< EXTRA_MIN_REFERENCE_WORDS words with nothing folded) are dropped; a
+    heading-only group with a folded list (an industries list, a CTA heading)
+    stays. Pure."""
+    taken: dict[str, dict[str, Any]] = {}
+    seen_intent: dict[str, int] = {}
+    ordered: list[dict[str, Any]] = []
+    for idx, g in enumerate(groups):
+        intent = g.get("intent") or "other"
+        words = int(g.get("words") or 0)
+        folded = any(b.get("folded") for b in g.get("blocks") or [])
+        if intent == "trust":
+            has_quotes = any((b.get("type") == "quote") for b in g.get("blocks") or [])
+            if not (has_quotes or _TESTIMONIAL_RE.search(g.get("heading") or "")):
+                intent = "value_prop"
+        key: Optional[str] = None
+        if idx == 0 and g.get("level") == "H1":
+            key = "intro"
+        else:
+            n = seen_intent.get(intent, 0)
+            candidates = _INTENT_TO_KEYS.get(intent, ())
+            if intent in ("objection", "comparison"):
+                candidates = ()  # own sections in client mode, never merged away
+            if candidates and n < len(candidates) and candidates[n] not in taken:
+                key = candidates[n]
+        seen_intent[intent] = seen_intent.get(intent, 0) + 1
+        if key is None and words < EXTRA_MIN_REFERENCE_WORDS and not folded and g.get("level") != "H1":
+            continue
+        if key is None:
+            base = f"ref-{_slug(g.get('heading') or intent) or intent}"
+            key, i = base, 2
+            while key in taken:
+                key = f"{base}-{i}"
+                i += 1
+        sec = {**g, "key": key, "source": "reference", "intent": intent,
+               # a client section with prose defines the page; a heading-only
+               # extra (a folded list) may be omitted when there is nothing to list
+               "required": bool(words > 0 or key in TEMPLATE_KEYS)}
+        taken[key] = sec
+        ordered.append(sec)
+    return ordered
+
+
+def pick_absorber(sections: list[dict[str, Any]]) -> Optional[str]:
+    """The section that takes the allocation residual: ``services`` when the
+    layout has one, else the reference section with the most prose. Pure."""
+    keys = {s["key"] for s in sections}
+    if ABSORBER_KEY in keys:
+        return ABSORBER_KEY
+    prose = [s for s in sections if s.get("required") and int(s.get("words") or 0) > 0]
+    if not prose:
+        return None
+    return max(prose, key=lambda s: int(s.get("words") or 0))["key"]
+
+
 # ── 4. band allocation ──────────────────────────────────────────────────────
 
 def allocate_bands(
     sections: list[dict[str, Any]],
     total: dict[str, Any],
+    absorber_key: Optional[str] = ABSORBER_KEY,
+    client_mode: bool = False,
 ) -> list[dict[str, Any]]:
     """Give every section a ``min_words``/``max_words`` band.
 
@@ -410,8 +487,15 @@ def allocate_bands(
     t_min, t_max = int(total["min"]), int(total["max"])
     for s, share in zip(secs, shares):
         t = _template(s["key"]) if s["key"] in TEMPLATE_KEYS else None
-        floor = int(t["floor"]) if t else 0
-        ceiling = t["ceiling"] if t else None
+        has_prose = int(s.get("words") or 0) > 0
+        if client_mode and has_prose:
+            # The client's proportions rule: a template clamp applies only to a
+            # section the reference left heading-only (it then rides the
+            # template weight, so the clamp keeps it sane).
+            floor, ceiling = 0, None
+        else:
+            floor = int(t["floor"]) if t else 0
+            ceiling = t["ceiling"] if t else None
         lo = int(round(share * t_min))
         hi = int(round(share * t_max))
         hi = max(hi, int(round(lo * MIN_BAND_RATIO)))
@@ -434,16 +518,19 @@ def allocate_bands(
         s["min_words"], s["max_words"] = int(lo), int(hi)
         s["share"] = round(share, 4)
 
-    absorber = next((s for s in secs if s["key"] == ABSORBER_KEY), None)
+    absorber = next((s for s in secs if s["key"] == absorber_key), None) if absorber_key else None
     if absorber is None:
         return secs
-    a_floor = int(_template(ABSORBER_KEY)["floor"])
+    a_floor = (int(absorber["min_words"]) if client_mode or absorber_key not in TEMPLATE_KEYS
+               else int(_template(absorber_key)["floor"]))
     others = [s for s in secs if s is not absorber]
 
     # Squeeze: the other sections may claim at most (1 − absorber share) of the
     # page, so the main body never collapses to a point. Scale their maxima
     # (and, if still needed, their minima — never below the floor) proportionally.
-    room_max = int(round(t_max * (1 - ABSORBER_MIN_SHARE_OF_MAX)))
+    # In client mode the absorber is just the largest client section, not the
+    # template's main body — it keeps its own share, never a forced 30%.
+    room_max = (t_max - a_floor) if client_mode else int(round(t_max * (1 - ABSORBER_MIN_SHARE_OF_MAX)))
     others_max = sum(s["max_words"] for s in others)
     if others_max > room_max and others_max > 0:
         f = room_max / others_max
@@ -483,9 +570,15 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
     keys = [s.get("key") for s in sections]
     if len(keys) != len(set(keys)):
         errors.append("duplicate_section_keys")
-    for t in TEMPLATE_SECTIONS:
-        if t["required"] and t["key"] not in keys:
-            errors.append(f"missing_required:{t['key']}")
+    if spec.get("structure_mode") == STRUCTURE_MODE_CLIENT:
+        # The client's layout is the structure: only the H1 intro block is a
+        # must (the page needs an H1 and the direct-answer/NAP opening).
+        if "intro" not in keys:
+            errors.append("missing_required:intro")
+    else:
+        for t in TEMPLATE_SECTIONS:
+            if t["required"] and t["key"] not in keys:
+                errors.append(f"missing_required:{t['key']}")
     sum_min = sum(_int(s.get("min_words")) for s in sections)
     sum_max = sum(_int(s.get("max_words")) for s in sections)
     if sum_min > t_max:
@@ -521,28 +614,72 @@ def build_spec(
     fallback_target: Optional[int],
     page_type: str = "local_landing",
     now: Optional[datetime] = None,
+    client_structure_overrides: bool = True,
 ) -> dict[str, Any]:
-    """Assemble a spec from its three inputs (plan §4). Pure."""
+    """Assemble a spec from its three inputs (plan §4). Pure.
+
+    ``client_structure_overrides`` (default on): when the reference is usable
+    the client's layout IS the structure (``structure_mode="client"`` —
+    client order, client sections, no template insertions); off, or with no
+    usable reference, the template is the frame (``structure_mode="template"``
+    — the reference is mapped onto the template skeleton and missing template
+    sections are inserted)."""
     total, serp_prov, flags = page_band(serp_analysis, fallback_target)
     usable, reason = reference_usable(reference_entry)
+    client_mode = bool(usable and client_structure_overrides)
     if usable:
         groups = fold_outline((reference_entry or {}).get("analysis", {}).get("outline") or [])
-        sections = ensure_required(map_to_template(groups))
+        sections = build_client_sections(groups) if client_mode else ensure_required(map_to_template(groups))
         ref_total = sum(_words_of(it) for it in (reference_entry or {}).get("analysis", {}).get("outline") or [] if isinstance(it, dict))
     else:
         sections = ensure_required([])
         ref_total = 0
-    sections = allocate_bands(sections, total)
+    absorber_key = pick_absorber(sections) if client_mode else ABSORBER_KEY
+    sections = allocate_bands(sections, total, absorber_key, client_mode=client_mode)
     out_sections: list[dict[str, Any]] = []
+    max_ref_h3 = 0
     for s in sections:
         t = _template(s["key"]) if s["key"] in TEMPLATE_KEYS else None
         raw_blocks = s.get("blocks") or []
-        if t is not None and s["key"] != "local":
+        if client_mode:
+            # A folded single sub-heading (a CTA's tagline) is not a list to
+            # reproduce; a folded list of 2+ headings (industries served) is.
+            raw_blocks = [b for b in raw_blocks if not (b.get("folded") and _int(b.get("items")) < 2)]
+        elif t is not None and s["key"] != "local":
             # A template section keeps only REAL reference blocks; a folded
             # heading-only list (a CTA's sub-heading) isn't a block to reproduce.
             raw_blocks = [b for b in raw_blocks if not b.get("folded")]
         blocks = _compact_blocks(raw_blocks) or (copy.deepcopy(t["blocks"]) if t else [])
-        entry: dict[str, Any] = {
+        if client_mode:
+            # The client's section, described as the client wrote it.
+            note = (s.get("intent_note") or "").strip()
+            heading = (s.get("heading") or "").strip()
+            entry: dict[str, Any] = {
+                "key": s["key"],
+                "level": "H1" if s["key"] == "intro" else (s.get("level") or "H2"),
+                "required": bool(s.get("required")),
+                "intent": s.get("intent") or (t["intent"] if t else "other"),
+                "heading_pattern": " — ".join(p for p in (heading, note) if p) or (t["heading_pattern"] if t else ""),
+                "reference_heading": heading or None,
+                "min_words": s["min_words"],
+                "max_words": s["max_words"],
+                "blocks": blocks,
+                "source": s.get("source") or "template",
+            }
+            ref_sub = int(s.get("subsections") or 0)
+            max_ref_h3 = max(max_ref_h3, ref_sub)
+            if ref_sub:
+                entry["subsections"] = {"min": max(1, ref_sub - 1), "max": ref_sub + 1}
+            if s["key"] == "faq":
+                entry["items"] = dict(_template("faq")["items"])
+                entry["words_per_item"] = dict(_template("faq")["words_per_item"])
+            else:
+                list_items = max((int(b.get("items") or 0) for b in blocks if b.get("type") == "list"), default=0)
+                if list_items >= 2:
+                    entry["items"] = {"min": max(2, list_items - 2), "max": list_items + 2}
+            out_sections.append(entry)
+            continue
+        entry = {
             "key": s["key"],
             "level": t["level"] if t else (s.get("level") or "H2"),
             "required": bool(s.get("required")),
@@ -568,6 +705,15 @@ def build_spec(
         out_sections.append(entry)
     structure = copy.deepcopy(STRUCTURE_DEFAULTS)
     structure["max_sections"] = max(structure["max_sections"], len(out_sections))
+    if client_mode:
+        structure["max_h3_per_h2"] = max(structure["max_h3_per_h2"], max_ref_h3 + 1)
+        present = {e["key"] for e in out_sections}
+        omitted = [t["key"] for t in TEMPLATE_SECTIONS if t["required"] and t["key"] not in present]
+        if omitted:
+            # Advisory: the client's layout has no slot the template would have
+            # carried (a FAQ/process/geo block the scorers reward). The client's
+            # structure still wins — this only records what it leaves out.
+            flags = [*flags, "client_structure_omits:" + ",".join(omitted)]
     spec = {
         "schema_version": SCHEMA_VERSION,
         "client_id": client_id,
@@ -577,6 +723,7 @@ def build_spec(
         "page_type": page_type,
         "generated_at": _now_iso(now),
         "edited_at": None,
+        "structure_mode": STRUCTURE_MODE_CLIENT if client_mode else STRUCTURE_MODE_TEMPLATE,
         "total": total,
         "structure": structure,
         "sections": out_sections,
@@ -733,14 +880,19 @@ def structure_verdict(measure: dict[str, Any], spec: dict[str, Any], audit: Opti
         issues.append({"key": key, "code": "missing_required", "detail": f"required section [{key}] is missing"})
     max_sections = _int(structure.get("max_sections"))
     over_cap = bool(max_sections and _int(measure.get("section_count")) > max_sections)
+    client_mode = spec.get("structure_mode") == STRUCTURE_MODE_CLIENT
     for key in measure.get("unknown_sections") or []:
         # An extra section the spec doesn't know is removed when the page is over
-        # its section cap; under the cap it is kept and reported as ADVISORY (the
-        # spec editor can't add sections yet, so a harmless extra must not keep a
-        # page in permanent drift).
-        issues.append({"key": key, "code": "unexpected_section", "advisory": not over_cap,
+        # its section cap, or whenever the client's layout IS the structure (a
+        # template section the client's page doesn't have is drift, not a
+        # bonus). Otherwise it is kept and reported as ADVISORY (the spec editor
+        # can't add sections yet, so a harmless extra must not keep a page in
+        # permanent drift).
+        blocking = over_cap or client_mode
+        issues.append({"key": key, "code": "unexpected_section", "advisory": not blocking,
                        "detail": f"section [{key}] is not in the spec"
-                       + ("" if over_cap else " (kept — under the section cap)")})
+                       + ("" if blocking else " (kept — under the section cap)")
+                       + (" — the client's layout has no such section" if client_mode and not over_cap else "")})
 
     spec_order = [s["key"] for s in spec.get("sections") or []]
     page_order = [k for k in (measure.get("order") or []) if k in bands]
@@ -780,7 +932,7 @@ def structure_verdict(measure: dict[str, Any], spec: dict[str, Any], audit: Opti
             elif _int(items.get("max")) and n > _int(items.get("max")):
                 issues.append({"key": key, "code": "items_high", "detail": f"[{key}] has {n} {what}; at most {items.get('max')}"})
         subs = band.get("subsections")
-        if isinstance(subs, dict) and key == ABSORBER_KEY:
+        if isinstance(subs, dict):
             n = _int(row.get("h3_count"))
             if n < _int(subs.get("min")):
                 issues.append({"key": key, "code": "subsections_low", "detail": f"[{key}] has {n} H3 sub-sections; needs at least {subs.get('min')}"})
@@ -876,6 +1028,15 @@ def render_spec_block(spec: dict[str, Any]) -> str:
         "- Emit each section as <section id=\"KEY\"> with EXACTLY these keys, in this order. "
         "Required sections must be present; optional ones may be omitted when there is no real content.",
     ]
+    if spec.get("structure_mode") == STRUCTURE_MODE_CLIENT:
+        lines.append(
+            "- STRUCTURE MODE: CLIENT. The section list below is the CLIENT'S OWN page layout and REPLACES the "
+            "template's Section 1–12 skeleton ENTIRELY: write ONLY these sections, in this order, with these keys, "
+            "each fulfilling the intent and heading described from the client's reference page. Do NOT add a "
+            "template section the list lacks (no extra FAQ, process, features or geo block unless listed) — any "
+            "section not in the list is removed after writing. The template's per-section rules still apply to a "
+            "listed section that shares its key (intro = H1 + direct answer + phone; faq = answer-first Q&A)."
+        )
     for s in spec.get("sections") or []:
         blocks = ", ".join(
             f"{b.get('count', 1)}× {b.get('type')}" + (f" ({b['items']} items)" if b.get("items") else "")

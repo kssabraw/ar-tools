@@ -78,6 +78,10 @@ export interface PageSpec {
   location_code?: number | null
   page_type: string
   generated_at?: string
+  // 'client' = the client's reference layout IS the structure (its sections,
+  // order and blocks override the app's template); 'template' = the default
+  // 12-section skeleton (no usable reference on file, or the override is off).
+  structure_mode?: 'client' | 'template'
   total: { min: number; target: number; max: number; basis: 'serp' | 'fallback' }
   structure: { max_sections: number; max_h3_per_h2: number; faq: { min: number; max: number } }
   sections: PageSpecSection[]

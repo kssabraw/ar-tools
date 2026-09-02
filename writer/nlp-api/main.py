@@ -5828,10 +5828,14 @@ async def _enforce_spec_structure(
         # Deterministic first — no model needed.
         if not verdict.get("order_ok"):
             html, _ = section_edit.reorder_sections(html, order)
-        if "cap_max_sections" in (verdict.get("issue_codes") or []) and verdict.get("unexpected_sections"):
-            html, removed = section_edit.remove_sections(html, verdict["unexpected_sections"])
+        to_drop = [i["key"] for i in verdict.get("issues") or []
+                   if i.get("code") == "unexpected_section" and not i.get("advisory") and i.get("key")]
+        if to_drop:
+            # Over the section cap, or the client's layout is the structure and
+            # the writer added a template section the client's page lacks.
+            html, removed = section_edit.remove_sections(html, to_drop)
             if removed:
-                logger.info("%s: dropped extra sections over the cap: %s", label, removed)
+                logger.info("%s: dropped sections the spec doesn't carry: %s", label, removed)
         if verdict.get("missing_required"):
             out = await _spec_add_inline(html, spec, verdict, keyword, city, business_name, phone, address,
                                          voice_block, serp_analysis_dict, client)

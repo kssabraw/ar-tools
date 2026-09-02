@@ -208,7 +208,11 @@ export function PageSpecPanel({
               </div>
               {ref?.usable && ref.url && (
                 <p style={{ fontSize: 11, color: '#94a3b8', margin: 0 }}>
-                  Layout from the client's {ref.page_type?.replace('_', ' ')} reference ({ref.total_words} words) · length from {spec.provenance.serp?.competitor_pages ? `${spec.provenance.serp.competitor_pages} competitor pages (avg ${spec.provenance.serp.avg_words})` : 'the standing market target'}
+                  {spec.structure_mode === 'client'
+                    ? `Structure: the client's ${ref.page_type?.replace('_', ' ')} reference (${ref.total_words} words) — its sections, order and blocks override the app's default template`
+                    : `Layout from the client's ${ref.page_type?.replace('_', ' ')} reference (${ref.total_words} words), mapped onto the default template`}
+                  {' · length from '}{spec.provenance.serp?.competitor_pages ? `${spec.provenance.serp.competitor_pages} competitor pages (avg ${spec.provenance.serp.avg_words})` : 'the standing market target'}
+                  {flags.some(f => f.startsWith('client_structure_omits:')) && ` · the client's layout has no ${flags.find(f => f.startsWith('client_structure_omits:'))!.split(':')[1].split(',').join(' / ')} section — the scorers reward those, so expect a lower AEO/structure score by design`}
                 </p>
               )}
             </>
