@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, CheckCircle2, Download, FileJson, RefreshCw, Save } from 'lucide-react'
 import { localSeoApi } from './api'
 import type { PageSpec, PageSpecEnvelope, PageSpecSection } from './types'
@@ -26,58 +26,84 @@ export function PageSpecPanel({
   defaultOpen?: boolean
 }) {
   const [open, setOpen] = useState(defaultOpen)
-  const [env, setEnv] = useState<PageSpecEnvelope | null>(null)
-  const [draft, setDraft] = useState<PageSpec | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [dirty, setDirty] = useState(false)
+  const queryClient = useQueryClient()
+  const kw = keyword.trim()
+  const loc = location.trim()
+  const canLoad = !!clientId && kw.length > 0 && loc.length > 0
+  const queryKey = ['local-seo-page-spec', clientId, kw, loc, locationCode ?? null]
 
-  const canLoad = !!clientId && keyword.trim().length > 0 && location.trim().length > 0
+  // The active spec (built + saved on first read; cache-only, no paid call).
+  const query = useQuery<PageSpecEnvelope>({
+    queryKey,
+    queryFn: () => localSeoApi.getPageSpec(clientId, kw, loc, locationCode ?? null),
+    enabled: open && canLoad,
+    staleTime: 60_000,
+  })
+  const env = query.data ?? null
+
+  // Unsaved edits are kept as overrides applied over the loaded spec at render
+  // time (no effect-driven state copy), keyed by the spec version so a rebuild
+  // or a save discards stale edits automatically.
+  const [edits, setEdits] = useState<{ forId: string | null; total: Partial<PageSpec['total']>; sections: Record<number, Partial<PageSpecSection>> }>({ forId: null, total: {}, sections: {} })
+  const editsApply = env && edits.forId === (env.id ?? null)
+  const draft: PageSpec | null = env
+    ? {
+        ...env.spec,
+        total: { ...env.spec.total, ...(editsApply ? edits.total : {}) },
+        sections: env.spec.sections.map((s, i) => (editsApply && edits.sections[i] ? { ...s, ...edits.sections[i] } : s)),
+      }
+    : null
+  const dirty = !!editsApply && (Object.keys(edits.total).length > 0 || Object.keys(edits.sections).length > 0)
+  const [saving, setSaving] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const loading = query.isLoading || rebuilding
+  const error = actionError ?? (query.error instanceof Error ? query.error.message : null)
 
   const load = async (rebuild = false) => {
     if (!canLoad) return
-    setLoading(true); setError(null)
+    if (!rebuild) { void query.refetch(); return }
+    setRebuilding(true); setActionError(null)
     try {
-      const res = rebuild
-        ? await localSeoApi.rebuildPageSpec(clientId, { keyword: keyword.trim(), location: location.trim(), location_code: locationCode ?? null })
-        : await localSeoApi.getPageSpec(clientId, keyword.trim(), location.trim(), locationCode ?? null)
-      setEnv(res); setDraft(res.spec); setDirty(false)
+      const res = await localSeoApi.rebuildPageSpec(clientId, { keyword: kw, location: loc, location_code: locationCode ?? null })
+      queryClient.setQueryData(queryKey, res)
+      setEdits({ forId: null, total: {}, sections: {} })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load the page spec')
+      setActionError(e instanceof Error ? e.message : 'Could not rebuild the page spec')
     } finally {
-      setLoading(false)
+      setRebuilding(false)
     }
   }
 
-  useEffect(() => {
-    if (open && !env && canLoad) void load()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, canLoad, keyword, location, locationCode])
-
   const save = async () => {
     if (!draft) return
-    setSaving(true); setError(null)
+    setSaving(true); setActionError(null)
     try {
       const res = await localSeoApi.editPageSpec(clientId, {
-        keyword: keyword.trim(), location: location.trim(), location_code: locationCode ?? null, spec: draft,
+        keyword: kw, location: loc, location_code: locationCode ?? null, spec: draft,
       })
-      setEnv(res); setDraft(res.spec); setDirty(false)
+      queryClient.setQueryData(queryKey, res)
+      setEdits({ forId: null, total: {}, sections: {} })
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not save the page spec')
+      setActionError(e instanceof Error ? e.message : 'Could not save the page spec')
     } finally {
       setSaving(false)
     }
   }
 
   const setSection = (idx: number, patch: Partial<PageSpecSection>) => {
-    if (!draft) return
-    const sections = draft.sections.map((s, i) => (i === idx ? { ...s, ...patch } : s))
-    setDraft({ ...draft, sections }); setDirty(true)
+    if (!env) return
+    setEdits((e) => {
+      const base = e.forId === (env.id ?? null) ? e : { forId: env.id ?? null, total: {}, sections: {} }
+      return { ...base, sections: { ...base.sections, [idx]: { ...(base.sections[idx] || {}), ...patch } } }
+    })
   }
   const setTotal = (patch: Partial<PageSpec['total']>) => {
-    if (!draft) return
-    setDraft({ ...draft, total: { ...draft.total, ...patch } }); setDirty(true)
+    if (!env) return
+    setEdits((e) => {
+      const base = e.forId === (env.id ?? null) ? e : { forId: env.id ?? null, total: {}, sections: {} }
+      return { ...base, total: { ...base.total, ...patch } }
+    })
   }
 
   if (!canLoad) return null
@@ -169,7 +195,7 @@ export function PageSpecPanel({
                   {!feasible && ' — infeasible: section bands must fit inside the page band'}
                 </span>
                 <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
-                  <button style={outlineBtn} onClick={() => downloadFile(JSON.stringify(spec, null, 2), `page-spec-${keyword.trim().toLowerCase().replace(/\s+/g, '-')}.json`, 'application/json')}>
+                  <button style={outlineBtn} onClick={() => downloadFile(JSON.stringify(spec, null, 2), `page-spec-${kw.toLowerCase().replace(/\s+/g, '-')}.json`, 'application/json')}>
                     <Download size={13} /> JSON
                   </button>
                   <button style={outlineBtn} onClick={() => load(true)} disabled={loading} title="Rebuild from the current SERP analysis + reference layout (discards edits)">
