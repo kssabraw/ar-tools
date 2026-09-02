@@ -80,6 +80,10 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         # scoped. Each reuses the ledger's own tested stats_window rollup.
         "pace_audit": _isolate("pace_audit", providers.prov_pace_audit, client_id, today),
         "sermastr_audit": _isolate("sermastr_audit", providers.prov_sermastr_audit, client_id, today),
+        # DORA's own guide-sync activity (services/guide_sync.py) — which in-app
+        # guides it updated/proposed after module changes. Insight only: no
+        # seam, no reconcile task. Portfolio-scoped (guides aren't per-client).
+        "guide_sync": _isolate("guide_sync", providers.prov_guide_sync, supabase, today),
         # Audit-log PROCESS health (owner ask 2026-09-01) — is the SerMaStr/PACE
         # propose→decide→outcome pipeline running efficiently (stale decisions /
         # low effectiveness / high dismiss / coverage gaps). Owns the pipeline-

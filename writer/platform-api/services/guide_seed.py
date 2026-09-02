@@ -603,7 +603,7 @@ Two agents that watch the task board so you don't have to chase it by hand. **PA
         "category": "Reporting",
         "icon": "Compass",
         "sort_order": 113,
-        "summary": "The read-only lens across every other agent — surfaces where work is stuck, duplicated, or falling through the cracks between SerMaStr, PACE, QA, and the board.",
+        "summary": "The read-only lens across every other agent — surfaces where work is stuck, duplicated, or falling through the cracks between SerMaStr, PACE, QA, and the board — and keeps these Guides current when a module changes.",
         "body": """# DORA (Director of Operations)
 
 DORA watches the seams **between** the other agents — SerMaStr (proposes), PACE (executes), QA (judges), and the deterministic producers that open tasks automatically — and flags where something is stuck, unactioned, or duplicated across them. It's **read-only**: it never reassigns, reprioritizes, or resolves anything itself; it opens a plain task naming the gap, or answers a question about it in chat.
@@ -620,9 +620,16 @@ DORA watches the seams **between** the other agents — SerMaStr (proposes), PAC
 - The **same target** (a keyword, a page) being worked by two different agents/producers at once.
 - Content that shipped in a degraded state (missing brand context, failed voice check).
 
+## It also keeps these Guides current
+Whenever a module changes in a way a user would notice (a new button, option, default, cadence, or output), DORA is told, re-reads that module's guide here in **Guides**, and rewrites it if it no longer describes the tool — then posts a short note to `#dora` saying which guide changed and what's different for users. Internal changes (refactors, speed-ups, bug fixes) leave the guide alone.
+- A **"DORA updated this guide"** banner at the top of a guide means the rewrite is live; staff can **Revert** to the previous version in one click if it reads wrong.
+- A **"DORA proposes an update"** banner (with **Preview**, **Apply**, **Dismiss**) appears only when auto-apply is off for your environment.
+- **Show DORA sync history** lists every review it ran on that guide, including the "no change needed" ones.
+
 ## Tips
 - A weekly **operations flow** digest posts to `#dora` — it says nothing at all on an all-clear week.
-- It's a diagnostic layer, not a decision-maker — treat what it surfaces as a nudge to go look, not an instruction already carried out.""",
+- It's a diagnostic layer, not a decision-maker — treat what it surfaces as a nudge to go look, not an instruction already carried out.
+- The Guides are the one thing DORA writes to — and only documentation, always revertible.""",
     },
     {
         "slug": "asana-tasks",

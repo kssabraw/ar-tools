@@ -5,11 +5,12 @@ import {
   ArrowLeft, BookOpen, Rocket, ListChecks, FileText, Building2, Sparkles, TrendingUp,
   MapPin, Eye, FileSearch, FileBarChart, ClipboardList, Settings, LifeBuoy, ArrowRight,
   Plus, Pencil, Trash2, ExternalLink, Package, Layers, Share2, Search, Radar, Megaphone, Compass,
+  History, RotateCcw, Check, X,
 } from 'lucide-react'
 import { Markdown } from '../components/Markdown'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
-import type { Guide, GuideCategory } from '../lib/types'
+import type { Guide, GuideCategory, GuideSyncRun } from '../lib/types'
 
 // In-app Guides portal — DB-backed and admin-editable. Index (/guides) lists
 // guides grouped by category; detail (/guides/:slug) renders one guide's Markdown.
@@ -52,7 +53,7 @@ function icon(key: string): React.ReactNode {
 
 export function Guides() {
   const { slug } = useParams<{ slug: string }>()
-  const { isAdmin } = useAuth()
+  const { isAdmin, isStaff } = useAuth()
   const [editing, setEditing] = useState<Guide | 'new' | null>(null)
 
   // Admins fetch disabled drafts too (so they can find + re-enable them).
@@ -64,7 +65,7 @@ export function Guides() {
   if (editing && isAdmin) {
     return <GuideEditor guide={editing === 'new' ? null : editing} onClose={() => setEditing(null)} />
   }
-  if (slug) return <GuideDetail slug={slug} guides={guides} isAdmin={isAdmin} onEdit={setEditing} />
+  if (slug) return <GuideDetail slug={slug} guides={guides} isAdmin={isAdmin} isStaff={isStaff} onEdit={setEditing} />
 
   const byCategory = CATEGORIES.map((cat) => ({
     cat, guides: guides.filter((g) => g.category === cat),
@@ -118,8 +119,8 @@ export function Guides() {
   )
 }
 
-function GuideDetail({ slug, guides, isAdmin, onEdit }: {
-  slug: string; guides: Guide[]; isAdmin: boolean; onEdit: (g: Guide) => void
+function GuideDetail({ slug, guides, isAdmin, isStaff, onEdit }: {
+  slug: string; guides: Guide[]; isAdmin: boolean; isStaff: boolean; onEdit: (g: Guide) => void
 }) {
   const guide = guides.find((g) => g.slug === slug)
   return (
@@ -150,8 +151,110 @@ function GuideDetail({ slug, guides, isAdmin, onEdit }: {
               <ExternalLink size={13} /> Open the illustrated field guide
             </a>
           )}
+          <GuideSyncBanner slug={guide.slug} isStaff={isStaff} />
           <Markdown>{guide.body}</Markdown>
         </div>
+      )}
+    </div>
+  )
+}
+
+// DORA's guide-sync trail for this guide: the latest applied rewrite (with a
+// one-click Revert for staff), any rewrite waiting on Apply/Dismiss, and a
+// collapsible history. Renders nothing for a guide DORA has never touched.
+function GuideSyncBanner({ slug, isStaff }: { slug: string; isStaff: boolean }) {
+  const queryClient = useQueryClient()
+  const [showHistory, setShowHistory] = useState(false)
+  const [preview, setPreview] = useState<GuideSyncRun | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const { data: runs = [] } = useQuery<GuideSyncRun[]>({
+    queryKey: ['guide-sync-runs', slug],
+    queryFn: () => api.get<GuideSyncRun[]>(`/guides/${encodeURIComponent(slug)}/sync-runs?limit=20`),
+  })
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ['guide-sync-runs', slug] })
+    queryClient.invalidateQueries({ queryKey: ['guides'] })
+  }
+  const act = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'apply' | 'revert' | 'dismiss' }) =>
+      api.post<GuideSyncRun>(`/guides/sync-runs/${id}/${action}`, {}),
+    onSuccess: () => { setPreview(null); setError(null); invalidate() },
+    onError: (e: unknown) => setError(e instanceof Error ? e.message : 'Action failed'),
+  })
+  const loadPreview = async (id: string) => {
+    try { setPreview(await api.get<GuideSyncRun>(`/guides/sync-runs/${id}`)) } catch { setError('Could not load the proposal') }
+  }
+
+  const visible = runs.filter((r) => r.status !== 'no_change' && r.status !== 'queued' && r.status !== 'running')
+  if (visible.length === 0) return null
+  const latestApplied = visible.find((r) => r.status === 'applied')
+  const proposals = visible.filter((r) => r.status === 'proposed')
+  const when = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '')
+  const after = (r: GuideSyncRun) => (r.commits?.[0]?.title ? ` after “${r.commits[0].title}”` : '')
+
+  return (
+    <div style={{ margin: '4px 0 16px' }}>
+      {latestApplied && (
+        <div style={syncBox}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <Compass size={15} style={{ color: '#4f46e5', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: '#312e81' }}>
+                DORA updated this guide on {when(latestApplied.applied_at || latestApplied.created_at)}{after(latestApplied)}
+              </div>
+              {latestApplied.change_summary && (
+                <div style={{ fontSize: 12.5, color: '#3730a3', marginTop: 3, lineHeight: 1.5 }}>{latestApplied.change_summary}</div>
+              )}
+            </div>
+            {isStaff && (
+              <button style={ghostBtn} disabled={act.isPending} title="Restore the guide as it was before this rewrite"
+                      onClick={() => { if (confirm('Restore the previous version of this guide?')) act.mutate({ id: latestApplied.id, action: 'revert' }) }}>
+                <RotateCcw size={12} /> Revert
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+      {proposals.map((p) => (
+        <div key={p.id} style={{ ...syncBox, background: '#fffbeb', borderColor: '#fde68a' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+            <Compass size={15} style={{ color: '#b45309', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: '#78350f' }}>
+                DORA proposes an update{after(p)} ({when(p.created_at)})
+              </div>
+              {p.change_summary && <div style={{ fontSize: 12.5, color: '#92400e', marginTop: 3, lineHeight: 1.5 }}>{p.change_summary}</div>}
+              <button style={{ ...linkBtn, marginTop: 6 }} onClick={() => (preview?.id === p.id ? setPreview(null) : loadPreview(p.id))}>
+                {preview?.id === p.id ? 'Hide preview' : 'Preview the proposed guide'}
+              </button>
+            </div>
+            {isStaff && (
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button style={primaryBtn} disabled={act.isPending} onClick={() => act.mutate({ id: p.id, action: 'apply' })}><Check size={12} /> Apply</button>
+                <button style={ghostBtn} disabled={act.isPending} onClick={() => act.mutate({ id: p.id, action: 'dismiss' })}><X size={12} /> Dismiss</button>
+              </div>
+            )}
+          </div>
+          {preview?.id === p.id && preview.proposed_body && (
+            <div style={{ marginTop: 10, borderTop: '1px solid #fde68a', paddingTop: 8 }}>
+              <Markdown>{preview.proposed_body}</Markdown>
+            </div>
+          )}
+        </div>
+      ))}
+      {error && <div style={{ color: '#dc2626', fontSize: 12, marginTop: 4 }}>{error}</div>}
+      <button style={linkBtn} onClick={() => setShowHistory((v) => !v)}>
+        <History size={12} /> {showHistory ? 'Hide' : 'Show'} DORA sync history ({visible.length})
+      </button>
+      {showHistory && (
+        <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: 12, color: '#475569', lineHeight: 1.6 }}>
+          {visible.map((r) => (
+            <li key={r.id}>
+              <strong>{r.status.replace('_', ' ')}</strong> · {when(r.created_at)}{after(r)}
+              {(r.change_summary || r.reason || r.error) && <> — {r.change_summary || r.reason || r.error}</>}
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   )
@@ -290,6 +393,13 @@ const fieldGuideLink: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, fontWeight: 600,
   color: '#4338ca', background: '#eef2ff', border: '1px solid #c7d2fe', borderRadius: 8,
   padding: '7px 12px', margin: '10px 0 18px', textDecoration: 'none',
+}
+const syncBox: React.CSSProperties = {
+  border: '1px solid #c7d2fe', background: '#eef2ff', borderRadius: 10, padding: '10px 12px', marginBottom: 8,
+}
+const linkBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: '#4f46e5',
+  background: 'none', border: 'none', cursor: 'pointer', padding: 0,
 }
 const draftTag: React.CSSProperties = {
   marginLeft: 8, fontSize: 10, fontWeight: 700, color: '#b45309', background: '#fffbeb',

@@ -171,10 +171,11 @@
         <li><a href="#s2" data-target="s2">02 · Where to find it</a></li>
         <li><a href="#s3" data-target="s3">03 · The seams it watches</a></li>
         <li><a href="#s4" data-target="s4">04 · The weekly digest</a></li>
-        <li><a href="#s5" data-target="s5">05 · Talking to DORA</a></li>
-        <li><a href="#s6" data-target="s6">06 · What it can NOT do</a></li>
-        <li><a href="#s7" data-target="s7">07 · Troubleshooting</a></li>
-        <li><a href="#s8" data-target="s8">08 · Quick reference</a></li>
+        <li><a href="#s5" data-target="s5">05 · Keeping the Guides current</a></li>
+        <li><a href="#s6" data-target="s6">06 · Talking to DORA</a></li>
+        <li><a href="#s7" data-target="s7">07 · What it can NOT do</a></li>
+        <li><a href="#s8" data-target="s8">08 · Troubleshooting</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
       </ol>
     </nav>
     <main class="content">
@@ -230,7 +231,31 @@
       </section>
 
       <section id="s5" class="block">
-        <div class="block-head"><span class="block-num">05</span><h2>Talking to DORA</h2></div>
+        <div class="block-head"><span class="block-num">05</span><h2>Keeping the Guides current</h2></div>
+        <p class="lede"><strong>DORA's one write.</strong> Every change that lands in a module is
+          reported to DORA. It works out which module the change belongs to, re-reads that
+          module's in-app guide (sidebar → <strong>Guides</strong>), and rewrites it only if the
+          change is something a user would notice — a new button, tab, option, default, cadence,
+          or output. Internal changes leave the guide alone, quietly.</p>
+        <table><tbody>
+          <tr><td class="term">"DORA updated this guide on …"</td><td>The rewrite is live. Read the banner's summary; staff can <strong>Revert</strong> to the previous version in one click.</td></tr>
+          <tr><td class="term">"DORA proposes an update"</td><td>Auto-apply is off for your environment — <strong>Preview</strong>, then <strong>Apply</strong> or <strong>Dismiss</strong>.</td></tr>
+          <tr><td class="term">"DORA couldn't update the … guide" (#dora)</td><td>The change looked user-facing but the rewrite failed DORA's own sanity checks — check that guide by hand.</td></tr>
+          <tr><td class="term">Show DORA sync history</td><td>Every review it ran on that guide, including the "no change needed" ones.</td></tr>
+        </tbody></table>
+        <div class="log">
+          <p class="log-label">what it will and won't do to a guide</p>
+          <p>It writes for the person <em>using</em> the tool — never code, file names, or ticket
+            numbers. It never invents behaviour: an unclear change gets a conservative "no update
+            needed", not a guess. It works from the guide as it reads <em>now</em>, so an admin's
+            hand-edits survive unless the change made them untrue. Only the in-app guide is
+            touched — this illustrated field guide and the long-form docs are still
+            hand-maintained; a #dora note is the cue to refresh them after a big change.</p>
+        </div>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Talking to DORA</h2></div>
         <p>Ask about a client, or ask agency-wide with none named — same scoping as SerMaStr. It
           answers strictly from the same data the reconciler uses.</p>
         <div class="chat">
@@ -252,8 +277,8 @@
         </div>
       </section>
 
-      <section id="s6" class="block">
-        <div class="block-head"><span class="block-num">06</span><h2>What it can NOT do</h2></div>
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>What it can NOT do</h2></div>
         <div class="caution">
           <p><strong>It doesn't block autonomy, either.</strong> A pre-flight veto exists in code
             but ships off by default, as a separate flag from the one that turns DORA on at all —
@@ -264,11 +289,13 @@
           <li>Never touches the reoptimization planner's priority, PACE's assignment logic, or the
             autonomy executor's decisions.</li>
           <li>Never auto-merges a duplicate-target flag — a human decides.</li>
+          <li>The Guides are the one exception (§05): rewriting a module's guide after that module
+            changed is documentation, not campaign state — and always one click to revert.</li>
         </ul>
       </section>
 
-      <section id="s7" class="block">
-        <div class="block-head"><span class="block-num">07</span><h2>Troubleshooting</h2></div>
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Troubleshooting</h2></div>
         <table><tbody>
           <tr><td class="term">DORA flagged something — does it fix it?</td><td>No. It opens a task naming the gap; a human or the owning agent does the fixing.</td></tr>
           <tr><td class="term">A seam task reappeared after I trashed it</td><td>The reconciler re-opens it each run while the condition holds — it closes on its own once resolved.</td></tr>
@@ -276,14 +303,15 @@
         </tbody></table>
       </section>
 
-      <section id="s8" class="block">
-        <div class="block-head"><span class="block-num">08</span><h2>Quick reference</h2></div>
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
         <div class="refcard">
           <div class="table-wrap"><table><tbody>
             <tr><td class="term">Ask about a client's gaps</td><td>/director, or #dora</td></tr>
             <tr><td class="term">Ask agency-wide</td><td>Same surface, name no client</td></tr>
             <tr><td class="term">A "Director seam" task appeared</td><td>Auto-closes once the condition clears</td></tr>
             <tr><td class="term">Fix what it flagged</td><td>Go to the agent it names — never DORA itself</td></tr>
+            <tr><td class="term">A guide changed on its own</td><td>DORA rewrote it after a module change — banner says what; <strong>Revert</strong> restores the old one</td></tr>
           </tbody></table></div>
         </div>
       </section>

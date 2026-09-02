@@ -1,0 +1,47 @@
+name: DORA guide sync
+
+# Every merge to main is reported to DORA (services/guide_sync.py) so the
+# in-app Guides stay current: the reporter groups the changed files by module
+# (services/guide_registry.py), keeps only user-facing code, and POSTs the
+# commit messages + a bounded diff per module to POST /director/module-changes.
+# DORA then reviews each affected module's guide and rewrites it if the change
+# is something a user would notice (prior body kept for a one-click revert).
+#
+# Needs two repository secrets: PLATFORM_API_URL (the public platform-api base,
+# e.g. https://platform-….up.railway.app) and GUIDE_SYNC_SECRET (must equal the
+# PLATFORM service's GUIDE_SYNC_SECRET env var). Without them the step prints a
+# notice and exits 0 — never a red check.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      before:
+        description: "Base commit SHA (default: parent of `after`)"
+        required: false
+        default: ""
+      after:
+        description: "Head commit SHA (default: the checked-out main)"
+        required: false
+        default: ""
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # the reporter diffs before..after and reads their commit messages
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Report module changes to DORA
+        env:
+          PLATFORM_API_URL: ${{ secrets.PLATFORM_API_URL }}
+          GUIDE_SYNC_SECRET: ${{ secrets.GUIDE_SYNC_SECRET }}
+          GUIDE_SYNC_BEFORE: ${{ github.event.inputs.before || github.event.before }}
+          GUIDE_SYNC_AFTER: ${{ github.event.inputs.after || github.sha }}
+        run: python writer/platform-api/scripts/report_module_changes.py

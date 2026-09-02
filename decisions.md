@@ -219,3 +219,33 @@ loop never checks `stop_reason` — portfolio-wide, not FCR-specific.
 
 **Deferred.** A "Generate recovery plan" button (after the FCR validation run); raising
 drill-down caps for recovery runs (only with evidence); per-goal runs.
+
+---
+
+## DORA — guide sync (DORA's one write)
+
+**Status: BUILT** (owner ask 2026-09-02: "every time a module gets changes that affect the user
+or output, DORA gets notified and updates the module's tutorial page if needed").
+
+**Decided.**
+- "Tutorial page" = the in-app **Guides** portal row for the module (`guides` table, the page
+  an admin already edits in-app). The illustrated field guides and `docs/*.md` stay
+  hand-maintained; DORA's #dora note is the cue to refresh them after a big change.
+- Detection is deterministic and lives in the repo: a GitHub Actions run on every push to
+  `main` maps changed files → modules → guide slug through `services/guide_registry.py`, and
+  only user-facing code counts (tests/docs/CI/migrations/scripts/lockfiles never do).
+- DORA judges "affects the user or output" from the diff + commit messages, and rewrites the
+  guide only when the change is something a user would notice; internal changes are silent.
+- **Auto-apply by default** (`guide_sync_auto_apply=True`): the rewrite goes live immediately
+  with the prior body kept for a one-click **Revert** on the guide page; the flag flips it to
+  propose-only (Preview / Apply / Dismiss). A deterministic sanity band gates every rewrite.
+- **This is the one exception to "build the eyes, defer the hands"** and it is deliberately
+  documentation-only: no board task, plan, assignment, or precedence engine is touched, and
+  every write is reversible from the page. It does not widen DORA's operational authority.
+- Fail-closed activation: the endpoint refuses everything until `GUIDE_SYNC_SECRET` is set on
+  PLATFORM and mirrored (with `PLATFORM_API_URL`) as GitHub repo secrets.
+
+**Deferred.** Updating the static field guides / long-form docs (would need a repo write path
+from the platform, or a CI-side LLM pass — not worth it until the in-app sync proves accurate);
+a per-guide "freeze" toggle to exempt a hand-curated guide from DORA's rewrites.
+

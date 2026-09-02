@@ -929,6 +929,10 @@ async def _process_job(job: dict) -> None:
     elif job_type == "autonomy_run":
         from services.autonomy_executor import run_autonomy_job
         await run_autonomy_job(job)
+    elif job_type == "guide_sync":
+        from services import guide_sync
+
+        await guide_sync.run_guide_sync_job(job)
     elif job_type == "internal_link_analyze":
         await run_internal_link_analyze_job(job)
     elif job_type == "internal_link_apply":

@@ -2583,6 +2583,23 @@ class Settings(BaseSettings):
     director_slack_bot_token: str = ""          # DIRECTOR_SLACK_BOT_TOKEN — the DORA app's xoxb- bot token
     director_slack_signing_secret: str = ""     # DIRECTOR_SLACK_SIGNING_SECRET — the DORA app's signing secret
 
+    # ── DORA guide sync (services/guide_sync.py) — owner ask 2026-09-02 ──────
+    # When a module change lands on main, CI (.github/workflows/guide-sync.yml →
+    # scripts/report_module_changes.py) POSTs the user-facing diff to
+    # POST /director/module-changes and DORA reviews whether the module's in-app
+    # guide still describes it, rewriting it when not (prior body kept for a
+    # one-click revert). Rides director_enabled. The endpoint is fail-closed:
+    # without guide_sync_secret it answers 503 and nothing is recorded.
+    guide_sync_enabled: bool = True
+    guide_sync_secret: str = ""                 # GUIDE_SYNC_SECRET — bearer the CI reporter sends (also a GitHub repo secret)
+    guide_sync_auto_apply: bool = True          # False → rewrites wait as `proposed` runs an admin applies/dismisses
+    guide_sync_model: str = "claude-sonnet-4-6" # the guide review + rewrite (whole guide re-emitted)
+    guide_sync_max_tokens: int = 16000
+    guide_sync_diff_chars: int = 60000          # per-module diff bound in the prompt
+    guide_sync_min_ratio: float = 0.5           # rewrite must be within [min, max] × the prior body length
+    guide_sync_max_ratio: float = 2.5
+    guide_sync_recent_days: int = 30            # window for DORA's read-model `guide_sync` block
+
     class Config:
         env_file = ".env"
 
