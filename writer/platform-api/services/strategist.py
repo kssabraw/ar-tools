@@ -25,6 +25,7 @@ smoke gate). Pure helpers (``sanitize_review``) are unit-tested.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
@@ -420,6 +421,16 @@ def _assistant_turn(content) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure helpers (unit-tested)
 # ─────────────────────────────────────────────────────────────────────────────
+def _clean_prose(value) -> str:
+    """Strip + unescape HTML entities. The strategy digest carries scraped
+    competitor names ("Melbourne Roof Restoration &amp; Repair"), and the
+    model echoes them verbatim into its assessment / root_cause / findings /
+    proposal prose. Pure."""
+    if not isinstance(value, str):
+        return ""
+    return html.unescape(value).strip()
+
+
 def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     """Enforce the §3 output contract on the model's emit payload. Pure.
 
@@ -429,8 +440,8 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     - disavow proposals dropped and surfaced as a question instead;
     - frozen client → proposals emptied (observation-only), noted in questions.
     """
-    assessment = (raw.get("assessment") or "").strip()
-    root_cause = (raw.get("root_cause") or "").strip() if isinstance(raw.get("root_cause"), str) else ""
+    assessment = _clean_prose(raw.get("assessment"))
+    root_cause = _clean_prose(raw.get("root_cause"))
     findings = []
     for f in raw.get("findings") or []:
         if not isinstance(f, dict) or not (f.get("synthesis") or "").strip():
@@ -438,7 +449,7 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         findings.append(
             {
                 "signal_refs": [str(s) for s in (f.get("signal_refs") or []) if s],
-                "synthesis": f["synthesis"].strip(),
+                "synthesis": _clean_prose(f["synthesis"]),
                 "sop_citation": (f.get("sop_citation") or "").strip(),
             }
         )
@@ -448,8 +459,8 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     for p in raw.get("proposals") or []:
         if not isinstance(p, dict):
             continue
-        title = (p.get("title") or "").strip()
-        action = (p.get("action") or "").strip()
+        title = _clean_prose(p.get("title"))
+        action = _clean_prose(p.get("action"))
         if not (title and action):
             continue
         blob = f"{title} {action} {p.get('rationale') or ''}"
@@ -472,7 +483,7 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         proposal = {
             "title": title,
             "action": action,
-            "rationale": (p.get("rationale") or "").strip(),
+            "rationale": _clean_prose(p.get("rationale")),
             "sop_citation": (p.get("sop_citation") or "").strip(),
             "est_cost_usd": est,
             "cost_basis": cost_basis,

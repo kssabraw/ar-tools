@@ -34,6 +34,36 @@ def test_sanitize_defaults_and_status():
     assert p["requires"] == "approval"  # bogus enum → default
 
 
+def test_sanitize_unescapes_html_entities_in_prose():
+    # Competitor names arrive HTML-escaped in the digest; the model echoes them
+    # verbatim into its prose. sanitize must collapse the entities so the stored
+    # review + the goal_chronic notification read "&", not "&amp;".
+    out = strategist.sanitize_review(
+        {
+            "assessment": "Beaten by Melbourne Roof Restoration &amp; Repair.",
+            "root_cause": "Incumbent &amp; its sister brand own the pack.",
+            "findings": [
+                {"synthesis": "Coverage gap vs A &amp; B.", "signal_refs": ["s1"]}
+            ],
+            "proposals": [
+                {
+                    "title": "Match A &amp; B",
+                    "action": "Build links &amp; content.",
+                    "rationale": "They out-link us 3&#215;.",
+                }
+            ],
+        },
+        frozen=False,
+    )
+    assert out["assessment"] == "Beaten by Melbourne Roof Restoration & Repair."
+    assert out["root_cause"] == "Incumbent & its sister brand own the pack."
+    assert out["findings"][0]["synthesis"] == "Coverage gap vs A & B."
+    prop = out["proposals"][0]
+    assert prop["title"] == "Match A & B"
+    assert prop["action"] == "Build links & content."
+    assert prop["rationale"] == "They out-link us 3\u00d7."
+
+
 def test_sanitize_forces_senior_on_passthrough_territory():
     cases = [
         _proposal(title="Lift the freeze", action="Unfreeze the client and resume links"),
