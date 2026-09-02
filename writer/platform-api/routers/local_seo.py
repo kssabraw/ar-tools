@@ -229,6 +229,15 @@ async def rebuild_local_seo_page_spec(
     )
 
 
+@router.get("/clients/{client_id}/local-seo/length-report")
+async def local_seo_length_report(
+    client_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Target vs actual length across the client's saved pages (plan §5.6)."""
+    return page_spec_service.length_report(str(client_id))
+
+
 @router.get("/local-seo/page-specs/{spec_id}/download")
 async def download_local_seo_page_spec(
     spec_id: UUID,

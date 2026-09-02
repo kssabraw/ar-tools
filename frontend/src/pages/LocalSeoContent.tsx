@@ -12,6 +12,7 @@ import { LocationAutocomplete } from '../components/localseo/LocationAutocomplet
 import type { AnalysisResult, ExistingMatch, LocalSeoPageDetail, LocalSeoPageListItem, PrecheckResult, RankabilityResult, RelatedPageItem } from '../components/localseo/types'
 import { GeneratedPageView } from '../components/localseo/GeneratedPageView'
 import { RelatedPagesList } from '../components/localseo/RelatedPagesList'
+import { LengthChip, LengthSummary, PageSpecPanel } from '../components/localseo/PageSpecPanel'
 import { BulkCreateBar } from '../components/localseo/BulkCreateBar'
 import { CustomTargetsPanel } from '../components/localseo/CustomTargetsPanel'
 import { MatrixTab } from '../components/localseo/matrix/MatrixTab'
@@ -500,6 +501,7 @@ export function LocalSeoContent() {
 
       {tab === 'saved' ? (
         <SavedPagesList
+          clientId={id!}
           pages={savedPages ?? []}
           loading={loadingSaved}
           onOpen={openSaved}
@@ -783,6 +785,13 @@ export function LocalSeoContent() {
           )}
           {!rankabilityLoading && rankability && <RankabilityReport result={rankability} />}
 
+          {/* The kept page spec this page will be written against (length band +
+              per-section bands). Built from the cached SERP analysis — no paid call —
+              editable before generation. */}
+          {canGenerate && clientId && (
+            <PageSpecPanel clientId={clientId} keyword={keyword} location={location} locationCode={locationCode} />
+          )}
+
           {/* Primary action */}
           <button
             style={{ ...primaryBtn, width: '100%', opacity: canGenerate ? 1 : 0.5, cursor: canGenerate ? 'pointer' : 'not-allowed' }}
@@ -802,7 +811,8 @@ export function LocalSeoContent() {
   )
 }
 
-function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured, githubConfigured }: {
+function SavedPagesList({ clientId, pages, loading, onOpen, onDelete, wordpressConfigured, githubConfigured }: {
+  clientId: string
   pages: LocalSeoPageListItem[]
   loading: boolean
   onOpen: (id: string) => void
@@ -836,6 +846,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured,
   }
   return (
     <>
+    <LengthSummary clientId={clientId} />
     <BulkPublishBar items={items} bulk={bulk} wordpressConfigured={wordpressConfigured} githubConfigured={githubConfigured} placement="top" />
     <div style={{ margin: '4px 0 12px' }}>
       <PublishTabs counts={pub.counts} active={pub.filter} onPick={pub.pick} />
@@ -866,6 +877,7 @@ function SavedPagesList({ pages, loading, onOpen, onDelete, wordpressConfigured,
               {p.composite_score != null && (
                 <span style={{ fontSize: 11, fontWeight: 700, color: scoreColor(p.composite_score) }}>{Math.round(p.composite_score)}/100</span>
               )}
+              <LengthChip target={p.target_words} actual={p.actual_words} status={p.length_status} />
             </div>
             <p style={{ fontSize: 12, color: '#94a3b8', margin: '2px 0 0' }}>
               {p.keyword} · {p.location.split(',')[0]} <span style={{ marginLeft: 6, opacity: 0.7 }}>{relativeTime(p.created_at)}</span>

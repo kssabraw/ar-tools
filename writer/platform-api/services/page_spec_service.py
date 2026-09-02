@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from fastapi.responses import Response
 
 from services import analysis_cache, locations_service, page_spec_store
+from db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +94,45 @@ def download(spec_id: str) -> Response:
         media_type="application/json",
         headers={"Content-Disposition": f'attachment; filename="page-spec-{slug}-v{row.get("version")}.json"'},
     )
+
+
+# ── per-client length report (plan §5.6) ────────────────────────────────────
+
+def summarize_lengths(rows: list[dict[str, Any]], recent: int = 10) -> dict[str, Any]:
+    """Pure: target-vs-actual rollup over a client's page rows so drift shows
+    up in a table, not in the owner's review of a client's pages."""
+    with_spec = [r for r in rows if r.get("target_words") and r.get("actual_words") is not None]
+    counts = {"in_band": 0, "over_length": 0, "under_length": 0}
+    overages: list[float] = []
+    for r in with_spec:
+        st = r.get("length_status") or "in_band"
+        counts[st] = counts.get(st, 0) + 1
+        t, a = int(r["target_words"]), int(r["actual_words"])
+        if t > 0:
+            overages.append((a - t) / t * 100.0)
+    n = len(with_spec)
+    return {
+        "pages": len(rows),
+        "with_spec": n,
+        "in_band": counts.get("in_band", 0),
+        "over_length": counts.get("over_length", 0),
+        "under_length": counts.get("under_length", 0),
+        "in_band_pct": round(counts.get("in_band", 0) / n * 100.0, 1) if n else None,
+        "avg_overage_pct": round(sum(overages) / len(overages), 1) if overages else None,
+        "recent": [
+            {"id": r.get("id"), "keyword": r.get("keyword"), "target_words": int(r["target_words"]),
+             "actual_words": int(r["actual_words"]), "length_status": r.get("length_status") or "in_band",
+             "created_at": r.get("created_at")}
+            for r in with_spec[:recent]
+        ],
+    }
+
+
+def length_report(client_id: str) -> dict[str, Any]:
+    res = (
+        get_supabase().table("local_seo_pages")
+        .select("id, keyword, target_words, actual_words, length_status, created_at")
+        .eq("client_id", client_id).is_("deleted_at", "null")
+        .order("created_at", desc=True).limit(200).execute()
+    )
+    return summarize_lengths(res.data or [])
