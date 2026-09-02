@@ -38,6 +38,18 @@ from services.website_plan import MATRIX_SIGNOFF_THRESHOLD, slugify
 # the most common client site; the second is the Website Builder's
 # location-first matrix, so a later matrix → site-plan bridge is a no-op.
 DEFAULT_URL_PATTERN = "/{service}-{location}/"
+
+# "App only" is a publish destination that keeps every generated page in the app
+# (Saved Pages + the matrix grid) and never pushes it to Google Docs / WordPress
+# / GitHub. A cell's terminal state stays `done`; the auto-publish-after-generate
+# (drip) and the bulk "publish done cells" both short-circuit on it.
+APP_ONLY = "app_only"
+
+
+def publishes_externally(destination: Optional[str]) -> bool:
+    """True when a destination actually pushes a page off the app. `app_only`
+    (and an empty destination, which is never a real external target) do not."""
+    return bool(destination) and destination != APP_ONLY
 URL_PATTERN_PRESETS: tuple[str, ...] = (
     DEFAULT_URL_PATTERN,
     "/{location}/{service}/",

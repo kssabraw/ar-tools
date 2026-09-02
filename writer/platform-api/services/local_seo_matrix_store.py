@@ -518,6 +518,10 @@ def start_publish(
     if not selected:
         return {"job_ids": [], "cell_ids": []}
     dest = destination or matrix.get("publish_destination") or "google_docs"
+    # "App only": pages live in Saved Pages, there is nothing to publish. The
+    # frontend hides the publish bar for such a matrix; this is the backstop.
+    if not core.publishes_externally(dest):
+        return {"job_ids": [], "cell_ids": []}
     pub_status = status or matrix.get("publish_status") or "draft"
     force = bool(force_voice and cell_ids)
     rows = [

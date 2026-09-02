@@ -20,7 +20,10 @@ const select: React.CSSProperties = { ...input, appearance: 'auto' as React.CSSP
 // anyway" in the grid, which is the same deliberate override the per-page
 // Publish button offers.
 export function MatrixPublishBar({ clientId, matrix, onStarted }: Props) {
-  const [destination, setDestination] = useState<'google_docs' | 'wordpress' | 'github'>(matrix.publish_destination)
+  const appOnly = matrix.publish_destination === 'app_only'
+  const [destination, setDestination] = useState<'google_docs' | 'wordpress' | 'github'>(
+    matrix.publish_destination === 'app_only' ? 'google_docs' : matrix.publish_destination,
+  )
   const [status, setStatus] = useState<'draft' | 'publish'>(matrix.publish_status)
   const [starting, setStarting] = useState(false)
   const [error, setError] = useState('')
@@ -43,6 +46,9 @@ export function MatrixPublishBar({ clientId, matrix, onStarted }: Props) {
       setStarting(false)
     }
   }
+
+  // App-only matrices keep pages in Saved Pages — there is nothing to publish.
+  if (appOnly) return null
 
   return (
     <div style={{ ...card, display: 'flex', flexDirection: 'column', gap: 10 }}>

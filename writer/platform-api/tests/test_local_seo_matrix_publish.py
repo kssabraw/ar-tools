@@ -120,3 +120,36 @@ async def test_run_publish_job_records_outcome_on_cell_and_job():
         await store.run_publish_job(job)
     assert rec.call_args[0][2] == "publish_blocked"
     assert sb.table.return_value.update.call_args[0][0]["result"]["status"] == "publish_blocked"
+
+
+def test_start_publish_app_only_matrix_is_a_noop():
+    """An app-only matrix keeps pages in Saved Pages — bulk publish enqueues
+    nothing even though the cells are `done` and publishable by shape."""
+    cells = _cells()
+    cells[0].update(status="done", page_id="p0")
+    app_only = {**MATRIX, "publish_destination": "app_only"}
+    with patch.object(store, "_matrix_row", return_value=app_only), \
+         patch.object(store, "reconcile", return_value=0), \
+         patch.object(store, "_cells", return_value=cells), \
+         patch.object(store, "get_supabase") as sb:
+        result = store.start_publish("m1", "c1", "u")
+    assert result == {"job_ids": [], "cell_ids": []}
+    sb.return_value.table.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_publish_after_generate_skips_external_publish_for_app_only():
+    """The drip's auto-publish is a no-op for an app-only matrix: the page is
+    already in Saved Pages, so publish_page is never called and the cell keeps
+    its `done` status (no publish outcome recorded)."""
+    from services import local_seo_service as svc
+
+    payload = {
+        "client_id": "c1", "matrix_id": "m1", "matrix_cell_id": "cell-0",
+        "user_id": "u", "publish_destination": "app_only", "publish_status": "draft",
+    }
+    with patch.object(svc, "publish_page") as pub, \
+         patch("services.local_seo_matrix_store.record_publish_outcome") as rec:
+        await svc._publish_after_generate("p0", payload, "job-1")
+    pub.assert_not_called()
+    rec.assert_not_called()
