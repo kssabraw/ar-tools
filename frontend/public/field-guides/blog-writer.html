@@ -250,6 +250,13 @@
             the cached brief — it's a per-run instruction, not a permanent change to how that
             keyword gets briefed for anyone else.</li>
         </ul>
+        <div class="note">
+          <p><strong>When to override Format.</strong> Leave it on Auto for almost everything —
+            the classifier reads the keyword well. Override it when the keyword is genuinely
+            ambiguous ("best hvac systems" could read as a listicle or a buying guide) and you
+            already know which one the client wants, or when a past run on this keyword picked
+            the wrong shape and you're re-running specifically to fix that.</p>
+        </div>
         <p>Click <strong>Start</strong>. If a cached brief already exists for that exact keyword,
           a dialog asks whether to reuse it (faster, cheaper) or force a fresh one — worth forcing
           if the SERP landscape has genuinely shifted since it was last researched.</p>
@@ -318,6 +325,17 @@
             generation is configured for the client it runs as a background job ("Generating
             images…"), otherwise it commits synchronously with no images at all.</li>
         </ul>
+        <div class="note">
+          <p><strong>Which destination to pick.</strong> Google Docs is the default for a client
+            who reviews before anything goes live — it lands as a draft doc, not a publish, so
+            it's the safe choice when you're not sure. WP (WordPress) is for a client whose site
+            the suite can publish to directly: choose <strong>Draft</strong> if a human still
+            needs to hit publish on their end, or <strong>Publish</strong> only for a client
+            you already trust the pipeline's output for — it goes live immediately. GitHub is for
+            a client with a suite-built website (the Website Builder module) — that site's repo
+            is its actual source of truth, so this is the only destination that's "publishing"
+            in the sense of shipping to the real site, not a review copy.</p>
+        </div>
         <div class="stamp-row">
           <span class="stamp-badge pass">approved</span>
           <span class="stamp-badge hold">on hold — voice</span>
@@ -345,6 +363,12 @@
           everything) and click <strong>Reoptimize</strong>; it rewrites against exactly those
           issues, then re-scores automatically, in the background. Both panels also carry an
           <strong>Entity engine</strong> selector (TextRazor by default, or Google NLP).</p>
+        <div class="note">
+          <p><strong>Which entity engine.</strong> Leave it on TextRazor — it's the default for a
+            reason and usually the better read. Switch to Google NLP mainly to cross-check a
+            borderline entity-coverage score, or when the topic is technical/niche enough that
+            Google's model might have better coverage of the specific entities involved.</p>
+        </div>
         <h3>A URL that isn't a suite run</h3>
         <p>From the Runs page (not inside a specific run), two toggles: <strong>Score an
           article</strong> — point at a live URL or paste content, plus a required keyword; scores
@@ -352,6 +376,12 @@
           optional notes, accepts either one URL or a pasted list of several. Unlike scoring, this
           spawns a genuine <strong>new run</strong> — full brief → research → writer — since
           there's no existing brief to reuse.</p>
+        <div class="note">
+          <p><strong>Score first, reoptimize second.</strong> Score is the cheap move — run it on
+            a competitor's page or a not-yet-suite page just to see where it stands. Only spend on
+            Reoptimize once the score actually tells you it's worth a full rewrite; on a URL that
+            isn't a suite run, that rewrite is a genuine new pipeline pass, not a cheap patch.</p>
+        </div>
       </section>
 
       <section id="s8" class="block">
@@ -363,6 +393,14 @@
           <strong>Reject</strong>, or approve-and-immediately-dispatch a run. The bulk toolbar
           mirrors the same three actions as buttons: <strong>Approve &amp; generate</strong>,
           <strong>Approve only</strong>, <strong>Reject</strong>.</p>
+        <div class="note">
+          <p><strong>Approve only vs. Approve &amp; generate.</strong> Approve only when you want
+            the topic on record for later — building out a content calendar without committing
+            spend yet. Approve &amp; generate when you're ready to write it now. Reject a
+            grouping that's genuinely a bad fit (unrelated keywords lumped together by
+            coincidence) rather than leaving it sitting in the list for someone else to puzzle
+            over.</p>
+        </div>
       </section>
 
       <section id="s9" class="block">
