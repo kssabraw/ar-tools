@@ -36,3 +36,38 @@ def test_cache_text_reads_the_config_flag_when_no_override(monkeypatch):
     assert isinstance(prompt_cache.cache_text("ctx"), list)
     monkeypatch.setattr(settings, "prompt_cache_enabled", False)
     assert prompt_cache.cache_text("ctx") == "ctx"
+
+
+class _Usage:
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+
+def test_usage_cache_fields_reads_the_two_counters():
+    u = _Usage(input_tokens=100, cache_read_input_tokens=900, cache_creation_input_tokens=50)
+    assert prompt_cache.usage_cache_fields(u) == {
+        "cache_read_input_tokens": 900,
+        "cache_creation_input_tokens": 50,
+    }
+
+
+def test_usage_cache_fields_zero_fills_absent_or_none():
+    # A None usage, or one missing the counters (e.g. caching off), reads as zeros.
+    assert prompt_cache.usage_cache_fields(None) == {
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    }
+    assert prompt_cache.usage_cache_fields(_Usage(input_tokens=10)) == {
+        "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0,
+    }
+
+
+def test_add_cache_usage_accumulates_in_place_across_rounds():
+    acc = {"input_tokens": 0, "output_tokens": 0}
+    prompt_cache.add_cache_usage(acc, _Usage(cache_read_input_tokens=0, cache_creation_input_tokens=200))
+    prompt_cache.add_cache_usage(acc, _Usage(cache_read_input_tokens=1800, cache_creation_input_tokens=0))
+    prompt_cache.add_cache_usage(acc, None)  # tolerant of a missing usage
+    assert acc["cache_read_input_tokens"] == 1800
+    assert acc["cache_creation_input_tokens"] == 200
+    # the pre-existing keys are left intact
+    assert acc["input_tokens"] == 0 and acc["output_tokens"] == 0

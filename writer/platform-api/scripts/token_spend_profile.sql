@@ -64,3 +64,18 @@ select
   round(sum(nullif(cost_breakdown->>'silo_discovery','')::numeric),2)     as nonclaude_silo,
   round(sum(coalesce(actual_cost_usd,0))::numeric,2)                      as session_total
 from fanout.sessions where created_at >= now() - interval '30 days';
+
+-- 5) Prompt-cache HIT RATE on the strategist (proves the #989 caching works).
+--    Only meaningful once strategy_reviews rows are written by the cache-metrics
+--    build; older rows carry no cache fields (they read as 0). A healthy warm
+--    loop shows cache_read dominating uncached input.
+select (created_at >= now() - interval '30 days') as last_30d,
+       count(*) n,
+       sum(nullif(token_usage->>'input_tokens','')::numeric)::bigint               as uncached_input,
+       sum(nullif(token_usage->>'cache_read_input_tokens','')::numeric)::bigint    as cache_read,
+       sum(nullif(token_usage->>'cache_creation_input_tokens','')::numeric)::bigint as cache_write,
+       round(100 * sum(nullif(token_usage->>'cache_read_input_tokens','')::numeric)
+             / nullif(sum(nullif(token_usage->>'cache_read_input_tokens','')::numeric)
+                    + sum(nullif(token_usage->>'input_tokens','')::numeric), 0), 1) as cache_read_pct
+from strategy_reviews where token_usage ? 'cache_read_input_tokens'
+group by last_30d order by last_30d desc;

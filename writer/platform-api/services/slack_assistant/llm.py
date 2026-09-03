@@ -665,6 +665,26 @@ def build_llm_tools() -> list[dict]:
     return tools
 
 
+def _log_cache_usage(usage) -> None:
+    """Best-effort one-line log of the cache-accounting tokens for an agent turn.
+
+    The interactive agents (Slack/PACE/QA/DORA) don't persist usage, so this is
+    how their prompt-cache hit/miss (the #989 win) is spot-checkable in the logs.
+    Only emits when the cache was actually touched, so it's silent when caching
+    is off or the prefix is below the cacheable minimum."""
+    try:
+        from services import prompt_cache
+
+        fields = prompt_cache.usage_cache_fields(usage)
+        if fields["cache_read_input_tokens"] or fields["cache_creation_input_tokens"]:
+            logger.info(
+                "prompt_cache_usage",
+                extra={"input_tokens": int(getattr(usage, "input_tokens", 0) or 0), **fields},
+            )
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        pass
+
+
 async def _one_llm_call(
     api, system: str, messages: list[dict], tools: list[dict],
     kwargs: dict, on_text=None,
@@ -690,11 +710,14 @@ async def _one_llm_call(
         **kwargs,
     }
     if on_text is None:
-        return await api.messages.create(**call_kwargs)
-    async with api.messages.stream(**call_kwargs) as stream:
-        async for delta in stream.text_stream:
-            await on_text(delta)
-        return await stream.get_final_message()
+        resp = await api.messages.create(**call_kwargs)
+    else:
+        async with api.messages.stream(**call_kwargs) as stream:
+            async for delta in stream.text_stream:
+                await on_text(delta)
+            resp = await stream.get_final_message()
+    _log_cache_usage(getattr(resp, "usage", None))
+    return resp
 
 
 async def _create_with_continuation(

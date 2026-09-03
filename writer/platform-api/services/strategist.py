@@ -778,6 +778,10 @@ async def run_strategy_review(
         )
         usage["input_tokens"] += getattr(resp.usage, "input_tokens", 0) or 0
         usage["output_tokens"] += getattr(resp.usage, "output_tokens", 0) or 0
+        # Cache-accounting totals, so the persisted token_usage shows whether the
+        # cached system + first-message prefix (the #989 win) is actually being
+        # read back — cache_read should dominate input on rounds 2..N of the loop.
+        prompt_cache.add_cache_usage(usage, resp.usage)
 
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         emit_block = next((b for b in tool_uses if b.name == "emit_strategy_review"), None)
