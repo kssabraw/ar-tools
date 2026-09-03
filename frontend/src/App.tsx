@@ -62,6 +62,7 @@ import { RankReport } from './pages/RankReport'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 import { Team } from './pages/Team'
+import { FeedbackBoard } from './pages/FeedbackBoard'
 import { SetPassword } from './pages/SetPassword'
 import FanoutApp from './fanout/FanoutApp'
 
@@ -153,6 +154,7 @@ export default function App() {
                       <Route path="/guides" element={<Guides />} />
                       <Route path="/guides/:slug" element={<Guides />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
+                      <Route path="/feedback" element={<AdminRoute><FeedbackBoard /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Layout>
