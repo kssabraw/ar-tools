@@ -330,7 +330,7 @@ def place_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
                         client_id=task.get("client_id"),
                         subject=f"Can't staff: {task.get('name') or task_id}",
                         body="Placement deferred — the eligible team is at capacity.",
-                        ref=task_id, correlation_id=f"placement:{task_id}",
+                        ref=task_id, correlation_id=agent_bus.placement_correlation(task_id),
                         dedupe_key=f"blocker:placement:{task_id}",
                         payload={"category": result.get("category")},
                     )

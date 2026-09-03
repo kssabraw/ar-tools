@@ -164,6 +164,24 @@ def mark_acted(*, correlation_id: str, by_agent: str, status: str = "acted") -> 
         return 0
 
 
+def placement_correlation(task_id: str) -> str:
+    """Correlation id for a PACE→DORA capacity blocker on a task's placement.
+    Shared by the post (pm_assign) and the resolve (task_service) so the two can
+    never drift apart. Pure."""
+    return f"placement:{task_id}"
+
+
+def resolve_placement_blocker(task_id: str, *, by_agent: str = "pace") -> int:
+    """Close any OPEN capacity blocker for a task once it no longer needs staffing
+    (it got assigned, or completed) — so DORA's open-blocker / coordination view
+    reflects live reality instead of accumulating resolved walls. Best-effort:
+    ``mark_acted`` self-gates on ``agent_bus_enabled`` and swallows errors, and a
+    task that never had a blocker simply updates 0 rows. Returns rows closed."""
+    if not task_id:
+        return 0
+    return mark_acted(correlation_id=placement_correlation(task_id), by_agent=by_agent)
+
+
 def inbox(agent: str, *, open_only: bool = True, limit: int = 100) -> list[dict]:
     """Messages addressed to ``agent`` (or broadcast) for the agent to read on its
     run. Best-effort ([] on error)."""
