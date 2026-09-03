@@ -1,5 +1,15 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-03 · **DORA (Director of Operations) — ✅ VERIFIED LIVE end-to-end**
+
+The DORA own-surface provisioning + verification is **complete**. All four surfaces confirmed working:
+- **Deploy** — the DORA-code deploy went active (backlog drained past `79e449c`/#892); `gsc_scheduler.started`, no `director_reconcile` step failure.
+- **Daily reconcile** — ran at **08:01 UTC** and opened **11 real `director_seam` `content_shipped_degraded` board tasks** (one client, 11 Local SEO pages that failed the brand-voice check in the 14-day lookback). `qa_idle` correctly did **not** trip (QA is actively used — 49 In-QA entries / 49 reviews in 30 days — and the seam fires only after 7+ idle days). The stale "expected qa_idle `ops_seam`" prediction was corrected in the docs (this branch / PR #1001).
+- **Web** — `/director` page + DORA sidebar entry live (`director_enabled` true).
+- **Slack inbound** — the one real blocker was a **misconfigured Event Request URL**: the DORA Slack app was pointing at `/slack/pace/events` (so #dora messages 403'd against PACE's signing secret). The owner repointed it to `https://platform-production-a5c5.up.railway.app/slack/director/events` (Socket Mode OFF, bot invited to #dora), posted in #dora, and **DORA replied in-thread under its own bot**. Outbound (`ops_seam`/`ops_digest`→#dora) was already confirmed.
+
+Env on PLATFORM: `DIRECTOR_SLACK_BOT_TOKEN` / `_SIGNING_SECRET` / `DIRECTOR_SLACK_CHANNEL`=`C0BTJB2F8M8` set; `DIRECTOR_ENABLED` true; `DIRECTOR_AUTONOMY_VETO_ENABLED` deliberately absent (veto stays dark). **Diagnostic gotcha for next time:** `handle_director_message` is read-only and writes **nothing** to the DB — the only success signals for a Slack DORA turn are the reply itself and the `slack_director_events.hit` / `/slack/director/events` 200 in PLATFORM HTTP logs (no `assistant_store` row; only the web `/director` chat persists). Per `decisions.md`, the acting-agent scope stays trigger-gated (§8) — nothing more to build unless a trigger fires. Docs-only PR #1001 (the stale-QA-note fix) carries this update too.
+
 ## ⏩ Update — 2026-09-03 · **Local SEO page spec: feasibility floors, the client-length lift, and the deepen pass (owner ruling; rules 11–12 in `docs/modules/local-seo-adherence-learnings-2026-09-02.md`)**
 
 The 2026-09-02 cross-client batch (First Class Roofing "roof restoration" in template mode: 1,344 words in band, structure ok, 85.0 / 79.4 — the clean win; Wheelhouse Fort Lauderdale run 5: 1,963 vs a 2,083 minimum, again under; Wheelhouse Orlando "IT Support Company Winter Park": in band but **7 structure issues**) exposed two general gaps, both fixed the same day:
