@@ -66,3 +66,38 @@ def cache_text(text: Union[str, list, None], *, enabled: Optional[bool] = None):
     if not _enabled(enabled) or not isinstance(text, str) or not text:
         return text
     return [{"type": "text", "text": text, "cache_control": _EPHEMERAL}]
+
+
+# ---------------------------------------------------------------------------
+# Measurement — make the cache's effect observable.
+#
+# Caching only pays when the cache is actually *read*: a warm loop should show
+# `cache_read_input_tokens` dominating regular `input_tokens`, with
+# `cache_creation_input_tokens` (the 1.25×/2× write) roughly one prefix's worth.
+# The API returns these on `response.usage`; the helpers below extract them (an
+# empty read across repeated calls is the signature of a silent invalidator).
+# ---------------------------------------------------------------------------
+_CACHE_USAGE_KEYS = ("cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def usage_cache_fields(usage) -> dict:
+    """The cache-accounting token counts off an Anthropic response ``usage``
+    object (or None), zero-filled when absent. Pure — no SDK import, tolerant of
+    a mock/None so a call site can capture unconditionally."""
+    out: dict = {}
+    for key in _CACHE_USAGE_KEYS:
+        try:
+            out[key] = int(getattr(usage, key, 0) or 0)
+        except (TypeError, ValueError):
+            out[key] = 0
+    return out
+
+
+def add_cache_usage(acc: dict, usage) -> dict:
+    """Accumulate a response's cache-token counts into ``acc`` in place (keys
+    zero-initialised on first use), and return it. Lets a multi-round loop total
+    its cache reads/writes alongside the input/output tokens it already sums, so
+    the hit rate is visible in the persisted usage. Pure/best-effort."""
+    for key, val in usage_cache_fields(usage).items():
+        acc[key] = acc.get(key, 0) + val
+    return acc
