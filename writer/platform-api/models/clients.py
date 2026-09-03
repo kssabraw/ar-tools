@@ -221,6 +221,45 @@ class ClientDetail(BaseModel):
             if val is not None and str(val).strip()
         }
 
+    @field_validator("trust_signals", mode="before")
+    @classmethod
+    def _sanitize_trust_signals(cls, v: Any) -> Optional[dict]:
+        """Coerce a malformed/legacy stored value into a shape TrustSignals
+        accepts so a bad row can't 500 a GET (the write path validates at the
+        request model, so this only ever repairs reads). A non-dict → None
+        (unset); each badge list is normalised to [{name, logo_url}] (a bare
+        string or partial dict is repaired, junk dropped); years_founded → int
+        or None. Mirrors the drive_folders sanitizer's defensive intent."""
+        if not isinstance(v, dict):
+            return None
+
+        def _badges(x: Any) -> list[dict]:
+            out: list[dict] = []
+            if isinstance(x, list):
+                for it in x:
+                    if isinstance(it, str) and it.strip():
+                        out.append({"name": it.strip(), "logo_url": ""})
+                    elif isinstance(it, dict):
+                        name = str(it.get("name") or "").strip()
+                        logo = str(it.get("logo_url") or it.get("logo") or "").strip()
+                        if name or logo:
+                            out.append({"name": name, "logo_url": logo})
+            return out
+
+        years = v.get("years_founded")
+        try:
+            years = int(years) if years not in (None, "") else None
+        except (TypeError, ValueError):
+            years = None
+        return {
+            "certifications": _badges(v.get("certifications")),
+            "affiliations": _badges(v.get("affiliations")),
+            "financing_partners": _badges(v.get("financing_partners")),
+            "license_number": (str(v.get("license_number")).strip() or None) if v.get("license_number") else None,
+            "years_founded": years,
+            "founding_date": (str(v.get("founding_date")).strip() or None) if v.get("founding_date") else None,
+        }
+
 
 class ClientCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)

@@ -55,7 +55,7 @@ def test_full_block_has_all_four_elements():
     # Aggregate rating badge
     assert "4.9" in block
     assert "132 Google reviews" in block
-    assert "AggregateRating" in block
+    assert "trust-rating" in block
     # Financing logos
     assert "cdn.example/wisetack.png" in block
     assert "Financing available" in block
@@ -73,14 +73,14 @@ def test_each_element_renders_independently():
 
     only_badges = main._build_trust_block(certifications=CERTS)
     assert "cdn.example/bbb.png" in only_badges
-    assert "AggregateRating" not in only_badges
+    assert "trust-rating" not in only_badges
     assert "Financing" not in only_badges
 
 
 def test_zero_or_missing_rating_omits_rating_badge():
-    assert "AggregateRating" not in main._build_trust_block(gbp_rating=0, gbp_review_count=5)
-    assert "AggregateRating" not in main._build_trust_block(gbp_rating=None)
-    assert "AggregateRating" not in main._build_trust_block(gbp_rating="not-a-number")
+    assert "trust-rating" not in main._build_trust_block(gbp_rating=0, gbp_review_count=5)
+    assert "trust-rating" not in main._build_trust_block(gbp_rating=None)
+    assert "trust-rating" not in main._build_trust_block(gbp_rating="not-a-number")
 
 
 def test_rating_without_review_count_omits_count():

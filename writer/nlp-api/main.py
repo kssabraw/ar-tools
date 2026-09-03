@@ -1645,9 +1645,11 @@ def _build_trust_block(
             f' from {review_count} Google review{"s" if review_count != 1 else ""}'
             if review_count else ""
         )
+        # Plain styled badge — no schema.org microdata: a standalone
+        # AggregateRating (not nested in a reviewed item) is invalid structured
+        # data, and the page's JSON-LD already carries the machine-readable rating.
         parts.append(
-            '  <div class="trust-rating" itemscope '
-            'itemtype="https://schema.org/AggregateRating">\n'
+            '  <div class="trust-rating">\n'
             f'    <span class="trust-rating-value">{esc(rating_txt)}</span>'
             '<span class="trust-rating-stars" aria-hidden="true">★★★★★</span>\n'
             f'    <span class="trust-rating-label">{esc(rating_txt)}-star rating'
@@ -9601,7 +9603,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
 
         # Parse existing page zones and compute delta-based SERP context
         page_zones = _parse_page_zones(existing_html)
-        serp_analysis_dict: Optional[dict] = serp_analysis_dict
+        serp_analysis_dict: Optional[dict] = body.serp_analysis
         serp_ctx = _reopt_serp_context(page_zones, serp_analysis_dict)
         # The word target that governs this page (SERP-measured, else the
         # caller's fallback) — threaded into every score + rewrite pass below.
