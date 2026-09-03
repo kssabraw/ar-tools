@@ -1688,6 +1688,11 @@ def _build_trust_block(
             caption = str(a.get("caption") or "").strip()
             cap_html = f'<figcaption>{esc(caption)}</figcaption>' if caption else ""
             if kind == "video_embed":
+                # An <iframe src> is a script sink (html-escaping does not
+                # neutralise a "javascript:" scheme), so only embed a real
+                # http(s) URL — a malformed/other-scheme value is dropped.
+                if not (url.startswith("https://") or url.startswith("http://")):
+                    continue
                 gallery.append(
                     f'    <figure class="asset asset-video">'
                     f'<iframe src="{esc(url)}" title="{esc(caption or "Video")}" '

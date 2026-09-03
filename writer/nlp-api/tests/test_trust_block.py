@@ -89,6 +89,21 @@ def test_rating_without_review_count_omits_count():
     assert "Google review" not in block
 
 
+def test_video_embed_requires_http_scheme():
+    # An iframe src is a script sink; a non-http(s) scheme (or malformed value)
+    # must be dropped, not escaped-and-embedded.
+    bad = main._build_trust_block(assets=[
+        {"kind": "video_embed", "url": "javascript:alert(1)", "caption": "x"},
+        {"kind": "video_embed", "url": "/relative/path"},
+    ])
+    assert bad == ""  # both dropped → nothing renderable
+    ok = main._build_trust_block(assets=[
+        {"kind": "video_embed", "url": "https://youtube.com/embed/ok"},
+    ])
+    assert '<iframe src="https://youtube.com/embed/ok"' in ok
+    assert "javascript:" not in ok
+
+
 def test_asset_without_url_is_skipped():
     block = main._build_trust_block(assets=[{"kind": "team_photo", "url": ""}, {"kind": "other"}])
     assert block == ""  # nothing renderable → empty
