@@ -39,6 +39,7 @@ import logging
 from typing import Callable, Optional
 
 from config import settings
+from services import prompt_cache
 
 logger = logging.getLogger(__name__)
 
@@ -321,7 +322,10 @@ async def _run_anthropic(
     response = await client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=system,
+        # Cache tools+system so a fan-out of same-shape report calls (per keyword /
+        # per client) reuses the prefix within the cache TTL. Transparent; no-op
+        # when caching is disabled or the prefix is below the cacheable minimum.
+        system=prompt_cache.cache_text(system),
         tools=[{"name": tool_name, "description": tool_description, "input_schema": input_schema}],
         tool_choice={"type": "tool", "name": tool_name},
         messages=[{"role": "user", "content": user}],
@@ -390,7 +394,7 @@ async def _run_anthropic_text(*, model: str, system: str, user: str, max_tokens:
     client = anthropic.AsyncAnthropic(api_key=api_key or settings.anthropic_api_key)
     kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": user}]}
     if system:
-        kwargs["system"] = system
+        kwargs["system"] = prompt_cache.cache_text(system)  # cache the (invariant) system prefix
     resp = await client.messages.create(**kwargs)
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
@@ -429,7 +433,7 @@ def _run_anthropic_sync(
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
-        system=system,
+        system=prompt_cache.cache_text(system),  # cache tools+system (see async twin)
         tools=[{"name": tool_name, "description": tool_description, "input_schema": input_schema}],
         tool_choice={"type": "tool", "name": tool_name},
         messages=[{"role": "user", "content": user}],
@@ -495,7 +499,7 @@ def _run_anthropic_text_sync(*, model: str, system: str, user: str, max_tokens: 
     client = anthropic.Anthropic(api_key=api_key or settings.anthropic_api_key)
     kwargs: dict = {"model": model, "max_tokens": max_tokens, "messages": [{"role": "user", "content": user}]}
     if system:
-        kwargs["system"] = system
+        kwargs["system"] = prompt_cache.cache_text(system)  # cache the (invariant) system prefix
     resp = client.messages.create(**kwargs)
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
