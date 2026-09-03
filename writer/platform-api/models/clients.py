@@ -94,6 +94,41 @@ class PageStructureGuidelines(BaseModel):
     solution: Optional[PageStructureGuideline] = None
 
 
+class TrustBadge(BaseModel):
+    """A single accreditation / affiliation / financing-partner badge — a name
+    and (optionally) a logo image URL — for the Local SEO Trust & Proof block."""
+    name: str = ""
+    logo_url: str = ""
+
+
+class TrustSignals(BaseModel):
+    """Business-supplied trust facts the Local SEO writer renders deterministically
+    (docs/modules/local-landing-page-structure.md). Stored on clients.trust_signals
+    (JSONB). Media assets (photos/video) are the separate client_assets table."""
+    certifications: list[TrustBadge] = Field(default_factory=list)
+    affiliations: list[TrustBadge] = Field(default_factory=list)
+    financing_partners: list[TrustBadge] = Field(default_factory=list)
+    license_number: Optional[str] = None
+    years_founded: Optional[int] = None
+    founding_date: Optional[str] = None
+
+
+class ClientAsset(BaseModel):
+    """A media-gallery asset row (client_assets table)."""
+    id: UUID
+    kind: Literal["team_photo", "owner_photo", "vehicle", "before_after", "video_embed", "other"]
+    url: str
+    caption: Optional[str] = None
+    sort_order: int = 0
+
+
+class ClientAssetCreateRequest(BaseModel):
+    kind: Literal["team_photo", "owner_photo", "vehicle", "before_after", "video_embed", "other"]
+    url: str = Field(..., min_length=1)
+    caption: Optional[str] = None
+    sort_order: int = 0
+
+
 class ClientDetail(BaseModel):
     id: UUID
     name: str
@@ -167,6 +202,10 @@ class ClientDetail(BaseModel):
     # Everhour project this client's time is logged against (opaque id like
     # "ev:123"/"as:123", not numeric). None → not yet onboarded to Everhour.
     everhour_project_id: Optional[str] = None
+    # Trust & Proof facts the Local SEO writer renders deterministically
+    # (docs/modules/local-landing-page-structure.md). Media assets are the
+    # separate client_assets table, surfaced via the assets endpoints.
+    trust_signals: Optional[TrustSignals] = None
 
     @field_validator("drive_folders", "github_content_paths", mode="before")
     @classmethod
@@ -180,6 +219,45 @@ class ClientDetail(BaseModel):
             str(k): str(val).strip()
             for k, val in v.items()
             if val is not None and str(val).strip()
+        }
+
+    @field_validator("trust_signals", mode="before")
+    @classmethod
+    def _sanitize_trust_signals(cls, v: Any) -> Optional[dict]:
+        """Coerce a malformed/legacy stored value into a shape TrustSignals
+        accepts so a bad row can't 500 a GET (the write path validates at the
+        request model, so this only ever repairs reads). A non-dict → None
+        (unset); each badge list is normalised to [{name, logo_url}] (a bare
+        string or partial dict is repaired, junk dropped); years_founded → int
+        or None. Mirrors the drive_folders sanitizer's defensive intent."""
+        if not isinstance(v, dict):
+            return None
+
+        def _badges(x: Any) -> list[dict]:
+            out: list[dict] = []
+            if isinstance(x, list):
+                for it in x:
+                    if isinstance(it, str) and it.strip():
+                        out.append({"name": it.strip(), "logo_url": ""})
+                    elif isinstance(it, dict):
+                        name = str(it.get("name") or "").strip()
+                        logo = str(it.get("logo_url") or it.get("logo") or "").strip()
+                        if name or logo:
+                            out.append({"name": name, "logo_url": logo})
+            return out
+
+        years = v.get("years_founded")
+        try:
+            years = int(years) if years not in (None, "") else None
+        except (TypeError, ValueError):
+            years = None
+        return {
+            "certifications": _badges(v.get("certifications")),
+            "affiliations": _badges(v.get("affiliations")),
+            "financing_partners": _badges(v.get("financing_partners")),
+            "license_number": (str(v.get("license_number")).strip() or None) if v.get("license_number") else None,
+            "years_founded": years,
+            "founding_date": (str(v.get("founding_date")).strip() or None) if v.get("founding_date") else None,
         }
 
 
@@ -228,6 +306,8 @@ class ClientCreateRequest(BaseModel):
     slack_channel_id: Optional[str] = None
     # Everhour project this client's time is logged against; None → unmapped.
     everhour_project_id: Optional[str] = None
+    # Trust & Proof facts (docs/modules/local-landing-page-structure.md).
+    trust_signals: Optional[TrustSignals] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
     # Written page-structure specs — the no-website alternative to the URLs above.
@@ -281,3 +361,6 @@ class ClientUpdateRequest(BaseModel):
     # Everhour project this client's time is logged against; pass an empty string
     # to clear the mapping.
     everhour_project_id: Optional[str] = None
+    # Trust & Proof facts (docs/modules/local-landing-page-structure.md). Send the
+    # full object to replace what's stored; omit to leave unchanged.
+    trust_signals: Optional[TrustSignals] = None

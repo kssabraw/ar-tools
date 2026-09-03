@@ -26,7 +26,7 @@ try:
     from fastapi.responses import StreamingResponse
     from fastapi.middleware.cors import CORSMiddleware
     from pydantic import BaseModel
-    from typing import Callable, List, Dict, Optional
+    from typing import Any, Callable, List, Dict, Optional
     from slowapi import Limiter, _rate_limit_exceeded_handler
     from slowapi.util import get_remote_address
     from slowapi.errors import RateLimitExceeded
@@ -779,6 +779,15 @@ optimised for Answer Engine Optimisation. Follow all of them in every section.
     and truthfully: never fabricate a price or guarantee to resolve a concern — if the fact
     isn't in the business data, address the concern qualitatively or record it in Content Gaps.
 
+17. TRUST-SIGNAL CONSISTENCY: any badge, certification, aggregate rating, license, or
+    guarantee you reference must be consistent with what the business actually states on its
+    GBP/website — as provided in the business data. Do NOT embellish a trust signal for this
+    one page: never upgrade "guaranteed" into a specific term the data doesn't give, never
+    claim an accreditation or rating not in the data, and never assert a signal on a city/
+    location page that the business doesn't hold everywhere. (The visual badges, the aggregate
+    rating, financing logos, and the media gallery are injected deterministically after
+    generation — do NOT hand-write them; see the Trust & Proof note below.)
+
 BRAND VOICE vs. AEO STRUCTURE — TIEBREAKER RULES
 
 These two sets of rules rarely conflict, but when they appear to, apply this hierarchy:
@@ -827,7 +836,7 @@ Section 1 — Intro / Direct Answer Block (100–150 words)
   <p>[Brand] provides [service] to [city] — [primary differentiator stated in the first sentence]. [One short supporting sentence with a proof point.]</p>
   <p>[Availability / scope signal — use a specific timeframe ONLY if it is in the business data, otherwise a coverage or credential proof point.] [Phone number as a CTA, e.g. "Call [phone] now".]</p>
   <p>[Direct service claim + city + 1 neighborhood.]</p>
-  NOTE: split the intro into SHORT paragraphs (1–2 sentences each) — do NOT emit one long <p>. Phone number MUST appear in this section. This section must mention city + ≥1 neighborhood.
+  NOTE: split the intro into SHORT paragraphs (1–2 sentences each) — do NOT emit one long <p>. Phone number MUST appear in this section. This section must mention city + ≥1 neighborhood. If the business data states years in business or a founding date, work it in here as a proof point (e.g. "serving [city] since 1998" / "over 25 years of experience") — verbatim from the data, never estimated or rounded.
 </section>
 
 Section 2 — USP / Value Proposition (150–200 words)
@@ -850,6 +859,7 @@ Section 5 — Features and Benefits (150–200 words)
 <section id="features">
   <h2>[Benefit-focused H2]</h2>
   <ul>[Min 4 feature/benefit pairs — outcome-first, ICP pain points addressed]</ul>
+  PRICING: if per-line-item pricing is present in the business data, work the figure into the relevant benefit line (e.g. "Drain cleaning — from $129") rather than a separate price list. Never invent, round, or estimate a figure that isn't stated; omit pricing entirely when none is provided.
 </section>
 
 Section 6 — Main Service Body (800–1400 words)
@@ -874,6 +884,11 @@ Section 6 — Main Service Body (800–1400 words)
   - Weave in the EXACT competitor 4-word phrases from the SEO checklist verbatim (do not paraphrase)
   - Do NOT copy competitor headings verbatim — use them to understand topic coverage, then write
     headings that are more specific, benefit-oriented, or locally relevant
+  - If the service supports a symptom-diagnosis or DIY-vs-professional angle, ONE H2 may present it
+    as a comparison table (symptom → likely cause → DIY-safe? → call a pro?). Use a table only when
+    it is genuinely comparative; base every row on the actual service/business data — never invent a
+    symptom, cause, or safety claim. This table counts against this section's word budget — it is not
+    additive, so trim prose elsewhere to make room.
 </section>
 
 Section 7 — Testimonials (include only if reviews provided above; omit if none)
@@ -885,13 +900,14 @@ Section 7 — Testimonials (include only if reviews provided above; omit if none
 Section 8 — CTA Block Secondary (50–75 words) — PROOF / RISK-REVERSAL
 <section id="cta-secondary">
   <h2>[Service-anchored action heading — name the SERVICE (no city, no verbatim exact-match keyword), DISTINCT wording from §4, e.g. "Trust Your Roof Restoration to a Proven Crew"]</h2>
-  [A DISTINCT angle from §4: lead with proof or risk-reversal — a guarantee/warranty, licensing/insurance, or a reviews callback (each ONLY if present in the business data; never invent one), then the ask. Include the phone. Do NOT reuse §4's wording or angle.]
+  [A DISTINCT angle from §4: lead with proof or risk-reversal — a guarantee/warranty, licensing/insurance, or a reviews callback (each ONLY if present in the business data; never invent one), then the ask. Include the phone. Do NOT reuse §4's wording or angle. When a guarantee/warranty IS in the business data, state its SPECIFIC terms ("2-year parts & labor warranty", not just "guaranteed work") — a specific term is a far stronger proof signal than a vague claim and reads as verifiable; if only a vague guarantee is on file, record the specific terms as a Content Gap rather than inventing them.]
 </section>
 
 Section 9 — Getting Started (150–200 words)
 <section id="getting-started">
   <h2>[Process-focused H2]</h2>
   <ol>[3–5 steps, plain language, close with CTA]</ol>
+  TIERS: if the business offers distinct service tiers/packages (per the business data), the process may present them as a comparison table (tier → what's included → price, only if the price is stated). Base every tier and inclusion on the actual business data — never invent a package, inclusion, or price. This table counts against this section's word budget — it is not additive.
 </section>
 
 Section 10 — Geographic / Local SEO Section (200–300 words)
@@ -899,7 +915,9 @@ Section 10 — Geographic / Local SEO Section (200–300 words)
   <h2>[City + service in heading]</h2>
   [City + min 3 neighborhoods in sentence context (not just a list) + min 1 landmark + min 2 streets + zip codes (min 3). Use only real, verifiable geographic details. If neighborhood/landmark/street/zip data is not provided in the business data, include only what you are certain is accurate for the target city. Do not invent or guess street names, zip codes, or landmarks. Coverage area required. Response time: ONLY include if explicitly stated in business hours, GBP description, or reviews — otherwise write "Call us for availability" or omit entirely.]
   NAP — REQUIRED: state the business Name, full Address, and Phone number verbatim from the business data in this section's body text (a short "Visit us" / "Find us" line is ideal). Use the exact values provided — never invent or alter an address or phone number. If the address or phone is not in the business data, include only what IS provided and record the missing part in the Content Gaps report.
+  LICENSE NUMBER: if a license number is present in the business data, state it verbatim in this section (e.g. "Licensed & insured — License #CCC1234567") as a verifiable trust signal. Never invent or guess a license number; if the business's category implies licensing but no number is on file, leave it out and record it in the Content Gaps report.
   NOTE — do NOT hand-write a Google Map embed, a "driving directions" link, or a contact form here. A canonical NAP block, an address-keyed map embed, a directions link, and a contact form are appended to the page automatically after generation; writing your own would duplicate them.
+  NOTE — do NOT hand-write trust badges (BBB/Google Guaranteed/trade seals), an aggregate star-rating badge, financing-partner logos, or a photo/video gallery. A deterministic "Trust & Proof" block carrying those is appended automatically after generation from the business's supplied assets; asserting one in prose risks claiming a badge/rating/photo that doesn't render, or duplicating it once it does. The NARRATIVE trust elements DO stay yours to write: the guarantee/warranty framing (§8), the years-in-business proof point (§1), the license number (§10), and any symptom/DIY or tier comparison table (§6/§9).
 </section>
 
 Section 11 — (removed) There are exactly TWO CTA blocks on the page — §4 (value/offer-led) and §8 (proof/risk-reversal). Do NOT add a third CTA block; repeated calls-to-action pad the page without adding value. (Section numbers below are unchanged.)
@@ -1000,7 +1018,14 @@ ALWAYS check for these high-impact gaps and include them if missing from the bus
 1. Response time — if no specific arrival/response window (e.g. "within 2 hours", "same-day") was present in the business data, include this gap:
    {"category":"Response Time","missing":"Specific response or arrival window (e.g. 'within 2 hours', 'same-day appointments')","score_impact":"high","why_important":"The nearme_intent scoring engine requires an explicit response time. Without it the page cannot score 90+ — this is the single most common reason for a sub-90 score. Having this prominently on your website also builds trust with visitors and improves conversions.","how_to_add":"Add your typical response or arrival time to your website (e.g. on your homepage, about page, or services page). Once it's there, you can either manually add it to this page, or start the process over once all missing information has been added to your site for a fully optimised result."}
 2. Service area / neighborhoods — if no specific neighborhoods or coverage areas were in the business data, flag it as a medium-impact gap with how_to_add explaining that having a clear service area listed on the website helps both customers and search engines understand coverage, and that they can manually add it to this page or restart once the site is updated.
-3. Certifications / licences — if the GBP category implies them (plumber, electrician, HVAC, contractor) but none were stated, flag as medium-impact with how_to_add explaining that licences and certifications are a key trust signal that customers look for, and that they should be listed on the website's about or services page — then either manually added to this page or the process restarted."""
+3. Certifications / licences — if the GBP category implies them (plumber, electrician, HVAC, contractor) but none were stated, flag as medium-impact with how_to_add explaining that licences and certifications are a key trust signal that customers look for, and that they should be listed on the website's about or services page — then either manually added to this page or the process restarted. Never assume a certification or licence from the category alone — it's a trust signal that must be verifiable.
+4. Years in business / founding date — if no "since [year]" or years-of-experience figure was in the business data, flag as medium-impact: {"category":"Years in Business","missing":"How long the business has operated (e.g. 'since 1998' or 'over 25 years')","score_impact":"medium","why_important":"Tenure is a strong trust and E-E-A-T signal buyers look for before hiring, and it strengthens the intro's credibility.","how_to_add":"Add your founding year or years of experience to your website (home/about), then regenerate the page."}
+5. License number — distinct from the certification/licensing claim above: the SPECIFIC verifiable number. If none was in the business data, flag as medium-impact ({"category":"License Number","missing":"The specific contractor/trade license number","score_impact":"medium","why_important":"A stated, verifiable license number is a stronger trust signal than a generic 'licensed & insured' claim and is often required by comparison-shopping buyers.","how_to_add":"Add your license number to your website, then regenerate the page."}).
+6. Guarantee/warranty terms — if a guarantee/warranty is only vaguely referenced (or implied by the category) but its SPECIFIC terms weren't in the business data, flag as HIGH-impact ({"category":"Guarantee/Warranty Terms","missing":"The specific terms behind the guarantee/warranty (e.g. '2-year parts & labor')","score_impact":"high","why_important":"A vague 'guaranteed' is a weak, unverifiable proof signal; specific terms convert better and read as credible.","how_to_add":"State your exact guarantee/warranty terms on your website, then regenerate the page."}).
+7. Pricing / price range — if no per-service or starting-from pricing was in the business data, flag as medium-impact explaining that explicit pricing (even "starting from") reduces buyer friction and can be scored, and how to add it to the site then regenerate.
+8. Comparison-table source data — if the service would support a tier/package table (§9) or a DIY-vs-professional / symptom-diagnosis table (§6) but the underlying data (tier inclusions/pricing, or a documented DIY-vs-pro baseline) wasn't provided, flag as medium-impact with how_to_add naming exactly which data to supply.
+9. Trust badges / affiliations — if no accreditations (BBB, Google Guaranteed, Angi/HomeAdvisor, trade-association seals) or financing partners were in the business data, flag as medium-impact explaining that badge logos are a high-visibility trust signal rendered in the Trust & Proof block, and how to add them (logo image + name) then regenerate.
+10. Photo/video assets — if no media (team/owner photo, branded vehicle, before/after, video embed) was in the business data, flag as low-to-medium impact explaining that authentic media populates the Trust & Proof gallery and lifts conversions, and how to add it then regenerate."""
 
 _REOPT_SYSTEM_PROMPT = """You are an expert local SEO content writer. Fix the SEO deficiencies in the existing page while keeping its design intact.
 
@@ -1511,6 +1536,231 @@ def _inject_contact_block(
     if not block:
         return content_html
     # Insert before the LAST </article> if the page is wrapped in one.
+    idx = content_html.rfind("</article>")
+    if idx != -1:
+        return content_html[:idx] + "  " + block + "\n" + content_html[idx:]
+    return content_html.rstrip() + "\n" + block
+
+
+_TRUST_BLOCK_ID = "trust-and-proof"
+
+
+def _norm_badges(items: Any) -> List[dict]:
+    """Coerce a certifications/affiliations/financing list into [{name, logo_url}].
+
+    Accepts the stored shape (list of dicts) and degrades gracefully: a bare
+    string becomes {name}, a dict missing both name and logo_url is dropped.
+    """
+    out: List[dict] = []
+    if not isinstance(items, list):
+        return out
+    for it in items:
+        if isinstance(it, str):
+            name = it.strip()
+            if name:
+                out.append({"name": name, "logo_url": ""})
+        elif isinstance(it, dict):
+            name = str(it.get("name") or "").strip()
+            logo = str(it.get("logo_url") or it.get("logo") or "").strip()
+            if name or logo:
+                out.append({"name": name, "logo_url": logo})
+    return out
+
+
+def _build_trust_block(
+    certifications: Any = None,
+    affiliations: Any = None,
+    financing_partners: Any = None,
+    license_number: Optional[str] = None,
+    gbp_rating: Any = None,
+    gbp_review_count: Any = None,
+    assets: Any = None,
+) -> str:
+    """Build the deterministic Trust & Proof block for a local landing page.
+
+    Sibling to the Contact & Find-Us block: everything here is a business-supplied
+    asset or an objectively true/false fact (a badge exists or it doesn't, a
+    rating is 4.9 or it isn't, a photo exists or it doesn't) — the same category
+    as NAP, so it is injected rather than model-authored (a model asked to
+    describe a BBB badge risks asserting it without it rendering, or duplicating
+    it once it does). See docs/modules/local-landing-page-structure.md.
+
+    Four elements, each rendered independently — a missing field omits only that
+    element, never a placeholder or an invented substitute:
+      • Trust badge strip — certifications + affiliations, as logo images.
+      • Aggregate rating badge — the GBP rating/review-count (never estimated).
+      • Financing partner logos.
+      • Media gallery — team/owner photo, branded vehicle, before/after, video.
+
+    Returns an empty string when no element has data (so the caller injects
+    nothing rather than an empty section). The license number is a narrative NAP
+    fact (§10), not part of this visual block, so it is accepted here only to keep
+    the signature complete and is not rendered.
+    """
+    import html as _html
+
+    esc = _html.escape
+
+    def _img(url: str, alt: str, cls: str) -> str:
+        return (
+            f'<img class="{cls}" src="{esc(url)}" alt="{esc(alt)}" '
+            'loading="lazy">'
+        )
+
+    parts: List[str] = []
+
+    # ── Trust badge strip (certifications + affiliations) ──────────────────────
+    badges = _norm_badges(certifications) + _norm_badges(affiliations)
+    if badges:
+        items = []
+        for b in badges:
+            if b["logo_url"]:
+                items.append(
+                    f'    <li class="trust-badge">'
+                    f'{_img(b["logo_url"], b["name"] or "Accreditation", "trust-badge-logo")}'
+                    + (f'<span>{esc(b["name"])}</span>' if b["name"] else "")
+                    + '</li>'
+                )
+            elif b["name"]:
+                items.append(
+                    f'    <li class="trust-badge"><span>{esc(b["name"])}</span></li>'
+                )
+        if items:
+            parts.append(
+                '  <ul class="trust-badges">\n' + "\n".join(items) + "\n  </ul>"
+            )
+
+    # ── Aggregate rating badge (GBP rating/review-count — never estimated) ──────
+    try:
+        rating = float(gbp_rating) if gbp_rating is not None else None
+    except (TypeError, ValueError):
+        rating = None
+    try:
+        review_count = int(gbp_review_count) if gbp_review_count is not None else None
+    except (TypeError, ValueError):
+        review_count = None
+    if rating is not None and rating > 0:
+        rating_txt = f"{rating:.1f}".rstrip("0").rstrip(".")
+        count_txt = (
+            f' from {review_count} Google review{"s" if review_count != 1 else ""}'
+            if review_count else ""
+        )
+        # Plain styled badge — no schema.org microdata: a standalone
+        # AggregateRating (not nested in a reviewed item) is invalid structured
+        # data, and the page's JSON-LD already carries the machine-readable rating.
+        parts.append(
+            '  <div class="trust-rating">\n'
+            f'    <span class="trust-rating-value">{esc(rating_txt)}</span>'
+            '<span class="trust-rating-stars" aria-hidden="true">★★★★★</span>\n'
+            f'    <span class="trust-rating-label">{esc(rating_txt)}-star rating'
+            f'{esc(count_txt)}</span>\n'
+            '  </div>'
+        )
+
+    # ── Financing partner logos ────────────────────────────────────────────────
+    financing = _norm_badges(financing_partners)
+    if financing:
+        items = []
+        for f in financing:
+            if f["logo_url"]:
+                items.append(
+                    f'    <li>{_img(f["logo_url"], f["name"] or "Financing partner", "financing-logo")}'
+                    + (f'<span>{esc(f["name"])}</span>' if f["name"] else "")
+                    + '</li>'
+                )
+            elif f["name"]:
+                items.append(f'    <li><span>{esc(f["name"])}</span></li>')
+        if items:
+            parts.append(
+                '  <div class="financing">\n    <p>Financing available through:</p>\n'
+                '    <ul class="financing-logos">\n' + "\n".join(items)
+                + "\n    </ul>\n  </div>"
+            )
+
+    # ── Media gallery (team/owner photo, vehicle, before/after, video) ─────────
+    gallery: List[str] = []
+    if isinstance(assets, list):
+        for a in assets:
+            if not isinstance(a, dict):
+                continue
+            url = str(a.get("url") or "").strip()
+            if not url:
+                continue
+            kind = str(a.get("kind") or "other").strip()
+            caption = str(a.get("caption") or "").strip()
+            cap_html = f'<figcaption>{esc(caption)}</figcaption>' if caption else ""
+            if kind == "video_embed":
+                # An <iframe src> is a script sink (html-escaping does not
+                # neutralise a "javascript:" scheme), so only embed a real
+                # http(s) URL — a malformed/other-scheme value is dropped.
+                if not (url.startswith("https://") or url.startswith("http://")):
+                    continue
+                gallery.append(
+                    f'    <figure class="asset asset-video">'
+                    f'<iframe src="{esc(url)}" title="{esc(caption or "Video")}" '
+                    'loading="lazy" allowfullscreen '
+                    'referrerpolicy="no-referrer-when-downgrade"></iframe>'
+                    f'{cap_html}</figure>'
+                )
+            else:
+                alt = caption or {
+                    "team_photo": "Our team",
+                    "owner_photo": "Business owner",
+                    "vehicle": "Branded service vehicle",
+                    "before_after": "Before and after our work",
+                }.get(kind, "Our work")
+                gallery.append(
+                    f'    <figure class="asset asset-{esc(kind)}">'
+                    f'{_img(url, alt, "asset-img")}{cap_html}</figure>'
+                )
+    if gallery:
+        parts.append(
+            '  <div class="media-gallery">\n' + "\n".join(gallery) + "\n  </div>"
+        )
+
+    if not parts:
+        return ""
+
+    return (
+        f'<section id="{_TRUST_BLOCK_ID}">\n'
+        '  <h2>Why Customers Trust Us</h2>\n'
+        + "\n".join(parts)
+        + '\n</section>'
+    )
+
+
+def _inject_trust_block(
+    content_html: str,
+    certifications: Any = None,
+    affiliations: Any = None,
+    financing_partners: Any = None,
+    license_number: Optional[str] = None,
+    gbp_rating: Any = None,
+    gbp_review_count: Any = None,
+    assets: Any = None,
+) -> str:
+    """Append the deterministic Trust & Proof block to a generated page.
+
+    Idempotent (checks the sentinel id before appending) and best-effort — mirrors
+    _inject_contact_block. Runs AFTER all rewrite/scoring passes so those passes
+    can't mangle the logos/iframe and the block isn't scored. Inserted just
+    inside the closing </article> (after the Contact block, when present).
+    """
+    if not content_html:
+        return content_html
+    if f'id="{_TRUST_BLOCK_ID}"' in content_html:
+        return content_html  # already present — don't stack
+    block = _build_trust_block(
+        certifications=certifications,
+        affiliations=affiliations,
+        financing_partners=financing_partners,
+        license_number=license_number,
+        gbp_rating=gbp_rating,
+        gbp_review_count=gbp_review_count,
+        assets=assets,
+    )
+    if not block:
+        return content_html
     idx = content_html.rfind("</article>")
     if idx != -1:
         return content_html[:idx] + "  " + block + "\n" + content_html[idx:]
@@ -8347,6 +8597,23 @@ class GeneratePageRequest(BaseModel):
     # Sibling pages this page must link to — [{anchor, url, relation}] — planned
     # by platform-api's service × location matrix (see `_internal_links_block`).
     internal_links: Optional[List[dict]] = None
+    # ── Trust & Proof (docs/modules/local-landing-page-structure.md) ───────────
+    # Business-supplied assets / objectively true-or-false facts rendered by the
+    # deterministic Trust & Proof block (never model-authored). Each is optional;
+    # a missing field omits only its element. certifications/affiliations/
+    # financing_partners are [{name, logo_url}]; assets is the media gallery
+    # [{kind, url, caption}]; gbp_rating/gbp_review_count come straight from the
+    # suite's GBP capture (never estimated here). license_number + years_founded/
+    # founding_date are narrative facts the prompt weaves into §10/§1.
+    certifications: Optional[List[dict]] = None
+    affiliations: Optional[List[dict]] = None
+    financing_partners: Optional[List[dict]] = None
+    assets: Optional[List[dict]] = None
+    license_number: Optional[str] = None
+    years_founded: Optional[int] = None
+    founding_date: Optional[str] = None
+    gbp_rating: Optional[float] = None
+    gbp_review_count: Optional[int] = None
 
 class GeneratePageResponse(BaseModel):
     content_html: str
@@ -9176,6 +9443,25 @@ Full location: {body.location}
             )
         except Exception as _cbe:
             logger.warning(f"generate-page: contact block injection failed (keeping page): {_cbe}")
+
+        # ── Deterministic Trust & Proof block ────────────────────────────────
+        # Trust badges, the GBP aggregate rating, financing logos, and the media
+        # gallery — business-supplied assets / objectively true-or-false facts,
+        # injected here (after Contact, after every scoring pass) so they are
+        # never hallucinated, never scored, and each degrades independently.
+        try:
+            content_html = _inject_trust_block(
+                content_html,
+                certifications=body.certifications,
+                affiliations=body.affiliations,
+                financing_partners=body.financing_partners,
+                license_number=body.license_number,
+                gbp_rating=body.gbp_rating,
+                gbp_review_count=body.gbp_review_count,
+                assets=body.assets,
+            )
+        except Exception as _tbe:
+            logger.warning(f"generate-page: trust block injection failed (keeping page): {_tbe}")
 
         # Build combined cost breakdown
         ac = (serp_analysis_dict or {}).get("analysis_cost", {})
