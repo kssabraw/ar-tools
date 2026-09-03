@@ -1197,3 +1197,78 @@ async def test_stream_nlp_skips_a_non_object_sse_payload():
         result = await local_seo_service._stream_nlp("/generate-page", {})
     # The junk lines are skipped, not fatal, and the real event still lands.
     assert result == {"id": "page-1"}
+
+
+# ── Trust & Proof (docs/modules/local-landing-page-structure.md) ─────────────
+
+def test_trust_signal_fields_maps_jsonb():
+    row = _client_row(trust_signals={
+        "certifications": [{"name": "BBB", "logo_url": "b.png"}],
+        "affiliations": [{"name": "MPA"}],
+        "financing_partners": [{"name": "Wisetack", "logo_url": "w.png"}],
+        "license_number": "CCC123",
+        "years_founded": "1998",   # string coerces to int
+        "founding_date": "1998",
+    })
+    out = local_seo_service._trust_signal_fields(row)
+    assert out["certifications"] == [{"name": "BBB", "logo_url": "b.png"}]
+    assert out["affiliations"] == [{"name": "MPA"}]
+    assert out["financing_partners"][0]["name"] == "Wisetack"
+    assert out["license_number"] == "CCC123"
+    assert out["years_founded"] == 1998
+    assert out["founding_date"] == "1998"
+
+
+def test_trust_signal_fields_defaults_when_absent_or_malformed():
+    # No trust_signals at all → empty lists / None, never a crash.
+    out = local_seo_service._trust_signal_fields(_client_row())
+    assert out["certifications"] == []
+    assert out["affiliations"] == []
+    assert out["financing_partners"] == []
+    assert out["license_number"] is None
+    assert out["years_founded"] is None
+    # Malformed types degrade gracefully.
+    bad = local_seo_service._trust_signal_fields(
+        _client_row(trust_signals={"certifications": "nope", "years_founded": "n/a"})
+    )
+    assert bad["certifications"] == []
+    assert bad["years_founded"] is None
+    # trust_signals present but not a dict.
+    assert local_seo_service._trust_signal_fields(_client_row(trust_signals=[]))["certifications"] == []
+
+
+def test_generate_payload_includes_trust_fields_and_gbp_rating():
+    row = _client_row(trust_signals={"license_number": "L-9"})
+    row["gbp"]["gbp_rating"] = 4.8
+    row["gbp"]["gbp_review_count"] = 57
+    payload = local_seo_service._gbp_to_generate_payload(row, "plumber", "Anaheim, CA")
+    assert payload["license_number"] == "L-9"
+    assert payload["gbp_rating"] == 4.8
+    assert payload["gbp_review_count"] == 57
+    assert payload["certifications"] == []  # absent field → empty, still present as a key
+
+
+def test_client_assets_reads_and_shapes_rows():
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for method in ("select", "eq", "order"):
+        getattr(table, method).return_value = table
+    table.execute.return_value = MagicMock(data=[
+        {"kind": "team_photo", "url": "t.jpg", "caption": "Crew", "sort_order": 0},
+        {"kind": "video_embed", "url": "", "caption": "", "sort_order": 1},  # no url → dropped
+        {"kind": "vehicle", "url": "v.jpg", "caption": None, "sort_order": 2},
+    ])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        assets = local_seo_service._client_assets("client-1")
+    assert assets == [
+        {"kind": "team_photo", "url": "t.jpg", "caption": "Crew"},
+        {"kind": "vehicle", "url": "v.jpg", "caption": ""},
+    ]
+
+
+def test_client_assets_degrades_on_read_error():
+    supabase = MagicMock()
+    supabase.table.side_effect = RuntimeError("boom")
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        assert local_seo_service._client_assets("client-1") == []

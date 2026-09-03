@@ -108,7 +108,75 @@ def _gbp_to_generate_payload(
         # nlp's default. Threaded from the UI so the SERP entity analysis inside
         # nlp uses the chosen engine.
         "entity_provider": entity_provider,
+        # ── Trust & Proof (docs/modules/local-landing-page-structure.md) ───────
+        # Business-supplied badges / facts the deterministic Trust & Proof block
+        # renders (never model-authored). Scalar/list facts come from the
+        # clients.trust_signals JSONB; the aggregate rating is the GBP capture,
+        # never estimated. The media gallery (assets) is a separate table, set by
+        # generate_page after this mapper.
+        **_trust_signal_fields(client),
+        "gbp_rating": gbp.get("gbp_rating"),
+        "gbp_review_count": gbp.get("gbp_review_count"),
     }
+
+
+def _trust_signal_fields(client: dict) -> dict:
+    """Extract the nlp trust-signal payload fields from clients.trust_signals.
+
+    Pure: reads the JSONB (a missing/blank field just becomes None/[]), so the
+    generator's Trust & Proof block and the §1/§8/§10 prompt conditionals get
+    exactly what the client has on file and nothing invented."""
+    ts = client.get("trust_signals") or {}
+    if not isinstance(ts, dict):
+        ts = {}
+
+    def _list(key: str) -> list:
+        v = ts.get(key)
+        return v if isinstance(v, list) else []
+
+    years = ts.get("years_founded")
+    try:
+        years = int(years) if years not in (None, "") else None
+    except (TypeError, ValueError):
+        years = None
+    return {
+        "certifications": _list("certifications"),
+        "affiliations": _list("affiliations"),
+        "financing_partners": _list("financing_partners"),
+        "license_number": (ts.get("license_number") or None),
+        "years_founded": years,
+        "founding_date": (ts.get("founding_date") or None),
+    }
+
+
+def _client_assets(client_id: str) -> list[dict]:
+    """Load a client's media-gallery assets (client_assets table) as the nlp
+    payload shape [{kind, url, caption}], ordered as stored. Best-effort — a
+    read failure returns [] so page generation never fails over a gallery."""
+    try:
+        res = (
+            get_supabase()
+            .table("client_assets")
+            .select("kind, url, caption, sort_order")
+            .eq("client_id", client_id)
+            .order("sort_order")
+            .order("created_at")
+            .execute()
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("local_seo.client_assets_read_failed", extra={"error": str(exc)})
+        return []
+    out: list[dict] = []
+    for row in res.data or []:
+        url = (row.get("url") or "").strip()
+        if not url:
+            continue
+        out.append({
+            "kind": row.get("kind") or "other",
+            "url": url,
+            "caption": row.get("caption") or "",
+        })
+    return out
 
 
 def _gbp_to_rankability_payload(
@@ -729,6 +797,9 @@ async def generate_page(
         client, keyword, location, location_code, include_decision_map=include_decision_map,
         entity_provider=entity_provider,
     )
+    # Media gallery (Trust & Proof block) — a separate table, loaded here since
+    # the mapper above is pure over the client row. Best-effort.
+    payload["assets"] = _client_assets(client_id)
     # The client's brand guide, distilled into enforceable rules (cached per
     # guide revision). Steers generation and drives the deterministic post-write
     # check; an empty card means the client has no guide and nothing changes.

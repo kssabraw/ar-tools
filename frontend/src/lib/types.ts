@@ -63,6 +63,31 @@ export interface GbpProfile {
   service_area_places?: string[]
 }
 
+export interface TrustBadge {
+  name: string
+  logo_url: string
+}
+
+export interface TrustSignals {
+  certifications: TrustBadge[]
+  affiliations: TrustBadge[]
+  financing_partners: TrustBadge[]
+  license_number: string | null
+  years_founded: number | null
+  founding_date: string | null
+}
+
+export type ClientAssetKind =
+  | 'team_photo' | 'owner_photo' | 'vehicle' | 'before_after' | 'video_embed' | 'other'
+
+export interface ClientAsset {
+  id: string
+  kind: ClientAssetKind
+  url: string
+  caption: string | null
+  sort_order: number
+}
+
 export interface Client extends ClientListItem {
   website_analysis: Record<string, unknown> | null
   website_analysis_error: string | null
@@ -107,6 +132,10 @@ export interface Client extends ClientListItem {
   slack_channel_id: string | null
   // Everhour project this client's time is logged against; null → unmapped.
   everhour_project_id: string | null
+  // Trust & Proof facts the Local SEO writer renders deterministically
+  // (docs/modules/local-landing-page-structure.md). Media assets are the
+  // separate client_assets table, fetched via the assets endpoints.
+  trust_signals: TrustSignals | null
   updated_at: string
 }
 

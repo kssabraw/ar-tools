@@ -94,6 +94,41 @@ class PageStructureGuidelines(BaseModel):
     solution: Optional[PageStructureGuideline] = None
 
 
+class TrustBadge(BaseModel):
+    """A single accreditation / affiliation / financing-partner badge — a name
+    and (optionally) a logo image URL — for the Local SEO Trust & Proof block."""
+    name: str = ""
+    logo_url: str = ""
+
+
+class TrustSignals(BaseModel):
+    """Business-supplied trust facts the Local SEO writer renders deterministically
+    (docs/modules/local-landing-page-structure.md). Stored on clients.trust_signals
+    (JSONB). Media assets (photos/video) are the separate client_assets table."""
+    certifications: list[TrustBadge] = Field(default_factory=list)
+    affiliations: list[TrustBadge] = Field(default_factory=list)
+    financing_partners: list[TrustBadge] = Field(default_factory=list)
+    license_number: Optional[str] = None
+    years_founded: Optional[int] = None
+    founding_date: Optional[str] = None
+
+
+class ClientAsset(BaseModel):
+    """A media-gallery asset row (client_assets table)."""
+    id: UUID
+    kind: Literal["team_photo", "owner_photo", "vehicle", "before_after", "video_embed", "other"]
+    url: str
+    caption: Optional[str] = None
+    sort_order: int = 0
+
+
+class ClientAssetCreateRequest(BaseModel):
+    kind: Literal["team_photo", "owner_photo", "vehicle", "before_after", "video_embed", "other"]
+    url: str = Field(..., min_length=1)
+    caption: Optional[str] = None
+    sort_order: int = 0
+
+
 class ClientDetail(BaseModel):
     id: UUID
     name: str
@@ -167,6 +202,10 @@ class ClientDetail(BaseModel):
     # Everhour project this client's time is logged against (opaque id like
     # "ev:123"/"as:123", not numeric). None → not yet onboarded to Everhour.
     everhour_project_id: Optional[str] = None
+    # Trust & Proof facts the Local SEO writer renders deterministically
+    # (docs/modules/local-landing-page-structure.md). Media assets are the
+    # separate client_assets table, surfaced via the assets endpoints.
+    trust_signals: Optional[TrustSignals] = None
 
     @field_validator("drive_folders", "github_content_paths", mode="before")
     @classmethod
@@ -228,6 +267,8 @@ class ClientCreateRequest(BaseModel):
     slack_channel_id: Optional[str] = None
     # Everhour project this client's time is logged against; None → unmapped.
     everhour_project_id: Optional[str] = None
+    # Trust & Proof facts (docs/modules/local-landing-page-structure.md).
+    trust_signals: Optional[TrustSignals] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
     page_structure_urls: Optional[PageStructureUrls] = None
     # Written page-structure specs — the no-website alternative to the URLs above.
@@ -281,3 +322,6 @@ class ClientUpdateRequest(BaseModel):
     # Everhour project this client's time is logged against; pass an empty string
     # to clear the mapping.
     everhour_project_id: Optional[str] = None
+    # Trust & Proof facts (docs/modules/local-landing-page-structure.md). Send the
+    # full object to replace what's stored; omit to leave unchanged.
+    trust_signals: Optional[TrustSignals] = None
