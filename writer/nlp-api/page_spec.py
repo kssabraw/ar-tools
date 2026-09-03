@@ -137,6 +137,23 @@ ABSORBER_MIN_SHARE_OF_MAX = 0.30
 # A section band is never narrower than this ratio (max ≥ min × ratio) unless a
 # hard ceiling forbids it — a point target is a guess, a band is a spec.
 MIN_BAND_RATIO = 1.25
+# ── feasibility floors (owner ruling 2026-09-03) ────────────────────────────
+# In client mode a section's minimum is never below this share of its OWN
+# reference words (the client's page is the proof that size works) and — in
+# both modes — never below what its structural asks need to exist at all: a
+# 13-item list cannot live in 22 words, two quotes cannot live in 6 (live:
+# Wheelhouse Orlando, a 2,287-word reference scaled onto a 1,058-word suburb
+# SERP target produced a 6–7-word testimonials band and a 22–28-word services
+# band asked for 13 items + 2 H3s). When the required sections' floors add up
+# to more than the SERP band allows, the PAGE band is lifted to them and the
+# spec is flagged `client_length_over_serp`: the client's length beats the
+# SERP average whenever the client's reference is the longer of the two.
+CLIENT_FLOOR_RATIO = 0.80
+WORDS_PER_LIST_ITEM = 4
+WORDS_PER_SUBSECTION = 25
+WORDS_PER_QUOTE = 20
+PROSE_SECTION_MIN_WORDS = 30
+TESTIMONIALS_MIN_QUOTES = 2
 _TESTIMONIAL_RE = re.compile(r"review|testimonial|what (our )?(clients|customers) say", re.I)
 # A "coverage" section is GEOGRAPHIC (→ the template's `local` slot) only when
 # its heading / note talk about places; "industry coverage" is its own section.
@@ -494,6 +511,78 @@ def pick_absorber(sections: list[dict[str, Any]]) -> Optional[str]:
 
 # ── 4. band allocation ──────────────────────────────────────────────────────
 
+def structural_floor(section: dict[str, Any]) -> int:
+    """Pure: the fewest words in which a section can carry its structural
+    asks — its list items, H3 sub-sections, quotes, and (when it has prose) a
+    small prose baseline. Accepts both an allocation-time section (raw
+    reference ``blocks`` / integer ``subsections``) and a finished spec entry
+    (``items`` / ``subsections`` bands, ``words_per_item``)."""
+    blocks = [b for b in (section.get("blocks") or []) if isinstance(b, dict)]
+    items = section.get("items")
+    if isinstance(items, dict):
+        n_items = _int(items.get("min"))
+    else:
+        n = max((_int(b.get("items")) for b in blocks
+                 if b.get("type") == "list" and not (b.get("folded") and _int(b.get("items")) < 2)), default=0)
+        n_items = max(2, n - 2) if n >= 2 else 0
+    wpi = section.get("words_per_item")
+    per_item = _int(wpi.get("min")) if isinstance(wpi, dict) and _int(wpi.get("min")) > 0 else WORDS_PER_LIST_ITEM
+    subs = section.get("subsections")
+    if isinstance(subs, dict):
+        n_subs = _int(subs.get("min"))
+    else:
+        raw = _int(subs)
+        n_subs = max(1, raw - 1) if raw >= CLIENT_SUBSECTIONS_MIN_REF else 0
+    quotes = sum(max(1, _int(b.get("count"), 1)) for b in blocks if b.get("type") == "quote")
+    if section.get("key") == "testimonials" and not section.get("no_reviews"):
+        quotes = max(quotes, TESTIMONIALS_MIN_QUOTES)
+    has_prose = _int(section.get("words")) > 0 or any(b.get("type") in ("paragraph", "cta") for b in blocks)
+    prose = PROSE_SECTION_MIN_WORDS if (has_prose and not isinstance(wpi, dict)) else 0
+    return prose + n_items * per_item + n_subs * WORDS_PER_SUBSECTION + quotes * WORDS_PER_QUOTE
+
+
+def section_floor(section: dict[str, Any], client_mode: bool) -> int:
+    """Pure: the lowest a section's minimum may be. Template mode: the
+    template's per-key floor (0 for a reference extra). Client mode: 80% of
+    the section's OWN reference words when the client wrote prose for it; a
+    heading-only section keeps the template floor it rides on. Both modes:
+    never below the structural floor."""
+    key = section.get("key")
+    t = _template(key) if key in TEMPLATE_KEYS else None
+    words = _int(section.get("words"))
+    if client_mode and words > 0:
+        base = int(round(CLIENT_FLOOR_RATIO * words))
+    else:
+        base = int(t["floor"]) if t else 0
+    return max(base, structural_floor(section))
+
+
+def lift_page_band(
+    total: dict[str, Any], sections: list[dict[str, Any]], client_mode: bool = True,
+) -> tuple[dict[str, Any], list[str]]:
+    """Pure: when the REQUIRED sections' floors add up to more than the page
+    band's minimum, lift the band to them (same shape as the SERP band:
+    target = min × overage, max = target × upper), keep the SERP numbers
+    alongside, and flag it. Returns ``(total, flags)`` — unchanged input +
+    no flags when the floors fit."""
+    floors = sum(section_floor(s, client_mode) for s in sections if s.get("required"))
+    t_min = _int(total.get("min"))
+    if floors <= t_min:
+        return total, []
+    target = int(round(floors * OVERAGE_MULTIPLIER))
+    lifted = {
+        **total,
+        "min": int(floors),
+        "target": target,
+        "max": int(round(target * BAND_UPPER)),
+        "serp_min": t_min,
+        "serp_target": total.get("target"),
+        "serp_max": total.get("max"),
+        "lifted_by": "client_floors",
+    }
+    return lifted, ["client_length_over_serp"]
+
+
 def allocate_bands(
     sections: list[dict[str, Any]],
     total: dict[str, Any],
@@ -524,18 +613,24 @@ def allocate_bands(
     shares = [r / norm for r in raw]
 
     t_min, t_max = int(total["min"]), int(total["max"])
+    lifted = bool(client_mode and total.get("lifted_by"))
     for s, share in zip(secs, shares):
         t = _template(s["key"]) if s["key"] in TEMPLATE_KEYS else None
         has_prose = int(s.get("words") or 0) > 0
-        if client_mode and has_prose:
-            # The client's proportions rule: a template clamp applies only to a
-            # section the reference left heading-only (it then rides the
-            # template weight, so the clamp keeps it sane).
-            floor, ceiling = 0, None
-        else:
-            floor = int(t["floor"]) if t else 0
-            ceiling = t["ceiling"] if t else None
+        # The floor: template per-key floor, or in client mode 80% of the
+        # section's own reference words — never below its structural floor.
+        # A template ceiling applies only to a section the reference left
+        # heading-only (it then rides the template weight, so the clamp keeps
+        # it sane); the client's proportions rule its prose sections.
+        floor = section_floor(s, client_mode)
+        ceiling = None if (client_mode and has_prose) else (t["ceiling"] if t else None)
         lo = int(round(share * t_min))
+        if lifted and s.get("required"):
+            # The lifted page band IS the sum of the floors, so each required
+            # section's minimum is its floor exactly — a proportional share of
+            # the lifted band would spread one section's structural extras
+            # over every other and the minimums would no longer close.
+            lo = int(floor)
         hi = int(round(share * t_max))
         hi = max(hi, int(round(lo * MIN_BAND_RATIO)))
         if t and t.get("items") and t.get("words_per_item"):
@@ -564,6 +659,7 @@ def allocate_bands(
             lo = 0
         s["min_words"], s["max_words"] = int(lo), int(hi)
         s["share"] = round(share, 4)
+        s["floor_words"] = int(floor) if s.get("required") else 0
 
     absorber = next((s for s in secs if s["key"] == absorber_key), None) if absorber_key else None
     if absorber is None:
@@ -588,8 +684,7 @@ def allocate_bands(
     if others_min > room_min and others_min > 0:
         f = room_min / others_min
         for s in others:
-            t = _template(s["key"]) if s["key"] in TEMPLATE_KEYS else None
-            floor = int(t["floor"]) if (t and s.get("required")) else 0
+            floor = int(s.get("floor_words") or 0)
             s["min_words"] = max(floor, int(round(s["min_words"] * f)))
             s["max_words"] = max(s["max_words"], s["min_words"])
 
@@ -643,6 +738,8 @@ def validate_spec(spec: dict[str, Any]) -> list[str]:
         if isinstance(items, dict) and isinstance(wpi, dict):
             if _int(items.get("min")) * _int(wpi.get("min")) > hi:
                 errors.append(f"item_floor_does_not_fit:{s.get('key')}")
+        if s.get("required") and structural_floor(s) > hi:
+            errors.append(f"structural_floor_does_not_fit:{s.get('key')}")
     structure = spec.get("structure") or {}
     if _int(structure.get("max_sections")) < len([s for s in sections if s.get("required")]):
         errors.append("max_sections_below_required")
@@ -685,6 +782,11 @@ def build_spec(
         sections = ensure_required([])
         ref_total = 0
     absorber_key = pick_absorber(sections) if client_mode else ABSORBER_KEY
+    if client_mode:
+        # The client's floors may not fit the SERP band (a long reference on a
+        # short SERP): lift the page band to them rather than crush sections.
+        total, lift_flags = lift_page_band(total, sections, client_mode=True)
+        flags = [*flags, *lift_flags]
     sections = allocate_bands(sections, total, absorber_key, client_mode=client_mode)
     out_sections: list[dict[str, Any]] = []
     max_ref_h3 = 0
@@ -1087,7 +1189,10 @@ def render_spec_block(spec: dict[str, Any]) -> str:
         "PAGE SPEC — AUTHORITATIVE LENGTH + STRUCTURE (overrides the per-section counts in the template):",
         f"- Whole <article> body: {total.get('min')}–{total.get('max')} words (aim ~{total.get('target')}). "
         f"Basis: {'competitor SERP average + 20%' if total.get('basis') == 'serp' else 'standing market target (no SERP measured)'}. "
-        "Treat the maximum as a HARD CEILING; coming in under is fine, going over is not.",
+        "Treat the maximum as a HARD CEILING; coming in under is fine, going over is not."
+        + (f" NOTE: the band follows the CLIENT'S reference layout — the competitor SERP average ({total.get('serp_min')} words) "
+           "is below what the client's own sections need, so the client's length wins here."
+           if total.get("lifted_by") else ""),
         f"- At most {structure.get('max_sections')} top-level sections; at most {structure.get('max_h3_per_h2')} H3s under any H2; "
         f"FAQ {structure.get('faq', {}).get('min')}–{structure.get('faq', {}).get('max')} entries.",
         "- Emit each section as <section id=\"KEY\"> with EXACTLY these keys, in this order. "
@@ -1116,7 +1221,7 @@ def render_spec_block(spec: dict[str, Any]) -> str:
             extras.append("list items from the client's page (reproduce these): " + "; ".join(s["list_items"]))
         req = "required" if s.get("required") else ("OMIT — no reviews on file" if s.get("no_reviews") else "optional")
         lines.append(
-            f"  [{s['key']}] {s.get('level')} · {req} · {s.get('min_words')}–{s.get('max_words')} words · "
+            f"  [{s['key']}] {s.get('level')} · {req} · {s.get('min_words')}–{s.get('max_words')} words (the minimum is a floor to REACH, the maximum a ceiling) · "
             f"{s.get('intent')}: {s.get('heading_pattern') or ''}"
             + (f" · blocks: {blocks}" if blocks else "")
             + (f" · {'; '.join(extras)}" if extras else "")

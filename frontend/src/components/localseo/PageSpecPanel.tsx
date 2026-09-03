@@ -148,6 +148,7 @@ export function PageSpecPanel({
                     {flags.includes('serp_target_missing') && 'No competitor SERP analysis is cached for this keyword — the band uses the market\'s standing target. Run an analysis (or generate the page) and rebuild to get the SERP-derived band. '}
                     {flags.includes('serp_too_few_pages') && 'Too few competitor pages were measured for a reliable target — using the standing target. '}
                     {flags.includes('serp_target_suspect') && 'The SERP-derived target fell outside the plausible range — using the standing target. '}
+                    {flags.includes('client_length_over_serp') && `The client's reference sections need at least ${spec?.total?.min} words between them, more than the competitor SERP average (${spec?.total?.serp_min ?? '—'}) — the page band follows the client's proven layout, so this page runs longer than the SERP. `}
                     {ref && !ref.usable && `No usable reference page layout (${ref.reason || 'none on file'}) — the template layout is used. Add a reference local landing page on the client's Setup page to mirror the client's own structure.`}
                   </span>
                 </div>

@@ -291,6 +291,9 @@ LENGTH_TRIM_MIN_RATIO = float(os.environ.get("LENGTH_TRIM_MIN_RATIO", "1.4"))
 # Page-spec enforcement (plan §5.4): section-scoped trim passes per generation /
 # reoptimization when sections are over their band. Not time-budget gated.
 PAGE_SPEC_TRIM_PASSES = int(os.environ.get("PAGE_SPEC_TRIM_PASSES", "2"))
+# Section-scoped DEEPEN passes (2026-09-03): required sections that came in
+# UNDER their band get substance written in (keep-best on the shortfall).
+PAGE_SPEC_DEEPEN_PASSES = int(os.environ.get("PAGE_SPEC_DEEPEN_PASSES", "2"))
 # Structure enforcement (plan §5.4 Phase 4): passes of deterministic fixes
 # (reorder / drop extras over the cap) + section-scoped rewrites (missing
 # required sections written in, block/FAQ/sub-section composition, intent and
@@ -5441,6 +5444,149 @@ async def _spec_trim_inline(
         return None
 
 
+_SECTION_DEEPEN_SYSTEM = """You are DEEPENING specific sections of an already-written local service page that came in UNDER their word band. This is an expansion pass with SUBSTANCE, never padding.
+
+You will be given the business facts, the BRAND VOICE guide (keep the voice), the competitor topics and entities the page should cover, and for each section to deepen its `[key]`, its intent, its current word count, its band (min–max words) and its current inner HTML.
+
+Return ONLY a JSON object mapping each given `[key]` to that section's NEW inner HTML (the content INSIDE its <section> tag). Include every section you were given; include no others.
+
+Rules for each section:
+- Land INSIDE the band — at or above the MINIMUM, never above the maximum (count the visible text; headings don't count). The minimum is a floor to reach.
+- Add SUBSTANCE, not words: concrete specifics of how the service is delivered, what the customer gets and when, the situations it covers, the competitor topics and entities listed that this section should carry, local anchors (the city, the areas served). Every new sentence must say something the page does not already say. No filler, no restating the heading, no generic "committed to excellence" copy.
+- Keep the section's heading, its role, its structure and every existing fact, list item, phone number, address, price and CTA sentence. Extend lists with real points and paragraphs with detail; when the CLIENT'S OWN LIST ITEMS are given, the list must contain every one of them. Do NOT remove anything accurate.
+- NEVER invent facts: no prices, response times, years in business, credentials, certifications, team sizes, reviews, guarantees or named clients unless they appear in the business facts or on the current page. Where a specific would be needed, write the concrete process or outcome instead.
+- SENTIMENT: positive and confident throughout — capable, reassuring, forward-looking. No hedging, apologies, fear-mongering or disparagement.
+- Preserve the client's brand voice, grammatical person and required phrasing. Do NOT touch sections you were not given.
+- Clean semantic HTML; no RDFa, no re-linking phone numbers (applied automatically). No markdown fences, no commentary — valid JSON with valid HTML fragments only."""
+
+
+def _spec_deepen_targets(measure: dict, spec: dict) -> List[dict]:
+    """Pure: the REQUIRED sections a deepen pass must expand, worst shortfall
+    first — ``[{key, words, min_words, max_words, add, intent, list_items}]``.
+    Only sections UNDER their band, and only required ones (an optional
+    section may legitimately be short or absent)."""
+    bands = {sec["key"]: sec for sec in spec.get("sections") or []}
+    out: List[dict] = []
+    for row in measure.get("sections") or []:
+        if row.get("status") != "under":
+            continue
+        band = bands.get(row.get("key")) or {}
+        if not band.get("required"):
+            continue
+        lo = int(row.get("min_words") or 0)
+        hi = int(row.get("max_words") or 0)
+        words = int(row.get("words") or 0)
+        out.append({"key": row.get("key"), "words": words, "min_words": lo, "max_words": hi,
+                    "add": max(0, lo - words), "intent": band.get("intent"),
+                    "list_items": band.get("list_items") or None})
+    out.sort(key=lambda r: -r["add"])
+    return out
+
+
+def _spec_shortfall(measure: dict, spec: dict) -> int:
+    """Pure: total words the REQUIRED under-band sections are short of their
+    minimums — the keep-best axis of a deepen pass."""
+    return sum(t["add"] for t in _spec_deepen_targets(measure, spec))
+
+
+def _spec_topic_hints(serp_analysis_dict: Optional[dict], limit: int = 15) -> str:
+    """Pure: a compact list of the competitor entities + related keywords a
+    deepen pass may draw on — TOPICS to cover, never facts to state."""
+    sa = serp_analysis_dict or {}
+    ents = [e for e in (sa.get("google_entities") or []) if isinstance(e, dict) and e.get("name")]
+    ents.sort(key=lambda e: e.get("page_spread") or 0, reverse=True)
+    names = [str(e["name"]) for e in ents[:limit]]
+    rk = sa.get("related_keywords") or {}
+    zones = [rk.get(z) for z in ("paragraphs", "h2_h3")] if isinstance(rk, dict) else [rk]
+    kws: List[str] = []
+    for zone in zones:
+        for k in (zone or []) if isinstance(zone, list) else []:
+            term = k if isinstance(k, str) else next(
+                (k.get(f) for f in ("term", "keyword", "phrase", "word") if isinstance(k, dict) and k.get(f)), None)
+            if term and str(term) not in kws:
+                kws.append(str(term))
+    parts = []
+    if names:
+        parts.append("ENTITIES competitors establish (cover the relevant ones): " + ", ".join(names))
+    if kws:
+        parts.append("TOPICS competitors cover (draw on the relevant ones): " + ", ".join(kws[:limit]))
+    return "\n".join(parts)
+
+
+def _spec_deepen_prompt(targets: List[dict], sections: List[dict], business_name: str, keyword: str, city: str,
+                        phone: Optional[str], address: Optional[str], voice_block: str, topic_hints: str) -> str:
+    """Pure: the user prompt for a section-scoped deepen pass."""
+    by_key = {sec["key"]: sec for sec in sections}
+    parts = []
+    for t in targets:
+        sec = by_key.get(t["key"])
+        if sec is None:
+            continue
+        items_line = (
+            "CLIENT'S OWN LIST ITEMS (the list must contain every one): " + "; ".join(t["list_items"]) + "\n"
+            if t.get("list_items") else ""
+        )
+        parts.append(
+            f"[{t['key']}] heading: {sec.get('heading') or '(no heading)'}\n"
+            f"INTENT: {t.get('intent')} · CURRENT: ~{t['words']} words · BAND: {t['min_words']}–{t['max_words']} words"
+            f" · ADD at least ~{t['add']} words of substance\n"
+            f"{items_line}"
+            f"{sec.get('inner') or ''}"
+        )
+    voice_section = f"\n{voice_block}\n" if voice_block else ""
+    hints = f"\n{topic_hints}\n" if topic_hints else ""
+    return (
+        f"BUSINESS: {business_name}\nKEYWORD: {keyword} | CITY: {city}\n"
+        f"PHONE: {phone or '(not provided)'}\nADDRESS: {address or '(not provided)'}\n{voice_section}{hints}\n"
+        "SECTIONS TO DEEPEN — return the new inner HTML for EACH, keyed by [key]:\n\n"
+        + "\n\n".join(parts)
+    )
+
+
+async def _spec_deepen_inline(
+    content_html: str, spec: dict, measure: dict, keyword: str, city: str, business_name: str,
+    phone: Optional[str], address: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict], client,
+) -> Optional[tuple]:
+    """One section-scoped deepen pass. Returns ``(new_html, token_rec,
+    applied_keys)`` or None when nothing is under / no addressable sections /
+    the model returned nothing usable / the call failed. Never raises."""
+    try:
+        targets = _spec_deepen_targets(measure, spec)
+        if not targets:
+            return None
+        sections = section_edit.split_sections(content_html)
+        if not sections:
+            return None
+        user_prompt = _spec_deepen_prompt(targets, sections, business_name, keyword, city, phone, address,
+                                          voice_block, _spec_topic_hints(serp_analysis_dict))
+        msg = await client.messages.create(
+            model=GENERATION_MODEL,
+            max_tokens=8000,
+            temperature=0,
+            system=[{"type": "text", "text": _SECTION_DEEPEN_SYSTEM, "cache_control": {"type": "ephemeral"}}],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        token_rec = _token_record("section-deepen-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        edits = _parse_claude_json(msg.content[0].text)
+        if not isinstance(edits, dict):
+            return None
+        wanted = {t["key"] for t in targets}
+        edits = {k: v for k, v in edits.items() if k in wanted and isinstance(v, str) and v.strip()}
+        if not edits:
+            return None
+        entities = (serp_analysis_dict or {}).get("google_entities", [])
+        edits = {k: _apply_rdfa_markup(_linkify_phones(v, phone), entities) for k, v in edits.items()}
+        new_html, applied, skipped = section_edit.apply_section_edits(content_html, edits)
+        if not applied:
+            return None
+        if skipped:
+            logger.info("section-deepen: applied %s; skipped unresolved %s", applied, skipped)
+        return new_html, token_rec, applied
+    except Exception as _sde:
+        logger.warning("section-deepen: failed (keeping page): %s", _sde)
+        return None
+
+
 def _spec_verdict(content_html: str, spec: Optional[dict]) -> Optional[dict]:
     """Measure + verdict against the spec (deterministic); None without a spec."""
     if not spec:
@@ -5458,16 +5604,26 @@ def _spec_verdict(content_html: str, spec: Optional[dict]) -> Optional[dict]:
 async def _enforce_spec_length(
     content_html: str, spec: Optional[dict], q, *, keyword: str, city: str, business_name: str,
     phone: Optional[str], voice_block: str, serp_analysis_dict: Optional[dict], client, label: str,
+    address: Optional[str] = None,
 ) -> tuple:
-    """The length guarantee: measure the page against its spec and trim the
-    over-band sections, up to ``PAGE_SPEC_TRIM_PASSES`` times, until nothing is
-    over. Returns ``(html, token_rec_delta, verdict, changed)``. NOT gated on
-    the time budget. Best-effort: any failure keeps the page so far."""
+    """The length guarantee, both directions: measure the page against its
+    spec, TRIM the over-band sections (up to ``PAGE_SPEC_TRIM_PASSES``) until
+    nothing is over, then DEEPEN the required under-band sections (up to
+    ``PAGE_SPEC_DEEPEN_PASSES``, keep-best on the shortfall) so a floor is a
+    floor and not a wish, with one closing trim if a deepen pass overshot.
+    Returns ``(html, token_rec_delta, verdict, changed)``. NOT gated on the
+    time budget. Best-effort: any failure keeps the page so far."""
     tok = {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
     verdict = _spec_verdict(content_html, spec)
     if verdict is None:
         return content_html, tok, None, False
     changed = False
+
+    def _add(rec: dict) -> None:
+        tok["input_tokens"] += rec["input_tokens"]
+        tok["output_tokens"] += rec["output_tokens"]
+        tok["cost_usd"] = round(tok["cost_usd"] + rec["cost_usd"], 6)
+
     for _pass in range(1, PAGE_SPEC_TRIM_PASSES + 1):
         if not verdict.get("over_sections"):
             break
@@ -5480,9 +5636,7 @@ async def _enforce_spec_length(
         if out is None:
             break
         new_html, trim_tok, applied = out
-        tok["input_tokens"] += trim_tok["input_tokens"]
-        tok["output_tokens"] += trim_tok["output_tokens"]
-        tok["cost_usd"] = round(tok["cost_usd"] + trim_tok["cost_usd"], 6)
+        _add(trim_tok)
         new_verdict = _spec_verdict(new_html, spec)
         if new_verdict is None or new_verdict["total_words"] >= verdict["total_words"]:
             logger.info("%s: spec trim pass %d did not shorten the page; keeping previous", label, _pass)
@@ -5490,6 +5644,45 @@ async def _enforce_spec_length(
         content_html, verdict, changed = new_html, new_verdict, True
         logger.info("%s: spec trim pass %d cut to %s words (over sections now %s)",
                     label, _pass, verdict["total_words"], verdict["over_sections"])
+
+    # DEEPEN: required sections under their band get substance written in.
+    for _pass in range(1, PAGE_SPEC_DEEPEN_PASSES + 1):
+        shortfall = _spec_shortfall(verdict["measure"], spec)
+        if shortfall <= 0:
+            break
+        under = _spec_deepen_targets(verdict["measure"], spec)
+        await q.put({"step": "progress", "progress": 92,
+                     "message": f"Deepening {len(under)} section(s) to the page spec (pass {_pass})…"})
+        out = await _spec_deepen_inline(
+            content_html, spec, verdict["measure"], keyword, city, business_name, phone, address,
+            voice_block, serp_analysis_dict, client,
+        )
+        if out is None:
+            break
+        new_html, deep_tok, applied = out
+        _add(deep_tok)
+        new_verdict = _spec_verdict(new_html, spec)
+        if new_verdict is None or _spec_shortfall(new_verdict["measure"], spec) >= shortfall:
+            logger.info("%s: spec deepen pass %d did not close the shortfall; keeping previous", label, _pass)
+            break
+        content_html, verdict, changed = new_html, new_verdict, True
+        logger.info("%s: spec deepen pass %d grew to %s words (under sections now %s)",
+                    label, _pass, verdict["total_words"], verdict["under_sections"])
+
+    # A deepen pass may overshoot a band: one closing trim keeps the ceiling.
+    if changed and verdict.get("over_sections"):
+        out = await _spec_trim_inline(
+            content_html, spec, verdict["measure"], keyword, city, business_name, phone,
+            voice_block, serp_analysis_dict, client,
+        )
+        if out is not None:
+            new_html, trim_tok, applied = out
+            _add(trim_tok)
+            new_verdict = _spec_verdict(new_html, spec)
+            if new_verdict is not None and len(new_verdict["over_sections"]) < len(verdict["over_sections"]) \
+                    and _spec_shortfall(new_verdict["measure"], spec) <= _spec_shortfall(verdict["measure"], spec):
+                content_html, verdict = new_html, new_verdict
+                logger.info("%s: closing trim after deepen → %s words", label, verdict["total_words"])
     return content_html, tok, verdict, changed
 
 
@@ -8694,6 +8887,7 @@ Full location: {body.location}
                 content_html, page_spec_dict, q, keyword=body.keyword, city=city,
                 business_name=body.business_name, phone=body.phone, voice_block=voice_block,
                 serp_analysis_dict=serp_analysis_dict, client=client, label="generate-page",
+                address=body.address,
             )
             token_rec["input_tokens"]  += _spec_tok["input_tokens"]
             token_rec["output_tokens"] += _spec_tok["output_tokens"]
@@ -9332,6 +9526,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 content_html, page_spec_dict, q, keyword=body.keyword, city=city,
                 business_name=body.business_name, phone=body.phone, voice_block=voice_block,
                 serp_analysis_dict=body.serp_analysis, client=client, label="reoptimize-page",
+                address=body.address,
             )
             token_rec["input_tokens"]  += _spec_tok["input_tokens"]
             token_rec["output_tokens"] += _spec_tok["output_tokens"]

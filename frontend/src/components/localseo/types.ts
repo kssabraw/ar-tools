@@ -82,7 +82,12 @@ export interface PageSpec {
   // order and blocks override the app's template); 'template' = the default
   // 12-section skeleton (no usable reference on file, or the override is off).
   structure_mode?: 'client' | 'template'
-  total: { min: number; target: number; max: number; basis: 'serp' | 'fallback' }
+  total: {
+    min: number; target: number; max: number; basis: 'serp' | 'fallback'
+    released_min?: number
+    // set when the client's section floors lifted the band above the SERP (2026-09-03)
+    serp_min?: number; serp_target?: number; serp_max?: number; lifted_by?: 'client_floors'
+  }
   structure: { max_sections: number; max_h3_per_h2: number; faq: { min: number; max: number } }
   sections: PageSpecSection[]
   provenance: {

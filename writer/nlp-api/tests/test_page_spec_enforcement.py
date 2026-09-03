@@ -375,3 +375,100 @@ def test_spec_fix_prompt_carries_the_clients_list_items():
     assert "CLIENT'S OWN LIST ITEMS (reproduce every one, as list items): Architecture; Aviation; Construction" in prompt
     add_prompt = main._spec_add_prompt([feat], [], "Acme", "k", "City", None, None, "")
     assert "CLIENT'S OWN LIST ITEMS (reproduce every one): Architecture; Aviation; Construction" in add_prompt
+
+
+# ── the deepen pass (2026-09-03): required under-band sections get substance ─
+
+def test_spec_deepen_targets_only_required_under_sections_worst_first():
+    spec = _spec()
+    bands = {s["key"]: s for s in spec["sections"]}
+    html = _page({
+        "intro": max(1, bands["intro"]["min_words"] - 20),
+        "services": max(1, bands["services"]["min_words"] - 100),
+        "usp": bands["usp"]["min_words"],
+        "testimonials": 5,  # optional in template mode → never a deepen target
+    })
+    measure = pspec.measure_page(html, spec)
+    targets = main._spec_deepen_targets(measure, spec)
+    assert [t["key"] for t in targets] == ["services", "intro"]
+    assert targets[0]["add"] == 100 and targets[1]["add"] == 20
+    assert targets[0]["min_words"] == bands["services"]["min_words"]
+    assert main._spec_shortfall(measure, spec) == 120
+    assert main._spec_deepen_targets(pspec.measure_page(_page({"intro": bands["intro"]["min_words"]}), spec), spec) == []
+
+
+def test_spec_deepen_prompt_carries_band_shortfall_list_items_and_topic_hints():
+    spec = _spec()
+    bands = {s["key"]: s for s in spec["sections"]}
+    html = _page({"intro": 10})
+    targets = main._spec_deepen_targets(pspec.measure_page(html, spec), spec)
+    targets[0]["list_items"] = ["Aviation", "Legal"]
+    hints = main._spec_topic_hints({
+        "google_entities": [{"name": "Managed IT", "page_spread": 9}, {"name": "Help desk", "page_spread": 3}],
+        "related_keywords": {"paragraphs": [{"term": "network monitoring"}], "h2_h3": ["cybersecurity"]},
+    })
+    assert "Managed IT, Help desk" in hints and "network monitoring, cybersecurity" in hints
+    assert main._spec_topic_hints(None) == ""
+    prompt = main._spec_deepen_prompt(targets, section_edit.split_sections(html), "Acme", "k", "City", "555", "1 St", "VOICE", hints)
+    lo, hi = bands["intro"]["min_words"], bands["intro"]["max_words"]
+    assert f"BAND: {lo}–{hi} words" in prompt and f"ADD at least ~{lo - 10} words" in prompt
+    assert "Aviation; Legal" in prompt and "Managed IT" in prompt and "VOICE" in prompt and "ADDRESS: 1 St" in prompt
+    assert "SECTIONS TO DEEPEN" in prompt and "[intro]" in prompt and "[usp]" not in prompt
+
+
+def _length_spec_page(spec, under_key, under_words):
+    bands = {s["key"]: s for s in spec["sections"]}
+    return "<article>" + "".join(
+        f'<section id="{k}">' + _conforming_body(bands[k], under_words if k == under_key else None) + "</section>"
+        for k in bands if bands[k]["required"]
+    ) + "</article>"
+
+
+def test_enforce_spec_length_deepens_an_under_band_section_into_its_band():
+    spec = _spec()
+    bands = {s["key"]: s for s in spec["sections"]}
+    html = _length_spec_page(spec, "usp", 10)
+    before = pspec.length_verdict(pspec.measure_page(html, spec), spec)
+    assert "usp" in before["under_sections"]
+
+    def deepen(prompt):
+        assert "[usp]" in prompt and "SECTIONS TO DEEPEN" in prompt
+        return json.dumps({"usp": "<h2>usp</h2><p>" + " ".join(["d"] * (bands["usp"]["min_words"] + 5)) + "</p>"})
+
+    client = _ScriptedClient({"DEEPENING specific sections": deepen})
+    new_html, tok, verdict, changed = asyncio.run(main._enforce_spec_length(
+        html, spec, _Q(), keyword="k", city="City", business_name="Acme", phone="555", voice_block="",
+        serp_analysis_dict=None, client=client, label="t", address="1 St"))
+    assert changed and "usp" not in verdict["under_sections"] and not verdict["over_sections"]
+    assert tok["input_tokens"] > 0 and len(client.calls) == 1
+
+
+def test_enforce_spec_length_keeps_previous_when_deepen_does_not_close_the_shortfall_and_trims_an_overshoot():
+    spec = _spec()
+    bands = {s["key"]: s for s in spec["sections"]}
+    html = _length_spec_page(spec, "usp", 10)
+
+    def no_help(_prompt):
+        return json.dumps({"usp": "<h2>usp</h2><p>" + " ".join(["d"] * 9) + "</p>"})
+
+    client = _ScriptedClient({"DEEPENING specific sections": no_help})
+    new_html, tok, verdict, changed = asyncio.run(main._enforce_spec_length(
+        html, spec, _Q(), keyword="k", city="City", business_name="Acme", phone="555", voice_block="",
+        serp_analysis_dict=None, client=client, label="t"))
+    assert not changed and new_html == html and "usp" in verdict["under_sections"]
+    assert len(client.calls) == 1  # keep-best stops the loop after a pass that did not improve
+
+    # an overshoot (deepen lands OVER the band) gets one closing trim
+    def overshoot(_prompt):
+        return json.dumps({"usp": "<h2>usp</h2><p>" + " ".join(["d"] * (bands["usp"]["max_words"] + 50)) + "</p>"})
+
+    def trim(prompt):
+        assert "[usp]" in prompt
+        return json.dumps({"usp": "<h2>usp</h2><p>" + " ".join(["t"] * bands["usp"]["max_words"]) + "</p>"})
+
+    client = _ScriptedClient({"DEEPENING specific sections": overshoot, "CUTTING specific sections": trim})
+    new_html, tok, verdict, changed = asyncio.run(main._enforce_spec_length(
+        html, spec, _Q(), keyword="k", city="City", business_name="Acme", phone="555", voice_block="",
+        serp_analysis_dict=None, client=client, label="t"))
+    assert changed and not verdict["over_sections"] and "usp" not in verdict["under_sections"]
+    assert [c[:12] for c in client.calls] == ["You are DEEP", "You are CUTT"]
