@@ -294,7 +294,9 @@ def test_client_mode_keeps_the_clients_sections_and_order_and_inserts_nothing():
     assert [b["type"] for b in secs["cta-primary"]["blocks"]] == ["cta"]
     # bands are bands and the sums close on the page band
     assert all(s["max_words"] > s["min_words"] for s in spec["sections"])
-    assert sum(s["max_words"] for s in spec["sections"]) == spec["total"]["max"]
+    # the maxima cover the page band (the absorber keeps a real band above its
+    # floor, so the sum may run a little over — sections don't all max out at once)
+    assert sum(s["max_words"] for s in spec["sections"]) >= spec["total"]["max"]
     assert sum(s["min_words"] for s in spec["sections"]) <= spec["total"]["max"]
 
 
@@ -425,3 +427,130 @@ def test_client_mode_testimonials_optional_without_reviews_and_no_point_bands():
     cta = next(s for s in big["sections"] if s["key"] == "cta-primary")
     assert cta["max_words"] == 80 and cta["min_words"] < cta["max_words"]
     assert all(s["max_words"] > s["min_words"] for s in big["sections"] if s["required"])
+
+
+# ── feasibility floors + the client-length lift (owner ruling 2026-09-03) ───
+
+def test_structural_floor_counts_items_subsections_quotes_and_prose():
+    # raw allocation-time section: 13-item list + 3 paragraphs + 3 reference H3s
+    raw = {"key": "services", "words": 50, "subsections": 3,
+           "blocks": [{"type": "paragraph", "count": 3}, {"type": "list", "count": 1, "items": 13}]}
+    assert ps.structural_floor(raw) == 30 + 11 * 4 + 2 * 25
+    # finished spec entry: items/subsection bands
+    entry = {"key": "services", "items": {"min": 11, "max": 15}, "subsections": {"min": 2, "max": 4},
+             "blocks": [{"type": "paragraph", "count": 3}, {"type": "list", "count": 1, "items": 13}]}
+    assert ps.structural_floor(entry) == 30 + 11 * 4 + 2 * 25
+    # testimonials always need two quotes' worth (unless there are no reviews)
+    assert ps.structural_floor({"key": "testimonials", "words": 15, "blocks": [{"type": "paragraph", "count": 7}]}) == 30 + 2 * 20
+    assert ps.structural_floor({"key": "testimonials", "words": 15, "no_reviews": True,
+                                "blocks": [{"type": "paragraph", "count": 7}]}) == 30
+    # a FAQ is governed by its words-per-item floor, no prose baseline on top
+    faq = {"key": "faq", "items": {"min": 4, "max": 7}, "words_per_item": {"min": 40, "max": 80},
+           "blocks": [{"type": "faq", "count": 1}]}
+    assert ps.structural_floor(faq) == 160
+    # a lone H3 and a folded single sub-heading are markup, not structure
+    assert ps.structural_floor({"key": "x", "words": 40, "subsections": 1,
+                                "blocks": [{"type": "list", "count": 1, "items": 1, "folded": True}]}) == 30
+    # heading-only, no asks → 0
+    assert ps.structural_floor({"key": "x", "words": 0, "blocks": []}) == 0
+
+
+def test_section_floor_is_80pct_of_the_clients_section_in_client_mode_and_template_floor_otherwise():
+    prose = {"key": "ref-why-us", "words": 200, "blocks": [{"type": "paragraph", "count": 7}]}
+    assert ps.section_floor(prose, client_mode=True) == 160
+    assert ps.section_floor(prose, client_mode=False) == 30  # a reference extra: structural floor only
+    intro = {"key": "intro", "words": 40, "blocks": [{"type": "paragraph", "count": 4}]}
+    assert ps.section_floor(intro, client_mode=True) == 32
+    assert ps.section_floor(intro, client_mode=False) == 60  # the template floor
+    # never below the structural floor, whichever mode
+    widget = {"key": "testimonials", "words": 15, "blocks": [{"type": "paragraph", "count": 7}]}
+    assert ps.section_floor(widget, client_mode=True) == 70
+
+
+def test_lift_page_band_lifts_to_the_required_floors_and_flags_it():
+    total = {"min": 882, "target": 1058, "max": 1164, "basis": "serp"}
+    fits = [{"key": "intro", "words": 100, "required": True, "blocks": [{"type": "paragraph", "count": 2}]}]
+    assert ps.lift_page_band(total, fits) == (total, [])
+    big = [{"key": f"ref-{i}", "words": 400, "required": True, "blocks": [{"type": "paragraph", "count": 4}]} for i in range(4)] \
+        + [{"key": "opt", "words": 400, "required": False, "blocks": [{"type": "paragraph", "count": 4}]}]
+    lifted, flags = ps.lift_page_band(total, big)
+    assert flags == ["client_length_over_serp"]
+    assert lifted["min"] == 4 * 320 and lifted["target"] == round(1280 * 1.2) and lifted["max"] == round(1536 * 1.1)
+    assert lifted["serp_min"] == 882 and lifted["serp_max"] == 1164 and lifted["lifted_by"] == "client_floors"
+    assert lifted["basis"] == "serp"  # provenance untouched
+
+
+# A compact stand-in for the Wheelhouse Orlando reference: ~2,300 words across
+# 16 sections, incl. a 13-item industries nav list with ~50 words of prose and
+# a 15-word review widget — on a 1,058-word suburb SERP.
+_ORLANDO_LIKE = [
+    _row("H1", "Hero: Local IT Support Introduction", "hero", 80),
+    _row("H2", "Core Value Proposition with Social Proof", "value_prop", 100),
+    _row("H2", "Industry-Specific Managed Services Overview", "service_detail", 50,
+         [{"type": "paragraph", "count": 3, "words": 50}]),
+    *[_row("H3", f"Industry Vertical: {n}", "service_detail", 0, []) for n in
+      ("Architecture", "Aviation", "Construction", "Professional Services", "Healthcare", "Insurance", "International",
+       "Legal", "Manufacturing", "Marine", "Non-Profit", "Private Equity", "Retail")],
+    _row("H2", "Service Category Definition", "service_detail", 100),
+    _row("H2", "Business Need for IT Support", "value_prop", 200),
+    _row("H2", "Benefits of Outsourced Managed Services", "value_prop", 480),
+    _row("H2", "How to Choose an Outsourced IT Provider", "process", 230,
+         [{"type": "paragraph", "count": 1, "words": 100}, {"type": "list", "count": 1, "items": 9, "words": 130}]),
+    _row("H2", "Common IT Problems Businesses Face", "objection", 110),
+    _row("H2", "Why Choose This Provider", "value_prop", 420),
+    _row("H2", "Client Testimonials", "trust", 15, [{"type": "paragraph", "count": 7, "words": 15}]),
+    _row("H2", "Local Service Area Coverage", "coverage", 30),
+    _row("H2", "Frequently Asked Questions", "faq", 380),
+    _row("H2", "Local Office Contact Details", "cta", 12, [{"type": "list", "count": 1, "items": 3, "words": 12}]),
+    _row("H2", "Contact Form and Closing CTA", "cta", 80),
+]
+
+
+def test_client_mode_lifts_a_long_reference_over_a_short_serp_and_keeps_every_section_feasible():
+    spec = ps.build_spec(client_id="c", keyword="k", location="Winter Park", location_code=1, serp_analysis=_SERP,
+                         reference_entry=_ref(_ORLANDO_LIKE), reference_page_type="local_landing",
+                         fallback_target=1200, has_reviews=True)
+    assert spec["structure_mode"] == "client" and spec["validation_errors"] == []
+    total = spec["total"]
+    assert "client_length_over_serp" in spec["provenance"]["flags"]
+    assert total["lifted_by"] == "client_floors" and total["serp_min"] == 882 and total["serp_max"] == 1164
+    assert total["min"] > 1164 and total["max"] > total["target"] > total["min"]
+    secs = {s["key"]: s for s in spec["sections"]}
+    # every required section starts at ≥80% of the client's section and can hold its asks
+    ref_words = {r["heading"]: r["word_count"] for r in _ORLANDO_LIKE if r["level"] != "H3"}
+    for s in spec["sections"]:
+        if not s["required"]:
+            continue
+        assert s["min_words"] >= ps.structural_floor(s), s["key"]
+        rw = ref_words.get(s.get("reference_heading") or "", 0)
+        if rw:
+            assert s["min_words"] >= round(0.8 * rw), (s["key"], s["min_words"], rw)
+        assert s["max_words"] > s["min_words"]
+    # the widgets that collapsed live are now real bands
+    assert secs["testimonials"]["min_words"] >= 70
+    assert secs["cta-primary"]["min_words"] >= 30
+    ind = next(s for s in spec["sections"] if s.get("list_items"))
+    assert ind["min_words"] >= 30 + 11 * 4
+    # the sums still close on the (lifted) page band
+    assert sum(s["min_words"] for s in spec["sections"]) == total["min"]
+    assert sum(s["max_words"] for s in spec["sections"]) >= total["max"]
+    block = ps.render_spec_block(spec)
+    assert "CLIENT'S reference layout" in block and "882" in block
+
+
+def test_client_mode_does_not_lift_when_the_reference_fits_the_serp():
+    spec = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1, serp_analysis=_SERP,
+                         reference_entry=_ref(_WHEELHOUSE_LIKE), reference_page_type="local_landing",
+                         fallback_target=1200)
+    assert "client_length_over_serp" not in spec["provenance"]["flags"]
+    assert spec["total"]["min"] == 882 and "lifted_by" not in spec["total"]
+    assert "CLIENT'S reference layout" not in ps.render_spec_block(spec)
+
+
+def test_validate_spec_flags_a_band_too_small_for_its_structural_asks():
+    spec = ps.build_spec(client_id="c", keyword="k", location="L", location_code=1, serp_analysis=_SERP,
+                         reference_entry=None, reference_page_type=None, fallback_target=1200)
+    assert spec["validation_errors"] == []
+    svc = next(s for s in spec["sections"] if s["key"] == "services")
+    svc["max_words"] = 40  # 3 H3s + prose cannot live in 40 words
+    assert "structural_floor_does_not_fit:services" in ps.validate_spec(spec)

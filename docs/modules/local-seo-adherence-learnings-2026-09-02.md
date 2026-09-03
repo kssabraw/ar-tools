@@ -18,6 +18,8 @@ This is the team-facing summary of what one day of live runs taught us about mak
 | 8 | Reference layouts carry markup noise. | A nav heading with one empty child is dropped; a lone H3 in a short block gives no sub-section band (≥2 prose H3s do); a ceiling clamp never collapses a band to a point; extra sections are advisory under the cap (template mode) and drift in client mode. |
 | 9 | Semantic mislabels in the reference analysis leak into the page. | A "coverage" section maps to the template's geographic slot only when it names places; "industry coverage" is its own section (owner ruling). |
 | 10 | Anything the verdict enforces must be part of "did the spec change". | Structural asks (sub-section/item bands, blocks, list items) are in the material-difference signature; an unedited spec rebuilds when they change, an edited spec always sticks. |
+| 11 | Proportional scaling has no floor: a long reference on a short SERP scales widgets into nonsense (Winter Park: testimonials 6–7 words, a 13-item services block in 22–28). | **Feasibility floors** (2026-09-03): a client section's minimum is never below 80% of its own reference words nor below its structural floor (items × 4, H3s × 25, quotes × 20, prose ≥ 30, FAQ words-per-item); when the required floors exceed the SERP band the **page band lifts to them** (`client_length_over_serp`) — the client's length wins over the SERP average whenever the reference is the longer. |
+| 12 | The loop only trimmed; a floor nothing enforces is a wish (5 of 5 Fort Lauderdale runs landed under the minimum). | A section-scoped **deepen pass** (`_spec_deepen_inline`, ≤`PAGE_SPEC_DEEPEN_PASSES`=2, keep-best on the total shortfall, not time-budget gated) writes substance — competitor entities/topics from the SERP analysis, delivery specifics, local anchors, the client's list items — into REQUIRED under-band sections, never invents facts, never pads; one closing trim if it overshoots. |
 
 ## 2. The measured trajectory (one keyword, same SERP, same reference)
 
@@ -27,13 +29,16 @@ This is the team-facing summary of what one day of live runs taught us about mak
 | 2 | v2 (clamped; reviews on file) | 2,074 | 2,083–2,750 | 3 | 78.2 / 76.8 |
 | 3 | v2 (audit-in-band live) | 2,173 | 2,083–2,750 | 3 | 82.5 / 83.1 |
 | 4 | v3 (no lone-H3 band) | 2,044 | 2,083–2,750 | 1 (industries 5/13) | 81.9 / 81.7 |
-| 5 | v4 (list items; own industries section) | *pending* | | | |
+| 5 | v4 (list items; own industries section) | 1,963 | 2,083–2,750 | 2 (industries 10/11; testimonials thin) | 76.9 / 80.8 |
+
+Cross-client batch (2026-09-02, same code): First Class Roofing "roof restoration" (template mode, no usable reference) 1,344 words in band 1,309–1,728, structure ok, 85.0 / 79.4; Wheelhouse Orlando "IT Support Company Winter Park" (client mode) 1,055 words in band 882–1,164 but 7 structure issues, every one downstream of the infeasible bands rule 11 now fixes.
 
 Every run kept the client's 11 sections in the client's order and quoted a real review once reviews were on file. Cost ≈ $0.63 per run, ≈ 11 minutes.
 
 ## 3. What is NOT yet general (open, with the evidence)
 
-- **Under-band pages.** Four of four runs landed 0–2% *under* the band minimum. The loop only trims; nothing deepens an under-band section with real substance (competitor topics from the SERP analysis, information gain). A section-scoped "deepen" pass, gated on a deficit above a threshold and forbidden from padding, is the natural mirror of the trim. Decide after the cross-client batch shows whether it is a Wheelhouse artefact or a writer habit.
+- **Under-band pages — now built (rule 12).** Five of five Fort Lauderdale runs landed under the minimum (run 5: 1,963 vs 2,083) and the cross-client batch showed the same habit on First Class Roofing (in band but at the bottom) — a writer habit, not a client artefact. The deepen pass is the mirror of the trim; measure its effect on the next runs (expect in-band pages and a small cost increase per page).
+- **Long reference on a short SERP — now built (rule 11).** Winter Park (Orlando reference 2,287 words, suburb SERP 882–1,164) produced 7 drift issues, all downstream of infeasible bands. Under the floors its band lifts to roughly 1,830–2,420 words; the page runs ~2× the competitor average by design.
 - **Reference quality is the ceiling.** First Class Roofing's reference is a staging host → unusable → template mode. A client only gets the client-structure benefits with a usable reference (live host, ≥300 words, ≥4 sections). Operational: add one per client; the spec panel says when it is missing.
 - **The reference analysis stores counts, not content.** List items are recovered from folded *headings*; a real `<ul>` on the reference page still yields only an item count. Capturing list item text at scrape time (`page_structure_eval`) would extend lesson 6 to every list.
 - **Acceptance at scale.** Plan §7 (≥9 of 10 fresh pages in band, 0 clean saves over the ceiling) is measured on one client so far. The per-client length report (`GET …/local-seo/length-report`) gives the number; a cross-client rollup does not exist yet.
@@ -41,6 +46,6 @@ Every run kept the client's 11 sections in the client's order and quoted a real 
 ## 4. Where to look
 
 - Spec + verdicts: `writer/platform-api/services/page_spec.py` (vendored into `writer/nlp-api/page_spec.py`, sync-guarded), store `page_spec_store.py`, wiring `local_seo_service.py`.
-- Enforcement loops: `writer/nlp-api/main.py` — `_enforce_spec_structure` (audit → deterministic fixes → add → fix), `_enforce_spec_length` (section-scoped trim), `_final_structure_verdict`.
+- Enforcement loops: `writer/nlp-api/main.py` — `_enforce_spec_structure` (audit → deterministic fixes → add → fix), `_enforce_spec_length` (section-scoped trim, then deepen, then a closing trim), `_final_structure_verdict`.
 - Reviews: `services/review_analytics.py` (`review_intel` job; backfills `clients.gbp.reviews`), `services/dataforseo_reviews.py` (live rating shape).
 - UI: `frontend/src/components/localseo/PageSpecPanel.tsx` (spec viewer/editor, length + structure chips, issue list).
