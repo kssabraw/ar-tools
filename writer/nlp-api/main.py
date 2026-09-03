@@ -9317,7 +9317,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
 
         # Parse existing page zones and compute delta-based SERP context
         page_zones = _parse_page_zones(existing_html)
-        serp_analysis_dict: Optional[dict] = serp_analysis_dict
+        serp_analysis_dict: Optional[dict] = body.serp_analysis
         serp_ctx = _reopt_serp_context(page_zones, serp_analysis_dict)
         # The word target that governs this page (SERP-measured, else the
         # caller's fallback) — threaded into every score + rewrite pass below.
