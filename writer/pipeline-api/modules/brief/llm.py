@@ -43,6 +43,8 @@ import httpx
 
 from config import settings
 
+from . import cost
+
 logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -172,7 +174,18 @@ async def _create_message(client: AsyncAnthropic, create_kwargs: dict[str, Any])
         while True:
             try:
                 async with semaphore:
-                    return await acct_client.messages.create(**create_kwargs)
+                    message = await acct_client.messages.create(**create_kwargs)
+                # Single choke point for every blog-module Anthropic call — record
+                # token usage into the per-request tally so module_outputs.cost_usd
+                # is honest. No-op unless a blog request started accounting.
+                usage = getattr(message, "usage", None)
+                if usage is not None:
+                    cost.record_usage(
+                        create_kwargs.get("model", ""),
+                        getattr(usage, "input_tokens", 0) or 0,
+                        getattr(usage, "output_tokens", 0) or 0,
+                    )
+                return message
             except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
                 if not _is_transient_anthropic_error(exc):
                     raise
