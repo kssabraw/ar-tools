@@ -216,7 +216,7 @@ SCORE_MODEL = os.environ.get("SCORE_MODEL", "claude-sonnet-4-6")
 # in this file ($0.80 in / $4.00 out per 1M). Unknown models fall back to Sonnet.
 _MODEL_PRICING = {
     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
-    "claude-haiku-4-5-20251001":  {"input": 0.80, "output": 4.00},
+    "claude-haiku-4-5-20251001":  {"input": 1.00, "output": 5.00},  # current Haiku 4.5 list price
 }
 
 
@@ -253,6 +253,19 @@ async def _gemini_embed(texts: List[str]) -> List[List[float]]:
 # rehome, leaving generate-page / reoptimize-page / augment-page / press-release
 # referencing undefined names (NameError -> 502). Tuned core: do not edit wording.
 GENERATION_MODEL = "claude-sonnet-4-6"
+
+# Model for the SECTION-SCOPED page-spec edit passes — section trim (reduce an
+# over-band section), section fix (rewrite a section flagged for a
+# block/FAQ/intent/sentiment issue), and section add (write a missing required
+# section). These are bounded, per-section rewrites, so they're the safe place to
+# trade the Sonnet default for a cheaper model. Defaults to GENERATION_MODEL, so
+# this is a NO-OP until set — the cost lever is `SECTION_EDIT_MODEL=claude-haiku-4-5-20251001`,
+# and because it only affects these bounded passes it's validated by watching the
+# composite + voice scores hold on a sample (trim is pure reduction and the
+# safest; fix/add touch intent/sentiment/voice, so watch those closely). Deliberately
+# NOT applied to the whole-page passes (generation, phrase-insert, the voice+SEO
+# corrective) or scoring, where a weaker model risks the whole page or the rubric.
+SECTION_EDIT_MODEL = os.environ.get("SECTION_EDIT_MODEL", GENERATION_MODEL)
 
 # ── Ecommerce compound-fact auto-research ──────────────────────────────────
 # Fills the INVARIANT, publicly-documented product specs (CAS number, molecular
@@ -5417,13 +5430,13 @@ async def _spec_trim_inline(
             return None
         user_prompt = _spec_trim_prompt(targets, sections, business_name, keyword, city, voice_block)
         msg = await client.messages.create(
-            model=GENERATION_MODEL,
+            model=SECTION_EDIT_MODEL,
             max_tokens=8000,
             temperature=0,
             system=[{"type": "text", "text": _SECTION_TRIM_SYSTEM, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_prompt}],
         )
-        token_rec = _token_record("section-trim-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        token_rec = _token_record("section-trim-inline", SECTION_EDIT_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
         edits = _parse_claude_json(msg.content[0].text)
         if not isinstance(edits, dict):
             return None
@@ -5885,13 +5898,13 @@ async def _spec_fix_inline(
             return None
         user_prompt = _spec_fix_prompt(targets, sections, business_name, keyword, city, phone, voice_block)
         msg = await client.messages.create(
-            model=GENERATION_MODEL,
+            model=SECTION_EDIT_MODEL,
             max_tokens=8000,
             temperature=0,
             system=[{"type": "text", "text": _SECTION_FIX_SYSTEM, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_prompt}],
         )
-        token_rec = _token_record("section-fix-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        token_rec = _token_record("section-fix-inline", SECTION_EDIT_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
         edits = _parse_claude_json(msg.content[0].text)
         if not isinstance(edits, dict):
             return None
@@ -5972,13 +5985,13 @@ async def _spec_add_inline(
         sections = section_edit.split_sections(content_html)
         user_prompt = _spec_add_prompt(missing, sections, business_name, keyword, city, phone, address, voice_block)
         msg = await client.messages.create(
-            model=GENERATION_MODEL,
+            model=SECTION_EDIT_MODEL,
             max_tokens=6000,
             temperature=0,
             system=[{"type": "text", "text": _SECTION_ADD_SYSTEM, "cache_control": {"type": "ephemeral"}}],
             messages=[{"role": "user", "content": user_prompt}],
         )
-        token_rec = _token_record("section-add-inline", GENERATION_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
+        token_rec = _token_record("section-add-inline", SECTION_EDIT_MODEL, msg.usage.input_tokens, msg.usage.output_tokens)
         additions = _parse_claude_json(msg.content[0].text)
         if not isinstance(additions, dict):
             return None
