@@ -1379,6 +1379,16 @@ async def score_page(
         )
     from services import voice_card_service
 
+    # The kept page spec (same one generation used): its target drives the
+    # length_fit engine, so a band lifted above the SERP by the client's
+    # reference floors — or edited by the owner — is scored as the band it is.
+    spec: Optional[dict] = None
+    try:
+        spec = _resolve_page_spec(client, keyword, location, location_code, serp_analysis,
+                                  _resolve_fallback_length_target(location_code, location))
+    except Exception as exc:  # noqa: BLE001 — a spec is an enhancement here, never a gate
+        logger.warning("local_seo.score_spec_unavailable", extra={"client_id": client_id, "error": str(exc)})
+
     result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
@@ -1393,6 +1403,7 @@ async def score_page(
         # Without these the rubric measured SEO only: icp_alignment inferred an
         # audience from the keyword and nothing scored brand voice at all.
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
+        "page_spec": spec,
     }, user_id=user_id)
     # A standalone score has no page row — log it against page_url (may be None
     # when scoring raw HTML) so the verdict is still kept in the run history.
@@ -1495,6 +1506,7 @@ async def reoptimize_page(
                 "serp_analysis": serp_analysis,
                 "entity_provider": entity_provider,
                 "voice_card": voice_card,
+                "page_spec": spec,
             })
             result["composite_score"] = score.get("composite_score")
             result["composite_status"] = score.get("composite_status")

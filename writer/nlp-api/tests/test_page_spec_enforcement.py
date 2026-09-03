@@ -472,3 +472,37 @@ def test_enforce_spec_length_keeps_previous_when_deepen_does_not_close_the_short
         serp_analysis_dict=None, client=client, label="t"))
     assert changed and not verdict["over_sections"] and "usp" not in verdict["under_sections"]
     assert [c[:12] for c in client.calls] == ["You are DEEP", "You are CUTT"]
+
+
+# ── the spec's target drives every length consumer (2026-09-03) ─────────────
+
+def test_with_spec_length_overrides_the_serp_numbers_on_a_copy_only():
+    sa = {"serp_word_target": 1058, "serp_avg_word_count": 882, "google_entities": [{"name": "x"}]}
+    lifted = {"min": 1998, "target": 2398, "max": 2638, "lifted_by": "client_floors", "serp_min": 882}
+    out = main._with_spec_length(sa, lifted)
+    assert out["serp_word_target"] == 2398 and out["serp_avg_word_count"] == 1998
+    assert out["length_basis"] == "page_spec_lifted" and out["google_entities"] == sa["google_entities"]
+    assert sa["serp_word_target"] == 1058  # the original is untouched (it gets echoed + cached)
+    plain = main._with_spec_length(sa, {"min": 882, "target": 1058, "max": 1164})
+    assert plain["length_basis"] == "page_spec" and plain["serp_word_target"] == 1058
+    assert main._with_spec_length(sa, None) is sa and main._with_spec_length(None, lifted)["serp_word_target"] == 2398
+    # length_fit now scores the lifted page as in band
+    html = "<article><section id='a'><h2>a</h2><p>" + " ".join(["w"] * 2320) + "</p></section></article>"
+    eng = main._compute_length_fit(html, out)
+    assert eng["score"] == 100.0
+    assert main._compute_length_fit(html, sa)["score"] == 0.0
+
+
+def test_length_budget_line_names_the_spec_basis():
+    sa = {"serp_word_target": 1058, "serp_avg_word_count": 882}
+    lifted = main._with_spec_length(sa, {"min": 1998, "target": 2398, "max": 2638, "lifted_by": "client_floors"})
+    line = main._length_budget_line(lifted, None)
+    assert "~2398 words" in line and "PAGE SPEC" in line and "1998" in line and "client's proven page size wins" in line
+    assert "competitor SERP average ~882" in main._length_budget_line(sa, None)
+    assert "PAGE SPEC's target" in main._length_budget_line(main._with_spec_length(sa, {"min": 900, "target": 1100}), None)
+
+
+def test_score_page_request_accepts_a_page_spec():
+    req = main.ScorePageRequest(keyword="k", business_name="B", gbp_category="c", page_content="<p>x</p>",
+                                page_spec={"total": {"target": 2398}})
+    assert req.page_spec["total"]["target"] == 2398

@@ -4661,6 +4661,29 @@ def _resolve_length_target(
     return None
 
 
+def _with_spec_length(serp_analysis: Optional[dict], total: Optional[dict]) -> Optional[dict]:
+    """Pure: a COPY of the SERP analysis whose length numbers are the page
+    spec's (``total.target`` → ``serp_word_target``, ``total.min`` →
+    ``serp_avg_word_count``, plus ``length_basis``). Every length consumer —
+    the writer's TOTAL WORD BUDGET line, the deterministic ``length_fit``
+    engine, the trim block — reads the target off the analysis and prefers it
+    to any fallback, so a spec whose band was LIFTED above the SERP (the
+    client's reference floors, 2026-09-03) or edited by the owner was being
+    written and scored against the wrong number (live: Winter Park, 2,320
+    words in its 1,998–2,638 band, scored length_fit 0 against the 1,058-word
+    SERP target). The caller keeps the ORIGINAL dict for anything it echoes
+    or caches — the spec numbers must never be mistaken for a measurement."""
+    t = total or {}
+    target = int(t.get("target") or 0)
+    if target <= 0:
+        return serp_analysis
+    out = dict(serp_analysis or {})
+    out["serp_word_target"] = target
+    out["serp_avg_word_count"] = int(t.get("min") or 0) or int(round(target / length_fit.OVERAGE_MULTIPLIER))
+    out["length_basis"] = "page_spec_lifted" if t.get("lifted_by") else "page_spec"
+    return out
+
+
 def _length_trim_deficiency(
     inline_scores: Optional[dict], inline_defs: Optional[list], min_ratio: float
 ) -> Optional[dict]:
@@ -4734,7 +4757,15 @@ def _length_budget_line(
     target = _resolve_length_target(sa, fallback_target)
     if not target:
         return ""
-    if sa.get("serp_word_target"):
+    if sa.get("length_basis") == "page_spec_lifted":
+        basis = (
+            f"(the PAGE SPEC's band — the client's reference layout needs at least "
+            f"{sa.get('serp_avg_word_count')} words between its sections, more than the competitor "
+            "SERP average; the client's proven page size wins, so write to the section bands)"
+        )
+    elif sa.get("length_basis") == "page_spec":
+        basis = "(the PAGE SPEC's target for this page)"
+    elif sa.get("serp_word_target"):
         avg = sa.get("serp_avg_word_count") or int(round(target / length_fit.OVERAGE_MULTIPLIER))
         basis = f"(competitor SERP average ~{avg} + 20%)"
     else:
@@ -7487,6 +7518,9 @@ class ScorePageRequest(BaseModel):
     # "local" (default — full 7-engine Local SEO scoring) or "national" (Service
     # Pages — drops the geo engines, de-geos gbp_maps/entity_establishment).
     geo_mode: str = "local"
+    # The kept page spec (platform-api resolves it): when present its target
+    # drives length_fit, so a lifted/edited band scores as the band it is.
+    page_spec: Optional[dict] = None
 
 class ScorePageResponse(BaseModel):
     composite_score: float
@@ -7541,6 +7575,12 @@ async def score_page(request: Request, body: ScorePageRequest):
         except Exception as _serp_err:
             logger.warning(f"score-page: inline SERP analysis failed ({_serp_err})")
             raise HTTPException(status_code=503, detail="Could not fetch competitor data. Please try again in a moment.")
+
+    # The measured analysis is what the response echoes; the spec's length
+    # numbers ride only on the working copy (see _with_spec_length).
+    serp_analysis_out = serp_analysis_dict
+    if isinstance(body.page_spec, dict) and (body.page_spec.get("total") or {}).get("target"):
+        serp_analysis_dict = _with_spec_length(serp_analysis_dict, body.page_spec.get("total"))
 
     from bs4 import BeautifulSoup as _BS
     page_html = body.page_content
@@ -7603,7 +7643,7 @@ async def score_page(request: Request, body: ScorePageRequest):
         voice_compliance=voice_compliance,
         deficiencies=_build_deficiencies(scores),
         token_usage=token_rec,
-        serp_analysis=serp_analysis_dict if inline_serp else None,
+        serp_analysis=serp_analysis_out if inline_serp else None,
         analysis_cost=inline_serp.analysis_cost if inline_serp else None,
     )
 
@@ -8417,10 +8457,17 @@ async def generate_page(request: Request, body: GeneratePageRequest):
         # The kept page spec wins on length when present: its target may be an
         # owner edit, and it is what the page is measured against afterwards.
         page_spec_dict = body.page_spec if isinstance(body.page_spec, dict) and body.page_spec.get("sections") else None
+        # The analysis as measured — echoed in the done payload (platform caches
+        # it); the length override below lives only on the working copy.
+        serp_analysis_out = serp_analysis_dict
         if page_spec_dict:
             _spec_target = int(((page_spec_dict.get("total") or {}).get("target")) or 0)
             if _spec_target > 0:
                 length_target = _spec_target
+                # ONE set of numbers: the budget line, length_fit and the trim
+                # block all read the target off the analysis, so hand them the
+                # spec's (a lifted/edited band otherwise scores length_fit 0).
+                serp_analysis_dict = _with_spec_length(serp_analysis_dict, page_spec_dict.get("total"))
             logger.info("generate-page: page spec v%s in force (band %s–%s)",
                         page_spec_dict.get("version"), (page_spec_dict.get("total") or {}).get("min"),
                         (page_spec_dict.get("total") or {}).get("max"))
@@ -9162,7 +9209,7 @@ Full location: {body.location}
                 "deficiencies": _build_deficiencies(inline_scores) if inline_scores else [],
                 "token_usage": token_rec,
                 "cost_breakdown": cost_breakdown,
-                "serp_analysis": serp_analysis_dict,
+                "serp_analysis": serp_analysis_out,
                 "content_gaps": content_gaps,
                 # Brand-voice scorecard — its own headline score + per-dimension
                 # breakdown, persisted by platform-api and shown alongside (not
@@ -9270,20 +9317,23 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
 
         # Parse existing page zones and compute delta-based SERP context
         page_zones = _parse_page_zones(existing_html)
-        serp_ctx = _reopt_serp_context(page_zones, body.serp_analysis)
+        serp_analysis_dict: Optional[dict] = serp_analysis_dict
+        serp_ctx = _reopt_serp_context(page_zones, serp_analysis_dict)
         # The word target that governs this page (SERP-measured, else the
         # caller's fallback) — threaded into every score + rewrite pass below.
-        length_target = _resolve_length_target(body.serp_analysis, body.length_target)
+        length_target = _resolve_length_target(serp_analysis_dict, body.length_target)
         page_spec_dict = body.page_spec if isinstance(body.page_spec, dict) and body.page_spec.get("sections") else None
         if page_spec_dict:
             _spec_target = int(((page_spec_dict.get("total") or {}).get("target")) or 0)
             if _spec_target > 0:
                 length_target = _spec_target
+                # see generate-page: the spec's numbers drive every length consumer
+                serp_analysis_dict = _with_spec_length(serp_analysis_dict, page_spec_dict.get("total"))
         spec_block_text = pspec.render_spec_block(page_spec_dict) if page_spec_dict else ""
 
         # Max-Cosine Synthesis against the live AI Overview (best-effort; '' when the
         # supplied serp_analysis carried no AIO / on failure).
-        mcs_block = await _local_seo_mcs_block(client, body.serp_analysis, body.keyword)
+        mcs_block = await _local_seo_mcs_block(client, serp_analysis_dict, body.keyword)
 
         deficiency_text = "\n".join(
             f"  Engine: {d['engine']} (score: {d['score']}/100)\n"
@@ -9331,7 +9381,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
             "Still keep every paragraph short per rule 2 (1–2 sentences)."
         )
 
-        length_budget_text = _length_budget_line(body.serp_analysis, length_target)
+        length_budget_text = _length_budget_line(serp_analysis_dict, length_target)
 
         internal_links_text = _internal_links_block(body.internal_links)
         user_prompt = f"""BUSINESS DATA
@@ -9397,7 +9447,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
 
         # Linkify phone numbers + RDFa entity markup
         content_html = _linkify_phones(content_html, body.phone)
-        reopt_entities = (body.serp_analysis or {}).get("google_entities", [])
+        reopt_entities = (serp_analysis_dict or {}).get("google_entities", [])
         content_html = _apply_rdfa_markup(content_html, reopt_entities)
 
         # ── Auto-retry: one scoring pass + one reoptimize pass if score < 90 ──
@@ -9420,7 +9470,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         try:
             inline_score, inline_defs, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
                 current_html, body.keyword, body.location, body.business_name,
-                body.gbp_category, body.address, body.serp_analysis, client,
+                body.gbp_category, body.address, serp_analysis_dict, client,
                 voice_card=voice_card,
                 length_target=length_target,
             )
@@ -9441,7 +9491,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     address=body.address,
                     phone=body.phone,
                     gbp_category=body.gbp_category,
-                    serp_analysis=body.serp_analysis,
+                    serp_analysis=serp_analysis_dict,
                     client=client,
                     voice_card=voice_card,
                 )
@@ -9466,7 +9516,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     new_html, new_schema, new_title, reopt_tok = await _reoptimize_html_inline(
                         current_html, body.keyword, body.location, city,
                         body.business_name, body.gbp_category, body.address, body.phone,
-                        inline_defs, body.serp_analysis, seo_checklist, client,
+                        inline_defs, serp_analysis_dict, seo_checklist, client,
                         voice_block=voice_block, length_target=length_target,
                     )
                     token_rec["input_tokens"]  += reopt_tok["input_tokens"]
@@ -9488,7 +9538,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 try:
                     inline_score, inline_defs, inline_scores, score_tok, voice_scorecard = await _score_html_inline(
                         current_html, body.keyword, body.location, body.business_name,
-                        body.gbp_category, body.address, body.serp_analysis, client,
+                        body.gbp_category, body.address, serp_analysis_dict, client,
                         voice_card=voice_card,
                         length_target=length_target,
                     )
@@ -9528,7 +9578,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             content_html, _struct_tok, structure_verdict, _struct_changed = await _enforce_spec_structure(
                 content_html, page_spec_dict, q, keyword=body.keyword, city=city,
                 business_name=body.business_name, phone=body.phone, address=body.address,
-                voice_block=voice_block, serp_analysis_dict=body.serp_analysis, client=client,
+                voice_block=voice_block, serp_analysis_dict=serp_analysis_dict, client=client,
                 label="reoptimize-page",
             )
             token_rec["input_tokens"]  += _struct_tok["input_tokens"]
@@ -9538,7 +9588,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             content_html, _spec_tok, spec_verdict, _spec_changed = await _enforce_spec_length(
                 content_html, page_spec_dict, q, keyword=body.keyword, city=city,
                 business_name=body.business_name, phone=body.phone, voice_block=voice_block,
-                serp_analysis_dict=body.serp_analysis, client=client, label="reoptimize-page",
+                serp_analysis_dict=serp_analysis_dict, client=client, label="reoptimize-page",
                 address=body.address,
             )
             token_rec["input_tokens"]  += _spec_tok["input_tokens"]
@@ -9550,7 +9600,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
                     ) = await _score_html_inline(
                         content_html, body.keyword, body.location, body.business_name,
-                        body.gbp_category, body.address, body.serp_analysis, client,
+                        body.gbp_category, body.address, serp_analysis_dict, client,
                         voice_card=voice_card, length_target=length_target,
                     )
                     token_rec["input_tokens"]  += rescore_tok["input_tokens"]
@@ -9566,7 +9616,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     seo_checklist = await _build_seo_checklist(
                         keyword=body.keyword, location=body.location, address=body.address,
                         phone=body.phone, gbp_category=body.gbp_category,
-                        serp_analysis=body.serp_analysis, client=client, voice_card=voice_card,
+                        serp_analysis=serp_analysis_dict, client=client, voice_card=voice_card,
                     )
                 except Exception as _ce:
                     logger.warning(f"reoptimize-page: checklist build for length trim failed: {_ce}")
@@ -9576,7 +9626,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                 trimmed_html, trimmed_schema, trimmed_title, trim_tok = await _reoptimize_html_inline(
                     content_html, body.keyword, body.location, city, body.business_name,
                     body.gbp_category, body.address, body.phone, [_trim_def],
-                    body.serp_analysis, seo_checklist, client, voice_block=voice_block,
+                    serp_analysis_dict, seo_checklist, client, voice_block=voice_block,
                     length_target=length_target, trim_block=_length_trim_block(_trim_engine),
                 )
                 token_rec["input_tokens"]  += trim_tok["input_tokens"]
@@ -9591,7 +9641,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                             inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
                         ) = await _score_html_inline(
                             content_html, body.keyword, body.location, body.business_name,
-                            body.gbp_category, body.address, body.serp_analysis, client,
+                            body.gbp_category, body.address, serp_analysis_dict, client,
                             voice_card=voice_card, length_target=length_target,
                         )
                         token_rec["input_tokens"]  += rescore_tok["input_tokens"]
@@ -9619,7 +9669,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     seo_checklist = await _build_seo_checklist(
                         keyword=body.keyword, location=body.location, address=body.address,
                         phone=body.phone, gbp_category=body.gbp_category,
-                        serp_analysis=body.serp_analysis, client=client, voice_card=voice_card,
+                        serp_analysis=serp_analysis_dict, client=client, voice_card=voice_card,
                     )
                 except Exception as _ce:
                     logger.warning(f"reoptimize-page: checklist build for voice pass failed: {_ce}")
@@ -9654,7 +9704,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                     fixed_html, fixed_schema, fixed_title, fix_tok = await _reoptimize_html_inline(
                         content_html, body.keyword, body.location, city,
                         body.business_name, body.gbp_category, body.address, body.phone,
-                        [], body.serp_analysis, seo_checklist, client,
+                        [], serp_analysis_dict, seo_checklist, client,
                         voice_block=voice_block, voice_corrections=corrections,
                         length_target=length_target,
                     )
@@ -9675,7 +9725,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
                         inline_score, inline_defs, inline_scores, rescore_tok, voice_scorecard
                     ) = await _score_html_inline(
                         content_html, body.keyword, body.location, body.business_name,
-                        body.gbp_category, body.address, body.serp_analysis, client,
+                        body.gbp_category, body.address, serp_analysis_dict, client,
                         voice_card=voice_card,
                         length_target=length_target,
                     )
