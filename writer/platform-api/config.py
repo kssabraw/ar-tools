@@ -126,6 +126,17 @@ class Settings(BaseSettings):
     # secondary account. Low, so a saturated primary yields to the second account
     # quickly instead of burning a long backoff (2 → ~2s + 4s, then switch).
     anthropic_key_failover_max_retries: int = 2
+    # ── Anthropic prompt caching (cache_control) ─────────────────────────────
+    # Wrap the large, re-sent context of the agentic loops (SerMaStr strategist,
+    # the Slack/web assistants, PACE, QA, DORA) in an ephemeral cache block so a
+    # multi-round loop pays full price for the big system/context on the first
+    # round and reads it from cache (≈10% of input price) on later rounds; the
+    # invariant system prompt is also reused across the bursty back-to-back calls
+    # of a weekly fan-out. Transparent to output — it only changes cost, never
+    # the response — and a block below the model's minimum cacheable size is
+    # simply not cached by the API (no error). Kill switch: False ⇒ every helper
+    # passes the plain string through unchanged (exact prior request shape).
+    prompt_cache_enabled: bool = True
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
     # redeploy or crash mid-run orphans them as status='running' forever. Each

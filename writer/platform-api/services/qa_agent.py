@@ -303,10 +303,12 @@ async def interpret_qa(question: str, client: Optional[dict], context: dict,
         blocks.append("Scope: the whole agency (every client's QA reviews).")
     blocks.append("QA data (JSON):\n" + json.dumps(context, default=str, ensure_ascii=False))
     blocks.append(f"Latest message: {question}")
-    from services import anthropic_failover
+    from services import anthropic_failover, prompt_cache
 
     clients = anthropic_failover.build_async_clients(timeout=60.0, max_retries=2)
-    messages = [{"role": "user", "content": "\n\n".join(blocks)}]
+    # The QA-data context is re-sent each tool-loop round; cache it so rounds
+    # 2..N read it from cache rather than re-billing the full JSON.
+    messages = [{"role": "user", "content": prompt_cache.cache_text("\n\n".join(blocks))}]
 
     async def on_text(delta: str) -> None:
         await on_event({"type": "text", "text": delta})

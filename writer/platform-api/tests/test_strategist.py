@@ -968,7 +968,11 @@ def test_run_goal_recovery_tiers_stores_budget_and_notifies_once(monkeypatch):
     )])
     calls, updates, notes = _run_with_responses(monkeypatch, [full], trigger="goal_recovery")
 
-    assert "CHRONIC-GOAL RECOVERY PLAN" in calls[0]["messages"][0]["content"]
+    # The first user message is sent as an ephemeral-cached text-block list
+    # (services/prompt_cache); read its text regardless of whether caching wraps it.
+    _msg0 = calls[0]["messages"][0]["content"]
+    _msg0_text = _msg0 if isinstance(_msg0, str) else "".join(b["text"] for b in _msg0)
+    assert "CHRONIC-GOAL RECOVERY PLAN" in _msg0_text
     done = next(u for u in updates if u.get("status") == "complete")
     assert done["budget"]["root_cause"] == "Metro built suburb pages north"
     assert done["budget"]["envelope"] == {"deployable": 340.0}
