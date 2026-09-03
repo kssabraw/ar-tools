@@ -2345,3 +2345,37 @@ export interface PaceDispositionResult {
   message: string
   result?: PaceInterventionResult
 }
+
+// ── Feedback Board (internal, admin-only: bugs + wishlist) ──
+export type FeedbackKind = 'bug' | 'wishlist'
+export type FeedbackStatus = 'new' | 'triaged' | 'in_progress' | 'done' | 'declined'
+export type FeedbackPriority = 'low' | 'medium' | 'high' | 'critical'
+
+export interface FeedbackComment {
+  id: string
+  item_id: string
+  author_id: string | null
+  author_name: string | null
+  body: string
+  created_at: string
+}
+
+export interface FeedbackItem {
+  id: string
+  kind: FeedbackKind
+  title: string
+  body: string | null
+  status: FeedbackStatus
+  priority: FeedbackPriority
+  labels: string[]
+  created_by: string | null
+  created_by_name: string | null
+  resolved_at: string | null
+  created_at: string
+  updated_at: string | null
+  comment_count: number
+}
+
+export interface FeedbackItemDetail extends FeedbackItem {
+  comments: FeedbackComment[]
+}

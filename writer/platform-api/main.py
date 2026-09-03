@@ -29,6 +29,7 @@ from routers.content_schedule import router as content_schedule_router
 from routers.dashboard import router as dashboard_router
 from routers.deliverables import router as deliverables_router
 from routers.everhour import router as everhour_router
+from routers.feedback import router as feedback_router
 from routers.files import router as files_router
 from routers.forecast import router as forecast_router
 from routers.freeze import router as freeze_router
@@ -329,6 +330,7 @@ app.include_router(deliverables_router)
 app.include_router(domain_intel_router)
 app.include_router(ecommerce_router)
 app.include_router(everhour_router)
+app.include_router(feedback_router)
 app.include_router(wheelhouse_router)
 app.include_router(keyword_research_router)
 app.include_router(files_router)

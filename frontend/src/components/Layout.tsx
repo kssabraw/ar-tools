@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass, ScrollText } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass, ScrollText, Bug } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -112,6 +112,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   // relevant once PACE is enabled.
   const mainNav: NavItem[] = [
     ...nav,
+    ...(isAdmin ? [{ label: 'Feedback', to: '/feedback', icon: <Bug size={18} /> }] : []),
     ...(isAdmin ? [{ label: 'Team', to: '/team', icon: <UserCog size={18} /> }] : []),
     ...(isAdmin && paceStatus?.enabled
       ? [{ label: 'PACE Log', to: '/pace/log', icon: <ScrollText size={18} /> }]
