@@ -7,12 +7,18 @@
 
 ## Status (2026-09-04)
 
+- **✅ BUILT + MERGED (Phases 0–2), shipped dark.** PR
+  [#1011](https://github.com/kssabraw/ar-tools/pull/1011) (`feat(gbp): GBP
+  Profile Editor module (description / services / hours)`) — squash-merged to
+  `main` as `07e1038`. CI green (platform-api tests + lint/typecheck + Netlify
+  preview). Migration `20260904120000_gbp_profile_edits.sql` **applied live**.
+  The module is inert until both `gbp_api_enabled` and `gbp_profile_enabled` are
+  on (both default False), so `main` ships it dark.
 - **PRD: Approved for build** (owner). Twelve grilling decisions folded in;
   recorded in the root `decisions.md` and ADR 0004.
 - **Sibling upgrade SHIPPED + MERGED:** the `gbp_audit` description-quality
   follow-up (**PR #1009**, on `main`) — the loop's real description trigger.
-- **BUILT (Phases 0–2), gated off.** On the build branch
-  `claude/gbp-profile-editor-build-hi2lpo`:
+- **What shipped (Phases 0–2), gated off:**
   - **Phase 0:** `gbp_profile_enabled` + the `gbp_profile_*` config; the verify
     script extended with a `--edit-test` (v1 `locations.get` read + a **no-op**
     `profile.description` patch round-trip that proves the write path with zero
@@ -41,17 +47,21 @@
 - **Flags:** both `gbp_api_enabled` and `gbp_profile_enabled` default False, so
   nothing is user-visible until both are on.
 
-## Before you start (branch + prerequisites)
+## Next action — owner/Railway activation (the build is done)
 
-- **Merge #1009 and #1008 first** (or branch off them). #1009 gives you
-  `gbp_audit.description_quality` (the loop trigger). #1008 carries this doc set +
-  the approved PRD. A fresh build branch off `main` after both merge is cleanest.
-- Develop on the branch your session was assigned; open a **draft PR** and let it
-  ride the drive-to-green PR watch.
-- **Phase 0 is a gate:** prove the write path on the **agency's own** GBP listing
-  (not a client's) before touching any client listing (decision Q9d).
+The whole module is merged and dark. The remaining step is operational and can't
+be done from the Claude Code sandbox (`developers.google.com` is egress-blocked):
 
-## Build plan (phases — full detail in PRD §4)
+1. From the **Railway PLATFORM shell**, re-verify the v1 field paths (see
+   Gotchas) and run `python scripts/verify_gbp_api_access.py --edit-test
+   locations/<agency>` against the **agency's own** listing — Phase 0 is a gate,
+   prove the write path there before any client listing (decision Q9d). Green =
+   auth + edit-right + field paths confirmed.
+2. Set `GBP_PROFILE_ENABLED=true` on PLATFORM (confirm `GBP_API_ENABLED=true`).
+   Both default False, so a fresh env still ships dark.
+3. Pilot on one client: draft → apply → confirm live on all three fields.
+
+## Build plan (phases — full detail in PRD §4) — ✅ Phases 0–2 BUILT + MERGED (#1011)
 
 1. **Phase 0 — read+write proof.** Extend `scripts/verify_gbp_api_access.py` with a
    `locations.get(readMask=…)` and an `--edit-test` `locations.patch` round-trip on
