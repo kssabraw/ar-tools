@@ -170,6 +170,58 @@ class ProfileLintResponse(BaseModel):
     warnings: list[dict[str, str]] = []
 
 
+class GbpAuditCheck(BaseModel):
+    key: str
+    label: str
+    ok: bool
+    detail: str = ""
+
+
+class GbpAuditRecommendation(BaseModel):
+    key: str
+    severity: str  # critical | high | medium | low
+    title: str
+    detail: str
+    target: Optional[str] = None  # profile | dashboard | reviews
+
+
+class GbpReviewGap(BaseModel):
+    client: int
+    competitor_median: int
+    deficit: int
+
+
+class GbpDescriptionQuality(BaseModel):
+    ok: bool = False
+    length: int = 0
+    issues: list[str] = []
+
+
+class GbpAuditResponse(BaseModel):
+    """Profile-health audit of the live listing + competitor context."""
+
+    access_status: Optional[str] = None  # ok | suspended | no_access
+    score: Optional[int] = None
+    band: Optional[str] = None           # strong | fair | needs_work
+    checks: list[GbpAuditCheck] = []
+    recommendations: list[GbpAuditRecommendation] = []
+    category_gaps: list[str] = []
+    review_gap: Optional[GbpReviewGap] = None
+    description_quality: Optional[GbpDescriptionQuality] = None
+    competitor_count: int = 0
+
+
+class GbpChangeEvent(BaseModel):
+    at: Optional[str] = None
+    source: str                    # team | external
+    kind: str                      # edit | outside_change | suspended | access_lost | restored
+    field: Optional[str] = None
+    detail: str = ""
+    who: Optional[str] = None
+    edit_source: Optional[str] = None  # manual | ai | strategist (team edits)
+    status: Optional[str] = None
+
+
 class GbpMonitorStatus(BaseModel):
     """Profile-monitor state for one location (suspension / out-of-band change
     watch). ``monitored`` is False until the first daily check establishes a

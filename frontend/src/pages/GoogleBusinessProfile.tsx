@@ -1,10 +1,11 @@
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, MapPin, BarChart3, Building2, Megaphone } from 'lucide-react'
+import { ArrowLeft, MapPin, BarChart3, Building2, Megaphone, ClipboardCheck } from 'lucide-react'
 import { api } from '../lib/api'
 import { ConnectionBar } from '../components/gbp/GbpConnection'
 import { GbpMetrics } from './GbpMetrics'
 import { GbpProfileBody } from './GbpProfile'
+import { GbpAuditBody } from './GbpAudit'
 import { GbpWorkspace } from './GbpPosts'
 import type { Client } from '../lib/types'
 
@@ -16,11 +17,12 @@ import type { Client } from '../lib/types'
 
 const ACCENT = '#1a73e8' // Google blue — signals the shared GBP surface.
 
-type Tab = 'insights' | 'profile' | 'posts'
+type Tab = 'insights' | 'profile' | 'posts' | 'audit'
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: 'insights', label: 'Insights', icon: <BarChart3 size={15} /> },
   { key: 'profile', label: 'Profile', icon: <Building2 size={15} /> },
   { key: 'posts', label: 'Posts', icon: <Megaphone size={15} /> },
+  { key: 'audit', label: 'Audit', icon: <ClipboardCheck size={15} /> },
 ]
 
 // Back-compat: the old per-tool routes (/gbp-posts, /gbp-profile, /gbp-metrics)
@@ -85,6 +87,8 @@ export function GoogleBusinessProfile() {
         <GbpMetrics key="insights" clientId={clientId} embedded />
       ) : tab === 'profile' ? (
         <GbpProfileBody key="profile" clientId={clientId} embedded />
+      ) : tab === 'audit' ? (
+        <GbpAuditBody key="audit" clientId={clientId} embedded />
       ) : (
         <GbpWorkspace key="posts" clientId={clientId} embedded />
       )}

@@ -20,6 +20,8 @@ from fastapi import APIRouter, Depends, Query
 
 from middleware.auth import require_auth, require_staff
 from models.gbp_profile import (
+    GbpAuditResponse,
+    GbpChangeEvent,
     GbpMonitorStatus,
     GbpProfileEdit,
     GbpProfileJob,
@@ -35,6 +37,7 @@ from models.gbp_profile import (
 from models.gbp_posts import GbpLocationOption
 from services import gbp_monitor
 from services import gbp_profile_api as api
+from services import gbp_profile_audit as audit_svc
 from services import gbp_profile_service as svc
 from services.freeze import assert_not_frozen
 
@@ -139,6 +142,26 @@ async def refresh_edit(client_id: UUID, edit_id: UUID, auth: dict = Depends(requ
     """Manually kick the reconciler for a pending_review edit (Refresh status)."""
     job_id = svc.enqueue_sync(str(edit_id), str(client_id))
     return GbpProfileJob(job_id=job_id)
+
+
+# ── audit (profile health + change trail) ─────────────────────────────────────
+@router.get("/clients/{client_id}/gbp/profile/audit", response_model=GbpAuditResponse)
+async def profile_audit(
+    client_id: UUID, location_row_id: UUID = Query(...), auth: dict = Depends(require_auth)
+):
+    """Profile-health audit of the LIVE listing: a 0–100 score, per-check
+    breakdown, and prioritized recommendations (deep-linking into the editor),
+    grounded in the live reads + captured competitor context."""
+    return await audit_svc.run_audit(str(client_id), str(location_row_id))
+
+
+@router.get("/clients/{client_id}/gbp/profile/audit/history", response_model=list[GbpChangeEvent])
+async def profile_audit_history(
+    client_id: UUID, location_row_id: UUID = Query(...), auth: dict = Depends(require_auth)
+):
+    """The change trail for one location: the team's own applied edits merged with
+    the outside / Google changes the monitor detected, newest first."""
+    return audit_svc.get_history(str(client_id), str(location_row_id))
 
 
 # ── profile monitor (suspension / out-of-band change watch) ───────────────────

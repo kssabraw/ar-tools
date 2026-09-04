@@ -194,6 +194,16 @@ def _notify(client_id: str, kind: str, title: str, summary: str, severity: str, 
         logger.info("gbp_monitor.notify_failed", extra={"error": str(exc)[:200]})
 
 
+def _log(client_id: str, location_row_id: str, kind: str, detail=None) -> None:
+    """Append the detected event to the Audit tab's change trail. Best-effort."""
+    try:
+        from services import gbp_profile_audit  # lazy
+
+        gbp_profile_audit.log_change(client_id, location_row_id, kind, detail)
+    except Exception as exc:  # noqa: BLE001 — trail is best-effort
+        logger.info("gbp_monitor.log_failed", extra={"error": str(exc)[:200]})
+
+
 async def run_monitor_job(job: dict) -> None:
     """Handler for job_type='gbp_profile_monitor'. Reads one location, diffs
     against its baseline, and alerts on a suspension/access-loss transition or an
@@ -256,6 +266,7 @@ async def run_monitor_job(job: dict) -> None:
             _notify(client_id, "gbp_profile_restored", "GBP access restored",
                     f"{client_name}'s Google Business Profile is verified/accessible again.",
                     "info", location_row_id)
+            _log(client_id, location_row_id, "restored")
         if changes:
             fields = ", ".join(c["label"] for c in changes)
             _notify(
@@ -264,6 +275,7 @@ async def run_monitor_job(job: dict) -> None:
                 "(Google or an outside source). Review it in the Profile editor.",
                 "warning", location_row_id,
             )
+            _log(client_id, location_row_id, "outside_change", {"fields": [c["field"] for c in changes]})
             upsert["last_change"] = {"fields": [c["field"] for c in changes]}
             upsert["last_change_at"] = "now()"
         _upsert_baseline(upsert)
@@ -304,3 +316,4 @@ def _handle_access(base: Optional[dict], access: str, client_id: str, location_r
                        "account (removed, unverified, or access revoked). Check the GBP dashboard / connection.")
         _notify(client_id, "gbp_profile_suspended", "GBP listing suspended / access lost", summary,
                 "critical", location_row_id)
+        _log(client_id, location_row_id, "suspended" if access == "suspended" else "access_lost")
