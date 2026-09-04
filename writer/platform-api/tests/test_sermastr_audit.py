@@ -49,6 +49,19 @@ def test_proposal_kind_defaults_general():
     assert sermastr_audit.proposal_kind({"sop_citation": ""}) == "general"
 
 
+def test_proposal_kind_strips_md_extension():
+    # A citation with the ".md" extension collapses to the same learning key as
+    # one without it, so a playbook's track record isn't split in two.
+    assert sermastr_audit.proposal_kind(
+        {"sop_citation": "Link_Building_Recipe_Engine.md §4"}
+    ) == "Link_Building_Recipe_Engine"
+    assert sermastr_audit.proposal_kind({"sop_citation": "_ORCHESTRATOR.md"}) == "_ORCHESTRATOR"
+    # Case-insensitive on the extension; a non-.md token is untouched.
+    assert sermastr_audit.proposal_kind({"sop_citation": "Rank_Drop_Mitigation_SOP_Maps.MD"}) \
+        == "Rank_Drop_Mitigation_SOP_Maps"
+    assert sermastr_audit.proposal_kind({"sop_citation": "AIO_AEO_SOP"}) == "AIO_AEO_SOP"
+
+
 def test_proposal_row_projection():
     row = sermastr_audit.proposal_row(
         "rev1", 2, "c1", "Acme", "scheduled",
