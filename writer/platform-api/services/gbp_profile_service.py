@@ -292,6 +292,18 @@ def _set_edit(edit_id: str, fields: dict) -> None:
     get_supabase().table("gbp_profile_edits").update(fields).eq("id", edit_id).execute()
 
 
+async def _refresh_monitor_baseline(location_row_id: str, client_id: str, field: str) -> None:
+    """After OUR apply of ``field`` goes live, advance that field in the profile
+    monitor's baseline so it doesn't flag the change as out-of-band. Best-effort
+    (lazy import to avoid a module cycle) — never affects the apply outcome."""
+    try:
+        from services import gbp_monitor  # lazy — gbp_monitor imports this module
+
+        await gbp_monitor.refresh_baseline(location_row_id, client_id, field)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("gbp_profile.monitor_refresh_failed", extra={"error": str(exc)[:200]})
+
+
 def _pending_or_terminal(field: str, proposed, live_field, metadata: dict) -> dict:
     """Decide an applied edit's post-patch state from the read-back. Pure.
 
@@ -353,6 +365,8 @@ async def run_apply_job(job: dict) -> None:
             update["error"] = "google_rejected_or_reverted"
         _set_edit(edit_id, update)
         _settle_job(job["id"], {"edit_id": edit_id, "state": outcome["status"]})
+        if outcome["status"] == "applied":
+            await _refresh_monitor_baseline(edit["location_row_id"], client_id, field)
         if outcome["status"] == "rejected":
             _notify(client_id, "gbp_profile_rejected", "GBP profile edit rejected",
                     f"Google rejected the {field} edit.", "warning", edit_id, field)
@@ -460,6 +474,7 @@ async def run_sync_job(job: dict) -> None:
             _set_edit(edit_id, {"status": "applied", "google_pending": False,
                                 "next_sync_at": None, "error": None})
             _settle_job(job["id"], {"edit_id": edit_id, "state": "applied"})
+            await _refresh_monitor_baseline(edit["location_row_id"], client_id, field)
             logger.info("gbp_profile.reconciled_applied", extra={"edit_id": edit_id})
             return
         if not parsed["metadata"].get("has_pending_edits"):

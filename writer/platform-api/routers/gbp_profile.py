@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 
 from middleware.auth import require_auth, require_staff
 from models.gbp_profile import (
+    GbpMonitorStatus,
     GbpProfileEdit,
     GbpProfileJob,
     GbpProfileJobsStatusRequest,
@@ -32,6 +33,7 @@ from models.gbp_profile import (
     ServiceTypesResponse,
 )
 from models.gbp_posts import GbpLocationOption
+from services import gbp_monitor
 from services import gbp_profile_api as api
 from services import gbp_profile_service as svc
 from services.freeze import assert_not_frozen
@@ -136,6 +138,25 @@ async def discard_edit(client_id: UUID, edit_id: UUID, auth: dict = Depends(requ
 async def refresh_edit(client_id: UUID, edit_id: UUID, auth: dict = Depends(require_staff)):
     """Manually kick the reconciler for a pending_review edit (Refresh status)."""
     job_id = svc.enqueue_sync(str(edit_id), str(client_id))
+    return GbpProfileJob(job_id=job_id)
+
+
+# ── profile monitor (suspension / out-of-band change watch) ───────────────────
+@router.get("/clients/{client_id}/gbp/profile/monitor", response_model=GbpMonitorStatus)
+async def monitor_status(
+    client_id: UUID, location_row_id: UUID = Query(...), auth: dict = Depends(require_auth)
+):
+    """The monitor state for one location: access (ok / suspended / no_access),
+    when it was last checked, and the last out-of-band change detected."""
+    return gbp_monitor.get_monitor_status(str(client_id), str(location_row_id))
+
+
+@router.post("/clients/{client_id}/gbp/profile/monitor/check", response_model=GbpProfileJob)
+async def monitor_check(
+    client_id: UUID, location_row_id: UUID = Query(...), auth: dict = Depends(require_staff)
+):
+    """Run a monitor check now (reads the live listing + diffs the baseline)."""
+    job_id = gbp_monitor.enqueue_check(str(client_id), str(location_row_id))
     return GbpProfileJob(job_id=job_id)
 
 

@@ -168,3 +168,16 @@ class ProfileLintResponse(BaseModel):
     """Advisory description linter — warnings only, never a gate."""
 
     warnings: list[dict[str, str]] = []
+
+
+class GbpMonitorStatus(BaseModel):
+    """Profile-monitor state for one location (suspension / out-of-band change
+    watch). ``monitored`` is False until the first daily check establishes a
+    baseline; ``enabled`` reflects the gbp_profile_monitor flag."""
+
+    monitored: bool = False
+    enabled: bool = False
+    access_status: Optional[str] = None          # ok | suspended | no_access
+    checked_at: Optional[str] = None
+    last_change: Optional[dict[str, Any]] = None  # {fields: [...]} of the last out-of-band change
+    last_change_at: Optional[str] = None

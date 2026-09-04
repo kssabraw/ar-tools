@@ -305,6 +305,79 @@ def test_parse_location_fields():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Pure: profile monitor snapshot / diff / access-status
+# ═══════════════════════════════════════════════════════════════════════════
+_MONITOR_LIVE = {
+    **_LIVE,
+    "websiteUri": "https://fcr.example.com",
+    "phoneNumbers": {"primaryPhone": "(813) 555-1212", "additionalPhones": ["813-555-3434"]},
+    "storefrontAddress": {"addressLines": ["1 Main St"], "locality": "Tampa",
+                          "administrativeArea": "FL", "postalCode": "33601", "regionCode": "US"},
+    "openInfo": {"status": "OPEN"},
+    "metadata": {"hasPendingEdits": False, "hasVoiceOfMerchant": True},
+}
+
+
+def test_monitor_snapshot_extracts_fields():
+    snap = api.monitor_snapshot(_MONITOR_LIVE)
+    assert snap["title"] == "First Class Roofing"
+    assert snap["description"] == "We restore roofs."
+    assert snap["categories"] == ["gcid:roofing_contractor", "gcid:gutter"]
+    assert snap["website"] == "https://fcr.example.com"
+    assert snap["phone"] == {"primary": "(813) 555-1212", "additional": ["813-555-3434"]}
+    assert snap["address"]["locality"] == "Tampa" and snap["address"]["country"] == "US"
+    assert snap["open_status"] == "OPEN"
+    assert snap["has_voice_of_merchant"] is True
+
+
+def test_snapshot_access_status():
+    assert api.snapshot_access_status({"has_voice_of_merchant": True}) == "ok"
+    assert api.snapshot_access_status({"has_voice_of_merchant": None}) == "ok"  # unknown never alarms
+    assert api.snapshot_access_status({"has_voice_of_merchant": False}) == "suspended"
+
+
+def test_access_status_for_code():
+    assert api.access_status_for_code("gbp_location_not_found") == "no_access"
+    assert api.access_status_for_code("gbp_listing_read_only") == "no_access"
+    assert api.access_status_for_code("gbp_listing_unverified") == "no_access"
+    # Transient / quota / api-disabled must NOT flip state.
+    assert api.access_status_for_code("gbp_quota_not_granted") is None
+    assert api.access_status_for_code("gbp_api_not_enabled") is None
+    assert api.access_status_for_code("unknown_error") is None
+
+
+def test_diff_snapshot_no_change():
+    snap = api.monitor_snapshot(_MONITOR_LIVE)
+    assert api.diff_snapshot(snap, dict(snap)) == []
+
+
+def test_diff_snapshot_detects_content_changes():
+    base = api.monitor_snapshot(_MONITOR_LIVE)
+    # Description + phone + hours changed out of band.
+    live = dict(base)
+    live["description"] = "We do roofs and gutters now."
+    live["phone"] = {"primary": "(813) 555-9999", "additional": []}
+    live["hours"] = {"regular": [{"day": 0, "open_24": True, "periods": []}], "special": []}
+    fields = {c["field"] for c in api.diff_snapshot(base, live)}
+    assert fields == {"description", "phone", "hours"}
+
+
+def test_diff_snapshot_ignores_voice_of_merchant():
+    # VoM drives access status, not the out-of-band content change list.
+    base = api.monitor_snapshot(_MONITOR_LIVE)
+    live = dict(base)
+    live["has_voice_of_merchant"] = False
+    assert api.diff_snapshot(base, live) == []
+
+
+def test_diff_snapshot_services_change():
+    base = api.monitor_snapshot(_MONITOR_LIVE)
+    live = dict(base)
+    live["services"] = [{"kind": "structured", "service_type_id": "job_type_id:new", "label": "New"}]
+    assert {c["field"] for c in api.diff_snapshot(base, live)} == {"services"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Pure: re-read-and-diff
 # ═══════════════════════════════════════════════════════════════════════════
 def test_diff_description_whitespace_insensitive():
@@ -446,7 +519,7 @@ class _Query:
     def __init__(self, table, rows):
         self.table, self.rows = table, rows
         self._filters, self._limit = [], None
-        self._insert = self._update = None
+        self._insert = self._update = self._upsert = None
         self._delete = False
 
     def select(self, *_a, **_k):
@@ -485,6 +558,9 @@ class _Query:
     def update(self, upd):
         self._update = upd; return self
 
+    def upsert(self, row, on_conflict=None):
+        self._upsert = (row, on_conflict or "id"); return self
+
     def delete(self):
         self._delete = True; return self
 
@@ -507,6 +583,15 @@ class _Query:
                 # Mirror the DB's now() default → a concrete timestamp.
                 r.update({k: ("t" if v == "now()" else v) for k, v in self._update.items()})
             return type("R", (), {"data": [dict(r) for r in hit]})()
+        if self._upsert is not None:
+            row, key = self._upsert
+            row = {k: ("t" if v == "now()" else v) for k, v in row.items()}
+            existing = next((r for r in self.rows if r.get(key) == row.get(key)), None)
+            if existing:
+                existing.update(row)
+                return type("R", (), {"data": [dict(existing)]})()
+            self.rows.append(row)
+            return type("R", (), {"data": [dict(row)]})()
         if self._delete:
             hit = self._matching()
             for r in hit:
@@ -517,7 +602,8 @@ class _Query:
 
 class _FakeSupabase:
     def __init__(self):
-        self.tables = {"gbp_profile_edits": [], "gbp_locations": [], "async_jobs": [], "clients": []}
+        self.tables = {"gbp_profile_edits": [], "gbp_locations": [], "async_jobs": [],
+                       "clients": [], "gbp_profile_snapshots": []}
 
     def table(self, name):
         return _Query(name, self.tables.setdefault(name, []))
@@ -644,3 +730,121 @@ def test_enqueue_due_syncs_selects_due_and_skips_active(fake, monkeypatch):
 
 def test_enqueue_due_syncs_noop_when_disabled(fake):
     assert svc.enqueue_due_gbp_profile_syncs() == 0  # flags default off in the fixture
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Flow tests: the profile monitor (suspension + out-of-band change detection)
+# ═══════════════════════════════════════════════════════════════════════════
+from services import gbp_monitor as mon  # noqa: E402
+
+
+def _enable_monitor(monkeypatch):
+    for flag in ("gbp_api_enabled", "gbp_profile_enabled", "gbp_profile_monitor_enabled"):
+        monkeypatch.setattr(mon.settings, flag, True)
+
+
+def _capture_alerts(monkeypatch):
+    alerts: list[dict] = []
+    monkeypatch.setattr(
+        mon, "_notify",
+        lambda client_id, kind, title, summary, severity, location_row_id:
+            alerts.append({"kind": kind, "severity": severity}),
+    )
+    return alerts
+
+
+def _seed_baseline(fake, access="ok", snapshot=None):
+    fake.tables["gbp_profile_snapshots"].append({
+        "location_row_id": "loc-1", "client_id": "c-1",
+        "snapshot": snapshot if snapshot is not None else api.monitor_snapshot(_MONITOR_LIVE),
+        "access_status": access,
+    })
+
+
+def _run_monitor(monkeypatch, fake, live=None, raise_exc=None):
+    monkeypatch.setattr(mon, "get_supabase", lambda: fake)
+    if raise_exc is not None:
+        monkeypatch.setattr(mon.api, "get_location", lambda *a, **k: (_ for _ in ()).throw(raise_exc))
+    else:
+        monkeypatch.setattr(mon.api, "get_location", lambda *a, **k: dict(live or _MONITOR_LIVE))
+    asyncio.run(mon.run_monitor_job({"id": "jm", "payload": {"client_id": "c-1", "location_row_id": "loc-1"}}))
+
+
+def test_monitor_first_run_establishes_baseline_no_alert(fake, monkeypatch):
+    _enable_monitor(monkeypatch)
+    alerts = _capture_alerts(monkeypatch)
+    _run_monitor(monkeypatch, fake)  # no baseline yet
+    snaps = fake.tables["gbp_profile_snapshots"]
+    assert len(snaps) == 1 and snaps[0]["access_status"] == "ok"
+    assert alerts == []  # first run is a silent baseline
+
+
+def test_monitor_detects_out_of_band_change(fake, monkeypatch):
+    _enable_monitor(monkeypatch)
+    _seed_baseline(fake)
+    alerts = _capture_alerts(monkeypatch)
+    changed = {**_MONITOR_LIVE, "profile": {"description": "Someone else edited this."}}
+    _run_monitor(monkeypatch, fake, live=changed)
+    assert [a["kind"] for a in alerts] == ["gbp_profile_changed"]
+    # Baseline advanced, so the same change won't re-alert next time.
+    assert fake.tables["gbp_profile_snapshots"][0]["snapshot"]["description"] == "Someone else edited this."
+
+
+def test_monitor_no_change_no_alert(fake, monkeypatch):
+    _enable_monitor(monkeypatch)
+    _seed_baseline(fake)
+    alerts = _capture_alerts(monkeypatch)
+    _run_monitor(monkeypatch, fake)  # live == baseline
+    assert alerts == []
+
+
+def test_monitor_alerts_on_suspension_transition(fake, monkeypatch):
+    _enable_monitor(monkeypatch)
+    _seed_baseline(fake)
+    alerts = _capture_alerts(monkeypatch)
+    suspended = {**_MONITOR_LIVE, "metadata": {"hasVoiceOfMerchant": False}}
+    _run_monitor(monkeypatch, fake, live=suspended)
+    assert [a["kind"] for a in alerts] == ["gbp_profile_suspended"]
+    assert fake.tables["gbp_profile_snapshots"][0]["access_status"] == "suspended"
+    # A second check while still suspended does NOT re-alert (transition-based).
+    alerts2 = _capture_alerts(monkeypatch)
+    _run_monitor(monkeypatch, fake, live=suspended)
+    assert alerts2 == []
+
+
+def test_monitor_read_failure_access_lost_alerts_transient_skips(fake, monkeypatch):
+    from fastapi import HTTPException
+
+    _enable_monitor(monkeypatch)
+    _seed_baseline(fake)
+    # 404 → access lost → alert + no_access.
+    alerts = _capture_alerts(monkeypatch)
+    _run_monitor(monkeypatch, fake, raise_exc=HTTPException(status_code=502, detail="gbp_location_not_found"))
+    assert [a["kind"] for a in alerts] == ["gbp_profile_suspended"]
+    assert fake.tables["gbp_profile_snapshots"][0]["access_status"] == "no_access"
+    # Reset, then a transient/quota failure → skip (no alert, no state flip).
+    fake.tables["gbp_profile_snapshots"][0]["access_status"] = "ok"
+    alerts2 = _capture_alerts(monkeypatch)
+    _run_monitor(monkeypatch, fake, raise_exc=HTTPException(status_code=502, detail="gbp_quota_not_granted"))
+    assert alerts2 == []
+    assert fake.tables["gbp_profile_snapshots"][0]["access_status"] == "ok"
+
+
+def test_monitor_alerts_recovery_after_suspension(fake, monkeypatch):
+    _enable_monitor(monkeypatch)
+    _seed_baseline(fake, access="suspended")
+    alerts = _capture_alerts(monkeypatch)
+    _run_monitor(monkeypatch, fake)  # live is ok again
+    assert [a["kind"] for a in alerts] == ["gbp_profile_restored"]
+    assert fake.tables["gbp_profile_snapshots"][0]["access_status"] == "ok"
+
+
+def test_monitor_noop_when_disabled(fake, monkeypatch):
+    # Module enabled but monitor flag off → job no-ops (no baseline, no alert).
+    monkeypatch.setattr(mon.settings, "gbp_api_enabled", True)
+    monkeypatch.setattr(mon.settings, "gbp_profile_enabled", True)
+    monkeypatch.setattr(mon.settings, "gbp_profile_monitor_enabled", False)
+    alerts = _capture_alerts(monkeypatch)
+    monkeypatch.setattr(mon, "get_supabase", lambda: fake)
+    asyncio.run(mon.run_monitor_job({"id": "jm", "payload": {"client_id": "c-1", "location_row_id": "loc-1"}}))
+    assert alerts == [] and fake.tables["gbp_profile_snapshots"] == []

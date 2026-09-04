@@ -602,6 +602,7 @@ async def gsc_scheduler() -> None:
         enqueue_due_gbp_scheduled_posts,
     )
     from services.gbp_profile_service import enqueue_due_gbp_profile_syncs
+    from services.gbp_monitor import enqueue_due_gbp_profile_monitor
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
     from services.freeze import enqueue_due_freeze_checks
@@ -697,6 +698,9 @@ async def gsc_scheduler() -> None:
                 _safe("syndication_scans", enqueue_due_syndication_scans)
                 # Daily Freeze Protocol check (homepage deindex detection).
                 _safe("freeze_checks", enqueue_due_freeze_checks)
+                # Daily GBP profile monitor (suspension / out-of-band change
+                # detection; no-op until gbp_profile_monitor_enabled).
+                _safe("gbp_profile_monitor", enqueue_due_gbp_profile_monitor)
                 # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
                 _safe("episode_sync", run_episode_sync)
                 # Daily chronic-emergency escalation: re-surface a campaign goal

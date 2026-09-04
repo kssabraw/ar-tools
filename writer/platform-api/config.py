@@ -623,12 +623,17 @@ class Settings(BaseSettings):
     # forbids a sleep-poll, so each check enqueues the next with a future
     # scheduled_at (the leadoff_geocode pattern).
     gbp_profile_sync_backoff: list[int] = [120, 1800, 7200, 43200, 86400]
-    # The services editor offers ONLY Google-defined service types (VAs pick from
-    # the approved list for the listing's categories — no free-form ADD). Those
-    # come from categories.batchGet, which is region/language-scoped; the suite is
-    # US/English by default. Overridable per env if a client's market differs.
+    # The services editor offers Google-defined service types picked from the
+    # listing's categories (via categories.batchGet, which is region/language-
+    # scoped; the suite is US/English by default) alongside operator-authored
+    # custom services. Overridable per env if a client's market differs.
     gbp_profile_service_region_code: str = "US"
     gbp_profile_service_language_code: str = "en"
+    # Profile monitor: a daily read of each 'ok' listing that alerts on a
+    # suspension / access loss or an out-of-band profile change (Google or an
+    # outside source). Alert-only (never auto-freezes/reverts). Ships dark on top
+    # of gbp_profile_enabled; flip on PLATFORM to activate (like freeze_check).
+    gbp_profile_monitor_enabled: bool = False
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may
