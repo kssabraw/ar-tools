@@ -21,8 +21,12 @@ const WINDOWS: [number, string][] = [
 // daily ingest) and shows period-over-period growth per metric plus a daily
 // trend. When no location is verified yet, it surfaces the connect flow
 // (resolve → register → verify → backfill) that starts ingest.
-export function GbpMetrics() {
-  const { id: clientId } = useParams<{ id: string }>()
+// Reusable standalone (route) and embedded in the unified Google Business
+// Profile module. `embedded` hides the back-link + page title (the module
+// supplies the header); the window selector + dashboard stay.
+export function GbpMetrics({ clientId: clientIdProp, embedded }: { clientId?: string; embedded?: boolean } = {}) {
+  const params = useParams<{ id: string }>()
+  const clientId = clientIdProp ?? params.id
   const navigate = useNavigate()
   // Not `window` — that shadows the global and would break any window.* call.
   const [windowDays, setWindowDays] = useState(30)
@@ -65,15 +69,17 @@ export function GbpMetrics() {
   }
 
   return (
-    <div style={{ padding: 32, maxWidth: 1080 }}>
-      <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
-        <ArrowLeft size={14} /> Back to Workspace
-      </button>
+    <div style={{ padding: embedded ? 0 : 32, maxWidth: 1080 }}>
+      {!embedded && (
+        <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
+          <ArrowLeft size={14} /> Back to Workspace
+        </button>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, marginBottom: 18, flexWrap: 'wrap' }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>GBP Insights</h1>
-          <p style={{ fontSize: 13, color: '#94a3b8', margin: '4px 0 0', maxWidth: 640 }}>
+          {!embedded && <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>GBP Insights</h1>}
+          <p style={{ fontSize: 13, color: '#94a3b8', margin: embedded ? 0 : '4px 0 0', maxWidth: 640 }}>
             Google Business Profile performance for {client?.name ?? 'this client'} — profile views, calls,
             website clicks, direction requests &amp; messages over time, from the Business Profile Performance API.
           </p>
