@@ -2379,3 +2379,36 @@ export interface FeedbackItem {
 export interface FeedbackItemDetail extends FeedbackItem {
   comments: FeedbackComment[]
 }
+
+// Admin Activity Report — agency-wide deliverables analytics
+// (routers/deliverables_analytics.py → services/deliverables_analytics.py).
+export interface ActivityReportTypeRow {
+  type: string
+  label: string
+  group: string
+  count: number
+}
+export interface ActivityReportClientRow {
+  client_id: string | null
+  client_name: string
+  count: number
+}
+export interface ActivityReportMemberRow {
+  member: string
+  count: number
+}
+export interface ActivityReportDay {
+  date: string
+  count: number
+}
+export interface ActivityReport {
+  from: string
+  to: string
+  client_id: string | null
+  total: number
+  truncated: boolean
+  by_type: ActivityReportTypeRow[]
+  by_client: ActivityReportClientRow[]
+  by_member: ActivityReportMemberRow[]
+  daily: ActivityReportDay[]
+}
