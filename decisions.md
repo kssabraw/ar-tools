@@ -249,3 +249,58 @@ or output, DORA gets notified and updates the module's tutorial page if needed")
 from the platform, or a CI-side LLM pass — not worth it until the in-app sync proves accurate);
 a per-guide "freeze" toggle to exempt a hand-curated guide from DORA's rewrites.
 
+---
+
+## GBP Profile Editor module
+
+**Status: APPROVED FOR BUILD** (owner, 2026-09-04). PRD: `docs/modules/gbp-profile-editor-prd-v1_0.md`
+(now Approved). The no-auto-apply divergence from GBP Posts is ADR
+`docs/adr/0004-gbp-profile-edits-never-auto-applied.md`. Twelve decisions from the 2026-09-04
+grilling session, folded into the PRD:
+
+**Decided.**
+- **Justification = absorbing manual GBP dashboard work** (editing description/services/hours by
+  hand today). The `gbp_audit` "closed loop" is a genuine but NARROW bonus, not the reason — a
+  code audit found only `description_quality` (built in #1009) and hours-missing map to a v1
+  lever; category and review map to out-of-scope surfaces, and a "service gap" finding never
+  existed. PRD §1 rewritten to say so; do not sell a four-way loop the diagnosis side can't feed.
+- **All three fields ship, sequenced description → services → hours.** Hours is manual-only (the
+  AI never drafts it, GBP-suspension risk) behind an extra "confirm the values you typed" step.
+- **No auto-apply, ever, in v1** (ADR 0004) — the deliberate divergence from Posts (which allows
+  opt-in auto-publish). Every edit is drafted → reviewed → applied on an explicit click.
+- **Apply re-reads and diffs** against the draft snapshot; if the live value drifted out-of-band
+  since drafting, it aborts into a `live_changed` re-review state rather than clobbering an unseen
+  dashboard edit.
+- **Pending-review reconciler built now** — a new `gbp_profile_sync` async job, self-continuing
+  per-edit (the `leadoff_geocode` pattern, since the 30-min reaper forbids a sleep-poll), bounded
+  backoff +2m/+30m/+2h/+12h/+24h → give up; terminal `applied`/`rejected`/gives-up-stays-
+  `pending_review` (+ manual refresh). Distinct from the Phase-3 periodic drift sweep.
+- **Per-location, one at a time** via the existing `RegisterLocations` picker. No bulk / no
+  cross-location apply.
+- **Strategist loop = BOTH a SerMaStr action (`update_gbp_profile`, staged + reply-yes) AND an
+  Action-Plan producer** — but honest: both only STAGE a draft into the review queue, never apply
+  (consistent with no-auto-apply + the strategist's propose-never-execute contract). The
+  automatic producer fires on `description_quality` + hours-missing only; services has no auto
+  trigger until a service-gap check lands.
+- **Free-form services**, operator picks the `categoryId` per service from the listing's
+  categories (Apply blocked until every service has one); for AI-drafted services the AI SUGGESTS
+  a category and the operator confirms/overrides.
+- **Services draft grounds on `clients.gbp` categories + silo plans** (best-effort/degrading).
+  Keyword-research + page-inventory mining deferred to Phase 2.5.
+- **A client-side content-policy linter for the description** (ALL-CAPS, promotional phrasing,
+  URLs/phone, etc.) that is ADVISORY warnings only — never a gate. Google's `rejected` verdict +
+  the reconciler stay the source of truth.
+- Reuses the live GBP connection layer wholesale (verified against the code 2026-09-04, PRD §12):
+  `gbp_auth` / `gbp_locations_service._build("mybusinessbusinessinformation", creds)` (the
+  v1-hardcoded `_build`, NOT the performance-service one) / `gbp_locations` registry. `locations.get`
+  and `locations.patch` are the genuinely new write path.
+- The `gbp_audit` description-quality follow-up (the loop's real trigger) is **BUILT** — PR #1009,
+  `description_quality: {ok, length, issues[]}`, wired into `reopt_planner.build_gbp_action`,
+  `strategy_digest._prov_gbp_audit`, and the `MapsGbpAuditResponse` model.
+
+**Deferred.** Structured services + AI-assigned categories; a real `service_gap` check in
+`gbp_audit` (needs this module's live `serviceItems` read — building it earlier = a throwaway
+capture path); categories + attributes editing; scheduled periodic drift detection; a Client
+Report "profile updates" line + strategy-digest `gbp_profile` provider; keyword-research/
+page-inventory grounding for the services draft (Phase 2.5).
+
