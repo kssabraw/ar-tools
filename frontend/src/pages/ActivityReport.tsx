@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { BarChart3, RefreshCw } from 'lucide-react'
+import { BarChart3, RefreshCw, Download, X } from 'lucide-react'
 import { api } from '../lib/api'
 import type { ActivityReport, ActivityReportDay } from '../lib/types'
+
+interface ClientListItem { id: string; name: string }
 
 // Admin Activity Report — agency-wide count of PRODUCED deliverables (completed
 // pages, live GBP posts, completed task work, reports, scans) broken down by
@@ -36,23 +38,82 @@ function qs(params: Record<string, string>): string {
   return s ? `?${s}` : ''
 }
 
+// ── CSV export (client-side; the real app allows <a download>) ────────────────
+function csvCell(v: string | number): string {
+  const s = String(v)
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+}
+
+function buildCsv(data: ActivityReport, clientLabel: string, cmp: boolean): string {
+  const lines: string[] = []
+  lines.push(['Activity Report'].map(csvCell).join(','))
+  lines.push(['Range', data.from, data.to].map(csvCell).join(','))
+  if (cmp && data.prev_from) lines.push(['Previous period', data.prev_from, data.prev_to ?? ''].map(csvCell).join(','))
+  lines.push(['Client', clientLabel].map(csvCell).join(','))
+  lines.push(['Total', data.total, ...(cmp ? ['Prev', data.prev_total, 'Delta', data.total_delta] : [])].map(csvCell).join(','))
+  lines.push('')
+  const header = ['Breakdown', 'Name', 'Group', 'Count', ...(cmp ? ['Previous', 'Delta'] : [])]
+  lines.push(header.map(csvCell).join(','))
+  for (const r of data.by_type) {
+    lines.push(['Type', r.label, r.group, r.count, ...(cmp ? [r.prev_count, r.delta] : [])].map(csvCell).join(','))
+  }
+  for (const r of data.by_client) {
+    lines.push(['Client', r.client_name, '', r.count, ...(cmp ? [r.prev_count, r.delta] : [])].map(csvCell).join(','))
+  }
+  for (const r of data.by_member) {
+    lines.push(['Member', r.member, '', r.count, ...(cmp ? [r.prev_count, r.delta] : [])].map(csvCell).join(','))
+  }
+  return lines.join('\n')
+}
+
+function csvFilename(from: string, to: string, clientLabel: string | null): string {
+  const c = clientLabel ? '_' + clientLabel.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') : ''
+  return `activity-report_${from}_${to}${c}.csv`
+}
+
+function downloadCsv(filename: string, text: string): void {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 export function ActivityReport() {
   const [preset, setPreset] = useState('30d')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
   const [compare, setCompare] = useState(true)
+  const [clientId, setClientId] = useState('')  // '' = all clients; else drilled into one
 
   const active = PRESETS.find((p) => p.key === preset)
   const from = preset === 'custom' ? customFrom : active?.from() ?? daysAgo(29)
   const to = preset === 'custom' ? customTo : active?.to() ?? isoDay(new Date())
   const rangeValid = !!from && !!to
 
+  const { data: clients } = useQuery<ClientListItem[]>({
+    queryKey: ['clients'],
+    queryFn: () => api.get<ClientListItem[]>('/clients'),
+    staleTime: 5 * 60_000,
+  })
+  const clientName = useMemo(() => {
+    const m: Record<string, string> = {}
+    for (const c of clients ?? []) m[c.id] = c.name
+    return m
+  }, [clients])
+
   const { data, isLoading, isFetching, refetch, error } = useQuery<ActivityReport>({
-    queryKey: ['activity-report', from, to, compare],
-    queryFn: () => api.get<ActivityReport>(`/admin/activity-report${qs({ date_from: from, date_to: to, compare: String(compare) })}`),
+    queryKey: ['activity-report', from, to, compare, clientId],
+    queryFn: () => api.get<ActivityReport>(`/admin/activity-report${qs({ date_from: from, date_to: to, compare: String(compare), client_id: clientId })}`),
     enabled: rangeValid,
   })
   const cmp = !!data?.compare
+  const drilled = !!clientId
+  const drilledName = clientName[clientId] || data?.by_client?.[0]?.client_name || 'Client'
 
   const byGroup = useMemo(() => {
     const groups: Record<string, { label: string; count: number; delta: number }[]> = {}
@@ -72,9 +133,17 @@ export function ActivityReport() {
         <BarChart3 size={22} />
         <h1 style={{ margin: 0, fontSize: 22 }}>Activity Report</h1>
         <button
+          onClick={() => data && downloadCsv(csvFilename(from, to, drilled ? drilledName : null), buildCsv(data, drilled ? drilledName : 'All clients', cmp))}
+          disabled={!data}
+          title="Export the current view as CSV"
+          style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 6, border: '1px solid #cbd5e1', background: data ? '#fff' : '#f1f5f9', cursor: data ? 'pointer' : 'default', fontSize: 13, color: data ? '#334155' : '#94a3b8' }}
+        >
+          <Download size={14} /> Export CSV
+        </button>
+        <button
           onClick={() => refetch()}
           title="Refresh"
-          style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: 13 }}
+          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 6, border: '1px solid #cbd5e1', background: '#fff', cursor: 'pointer', fontSize: 13 }}
         >
           <RefreshCw size={14} className={isFetching ? 'spin' : undefined} /> Refresh
         </button>
@@ -108,6 +177,15 @@ export function ActivityReport() {
           <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} />
           Compare to previous period
         </label>
+        <select
+          value={clientId}
+          onChange={(e) => setClientId(e.target.value)}
+          title="Drill into one client"
+          style={{ marginLeft: 8, padding: '6px 8px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13, background: '#fff', maxWidth: 220 }}
+        >
+          <option value="">All clients</option>
+          {(clients ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
       </div>
       {rangeValid && (
         <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
@@ -134,6 +212,15 @@ export function ActivityReport() {
           {data.truncated && (
             <div style={{ padding: 10, background: '#fffbeb', color: '#92400e', borderRadius: 8, fontSize: 12.5, marginBottom: 12 }}>
               This range hit the row cap — counts are a lower bound. Narrow the dates for exact totals.
+            </div>
+          )}
+
+          {drilled && (
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8, padding: '6px 10px 6px 12px', background: '#ecfeff', border: '1px solid #a5f3fc', color: '#0e7490', borderRadius: 999, fontSize: 13, marginBottom: 12 }}>
+              <span>Drilled into <strong>{drilledName}</strong></span>
+              <button onClick={() => setClientId('')} title="Back to all clients" style={{ display: 'inline-flex', alignItems: 'center', border: 'none', background: 'transparent', color: '#0e7490', cursor: 'pointer', padding: 0 }}>
+                <X size={15} />
+              </button>
             </div>
           )}
 
@@ -167,13 +254,23 @@ export function ActivityReport() {
               )}
             </Panel>
 
-            <Panel title="By client">
-              {data.by_client.length === 0 ? <Empty /> : (
-                data.by_client.map((r) => (
-                  <Bar key={r.client_id ?? 'none'} label={r.client_name} count={r.count} max={clientMax} color="#0891b2" delta={cmp ? r.delta : undefined} />
-                ))
-              )}
-            </Panel>
+            {!drilled && (
+              <Panel title="By client">
+                {data.by_client.length === 0 ? <Empty /> : (
+                  data.by_client.map((r) => (
+                    <Bar
+                      key={r.client_id ?? 'none'}
+                      label={r.client_name}
+                      count={r.count}
+                      max={clientMax}
+                      color="#0891b2"
+                      delta={cmp ? r.delta : undefined}
+                      onClick={r.client_id ? () => setClientId(r.client_id as string) : undefined}
+                    />
+                  ))
+                )}
+              </Panel>
+            )}
 
             <Panel title="By team member">
               {data.by_member.length === 0 ? <Empty /> : (
@@ -226,11 +323,15 @@ function Stat({ label, value, big, delta, prev }: { label: string; value: number
   )
 }
 
-function Bar({ label, count, max, color, muted, delta }: { label: string; count: number; max: number; color: string; muted?: boolean; delta?: number }) {
+function Bar({ label, count, max, color, muted, delta, onClick }: { label: string; count: number; max: number; color: string; muted?: boolean; delta?: number; onClick?: () => void }) {
   const pct = count === 0 ? 0 : Math.max(2, Math.round((count / max) * 100))
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0' }}>
-      <div title={label} style={{ width: 150, flexShrink: 0, fontSize: 12.5, color: muted ? '#94a3b8' : '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+    <div
+      onClick={onClick}
+      title={onClick ? `Drill into ${label}` : label}
+      style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0', cursor: onClick ? 'pointer' : 'default', borderRadius: 4 }}
+    >
+      <div style={{ width: 150, flexShrink: 0, fontSize: 12.5, color: muted ? '#94a3b8' : onClick ? '#0e7490' : '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: onClick ? 'underline' : undefined }}>{label}</div>
       <div style={{ flex: 1, background: '#f1f5f9', borderRadius: 4, height: 16, position: 'relative' }}>
         <div style={{ width: `${pct}%`, background: muted ? '#cbd5e1' : color, height: '100%', borderRadius: 4 }} />
       </div>
