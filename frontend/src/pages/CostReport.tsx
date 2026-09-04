@@ -145,10 +145,10 @@ export function CostReport() {
       </div>
       <p style={{ marginTop: 0, color: '#64748b', fontSize: 13 }}>
         Money spent and LLM tokens used across the suite — page/blog generation, research, LeadOff
-        market research, and the SerMaStr strategist — broken down by type, client, and team member.
-        A spend ledger (all recorded cost). Tokens are reported where the source records them (Local
-        SEO + Ecommerce generators, and the strategist); the strategist records tokens but no dollar
-        cost, so it shows under Tokens. QA reviews don't yet record cost or tokens.
+        market research, the SerMaStr strategist, and QA — broken down by type, client, and team
+        member. A spend ledger of all recorded cost. Strategist cost is <em>estimated</em> from its
+        token usage × the model's list price (it records tokens, not dollars). Blog and QA capture
+        their tokens/cost going forward, so their history fills in from here.
       </p>
 
       {/* Controls */}

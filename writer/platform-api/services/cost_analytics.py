@@ -45,6 +45,7 @@ TYPE_LABELS: dict[str, str] = {
     "domain_intel": "Domain intel",
     "autonomy_run": "Autonomy run",
     "strategist_review": "Strategist review",
+    "qa_review": "QA review",
     "leadoff_scout": "LeadOff scout",
     "leadoff_tryout": "LeadOff tryout",
     "leadoff_city_finder": "LeadOff city finder",
@@ -56,7 +57,7 @@ _PAGE_TYPES = {
     "ecommerce_reoptimize",
 }
 _RESEARCH_TYPES = {"keyword_research", "keyword_topic_research", "domain_intel"}
-_AGENT_TYPES = {"autonomy_run", "strategist_review"}
+_AGENT_TYPES = {"autonomy_run", "strategist_review", "qa_review"}
 
 
 def label_for(cost_type: str) -> str:

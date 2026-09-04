@@ -54,6 +54,11 @@ def test_leadoff_and_strategist_labels_and_groups():
     assert ca.group_for("leadoff_something_new") == "Market research"
 
 
+def test_qa_review_label_and_group():
+    assert ca.label_for("qa_review") == "QA review"
+    assert ca.group_for("qa_review") == "Agents"
+
+
 def test_aggregate_sums_cost_and_tokens():
     events = [
         _ev("local_seo_page", 0.35, 1500, 1200, client_id="c1", actor_id="p1", occurred_at="2026-09-01T10:00:00Z"),
