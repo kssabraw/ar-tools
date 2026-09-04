@@ -72,6 +72,16 @@ const STATUS_META: Record<EditStatus, { label: string; color: string; bg: string
   failed: { label: 'Failed', color: '#b91c1c', bg: '#fef2f2' },
 }
 
+// Structured (Google-defined) services come back as raw ids like
+// "job_type_id:flex_office_rentals" / "gcid:..."; humanize them for display
+// (Flex Office Rentals). The stored value used for the patch is untouched.
+// Free-form labels are already plain text and pass through.
+function serviceLabel(s: { kind: 'free_form' | 'structured'; label: string }): string {
+  if (s.kind !== 'structured') return s.label
+  const bare = (s.label || '').replace(/^[^:]*:/, '').replace(/_/g, ' ').trim()
+  return bare ? bare.replace(/\b\w/g, (c) => c.toUpperCase()) : s.label
+}
+
 // Advisory client-side linter (mirrors the server; warnings only, never a gate).
 function lintDescription(text: string): { code: string; message: string }[] {
   const v = (text || '').trim()
@@ -327,13 +337,13 @@ function ServicesCard({ clientId, locationRowId, current, categories, canModify,
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {current.map((s, i) => (
             <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: s.kind === 'structured' ? '#eef2ff' : '#f1f5f9', color: '#334155' }}>
-              {s.label}{s.kind === 'structured' ? ' (structured)' : ''}
+              {serviceLabel(s)}{s.kind === 'structured' ? ' (structured)' : ''}
             </span>
           ))}
         </div>
       )}
       {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => (
-        <span>{proposed?.map((s) => s.label).join(', ')}</span>
+        <span>{proposed?.map(serviceLabel).join(', ')}</span>
       )} onChanged={onChanged} setErr={setErr} />}
       {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
 
