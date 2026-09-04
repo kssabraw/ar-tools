@@ -431,6 +431,119 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'If it keeps failing, share the raw error below with the team.',
     ],
   },
+  // ── GBP Profile Editor ─────────────────────────────────────────────────────
+  gbp_profile_not_enabled: {
+    title: 'GBP Profile Editor isn’t turned on yet',
+    meaning:
+      'The tool is built but gated off. It needs the agency Google account ' +
+      'connected and two server flags set.',
+    steps: [
+      'Connect the agency Google account (the Connect button above).',
+      'Set GBP_API_ENABLED and GBP_PROFILE_ENABLED on the platform service.',
+      'Prove the write path with verify_gbp_api_access.py --edit-test first.',
+    ],
+  },
+  gbp_listing_read_only: {
+    title: 'The connected account can’t edit this listing',
+    meaning:
+      'The Google account can SEE this listing (so it lists) but doesn’t have ' +
+      'full edit rights on it — usually the listing is unverified or the ' +
+      'account is only a Site Manager, not an Owner/Manager.',
+    steps: [
+      'Confirm the Business Profile is verified.',
+      'Have the client add the agency account as an Owner/Manager (not just Site Manager).',
+      'Then re-open this page and try the edit again.',
+    ],
+  },
+  cannot_modify_services: {
+    title: 'This listing doesn’t allow editing its services',
+    meaning:
+      'Google reports the services list can’t be modified for this listing ' +
+      '(canModifyServiceList is false) — often because the listing’s primary ' +
+      'category doesn’t support a services list, or it’s unverified.',
+    steps: [
+      'Check the listing is verified and its category supports services.',
+      'Edit the description or hours instead if you just need to update those.',
+    ],
+  },
+  gbp_listing_unverified: {
+    title: 'This Business Profile isn’t verified',
+    meaning:
+      'An unverified listing has limited editability, so Google rejected the ' +
+      'edit.',
+    steps: [
+      'Verify the Business Profile in the Google dashboard, then retry.',
+    ],
+  },
+  description_too_long: {
+    title: 'Description is over 750 characters',
+    meaning:
+      'Google caps a Business Profile description at 750 characters and ' +
+      'rejected this one for length.',
+    steps: [
+      'Trim the description to 750 characters or fewer (the counter shows the length).',
+      'Apply again.',
+    ],
+  },
+  description_contains_url: {
+    title: 'Description contains a URL',
+    meaning:
+      'Google doesn’t allow links in the business description and rejects any ' +
+      'that contain one.',
+    steps: [
+      'Remove the URL from the description (put your website in the profile’s Website field instead).',
+      'Apply again.',
+    ],
+  },
+  description_contains_phone: {
+    title: 'Description contains a phone number',
+    meaning:
+      'Google doesn’t allow phone numbers in the business description.',
+    steps: [
+      'Remove the phone number (the profile’s phone field handles that).',
+      'Apply again.',
+    ],
+  },
+  invalid_service_category: {
+    title: 'A service has an invalid category',
+    meaning:
+      'Every free-form service must attach to one of the listing’s own ' +
+      'categories, and one here points at a category the listing doesn’t have.',
+    steps: [
+      'Open the Services editor and pick a valid category for each service (the dropdown lists the listing’s categories).',
+      'Apply again once every service has a category.',
+    ],
+  },
+  gbp_edit_pending_review: {
+    title: 'Submitted to Google — pending review',
+    meaning:
+      'The edit was accepted but Google queued it for review rather than ' +
+      'publishing it instantly. This isn’t a failure.',
+    steps: [
+      'Nothing to do — the app re-checks automatically and marks it live when Google approves it.',
+      'Use “Refresh status” if you want to check right now.',
+    ],
+  },
+  gbp_edit_live_changed: {
+    title: 'The live value changed since you drafted this',
+    meaning:
+      'Someone edited this field in the Google dashboard after this draft was ' +
+      'made, so applying would overwrite that change unseen. The app stopped ' +
+      'instead of clobbering it.',
+    steps: [
+      'Re-open this page to see the current live value.',
+      'Re-draft on top of the current value, then apply.',
+    ],
+  },
+  gbp_location_not_found: {
+    title: 'Listing not found',
+    meaning:
+      'Google couldn’t find the listing this edit targets — it may have been ' +
+      'removed or its id changed.',
+    steps: [
+      'Re-open the Business Profile tool and re-register the client’s listing.',
+    ],
+  },
 }
 
 /**

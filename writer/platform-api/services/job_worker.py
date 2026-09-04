@@ -871,6 +871,15 @@ async def _process_job(job: dict) -> None:
         await gbp_posts_service.run_generate_job(job)
     elif job_type == "gbp_posts_sync":
         await gbp_posts_service.run_sync_job(job)
+    elif job_type == "gbp_profile_apply":
+        from services import gbp_profile_service
+        await gbp_profile_service.run_apply_job(job)
+    elif job_type == "gbp_profile_draft":
+        from services import gbp_profile_service
+        await gbp_profile_service.run_draft_job(job)
+    elif job_type == "gbp_profile_sync":
+        from services import gbp_profile_service
+        await gbp_profile_service.run_sync_job(job)
     elif job_type == "gsc_materialize":
         await run_gsc_materialize_job(job)
     elif job_type == "dataforseo_rank":

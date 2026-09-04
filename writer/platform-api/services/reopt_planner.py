@@ -896,9 +896,17 @@ def build_head_to_head_landgrab_actions(
     return actions
 
 
-def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[dict]:
+def build_gbp_action(
+    client_id: str, gbp_audit_result: "dict | None", profile_editor_enabled: bool = False
+) -> list[dict]:
     """A single consolidated 'strengthen your GBP' action from the profile audit
-    (missing fields + category gaps + a review deficit vs competitors). Pure."""
+    (missing fields + category gaps + a review deficit vs competitors). Pure.
+
+    When ``profile_editor_enabled`` and the gap is one the GBP Profile Editor can
+    fix (a thin/missing description or missing hours — its two auto-loop triggers),
+    the CTA deep-links into that editor so the board task lands where the fix is
+    made (Q6); category/review-only gaps keep the Maps CTA (out of the editor's
+    v1 scope)."""
     a = gbp_audit_result
     if not a:
         return []
@@ -940,6 +948,19 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
         )
     else:
         diagnosis = "GBP has optimization gaps."
+    # Deep-link into the GBP Profile Editor when it's enabled AND the gap is one
+    # it edits (a thin/missing description or missing hours); else keep the Maps
+    # CTA (category/review gaps are out of the editor's v1 scope).
+    editable_here = bool(
+        (dq and not dq.get("ok") and dq.get("length"))
+        or "Business description" in (a.get("gaps") or [])
+        or "Opening hours" in (a.get("gaps") or [])
+    )
+    cta_label = "Open Maps tracker"
+    cta_path = f"clients/{client_id}/maps"
+    if profile_editor_enabled and editable_here:
+        cta_label = "Open Business Profile editor"
+        cta_path = f"clients/{client_id}/gbp-profile"
     return [
         {
             "kind": "gbp_gap",
@@ -947,8 +968,8 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
             "keyword": "Google Business Profile",
             "diagnosis": diagnosis,
             "recommendation": "Strengthen the Google Business Profile: " + "; ".join(parts) + ".",
-            "cta_label": "Open Maps tracker",
-            "cta_path": f"clients/{client_id}/maps",
+            "cta_label": cta_label,
+            "cta_path": cta_path,
             "severity": "info",
             "sort": _SORT_MAPS + _within(_MAPS_GBP_WITHIN),
         }
@@ -1722,7 +1743,10 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
         except Exception as exc:
             logger.warning("reopt_plan_landgrab_layers_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions += build_relevance_action(client_id, relevance_gap)
-    maps_actions += build_gbp_action(client_id, gbp_audit_result)
+    maps_actions += build_gbp_action(
+        client_id, gbp_audit_result,
+        profile_editor_enabled=bool(settings.gbp_api_enabled and settings.gbp_profile_enabled),
+    )
     maps_actions += build_review_action(client_id, review_gap)
     maps_actions += build_content_action(client_id, content_gap)
     brand_actions = build_brand_action(client_id, brand_decline)

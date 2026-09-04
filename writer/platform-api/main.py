@@ -36,6 +36,7 @@ from routers.freeze import router as freeze_router
 from routers.goals import router as goals_router
 from routers.gbp_metrics import router as gbp_metrics_router
 from routers.gbp_posts import router as gbp_posts_router
+from routers.gbp_profile import router as gbp_profile_router
 from routers.gbp_oauth import router as gbp_oauth_router
 from routers.ga4 import router as ga4_router
 from routers.gsc import router as gsc_router
@@ -339,6 +340,7 @@ app.include_router(freeze_router)
 app.include_router(goals_router)
 app.include_router(gbp_metrics_router)
 app.include_router(gbp_posts_router)
+app.include_router(gbp_profile_router)
 app.include_router(gbp_oauth_router)
 app.include_router(gsc_router)
 app.include_router(ga4_router)

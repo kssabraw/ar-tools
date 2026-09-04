@@ -50,6 +50,7 @@ import { Outreach } from './pages/Outreach'
 import { OutreachLeads } from './pages/OutreachLeads'
 import { Syndication } from './pages/Syndication'
 import { GbpPosts } from './pages/GbpPosts'
+import { GbpProfile } from './pages/GbpProfile'
 import { GbpMetrics } from './pages/GbpMetrics'
 import { WebsiteBuilder } from './pages/WebsiteBuilder'
 import { Websites } from './pages/Websites'
@@ -123,6 +124,7 @@ export default function App() {
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
                       <Route path="/clients/:id/gbp-posts" element={<GbpPosts />} />
+                      <Route path="/clients/:id/gbp-profile" element={<GbpProfile />} />
                       <Route path="/clients/:id/gbp-metrics" element={<GbpMetrics />} />
                       <Route path="/clients/:id/website" element={<WebsiteBuilder />} />
                       <Route path="/websites" element={<Websites />} />

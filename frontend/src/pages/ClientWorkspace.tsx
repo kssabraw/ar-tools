@@ -307,6 +307,13 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<Building2 size={22} />}
+          label="Business Profile"
+          description="Edit the client's Google Business Profile description, services & hours — AI-drafted, reviewed, then applied on an explicit click (never auto-applied)."
+          to={id ? `/clients/${id}/gbp-profile` : undefined}
+          cta="Open"
+        />
+        <ActionCard
           icon={<BookOpen size={22} />}
           label="Citations"
           description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."

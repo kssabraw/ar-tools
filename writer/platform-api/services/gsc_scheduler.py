@@ -601,6 +601,7 @@ async def gsc_scheduler() -> None:
         enqueue_due_gbp_post_syncs,
         enqueue_due_gbp_scheduled_posts,
     )
+    from services.gbp_profile_service import enqueue_due_gbp_profile_syncs
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
     from services.freeze import enqueue_due_freeze_checks
@@ -982,6 +983,11 @@ async def gsc_scheduler() -> None:
             # they fire near their local time. No-op until the module is enabled.
             _safe("gbp_post_schedules", enqueue_due_gbp_post_schedules)
             _safe("gbp_scheduled_posts", enqueue_due_gbp_scheduled_posts)
+            # GBP Profile Editor — the pending-review reconciler. Backoff lives on
+            # the edit row (next_sync_at); the worker claims by scheduled_at with
+            # no <=now gate, so a per-cycle sweep is what honours the ladder (the
+            # leadoff_geocode self-continuing shape). No-op until enabled.
+            _safe("gbp_profile_syncs", enqueue_due_gbp_profile_syncs)
             # Client Reporting scheduled reports (Phase 5) — same self-clocked
             # next_run_at pattern; delivery runs after each scheduled render.
             _safe("report_schedules", enqueue_due_report_schedules)

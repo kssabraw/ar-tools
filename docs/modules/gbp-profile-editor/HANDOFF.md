@@ -9,15 +9,37 @@
 
 - **PRD: Approved for build** (owner). Twelve grilling decisions folded in;
   recorded in the root `decisions.md` and ADR 0004.
-- **Sibling upgrade SHIPPED:** the `gbp_audit` description-quality follow-up —
-  **PR #1009** (`feat(gbp_audit): add description-quality finding to close the
-  strategist loop`), CI green (platform-api lint/typecheck + full test suite),
-  draft, on branch `claude/reload-skills-y7uok4`. This is the loop's real
-  description trigger; the Profile Editor build depends on it being merged.
-- **No Profile Editor code exists yet.** Nothing in `gbp_profile_*`.
-- **Flags:** `gbp_profile_enabled` does not exist yet; add it (default False) on
-  top of the existing `gbp_api_enabled` (already False). Nothing is user-visible
-  until both are on.
+- **Sibling upgrade SHIPPED + MERGED:** the `gbp_audit` description-quality
+  follow-up (**PR #1009**, on `main`) — the loop's real description trigger.
+- **BUILT (Phases 0–2), gated off.** On the build branch
+  `claude/gbp-profile-editor-build-hi2lpo`:
+  - **Phase 0:** `gbp_profile_enabled` + the `gbp_profile_*` config; the verify
+    script extended with a `--edit-test` (v1 `locations.get` read + a **no-op**
+    `profile.description` patch round-trip that proves the write path with zero
+    visible change — point it at the agency's own listing).
+  - **Phase 1:** migration `20260904120000_gbp_profile_edits.sql` (**applied
+    live** — table + the 3 job types on the rebuilt `async_jobs` CHECK);
+    `services/gbp_profile_api.py` (pure builders/validators + v1 get/patch),
+    `services/gbp_profile_service.py` (read-current, apply job with
+    re-read-and-diff, the self-continuing `gbp_profile_sync` reconciler),
+    `routers/gbp_profile.py`, `models/gbp_profile.py`, worker dispatch, freeze
+    gates (`gbp_profile_apply` + `gbp_profile_sync`), the per-cycle reconciler
+    sweep on the shared scheduler, `pages/GbpProfile.tsx` + workspace card +
+    `ErrorDetails` codes. The connection/listing picker was extracted to the
+    shared `components/gbp/GbpConnection.tsx` (GBP Posts now reuses it too).
+  - **Phase 2:** the `gbp_profile_draft` job (description + services drafted;
+    hours never invented); the `update_gbp_profile` SerMaStr action (stages a
+    draft, never applies); the Action-Plan producer deep-link (`build_gbp_action`
+    retargets the `gbp_gap` CTA to the editor when the gap is a thin/missing
+    description or missing hours and the module is enabled).
+  - Tests: `tests/test_gbp_profile.py` (pure builders + apply/reconciler/draft
+    flow). Full platform-api suite green locally (dep-limited sandbox aside).
+- **STILL TO DO before flipping on (owner/Railway):** run
+  `verify_gbp_api_access.py --edit-test locations/<agency>` from the PLATFORM
+  shell to prove the write path + re-verify the v1 field paths (see Gotchas),
+  then set `GBP_PROFILE_ENABLED=true` (+ confirm `GBP_API_ENABLED=true`).
+- **Flags:** both `gbp_api_enabled` and `gbp_profile_enabled` default False, so
+  nothing is user-visible until both are on.
 
 ## Before you start (branch + prerequisites)
 
