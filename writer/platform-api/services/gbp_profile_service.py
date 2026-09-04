@@ -119,6 +119,25 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
     }
 
 
+async def list_service_types(client_id: str, location_row_id: str) -> dict:
+    """The Google-defined service types the operator can pick for this listing —
+    grouped by the listing's own categories (v1 categories.batchGet, view=FULL).
+    This is the services editor's ONLY add path (VAs pick from Google's approved
+    list; free-form ADD was removed). Best-effort per category — a category with
+    no structured services simply contributes an empty group."""
+    _assert_enabled()
+    location = _location(location_row_id, client_id)
+    loc = await asyncio.to_thread(api.get_location, _location_name(location))
+    categories = api.parse_categories(loc)
+    resp = await asyncio.to_thread(
+        api.list_service_types,
+        [c["id"] for c in categories],
+        settings.gbp_profile_service_region_code,
+        settings.gbp_profile_service_language_code,
+    )
+    return {"categories": api.parse_service_types(resp, categories)}
+
+
 def list_edits(client_id: str, location_row_id: Optional[str] = None, field: Optional[str] = None) -> list[dict]:
     _assert_enabled()
     query = (
@@ -507,13 +526,13 @@ _DESC_SYSTEM = (
 )
 
 _SERVICES_SYSTEM = (
-    "You propose a Google Business Profile SERVICES list for a local business. "
-    "Return ONLY a JSON array (no prose) of up to 20 objects, each "
-    '{"label": "<short service name, <=120 chars>", "description": "<one plain '
-    'sentence or empty>", "category": "<the display name of the ONE listing '
-    'category this service best fits, chosen from the provided categories>"}. '
-    "Ground services ONLY in the business's real offering — never invent a service "
-    "the facts don't support. Keep labels specific and customer-facing."
+    "You choose which of Google's approved service types apply to a local "
+    "business's Google Business Profile. You are given the ONLY allowed service "
+    "types (Google-defined, per the listing's categories). Return ONLY a JSON "
+    "array (no prose) of the serviceTypeId strings that genuinely match the "
+    "business's real offering — up to 20, most relevant first. Pick ONLY ids from "
+    "the provided list; NEVER invent an id or a service. Choose a service type "
+    "only if the business actually offers it."
 )
 
 
@@ -573,16 +592,25 @@ def _content_violations(text: str) -> list[str]:
     return hits
 
 
-async def _draft_services(client: dict, categories: list[dict], existing: list[dict], card: Optional[dict]) -> list[dict]:
+async def _draft_services(
+    client: dict, categories: list[dict], existing: list[dict], card: Optional[dict],
+    service_types: list[dict],
+) -> list[dict]:
     from services import anthropic_failover  # lazy
     from services.gbp_posts_service import build_client_context, render_voice_card_block
     from services.report_llm import retry_transient
 
-    cat_lines = "\n".join(f"- {c['name']} (id: {c['id']})" for c in categories) or "(none on file)"
+    type_lines: list[str] = []
+    for cat in service_types:
+        if not cat.get("service_types"):
+            continue
+        type_lines.append(f"Category — {cat['name']}:")
+        type_lines.extend(f"  - {st['display_name']} (id: {st['service_type_id']})" for st in cat["service_types"])
+    available = "\n".join(type_lines) or "(no structured service types available for these categories)"
     grounding = _services_grounding(client, existing)
     ask = [
-        "Propose the services list for this Google Business Profile.",
-        f"Listing categories (attach each service to ONE of these by its display name):\n{cat_lines}",
+        "Choose the Google-approved service types that apply to this Google Business Profile.",
+        f"Allowed service types (pick ONLY serviceTypeIds from here):\n{available}",
         f"Known offering / existing services / silo topics:\n{grounding}",
     ]
     user = build_client_context(client) + "\n\n" + "\n".join(ask)
@@ -598,7 +626,7 @@ async def _draft_services(client: dict, categories: list[dict], existing: list[d
         max_retries=2, log_tag="gbp_profile_services_draft",
     )
     raw = "\n".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-    return map_drafted_services(raw, categories)
+    return map_drafted_service_types(raw, service_types)
 
 
 def _services_grounding(client: dict, existing: list[dict]) -> str:
@@ -657,6 +685,42 @@ def map_drafted_services(raw: str, categories: list[dict]) -> list[dict]:
     return out
 
 
+def map_drafted_service_types(raw: str, service_types: list[dict]) -> list[dict]:
+    """Parse the model's JSON array of serviceTypeIds and map each to a structured
+    pick ``{kind:'structured', service_type_id, label, category_id}``. Drops any id
+    not in the available list (the model can only SUGGEST from Google's approved
+    set — Q11). Accepts bare-string ids or ``{"service_type_id": ...}`` objects.
+    Pure (unit-tested)."""
+    by_id: dict[str, tuple[str, str]] = {}
+    for cat in service_types or []:
+        for st in cat.get("service_types") or []:
+            sid = st.get("service_type_id")
+            if sid and sid not in by_id:
+                by_id[sid] = (st.get("display_name") or sid, cat.get("id") or "")
+    try:
+        data = json.loads(_json_slice(raw))
+    except Exception:  # noqa: BLE001 — a non-JSON reply degrades to empty
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, str):
+            stid = item.strip()
+        elif isinstance(item, dict):
+            stid = (item.get("service_type_id") or item.get("serviceTypeId") or "").strip()
+        else:
+            continue
+        if not stid or stid in seen or stid not in by_id:
+            continue
+        seen.add(stid)
+        label, category_id = by_id[stid]
+        out.append({
+            "kind": "structured", "service_type_id": stid,
+            "label": label, "category_id": category_id,
+        })
+    return out
+
+
 def _json_slice(raw: str) -> str:
     """The first [...] JSON array in a model reply (tolerates prose/fences)."""
     start = raw.find("[")
@@ -686,7 +750,14 @@ async def run_draft_job(job: dict) -> None:
             if not proposed:
                 raise HTTPException(status_code=502, detail="empty_draft")
         else:  # services
-            proposed = await _draft_services(client, parsed["categories"], parsed["services"], card)
+            resp = await asyncio.to_thread(
+                api.list_service_types,
+                [c["id"] for c in parsed["categories"]],
+                settings.gbp_profile_service_region_code,
+                settings.gbp_profile_service_language_code,
+            )
+            service_types = api.parse_service_types(resp, parsed["categories"])
+            proposed = await _draft_services(client, parsed["categories"], parsed["services"], card, service_types)
             current = parsed["services"]
             if not proposed:
                 raise HTTPException(status_code=502, detail="empty_draft")

@@ -29,6 +29,7 @@ from models.gbp_profile import (
     ProfileEditCreateRequest,
     ProfileEditPatchRequest,
     ProfileLintResponse,
+    ServiceTypesResponse,
 )
 from models.gbp_posts import GbpLocationOption
 from services import gbp_profile_api as api
@@ -56,6 +57,16 @@ async def read_profile(
     """The three fields' LIVE current values for one location (always read fresh
     from Google — no cached 'current') plus the location's recent edit rows."""
     return await svc.read_current(str(client_id), str(location_row_id))
+
+
+@router.get("/clients/{client_id}/gbp/profile/service-types", response_model=ServiceTypesResponse)
+async def list_service_types(
+    client_id: UUID, location_row_id: UUID = Query(...), auth: dict = Depends(require_auth)
+):
+    """The Google-defined service types the operator can pick for this listing,
+    grouped by its categories (the services editor's only add path — VAs pick
+    from Google's approved list, not free text)."""
+    return await svc.list_service_types(str(client_id), str(location_row_id))
 
 
 @router.post("/clients/{client_id}/gbp/profile/lint", response_model=ProfileLintResponse)

@@ -19,11 +19,15 @@ runners, raising an ``HTTPException`` with a classified ``detail`` on failure.
 egress-blocked from the sandbox but reachable from the Railway PLATFORM shell —
 re-check ``profile.description``, ``regularHours``/``TimeOfDay`` (v1 uses
 structured ``{hours, minutes}`` objects, NOT v4 ``"HHMM"`` strings), the
-``serviceItems``/``freeFormServiceItem`` shape, and the ``metadata`` pending-edit
-fields against
+``serviceItems``/``freeFormServiceItem``/``structuredServiceItem`` shape, and the
+``metadata`` pending-edit fields against
 ``developers.google.com/my-business/reference/businessinformation/rest/v1/accounts.locations``.
 The one live-shape constant most likely to need a tweak is
-``_FREEFORM_CATEGORY_FIELD`` below.
+``_FREEFORM_CATEGORY_FIELD`` below. The **service-type picker** additionally
+relies on ``categories.batchGet(view=FULL)`` returning per-category
+``serviceTypes: [{serviceTypeId, displayName}]`` — re-verify against
+``.../businessinformation/rest/v1/categories/batchGet`` (a READ, so safe to test
+live).
 
 See: docs/modules/gbp-profile-editor-prd-v1_0.md §2, §7.
 """
@@ -244,32 +248,57 @@ def build_services_patch(
 ) -> tuple[dict, str]:
     """Build (body, updateMask) for a services edit from our internal list.
 
-    Each service is either a free-form entry
-    ``{kind: 'free_form', label, description?, category_id}`` — the editable kind,
-    v1 free-form (decision Q8) — or a passthrough ``{kind: 'structured', raw:
-    <original serviceItem dict>}`` preserving a structured item the listing
-    already has (so a free-form-only patch never clobbers structured services).
+    Each service is one of:
 
-    ``label`` and ``category_id`` are required on every free-form service; when
-    ``allowed_categories`` is given, ``category_id`` must be one of the listing's
-    categories (else ValueError ``invalid_service_category:<label>``). Duplicate
-    free-form labels (case-insensitive) are dropped. Pure (unit-tested)."""
+    - a **structured pick** ``{kind: 'structured', service_type_id, description?}``
+      — a Google-defined service type the operator chose from the listing's
+      categories (the editor's only ADD path now, decision Q8 revised) → emits a
+      ``structuredServiceItem``;
+    - a **structured passthrough** ``{kind: 'structured', raw: <serviceItem dict>}``
+      — an existing structured item preserved verbatim (keeps its description);
+    - a **free-form** entry ``{kind: 'free_form', label, description?, category_id}``
+      — a legacy custom service the listing already has, kept (the editor no
+      longer ADDs free-form, only preserves/removes them).
+
+    Free-form services require ``label`` + ``category_id`` (validated against
+    ``allowed_categories`` when given, else ValueError). Structured services are
+    deduped by ``serviceTypeId``, free-form by label (case-insensitive). Pure
+    (unit-tested)."""
     items: list[dict] = []
-    seen: set[str] = set()
+    seen_free: set[str] = set()
+    seen_struct: set[str] = set()
     for svc in services or []:
         kind = (svc.get("kind") or "free_form").strip()
         if kind == "structured":
             raw = svc.get("raw")
             if isinstance(raw, dict):
+                # Passthrough of an existing structured item (description kept).
+                stid = ((raw.get("structuredServiceItem") or {}).get("serviceTypeId") or "").strip()
+                if stid and stid in seen_struct:
+                    continue
+                if stid:
+                    seen_struct.add(stid)
                 items.append(raw)
+                continue
+            stid = (svc.get("service_type_id") or svc.get("label") or "").strip()
+            if not stid:
+                raise ValueError("service_type_id_required")
+            if stid in seen_struct:
+                continue
+            seen_struct.add(stid)
+            item: dict = {"structuredServiceItem": {"serviceTypeId": stid}}
+            desc = (svc.get("description") or "").strip()
+            if desc:
+                item["structuredServiceItem"]["description"] = desc
+            items.append(item)
             continue
         label = (svc.get("label") or "").strip()
         if not label:
             raise ValueError("service_label_required")
         key = label.lower()
-        if key in seen:
+        if key in seen_free:
             continue
-        seen.add(key)
+        seen_free.add(key)
         category = (svc.get("category_id") or "").strip()
         if not category:
             raise ValueError(f"service_category_required:{label}")
@@ -354,13 +383,86 @@ def parse_services(loc: dict) -> list[dict]:
             continue
         structured = item.get("structuredServiceItem")
         if isinstance(structured, dict):
+            stid = structured.get("serviceTypeId") or ""
             out.append({
                 "kind": "structured",
-                "label": structured.get("serviceTypeId") or "",
+                "label": stid,
+                "service_type_id": stid,
                 "description": structured.get("description") or "",
                 "raw": item,
             })
     return out
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Service types — the Google-defined services pickable for a listing's
+# categories (v1 ``categories.batchGet`` with ``view=FULL``). Pure parse +
+# the live call. This is the operator's ONLY services ADD path now (Q8 revised —
+# free-form ADD removed; VAs pick from Google's approved list).
+# ───────────────────────────────────────────────────────────────────────────
+def humanize_service_type_id(stid: str) -> str:
+    """A serviceTypeId ('job_type_id:flex_office_rentals') → a readable fallback
+    ('Flex Office Rentals') for the rare case Google returns no displayName.
+    Pure (mirrors the frontend serviceLabel)."""
+    bare = re.sub(r"^[^:]*:", "", stid or "").replace("_", " ").strip()
+    return bare.title() if bare else (stid or "")
+
+
+def parse_service_types(response: dict, categories: Optional[list[dict]] = None) -> list[dict]:
+    """A v1 ``categories.batchGet`` (view=FULL) response → the operator's picker
+    shape: ``[{id, name, service_types: [{service_type_id, display_name}]}]``,
+    ordered to match the listing's own category order when ``categories``
+    ([{id, name}]) is given. Pure (unit-tested)."""
+    name_by_id = {c["id"]: c["name"] for c in (categories or []) if c.get("id")}
+    order = [c["id"] for c in (categories or []) if c.get("id")]
+    out: list[dict] = []
+    for cat in (response or {}).get("categories") or []:
+        cid = cat.get("name")
+        if not cid:
+            continue
+        types: list[dict] = []
+        seen: set[str] = set()
+        for st in cat.get("serviceTypes") or []:
+            if not isinstance(st, dict):
+                continue
+            stid = st.get("serviceTypeId")
+            if not stid or stid in seen:
+                continue
+            seen.add(stid)
+            types.append({
+                "service_type_id": stid,
+                "display_name": st.get("displayName") or humanize_service_type_id(stid),
+            })
+        out.append({
+            "id": cid,
+            "name": cat.get("displayName") or name_by_id.get(cid) or cid,
+            "service_types": types,
+        })
+    out.sort(key=lambda c: order.index(c["id"]) if c["id"] in order else len(order))
+    return out
+
+
+def list_service_types(
+    category_names: list[str], region_code: str = "US", language_code: str = "en",
+    view: str = "FULL",
+) -> dict:
+    """v1 ``categories.batchGet`` — the Google-defined service types for the given
+    category resource names (``categories/gcid:...``). ``view='FULL'`` is required
+    to get ``serviceTypes``. Returns the raw response (``parse_service_types``
+    shapes it). Raises a classified HTTPException on failure."""
+    names = [n for n in (category_names or []) if n]
+    if not names:
+        return {"categories": []}
+    try:
+        return (
+            _info_client().categories()
+            .batchGet(names=names, regionCode=region_code, languageCode=language_code, view=view)
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — google HttpError / transport
+        _raise(exc, field="services")
 
 
 def parse_metadata(loc: dict) -> dict:
@@ -421,7 +523,12 @@ def _services_key(services) -> set:
     key = set()
     for svc in services or []:
         if (svc.get("kind") or "free_form") == "structured":
-            key.add(("structured", (svc.get("label") or "").strip().lower()))
+            # Key on the serviceTypeId. A fresh pick carries it in
+            # ``service_type_id`` (``label`` is the human display name); a
+            # live-parsed structured item carries it in both — so keying on the
+            # id makes a picked service and its live read-back compare equal.
+            sid = (svc.get("service_type_id") or svc.get("label") or "").strip().lower()
+            key.add(("structured", sid))
         else:
             key.add((
                 "free_form",
