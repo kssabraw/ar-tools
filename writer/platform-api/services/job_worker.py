@@ -880,6 +880,9 @@ async def _process_job(job: dict) -> None:
     elif job_type == "gbp_profile_sync":
         from services import gbp_profile_service
         await gbp_profile_service.run_sync_job(job)
+    elif job_type == "gbp_profile_monitor":
+        from services import gbp_monitor
+        await gbp_monitor.run_monitor_job(job)
     elif job_type == "gsc_materialize":
         await run_gsc_materialize_job(job)
     elif job_type == "dataforseo_rank":

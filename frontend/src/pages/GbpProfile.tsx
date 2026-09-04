@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Building2, Sparkles, Save, X, Trash2, RefreshCw, CheckCircle2,
-  Clock, Plus, AlertTriangle, Info, Search,
+  Clock, Plus, AlertTriangle, Info, Search, ShieldCheck, ShieldAlert,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -213,6 +213,7 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
 
   return (
     <div style={{ display: 'grid', gap: 16 }}>
+      <MonitorPanel clientId={clientId} locationRowId={locationRowId} />
       {p.metadata.has_pending_edits && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 12px' }}>
           <Clock size={14} /> Google shows this listing has a pending edit still settling.
@@ -221,6 +222,90 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
       <DescriptionCard clientId={clientId} locationRowId={locationRowId} current={p.description} edit={editFor('description')} onChanged={onChanged} />
       <ServicesCard clientId={clientId} locationRowId={locationRowId} current={p.services} categories={p.categories} canModify={p.metadata.can_modify_service_list} edit={editFor('services')} onChanged={onChanged} />
       <HoursCard clientId={clientId} locationRowId={locationRowId} current={p.hours} edit={editFor('hours')} onChanged={onChanged} />
+    </div>
+  )
+}
+
+// ── Monitoring (suspension + out-of-band change watch) ────────────────────────
+interface MonitorStatus {
+  monitored: boolean; enabled: boolean; access_status?: string | null
+  checked_at?: string | null; last_change?: { fields?: string[] } | null; last_change_at?: string | null
+}
+const FIELD_LABELS: Record<string, string> = {
+  title: 'business name', description: 'description', categories: 'categories',
+  phone: 'phone number', website: 'website', address: 'address',
+  hours: 'hours', services: 'services', open_status: 'open/closed status',
+}
+const fmtWhen = (iso?: string | null) => {
+  if (!iso) return null
+  try { return new Date(iso).toLocaleString() } catch { return iso }
+}
+
+// A compact status strip: is the listing being watched for suspension /
+// out-of-band edits, when it was last checked, its access state, and the last
+// change Google or an outside source made. "Check now" runs a check immediately.
+function MonitorPanel({ clientId, locationRowId }: { clientId: string; locationRowId: string }) {
+  const qc = useQueryClient()
+  const statusQ = useQuery<MonitorStatus>({
+    queryKey: ['gbp-monitor', clientId, locationRowId],
+    queryFn: () => api.get<MonitorStatus>(`/clients/${clientId}/gbp/profile/monitor?location_row_id=${locationRowId}`),
+    retry: false,
+  })
+  const { job } = useCardJobs(clientId, locationRowId, 'monitor', () =>
+    qc.invalidateQueries({ queryKey: ['gbp-monitor', clientId, locationRowId] }))
+  const s = statusQ.data
+  if (!s) return null
+
+  const check = () => job.start(
+    () => api.post<Job>(`/clients/${clientId}/gbp/profile/monitor/check?location_row_id=${locationRowId}`, {})
+      .then((j) => j.job_id), undefined)
+
+  const suspended = s.access_status === 'suspended' || s.access_status === 'no_access'
+  const changedFields = (s.last_change?.fields || []).map((f) => FIELD_LABELS[f] || f)
+  const checkBtn = s.enabled ? (
+    <button onClick={check} disabled={job.running} style={{ ...btn('#fff', '#334155'), marginLeft: 'auto', padding: '5px 10px', fontSize: 12 }}>
+      <RefreshCw size={12} /> {job.running ? 'Checking…' : 'Check now'}
+    </button>
+  ) : null
+
+  if (suspended) {
+    return (
+      <div style={{ display: 'grid', gap: 6, background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 10, padding: '12px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#b91c1c', fontWeight: 700, fontSize: 13.5 }}>
+          <ShieldAlert size={16} />
+          {s.access_status === 'suspended' ? 'This listing appears SUSPENDED' : 'This listing can no longer be read'}
+          {checkBtn}
+        </div>
+        <div style={{ fontSize: 12.5, color: '#7f1d1d', lineHeight: 1.5 }}>
+          {s.access_status === 'suspended'
+            ? 'Google reports the profile is no longer verified (Voice of Merchant lost). Check the Google Business Profile dashboard and reinstate if needed.'
+            : 'Our connected Google account can’t read this listing (removed, unverified, or access revoked). Check the GBP dashboard / connection.'}
+          {s.checked_at && <> · last checked {fmtWhen(s.checked_at)}</>}
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: 5, background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 14px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: '#334155' }}>
+        <ShieldCheck size={15} color={s.enabled ? '#0d9488' : '#94a3b8'} />
+        <span style={{ fontWeight: 600 }}>
+          {s.enabled
+            ? (s.monitored ? 'Watching for suspensions & outside changes' : 'Monitoring on — first check pending')
+            : 'Change & suspension monitoring is off'}
+        </span>
+        {s.enabled && s.monitored && s.checked_at && (
+          <span style={{ color: '#94a3b8' }}>· last checked {fmtWhen(s.checked_at)}</span>
+        )}
+        {checkBtn}
+      </div>
+      {changedFields.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#b45309' }}>
+          <AlertTriangle size={12} />
+          Last outside change: {changedFields.join(', ')}{s.last_change_at ? ` · ${fmtWhen(s.last_change_at)}` : ''}
+        </div>
+      )}
     </div>
   )
 }

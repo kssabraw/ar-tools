@@ -477,6 +477,10 @@ def parse_metadata(loc: dict) -> dict:
         "has_pending_edits": bool(meta.get("hasPendingEdits")),
         "can_modify_service_list": meta.get("canModifyServiceList"),
         "can_operate_local_post": meta.get("canOperateLocalPost"),
+        # Voice of Merchant: whether the account still has verified control of the
+        # listing. Explicit False is the API's strongest 'suspended / lost control'
+        # signal; None means Google didn't return it (unknown — never alarm).
+        "has_voice_of_merchant": meta.get("hasVoiceOfMerchant"),
         "place_id": meta.get("placeId"),
         "maps_uri": meta.get("mapsUri"),
     }
@@ -494,6 +498,113 @@ def parse_location_fields(loc: dict) -> dict:
         "categories": parse_categories(loc),
         "metadata": parse_metadata(loc),
     }
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Profile monitor — snapshot the fields Google or an outside source might change
+# + suspension/access detection. Pure snapshot/diff; the live read + alerting
+# live in services/gbp_monitor.py. See docs/modules/gbp-profile-editor-prd-v1_0.md.
+# ───────────────────────────────────────────────────────────────────────────
+# A wider read than the editor's — the monitor also watches identity fields
+# (name / phone / website / address / categories) an outside source (a scraper,
+# a hijack, or Google itself) can change, plus openInfo + voice-of-merchant.
+MONITOR_READ_MASK = (
+    "name,title,profile.description,regularHours,specialHours,serviceItems,"
+    "categories,phoneNumbers,websiteUri,storefrontAddress,openInfo,metadata"
+)
+
+# The monitored fields, in the order alerts list them. Each maps to a snapshot
+# key; hours/services diff via the field-aware ``diff_field``, the rest compare
+# with normalized equality.
+MONITOR_FIELDS = (
+    "title", "description", "categories", "phone", "website", "address",
+    "hours", "services", "open_status",
+)
+_MONITOR_LABELS = {
+    "title": "business name", "description": "description", "categories": "categories",
+    "phone": "phone number", "website": "website", "address": "address",
+    "hours": "hours", "services": "services", "open_status": "open/closed status",
+}
+
+
+def _phone_value(loc: dict) -> dict:
+    phones = (loc or {}).get("phoneNumbers") or {}
+    return {
+        "primary": (phones.get("primaryPhone") or "").strip(),
+        "additional": [p.strip() for p in (phones.get("additionalPhones") or []) if isinstance(p, str)],
+    }
+
+
+def _address_value(loc: dict) -> dict:
+    addr = (loc or {}).get("storefrontAddress") or {}
+    return {
+        "lines": [l.strip() for l in (addr.get("addressLines") or []) if isinstance(l, str)],
+        "locality": (addr.get("locality") or "").strip(),
+        "region": (addr.get("administrativeArea") or "").strip(),
+        "postal_code": (addr.get("postalCode") or "").strip(),
+        "country": (addr.get("regionCode") or "").strip(),
+    }
+
+
+def monitor_snapshot(loc: dict) -> dict:
+    """The monitored fields of a v1 Location, in the internal comparable shape.
+    Pure (unit-tested)."""
+    loc = loc or {}
+    meta = parse_metadata(loc)
+    return {
+        "title": (loc.get("title") or "").strip(),
+        "description": ((loc.get("profile") or {}).get("description") or "").strip(),
+        "categories": [c["id"] for c in parse_categories(loc)],
+        "phone": _phone_value(loc),
+        "website": (loc.get("websiteUri") or "").strip(),
+        "address": _address_value(loc),
+        "hours": parse_hours(loc),
+        "services": parse_services(loc),
+        "open_status": ((loc.get("openInfo") or {}).get("status") or "").strip(),
+        "has_voice_of_merchant": meta.get("has_voice_of_merchant"),
+    }
+
+
+def snapshot_access_status(snapshot: dict) -> str:
+    """'suspended' when Voice of Merchant is explicitly False (lost verified
+    control — the API's strongest suspension signal), else 'ok'. A None VoM is
+    unknown and never alarms. Pure."""
+    return "suspended" if (snapshot or {}).get("has_voice_of_merchant") is False else "ok"
+
+
+# A classified get-failure code (from ``classify_profile_error``) that means the
+# account can no longer READ the listing — a hard suspension or lost management,
+# distinct from a transient/quota/api-disabled blip (which must not flip state).
+_ACCESS_LOST_CODES = frozenset({
+    "gbp_location_not_found", "gbp_listing_read_only", "gbp_listing_unverified",
+})
+
+
+def access_status_for_code(code: str) -> Optional[str]:
+    """Map a classified get-failure code to 'no_access', or None when the failure
+    is transient/quota/api-disabled (skip the cycle — don't flip state). Pure."""
+    return "no_access" if code in _ACCESS_LOST_CODES else None
+
+
+def diff_snapshot(baseline: dict, live: dict) -> list[dict]:
+    """Out-of-band changes between a stored baseline snapshot and a fresh live
+    snapshot. Returns ``[{field, label}]`` for each monitored field that changed
+    (hours/services via ``diff_field``; the rest via normalized equality). Pure
+    (unit-tested). ``has_voice_of_merchant`` is NOT a content change — it drives
+    access status, not the change list."""
+    baseline = baseline or {}
+    live = live or {}
+    changes: list[dict] = []
+    for field in MONITOR_FIELDS:
+        b = baseline.get(field)
+        l = live.get(field)
+        if field in ("hours", "services"):
+            changed = diff_field(field, b, l)
+        else:
+            changed = _norm(b) != _norm(l)
+        if changed:
+            changes.append({"field": field, "label": _MONITOR_LABELS.get(field, field)})
+    return changes
 
 
 # ───────────────────────────────────────────────────────────────────────────
