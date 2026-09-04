@@ -83,6 +83,12 @@ def proposal_kind(proposal: Optional[dict]) -> str:
             if sep in cite:
                 cite = cite.split(sep, 1)[0]
         cite = cite.strip().strip(",;:")
+        # Normalize the file extension so a citation written WITH the ".md"
+        # (e.g. "Link_Building_Recipe_Engine.md") and one written without it
+        # collapse to ONE learning key instead of splitting the same playbook's
+        # track record across two kinds.
+        if cite[-3:].lower() == ".md":
+            cite = cite[:-3]
         if cite:
             return cite[:120]
     return "general"
