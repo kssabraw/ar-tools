@@ -2423,3 +2423,48 @@ export interface ActivityReport {
   by_member: ActivityReportMemberRow[]
   daily: ActivityReportDay[]
 }
+
+// Admin Cost & Usage Report — agency-wide spend + LLM token analytics
+// (routers/cost_analytics.py → services/cost_analytics.py).
+export interface CostMetrics {
+  cost: number
+  prev_cost: number
+  cost_delta: number
+  input_tokens: number
+  output_tokens: number
+  tokens: number
+  prev_tokens: number
+  tokens_delta: number
+  events: number
+}
+export interface CostTypeRow extends CostMetrics {
+  type: string
+  label: string
+  group: string
+}
+export interface CostClientRow extends CostMetrics {
+  client_id: string | null
+  client_name: string
+}
+export interface CostMemberRow extends CostMetrics {
+  member: string
+}
+export interface CostDay {
+  date: string
+  cost: number
+  tokens: number
+}
+export interface CostReport {
+  from: string
+  to: string
+  prev_from: string | null
+  prev_to: string | null
+  compare: boolean
+  client_id: string | null
+  truncated: boolean
+  total: CostMetrics
+  by_type: CostTypeRow[]
+  by_client: CostClientRow[]
+  by_member: CostMemberRow[]
+  daily: CostDay[]
+}

@@ -4,7 +4,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../context/AuthContext'
 import { api } from '../lib/api'
 import { NotificationBell } from './NotificationBell'
-import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass, ScrollText, Bug, BarChart3 } from 'lucide-react'
+import { LayoutDashboard, Home, Users, LogOut, FileText, BookOpen, Layers, UserCog, Gauge, Library, LibraryBig, LifeBuoy, Sparkles, Link2, ListChecks, ListTodo, Menu, X, Radar, Crosshair, Loader2, ShieldCheck, Globe, Globe2, CalendarDays, Compass, ScrollText, Bug, BarChart3, DollarSign } from 'lucide-react'
 
 interface NavItem {
   label: string
@@ -113,6 +113,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const mainNav: NavItem[] = [
     ...nav,
     ...(isAdmin ? [{ label: 'Activity Report', to: '/activity-report', icon: <BarChart3 size={18} /> }] : []),
+    ...(isAdmin ? [{ label: 'Cost & Usage', to: '/cost-report', icon: <DollarSign size={18} /> }] : []),
     ...(isAdmin ? [{ label: 'Feedback', to: '/feedback', icon: <Bug size={18} /> }] : []),
     ...(isAdmin ? [{ label: 'Team', to: '/team', icon: <UserCog size={18} /> }] : []),
     ...(isAdmin && paceStatus?.enabled

@@ -63,6 +63,7 @@ import { Silos } from './pages/Silos'
 import { Team } from './pages/Team'
 import { FeedbackBoard } from './pages/FeedbackBoard'
 import { ActivityReport } from './pages/ActivityReport'
+import { CostReport } from './pages/CostReport'
 import { SetPassword } from './pages/SetPassword'
 import FanoutApp from './fanout/FanoutApp'
 
@@ -159,6 +160,7 @@ export default function App() {
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
                       <Route path="/feedback" element={<AdminRoute><FeedbackBoard /></AdminRoute>} />
                       <Route path="/activity-report" element={<AdminRoute><ActivityReport /></AdminRoute>} />
+                      <Route path="/cost-report" element={<AdminRoute><CostReport /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Layout>

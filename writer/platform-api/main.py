@@ -29,6 +29,7 @@ from routers.content_schedule import router as content_schedule_router
 from routers.dashboard import router as dashboard_router
 from routers.deliverables import router as deliverables_router
 from routers.deliverables_analytics import router as deliverables_analytics_router
+from routers.cost_analytics import router as cost_analytics_router
 from routers.everhour import router as everhour_router
 from routers.feedback import router as feedback_router
 from routers.files import router as files_router
@@ -330,6 +331,7 @@ app.include_router(content_schedule_router)
 app.include_router(dashboard_router)
 app.include_router(deliverables_router)
 app.include_router(deliverables_analytics_router)
+app.include_router(cost_analytics_router)
 app.include_router(domain_intel_router)
 app.include_router(ecommerce_router)
 app.include_router(everhour_router)
