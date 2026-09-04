@@ -156,6 +156,111 @@ def test_build_services_patch_preserves_structured():
     assert body["serviceItems"] == [raw]
 
 
+def test_build_services_patch_structured_pick():
+    body, mask = api.build_services_patch([
+        {"kind": "structured", "service_type_id": "job_type_id:flex_office_rentals"},
+        {"kind": "structured", "service_type_id": "job_type_id:coworking", "description": "hot desks"},
+    ])
+    assert mask == "serviceItems"
+    assert body["serviceItems"] == [
+        {"structuredServiceItem": {"serviceTypeId": "job_type_id:flex_office_rentals"}},
+        {"structuredServiceItem": {"serviceTypeId": "job_type_id:coworking", "description": "hot desks"}},
+    ]
+
+
+def test_build_services_patch_structured_pick_requires_id():
+    with pytest.raises(ValueError, match="service_type_id_required"):
+        api.build_services_patch([{"kind": "structured"}])
+
+
+def test_build_services_patch_structured_dedup_across_pick_and_passthrough():
+    # A picked id + a passthrough raw for the SAME serviceTypeId collapse to one.
+    raw = {"structuredServiceItem": {"serviceTypeId": "job_type_id:x", "description": "d"}}
+    body, _ = api.build_services_patch([
+        {"kind": "structured", "raw": raw},
+        {"kind": "structured", "service_type_id": "job_type_id:x"},
+    ])
+    assert body["serviceItems"] == [raw]
+
+
+def test_build_services_patch_structured_uses_row_description_over_raw():
+    # Editing an existing structured service's description takes effect (the
+    # row's service_type_id + edited description win over the stored raw).
+    raw = {"structuredServiceItem": {"serviceTypeId": "job_type_id:x", "description": "old"}}
+    body, _ = api.build_services_patch([
+        {"kind": "structured", "service_type_id": "job_type_id:x", "description": "new desc", "raw": raw},
+    ])
+    assert body["serviceItems"] == [
+        {"structuredServiceItem": {"serviceTypeId": "job_type_id:x", "description": "new desc"}},
+    ]
+
+
+def test_diff_services_structured_description_change_detected():
+    a = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "X", "description": "d1"}]
+    b = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "X", "description": "d2"}]
+    assert api.diff_field("services", a, b) is True
+
+
+def test_build_services_patch_mixes_structured_and_kept_free_form():
+    body, _ = api.build_services_patch(
+        [
+            {"kind": "structured", "service_type_id": "job_type_id:x"},
+            {"kind": "free_form", "label": "Legacy Custom", "category_id": "gcid:roofing_contractor"},
+        ],
+        allowed_categories={"gcid:roofing_contractor"},
+    )
+    kinds = [next(iter(i)) for i in body["serviceItems"]]
+    assert kinds == ["structuredServiceItem", "freeFormServiceItem"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pure: service-type picker (categories.batchGet view=FULL → picker shape)
+# ═══════════════════════════════════════════════════════════════════════════
+def test_humanize_service_type_id():
+    assert api.humanize_service_type_id("job_type_id:flex_office_rentals") == "Flex Office Rentals"
+    assert api.humanize_service_type_id("gcid:coworking_space") == "Coworking Space"
+    assert api.humanize_service_type_id("") == ""
+
+
+_BATCHGET = {
+    "categories": [
+        {
+            "name": "gcid:roofing_contractor", "displayName": "Roofing contractor",
+            "serviceTypes": [
+                {"serviceTypeId": "job_type_id:roof_repair", "displayName": "Roof repair"},
+                {"serviceTypeId": "job_type_id:roof_repair", "displayName": "dup"},  # dup id dropped
+                {"serviceTypeId": "job_type_id:roof_inspection"},  # no displayName → humanized
+            ],
+        },
+        {"name": "gcid:gutter", "displayName": "Gutter service", "serviceTypes": []},
+    ]
+}
+
+
+def test_parse_service_types_groups_and_orders():
+    cats = [{"id": "gcid:gutter", "name": "Gutter service"},
+            {"id": "gcid:roofing_contractor", "name": "Roofing contractor"}]
+    out = api.parse_service_types(_BATCHGET, cats)
+    # Ordered to match the listing's category order (gutter first).
+    assert [c["id"] for c in out] == ["gcid:gutter", "gcid:roofing_contractor"]
+    roofing = next(c for c in out if c["id"] == "gcid:roofing_contractor")
+    assert roofing["service_types"] == [
+        {"service_type_id": "job_type_id:roof_repair", "display_name": "Roof repair"},
+        {"service_type_id": "job_type_id:roof_inspection", "display_name": "Roof Inspection"},
+    ]
+
+
+def test_parse_service_types_empty_response():
+    assert api.parse_service_types({}, []) == []
+    assert api.parse_service_types(None, None) == []
+
+
+def test_parse_services_carries_structured_service_type_id():
+    svcs = api.parse_services(_LIVE)
+    structured = next(s for s in svcs if s["kind"] == "structured")
+    assert structured["service_type_id"] == "job_type_id:x"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Pure: parse a v1 Location into the internal shape
 # ═══════════════════════════════════════════════════════════════════════════
@@ -216,6 +321,17 @@ def test_diff_services_order_insensitive():
     assert api.diff_field("services", a, c) is True
 
 
+def test_diff_services_structured_pick_matches_live_read_back():
+    # A fresh pick (human label + service_type_id) and its live read-back
+    # (label == service_type_id) must compare equal, so apply records 'applied'.
+    picked = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "Flex Office"}]
+    live = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "job_type_id:x",
+             "raw": {"structuredServiceItem": {"serviceTypeId": "job_type_id:x"}}}]
+    assert api.diff_field("services", picked, live) is False
+    other = [{"kind": "structured", "service_type_id": "job_type_id:y", "label": "Other"}]
+    assert api.diff_field("services", picked, other) is True
+
+
 def test_diff_hours():
     a = {"regular": [{"day": 0, "open_24": False, "periods": [{"open": "09:00", "close": "17:00"}]}]}
     assert api.diff_field("hours", a, dict(a)) is False
@@ -253,6 +369,62 @@ def test_map_drafted_services_maps_category_and_falls_back():
 
 def test_map_drafted_services_bad_json_degrades():
     assert svc.map_drafted_services("not json at all", [{"id": "c", "name": "n"}]) == []
+
+
+_SVC_TYPES = [
+    {"id": "gcid:roofing_contractor", "name": "Roofing contractor", "service_types": [
+        {"service_type_id": "job_type_id:roof_repair", "display_name": "Roof repair"},
+        {"service_type_id": "job_type_id:roof_inspection", "display_name": "Roof inspection"},
+    ]},
+]
+
+
+def test_map_drafted_service_types_maps_and_drops_unknown():
+    out = svc.map_drafted_service_types(
+        'ok: ["job_type_id:roof_repair", "job_type_id:not_real", "job_type_id:roof_repair"]',
+        _SVC_TYPES,
+    )
+    # Unknown id dropped, duplicate collapsed, mapped to display + category.
+    assert out == [{
+        "kind": "structured", "service_type_id": "job_type_id:roof_repair",
+        "label": "Roof repair", "category_id": "gcid:roofing_contractor",
+    }]
+
+
+def test_map_drafted_service_types_accepts_objects():
+    out = svc.map_drafted_service_types(
+        '[{"service_type_id": "job_type_id:roof_inspection"}]', _SVC_TYPES,
+    )
+    assert out[0]["service_type_id"] == "job_type_id:roof_inspection"
+    assert out[0]["label"] == "Roof inspection"
+
+
+def test_map_drafted_service_types_bad_json_degrades():
+    assert svc.map_drafted_service_types("not json", _SVC_TYPES) == []
+
+
+def test_merge_drafted_services_keeps_existing_and_appends_new():
+    existing = [
+        {"kind": "free_form", "label": "24/7 Emergency Callout", "category_id": "c", "description": ""},
+        {"kind": "structured", "service_type_id": "job_type_id:roof_repair", "label": "Roof repair", "raw": {}},
+    ]
+    additions = [
+        {"kind": "structured", "service_type_id": "job_type_id:roof_repair", "label": "Roof repair"},  # dup → dropped
+        {"kind": "structured", "service_type_id": "job_type_id:roof_inspection", "label": "Roof inspection"},
+    ]
+    out = svc.merge_drafted_services(existing, additions)
+    # Existing custom + structured preserved; only the genuinely-new pick appended.
+    assert out[0]["label"] == "24/7 Emergency Callout"
+    assert [s.get("service_type_id") for s in out if s["kind"] == "structured"] == [
+        "job_type_id:roof_repair", "job_type_id:roof_inspection",
+    ]
+    assert len(out) == 3
+
+
+def test_merge_drafted_services_empty_existing():
+    additions = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "X"}]
+    assert svc.merge_drafted_services([], additions) == additions
+    assert svc.merge_drafted_services(None, None) == []
 
 
 def test_next_backoff_ladder():

@@ -52,13 +52,32 @@ class ServiceItemInput(BaseModel):
     kind: Literal["free_form", "structured"] = "free_form"
     label: str = ""
     description: Optional[str] = None
-    category_id: Optional[str] = None      # a listing category's gcid
-    raw: Optional[dict[str, Any]] = None   # structured passthrough (Phase 3)
+    category_id: Optional[str] = None        # a listing category's gcid
+    service_type_id: Optional[str] = None    # a Google-defined structured service type
+    raw: Optional[dict[str, Any]] = None     # structured passthrough (keeps description)
 
 
 class Category(BaseModel):
     id: str    # the gcid the services editor attaches to
     name: str  # display name
+
+
+class ServiceType(BaseModel):
+    service_type_id: str
+    display_name: str
+
+
+class ServiceTypeCategory(BaseModel):
+    id: str    # the listing category's gcid
+    name: str  # display name
+    service_types: list[ServiceType] = []
+
+
+class ServiceTypesResponse(BaseModel):
+    """The Google-defined service types the operator can pick, grouped by the
+    listing's categories (categories.batchGet, view=FULL)."""
+
+    categories: list[ServiceTypeCategory] = []
 
 
 # ── requests ────────────────────────────────────────────────────────────────
