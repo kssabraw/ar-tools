@@ -35,6 +35,20 @@ def test_unknown_model_defaults_to_sonnet_pricing():
     assert cost.total_cost() == 3.0
 
 
+def test_tokens_accumulate_alongside_cost():
+    cost.start_accounting()
+    cost.record_usage("claude-sonnet-4-6", 1500, 1200)
+    cost.record_usage("claude-haiku-4-5-20251001", 500, 300)
+    assert cost.total_tokens() == {"input_tokens": 2000, "output_tokens": 1500}
+
+
+def test_total_tokens_zero_when_unstarted():
+    cost._cost_accumulator.set(None)
+    cost._token_accumulator.set(None)
+    cost.record_usage("claude-sonnet-4-6", 1000, 1000)
+    assert cost.total_tokens() == {"input_tokens": 0, "output_tokens": 0}
+
+
 def test_start_accounting_resets_between_requests():
     cost.start_accounting()
     cost.record_usage("claude-sonnet-4-6", 1_000_000, 0)

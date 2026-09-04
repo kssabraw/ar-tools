@@ -354,6 +354,7 @@ async def _save_module_output(
     duration_ms: int,
     cost_usd: Optional[float],
     module_version: Optional[str],
+    token_usage: Optional[dict] = None,
 ) -> None:
     _sb().table("module_outputs").update(
         {
@@ -361,6 +362,7 @@ async def _save_module_output(
             "output_payload": result,
             "duration_ms": duration_ms,
             "cost_usd": cost_usd,
+            "token_usage": token_usage,
             "module_version": module_version,
             "completed_at": "now()",
         }
@@ -507,7 +509,8 @@ async def _call_module(
             raise StageError(module, err)
 
     cost = result.get("cost_usd") or result.get("metadata", {}).get("cost_usd")
-    await _save_module_output(output_id, result, duration_ms, cost, actual_version)
+    token_usage = result.get("token_usage") or result.get("metadata", {}).get("token_usage")
+    await _save_module_output(output_id, result, duration_ms, cost, actual_version, token_usage)
 
     # PRD v1.4 §8.5 — when a brief (or service_brief) module_output
     # transitions to complete, enqueue the silo_dedup async job. Best-effort:

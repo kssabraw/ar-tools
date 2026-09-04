@@ -53,6 +53,7 @@ async def _blog_cost_accounting(request: Request, call_next):
     blog_cost.start_accounting()
     response = await call_next(request)
     total = blog_cost.total_cost()
+    tokens = blog_cost.total_tokens()
     ctype = response.headers.get("content-type", "")
     if total <= 0 or response.status_code >= 400 or not ctype.startswith("application/json"):
         return response
@@ -63,6 +64,10 @@ async def _blog_cost_accounting(request: Request, call_next):
         data = json.loads(body)
         if isinstance(data, dict):
             data.setdefault("cost_usd", total)
+            # Surface token usage alongside cost so the orchestrator can persist
+            # it onto module_outputs.token_usage (blog Claude token accounting).
+            if (tokens["input_tokens"] or tokens["output_tokens"]) and "token_usage" not in data:
+                data["token_usage"] = tokens
             body = json.dumps(data).encode()
     except Exception:  # noqa: BLE001 — keep the original body on any parse/encode failure
         logger.warning("blog_cost_injection_failed", exc_info=True)

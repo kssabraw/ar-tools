@@ -33,11 +33,17 @@ _PRICES: dict[str, tuple[float, float]] = {
 _cost_accumulator: contextvars.ContextVar[Optional[list[float]]] = contextvars.ContextVar(
     "blog_pipeline_cost", default=None
 )
+# Token tally parallel to the cost tally: [input_tokens, output_tokens]. Same
+# single-mutable-container trick so gathered child coroutines accumulate into it.
+_token_accumulator: contextvars.ContextVar[Optional[list[int]]] = contextvars.ContextVar(
+    "blog_pipeline_tokens", default=None
+)
 
 
 def start_accounting() -> None:
-    """Begin a fresh per-request cost tally (call once per blog module request)."""
+    """Begin a fresh per-request cost + token tally (once per blog module request)."""
     _cost_accumulator.set([0.0])
+    _token_accumulator.set([0, 0])
 
 
 def _price_for(model: str) -> tuple[float, float]:
@@ -60,9 +66,21 @@ def record_usage(model: str, input_tokens: int, output_tokens: int) -> None:
         return
     in_price, out_price = _price_for(model)
     bucket[0] += (input_tokens / 1_000_000) * in_price + (output_tokens / 1_000_000) * out_price
+    tokens = _token_accumulator.get()
+    if tokens is not None:
+        tokens[0] += int(input_tokens or 0)
+        tokens[1] += int(output_tokens or 0)
 
 
 def total_cost() -> float:
     """Return the accumulated cost in USD (0.0 if accounting wasn't started)."""
     bucket = _cost_accumulator.get()
     return round(bucket[0], 6) if bucket else 0.0
+
+
+def total_tokens() -> dict[str, int]:
+    """Return the accumulated {input_tokens, output_tokens} (zeros if unstarted)."""
+    tokens = _token_accumulator.get()
+    if not tokens:
+        return {"input_tokens": 0, "output_tokens": 0}
+    return {"input_tokens": tokens[0], "output_tokens": tokens[1]}
