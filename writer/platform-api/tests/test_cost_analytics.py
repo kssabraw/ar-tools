@@ -39,7 +39,19 @@ def test_label_and_group():
     assert ca.group_for("blog_post") == "Content pages"
     assert ca.group_for("ecommerce_product") == "Content pages"
     assert ca.group_for("keyword_research") == "Research"
-    assert ca.group_for("autonomy_run") == "Automation"
+    # autonomy + strategist are agent runs
+    assert ca.group_for("autonomy_run") == "Agents"
+
+
+def test_leadoff_and_strategist_labels_and_groups():
+    assert ca.label_for("strategist_review") == "Strategist review"
+    assert ca.group_for("strategist_review") == "Agents"
+    assert ca.label_for("leadoff_scout") == "LeadOff scout"
+    assert ca.label_for("leadoff_ai_probe") == "LeadOff AI probe"
+    # unmapped leadoff action → readable "LeadOff <action>" fallback
+    assert ca.label_for("leadoff_something_new") == "LeadOff something new"
+    assert ca.group_for("leadoff_scout") == "Market research"
+    assert ca.group_for("leadoff_something_new") == "Market research"
 
 
 def test_aggregate_sums_cost_and_tokens():

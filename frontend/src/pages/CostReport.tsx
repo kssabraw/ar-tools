@@ -23,7 +23,7 @@ const PRESETS: Preset[] = [
   { key: '60d', label: 'Last 60 days', from: () => daysAgo(59), to: () => isoDay(new Date()) },
   { key: '90d', label: 'Last 90 days', from: () => daysAgo(89), to: () => isoDay(new Date()) },
 ]
-const GROUP_ORDER = ['Content pages', 'Research', 'Automation', 'Other']
+const GROUP_ORDER = ['Content pages', 'Research', 'Market research', 'Agents', 'Automation', 'Other']
 
 function qs(params: Record<string, string>): string {
   const p = new URLSearchParams()
@@ -144,10 +144,11 @@ export function CostReport() {
         </button>
       </div>
       <p style={{ marginTop: 0, color: '#64748b', fontSize: 13 }}>
-        Money spent and LLM tokens used across the suite — page/blog generation, research, and
-        automation — broken down by type, client, and team member. A spend ledger (all recorded
-        cost). Token counts are reported by the LLM page generators (Local SEO, Ecommerce); other
-        sources record cost only.
+        Money spent and LLM tokens used across the suite — page/blog generation, research, LeadOff
+        market research, and the SerMaStr strategist — broken down by type, client, and team member.
+        A spend ledger (all recorded cost). Tokens are reported where the source records them (Local
+        SEO + Ecommerce generators, and the strategist); the strategist records tokens but no dollar
+        cost, so it shows under Tokens. QA reviews don't yet record cost or tokens.
       </p>
 
       {/* Controls */}

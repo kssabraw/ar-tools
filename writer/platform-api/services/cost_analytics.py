@@ -44,6 +44,11 @@ TYPE_LABELS: dict[str, str] = {
     "keyword_topic_research": "Topic research",
     "domain_intel": "Domain intel",
     "autonomy_run": "Autonomy run",
+    "strategist_review": "Strategist review",
+    "leadoff_scout": "LeadOff scout",
+    "leadoff_tryout": "LeadOff tryout",
+    "leadoff_city_finder": "LeadOff city finder",
+    "leadoff_ai_probe": "LeadOff AI probe",
 }
 _PAGE_TYPES = {
     "blog_post", "service_page", "location_page", "local_seo_page",
@@ -51,11 +56,17 @@ _PAGE_TYPES = {
     "ecommerce_reoptimize",
 }
 _RESEARCH_TYPES = {"keyword_research", "keyword_topic_research", "domain_intel"}
+_AGENT_TYPES = {"autonomy_run", "strategist_review"}
 
 
 def label_for(cost_type: str) -> str:
     """Human label for a type key, readable fallback for unmapped keys. Pure."""
-    return TYPE_LABELS.get(cost_type) or cost_type.replace("_", " ").title()
+    if cost_type in TYPE_LABELS:
+        return TYPE_LABELS[cost_type]
+    if cost_type.startswith("leadoff_"):
+        rest = cost_type[len("leadoff_"):].replace("_", " ").strip()
+        return f"LeadOff {rest}" if rest else "LeadOff"
+    return cost_type.replace("_", " ").title()
 
 
 def group_for(cost_type: str) -> str:
@@ -64,8 +75,10 @@ def group_for(cost_type: str) -> str:
         return "Content pages"
     if cost_type in _RESEARCH_TYPES:
         return "Research"
-    if cost_type == "autonomy_run":
-        return "Automation"
+    if cost_type.startswith("leadoff_"):
+        return "Market research"
+    if cost_type in _AGENT_TYPES:
+        return "Agents"
     return "Other"
 
 
