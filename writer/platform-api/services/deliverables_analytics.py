@@ -172,35 +172,49 @@ def aggregate(events: list[dict]) -> dict[str, Any]:
     }
 
 
-def build_type_rows(by_type: dict[str, int]) -> list[dict[str, Any]]:
-    """Sorted (count desc, label asc) by-type rows with label + group. Pure."""
-    rows = [
-        {"type": t, "label": label_for(t), "group": group_for(t), "count": n}
-        for t, n in by_type.items()
-    ]
-    rows.sort(key=lambda r: (-r["count"], r["label"]))
+def build_type_rows(
+    by_type: dict[str, int], prev_by_type: Optional[dict[str, int]] = None
+) -> list[dict[str, Any]]:
+    """Sorted by-type rows with label + group and a previous-period delta. Pure.
+
+    The row set is the union of both periods, so a type that dropped to zero
+    this period (but ran last period) still surfaces with its negative delta."""
+    prev = prev_by_type or {}
+    rows = []
+    for t in set(by_type) | set(prev):
+        c, p = by_type.get(t, 0), prev.get(t, 0)
+        rows.append({
+            "type": t, "label": label_for(t), "group": group_for(t),
+            "count": c, "prev_count": p, "delta": c - p,
+        })
+    rows.sort(key=lambda r: (-r["count"], -r["prev_count"], r["label"]))
     return rows
 
 
 def build_client_rows(
-    by_client: dict[Optional[str], int], names: dict[str, str]
+    by_client: dict[Optional[str], int],
+    names: dict[str, str],
+    prev_by_client: Optional[dict[Optional[str], int]] = None,
 ) -> list[dict[str, Any]]:
-    """Sorted by-client rows with resolved names. Pure. Null client → internal."""
+    """Sorted by-client rows with resolved names and a previous-period delta.
+    Pure. Null client → internal. Union of both periods."""
+    prev = prev_by_client or {}
     rows = []
-    for cid, n in by_client.items():
+    for cid in set(by_client) | set(prev):
+        c, p = by_client.get(cid, 0), prev.get(cid, 0)
         rows.append({
             "client_id": cid,
             "client_name": names.get(cid, _NO_CLIENT) if cid else _NO_CLIENT,
-            "count": n,
+            "count": c, "prev_count": p, "delta": c - p,
         })
-    rows.sort(key=lambda r: (-r["count"], r["client_name"].lower()))
+    rows.sort(key=lambda r: (-r["count"], -r["prev_count"], r["client_name"].lower()))
     return rows
 
 
-def build_member_rows(
+def member_display_counts(
     by_member: dict[tuple[str, Optional[str]], int], profile_names: dict[str, str]
-) -> list[dict[str, Any]]:
-    """Sorted by-member rows with a single display name per bucket. Pure.
+) -> dict[str, int]:
+    """Collapse member-key buckets into counts by display name. Pure.
 
     A profile-id bucket resolves through profile_names; a name bucket is used
     verbatim; the system bucket is the automated/scheduled label."""
@@ -213,9 +227,23 @@ def build_member_rows(
         else:
             display = _SYSTEM_MEMBER
         merged[display] = merged.get(display, 0) + n
-    rows = [{"member": m, "count": n} for m, n in merged.items()]
-    # Keep the automated bucket last among equal counts — it's context, not a person.
-    rows.sort(key=lambda r: (-r["count"], r["member"] == _SYSTEM_MEMBER, r["member"].lower()))
+    return merged
+
+
+def build_member_rows(
+    by_member: dict[tuple[str, Optional[str]], int],
+    profile_names: dict[str, str],
+    prev_by_member: Optional[dict[tuple[str, Optional[str]], int]] = None,
+) -> list[dict[str, Any]]:
+    """Sorted by-member rows (one display name per bucket) with a previous-period
+    delta. Pure. Union of both periods; automated bucket sorts last on ties."""
+    cur = member_display_counts(by_member, profile_names)
+    prev = member_display_counts(prev_by_member or {}, profile_names)
+    rows = []
+    for m in set(cur) | set(prev):
+        c, p = cur.get(m, 0), prev.get(m, 0)
+        rows.append({"member": m, "count": c, "prev_count": p, "delta": c - p})
+    rows.sort(key=lambda r: (-r["count"], -r["prev_count"], r["member"] == _SYSTEM_MEMBER, r["member"].lower()))
     return rows
 
 
@@ -249,6 +277,15 @@ def _parse_date(value: Optional[str]) -> Optional[date]:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).date()
     except (ValueError, TypeError):
         return None
+
+
+def previous_window(start: date, end: date) -> tuple[date, date]:
+    """The equal-length window immediately preceding [start, end] (inclusive).
+    Pure — a 30-day range compares against the 30 days before it."""
+    length = (end - start).days + 1
+    prev_end = start - timedelta(days=1)
+    prev_start = prev_end - timedelta(days=length - 1)
+    return prev_start, prev_end
 
 
 def _fetch_events(
@@ -316,13 +353,18 @@ def _profile_names(supabase, profile_ids: set[str]) -> dict[str, str]:
         return {}
 
 
+_EMPTY_TALLIES: dict[str, Any] = {"by_type": {}, "by_client": {}, "by_member": {}, "by_day": {}, "total": 0}
+
+
 def build_report(
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     client_id: Optional[str] = None,
+    compare: bool = True,
 ) -> dict[str, Any]:
     """The admin Activity Report payload for a date range (defaults to the last
-    30 days), optionally scoped to one client."""
+    30 days), optionally scoped to one client. When `compare`, every count also
+    carries a delta vs the equal-length window immediately before the range."""
     start = _parse_date(date_from)
     end = _parse_date(date_to)
     if not start or not end:
@@ -336,19 +378,37 @@ def build_report(
     events, truncated = _fetch_events(supabase, start, end, client_id)
     tallies = aggregate(events)
 
-    client_ids = {c for c in tallies["by_client"] if c}
+    prev_start = prev_end = None
+    prev_tallies = _EMPTY_TALLIES
+    prev_truncated = False
+    if compare:
+        prev_start, prev_end = previous_window(start, end)
+        prev_events, prev_truncated = _fetch_events(supabase, prev_start, prev_end, client_id)
+        prev_tallies = aggregate(prev_events)
+
+    # Resolve names over the UNION of both periods, so a client/member present
+    # only last period still renders with a real name (and its negative delta).
+    client_ids = {c for c in tallies["by_client"] if c} | {c for c in prev_tallies["by_client"] if c}
     names = _client_names(supabase, client_ids)
-    profile_ids = {key for (kind, key) in tallies["by_member"] if kind == "profile" and key}
+    profile_ids = (
+        {k for (kind, k) in tallies["by_member"] if kind == "profile" and k}
+        | {k for (kind, k) in prev_tallies["by_member"] if kind == "profile" and k}
+    )
     profile_names = _profile_names(supabase, profile_ids)
 
     return {
         "from": start.isoformat(),
         "to": end.isoformat(),
+        "prev_from": prev_start.isoformat() if prev_start else None,
+        "prev_to": prev_end.isoformat() if prev_end else None,
+        "compare": compare,
         "client_id": client_id,
         "total": tallies["total"],
-        "truncated": truncated,
-        "by_type": build_type_rows(tallies["by_type"]),
-        "by_client": build_client_rows(tallies["by_client"], names),
-        "by_member": build_member_rows(tallies["by_member"], profile_names),
+        "prev_total": prev_tallies["total"],
+        "total_delta": tallies["total"] - prev_tallies["total"],
+        "truncated": truncated or prev_truncated,
+        "by_type": build_type_rows(tallies["by_type"], prev_tallies["by_type"]),
+        "by_client": build_client_rows(tallies["by_client"], names, prev_tallies["by_client"]),
+        "by_member": build_member_rows(tallies["by_member"], profile_names, prev_tallies["by_member"]),
         "daily": build_daily_series(tallies["by_day"], start, end),
     }

@@ -105,7 +105,23 @@ def test_aggregate_bad_timestamp_skips_day_only():
 def test_build_type_rows_sorted_with_label_and_group():
     rows = da.build_type_rows({"gbp_post": 1, "blog_post": 3})
     assert [r["type"] for r in rows] == ["blog_post", "gbp_post"]  # count desc
-    assert rows[0] == {"type": "blog_post", "label": "Blog post", "group": "Content pages", "count": 3}
+    assert rows[0] == {
+        "type": "blog_post", "label": "Blog post", "group": "Content pages",
+        "count": 3, "prev_count": 0, "delta": 3,
+    }
+
+
+def test_build_type_rows_with_prev_includes_dropped_to_zero():
+    rows = da.build_type_rows({"blog_post": 2}, {"blog_post": 5, "gbp_post": 4})
+    by_type = {r["type"]: r for r in rows}
+    assert by_type["blog_post"] == {
+        "type": "blog_post", "label": "Blog post", "group": "Content pages",
+        "count": 2, "prev_count": 5, "delta": -3,
+    }
+    # ran last period, none this period → still surfaces with a negative delta
+    assert by_type["gbp_post"]["count"] == 0
+    assert by_type["gbp_post"]["prev_count"] == 4
+    assert by_type["gbp_post"]["delta"] == -4
 
 
 def test_build_client_rows_resolves_names_and_internal_bucket():
@@ -134,7 +150,35 @@ def test_build_member_rows_merges_and_orders_system_last():
 
 def test_build_member_rows_missing_profile_name_falls_back():
     rows = da.build_member_rows({("profile", "ghost"): 1}, {})
-    assert rows == [{"member": "Unknown user", "count": 1}]
+    assert rows == [{"member": "Unknown user", "count": 1, "prev_count": 0, "delta": 1}]
+
+
+def test_build_member_rows_with_prev_delta():
+    rows = da.build_member_rows(
+        {("name", "Ivy"): 3},
+        {"p1": "Kyle"},
+        prev_by_member={("name", "Ivy"): 1, ("profile", "p1"): 5},
+    )
+    by_member = {r["member"]: r for r in rows}
+    assert by_member["Ivy"] == {"member": "Ivy", "count": 3, "prev_count": 1, "delta": 2}
+    # Kyle did work last period, none this period → surfaces with a negative delta
+    assert by_member["Kyle"] == {"member": "Kyle", "count": 0, "prev_count": 5, "delta": -5}
+
+
+def test_build_client_rows_with_prev_delta():
+    rows = da.build_client_rows({"c1": 4}, {"c1": "Acme", "c2": "Beta"}, {"c1": 1, "c2": 2})
+    by_client = {r["client_name"]: r for r in rows}
+    assert by_client["Acme"]["delta"] == 3
+    assert by_client["Beta"]["count"] == 0 and by_client["Beta"]["delta"] == -2
+
+
+def test_previous_window_is_equal_length_and_immediately_before():
+    # a 30-day inclusive range → the 30 days immediately before it
+    start, end = date(2026, 8, 5), date(2026, 9, 3)  # 30 days inclusive
+    ps, pe = da.previous_window(start, end)
+    assert pe == date(2026, 8, 4)
+    assert ps == date(2026, 7, 6)
+    assert (pe - ps).days == (end - start).days == 29
 
 
 # ── daily series ─────────────────────────────────────────────────────────────

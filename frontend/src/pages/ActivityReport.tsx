@@ -20,18 +20,11 @@ function daysAgo(n: number): string {
   d.setDate(d.getDate() - n)
   return isoDay(d)
 }
-function monthStart(): string {
-  const d = new Date()
-  return isoDay(new Date(d.getFullYear(), d.getMonth(), 1))
-}
-
 type Preset = { key: string; label: string; from: () => string; to: () => string }
 const PRESETS: Preset[] = [
-  { key: '7d', label: 'Last 7 days', from: () => daysAgo(6), to: () => isoDay(new Date()) },
   { key: '30d', label: 'Last 30 days', from: () => daysAgo(29), to: () => isoDay(new Date()) },
+  { key: '60d', label: 'Last 60 days', from: () => daysAgo(59), to: () => isoDay(new Date()) },
   { key: '90d', label: 'Last 90 days', from: () => daysAgo(89), to: () => isoDay(new Date()) },
-  { key: 'mtd', label: 'This month', from: () => monthStart(), to: () => isoDay(new Date()) },
-  { key: 'all', label: 'All time', from: () => '2020-01-01', to: () => isoDay(new Date()) },
 ]
 
 const GROUP_ORDER = ['Content pages', 'GBP posts', 'Tasks', 'Reports', 'Research & scans', 'Other']
@@ -47,6 +40,7 @@ export function ActivityReport() {
   const [preset, setPreset] = useState('30d')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  const [compare, setCompare] = useState(true)
 
   const active = PRESETS.find((p) => p.key === preset)
   const from = preset === 'custom' ? customFrom : active?.from() ?? daysAgo(29)
@@ -54,15 +48,16 @@ export function ActivityReport() {
   const rangeValid = !!from && !!to
 
   const { data, isLoading, isFetching, refetch, error } = useQuery<ActivityReport>({
-    queryKey: ['activity-report', from, to],
-    queryFn: () => api.get<ActivityReport>(`/admin/activity-report${qs({ date_from: from, date_to: to })}`),
+    queryKey: ['activity-report', from, to, compare],
+    queryFn: () => api.get<ActivityReport>(`/admin/activity-report${qs({ date_from: from, date_to: to, compare: String(compare) })}`),
     enabled: rangeValid,
   })
+  const cmp = !!data?.compare
 
   const byGroup = useMemo(() => {
-    const groups: Record<string, { label: string; count: number }[]> = {}
+    const groups: Record<string, { label: string; count: number; delta: number }[]> = {}
     for (const r of data?.by_type ?? []) {
-      ;(groups[r.group] ||= []).push({ label: r.label, count: r.count })
+      ;(groups[r.group] ||= []).push({ label: r.label, count: r.count, delta: r.delta })
     }
     return groups
   }, [data])
@@ -109,10 +104,19 @@ export function ActivityReport() {
             <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={dateInput} />
           </span>
         )}
-        {rangeValid && (
-          <span style={{ marginLeft: 'auto', fontSize: 12, color: '#94a3b8' }}>{from} → {to}</span>
-        )}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#334155', cursor: 'pointer', marginLeft: 8 }}>
+          <input type="checkbox" checked={compare} onChange={(e) => setCompare(e.target.checked)} />
+          Compare to previous period
+        </label>
       </div>
+      {rangeValid && (
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>
+          {from} → {to}
+          {cmp && data?.prev_from && (
+            <span> · vs previous period {data.prev_from} → {data.prev_to}</span>
+          )}
+        </div>
+      )}
 
       {error && (
         <div style={{ padding: 12, background: '#fef2f2', color: '#b91c1c', borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
@@ -135,10 +139,10 @@ export function ActivityReport() {
 
           {/* Summary strip */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, margin: '4px 0 18px' }}>
-            <Stat label="Total deliverables" value={data.total} big />
-            <Stat label="Types" value={data.by_type.length} />
-            <Stat label="Clients" value={data.by_client.filter((c) => c.client_id).length} />
-            <Stat label="Contributors" value={data.by_member.length} />
+            <Stat label="Total deliverables" value={data.total} big delta={cmp ? data.total_delta : undefined} prev={cmp ? data.prev_total : undefined} />
+            <Stat label="Types" value={data.by_type.filter((t) => t.count > 0).length} />
+            <Stat label="Clients" value={data.by_client.filter((c) => c.client_id && c.count > 0).length} />
+            <Stat label="Contributors" value={data.by_member.filter((m) => m.count > 0).length} />
           </div>
 
           {/* Daily volume */}
@@ -157,7 +161,7 @@ export function ActivityReport() {
                 GROUP_ORDER.filter((g) => byGroup[g]?.length).map((g) => (
                   <div key={g} style={{ marginBottom: 14 }}>
                     <div style={groupHead}>{g}</div>
-                    {byGroup[g].map((r) => <Bar key={r.label} label={r.label} count={r.count} max={typeMax} color="#6366f1" />)}
+                    {byGroup[g].map((r) => <Bar key={r.label} label={r.label} count={r.count} max={typeMax} color="#6366f1" delta={cmp ? r.delta : undefined} />)}
                   </div>
                 ))
               )}
@@ -166,7 +170,7 @@ export function ActivityReport() {
             <Panel title="By client">
               {data.by_client.length === 0 ? <Empty /> : (
                 data.by_client.map((r) => (
-                  <Bar key={r.client_id ?? 'none'} label={r.client_name} count={r.count} max={clientMax} color="#0891b2" />
+                  <Bar key={r.client_id ?? 'none'} label={r.client_name} count={r.count} max={clientMax} color="#0891b2" delta={cmp ? r.delta : undefined} />
                 ))
               )}
             </Panel>
@@ -174,7 +178,7 @@ export function ActivityReport() {
             <Panel title="By team member">
               {data.by_member.length === 0 ? <Empty /> : (
                 data.by_member.map((r) => (
-                  <Bar key={r.member} label={r.member} count={r.count} max={memberMax} color="#16a34a" muted={r.member === 'Automated / scheduled'} />
+                  <Bar key={r.member} label={r.member} count={r.count} max={memberMax} color="#16a34a" muted={r.member === 'Automated / scheduled'} delta={cmp ? r.delta : undefined} />
                 ))
               )}
             </Panel>
@@ -200,23 +204,37 @@ function Empty() {
   return <div style={{ color: '#94a3b8', fontSize: 13, padding: '8px 0' }}>Nothing in this range.</div>
 }
 
-function Stat({ label, value, big }: { label: string; value: number; big?: boolean }) {
+// A colored +N / −N / no-change delta chip (rendered only when comparing).
+function Delta({ value, style }: { value: number; style?: CSSProperties }) {
+  const color = value > 0 ? '#16a34a' : value < 0 ? '#dc2626' : '#94a3b8'
+  const text = value > 0 ? `+${value.toLocaleString()}` : value < 0 ? `−${Math.abs(value).toLocaleString()}` : '±0'
+  return <span style={{ fontSize: 11, fontWeight: 700, color, ...style }}>{text}</span>
+}
+
+function Stat({ label, value, big, delta, prev }: { label: string; value: number; big?: boolean; delta?: number; prev?: number }) {
   return (
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: '10px 16px', minWidth: 120, background: '#fff' }}>
-      <div style={{ fontSize: big ? 28 : 20, fontWeight: 800, color: '#0f172a' }}>{value.toLocaleString()}</div>
-      <div style={{ fontSize: 11, color: '#64748b' }}>{label}</div>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+        <div style={{ fontSize: big ? 28 : 20, fontWeight: 800, color: '#0f172a' }}>{value.toLocaleString()}</div>
+        {delta !== undefined && <Delta value={delta} />}
+      </div>
+      <div style={{ fontSize: 11, color: '#64748b' }}>
+        {label}
+        {prev !== undefined && <span> · prev {prev.toLocaleString()}</span>}
+      </div>
     </div>
   )
 }
 
-function Bar({ label, count, max, color, muted }: { label: string; count: number; max: number; color: string; muted?: boolean }) {
-  const pct = Math.max(2, Math.round((count / max) * 100))
+function Bar({ label, count, max, color, muted, delta }: { label: string; count: number; max: number; color: string; muted?: boolean; delta?: number }) {
+  const pct = count === 0 ? 0 : Math.max(2, Math.round((count / max) * 100))
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0' }}>
       <div title={label} style={{ width: 150, flexShrink: 0, fontSize: 12.5, color: muted ? '#94a3b8' : '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
       <div style={{ flex: 1, background: '#f1f5f9', borderRadius: 4, height: 16, position: 'relative' }}>
         <div style={{ width: `${pct}%`, background: muted ? '#cbd5e1' : color, height: '100%', borderRadius: 4 }} />
       </div>
+      {delta !== undefined && <div style={{ width: 40, flexShrink: 0, textAlign: 'right' }}><Delta value={delta} /></div>}
       <div style={{ width: 44, flexShrink: 0, textAlign: 'right', fontSize: 12.5, fontWeight: 600, color: '#0f172a' }}>{count.toLocaleString()}</div>
     </div>
   )

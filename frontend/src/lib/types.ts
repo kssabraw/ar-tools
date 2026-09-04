@@ -2387,15 +2387,21 @@ export interface ActivityReportTypeRow {
   label: string
   group: string
   count: number
+  prev_count: number
+  delta: number
 }
 export interface ActivityReportClientRow {
   client_id: string | null
   client_name: string
   count: number
+  prev_count: number
+  delta: number
 }
 export interface ActivityReportMemberRow {
   member: string
   count: number
+  prev_count: number
+  delta: number
 }
 export interface ActivityReportDay {
   date: string
@@ -2404,8 +2410,13 @@ export interface ActivityReportDay {
 export interface ActivityReport {
   from: string
   to: string
+  prev_from: string | null
+  prev_to: string | null
+  compare: boolean
   client_id: string | null
   total: number
+  prev_total: number
+  total_delta: number
   truncated: boolean
   by_type: ActivityReportTypeRow[]
   by_client: ActivityReportClientRow[]
