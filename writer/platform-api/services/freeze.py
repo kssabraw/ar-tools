@@ -63,6 +63,12 @@ FREEZE_GATED_JOB_TYPES = {
     "syndication_item",
     "content_batch_item",
     "gbp_post_publish",
+    # GBP Profile Editor: applying a description/services/hours edit writes a
+    # persistent, customer-facing profile field (output). The self-continuing
+    # reconciler that chases Google's pending verdict is gated too, so a client
+    # frozen mid-review holds — reads + drafting stay ungated (observation).
+    "gbp_profile_apply",
+    "gbp_profile_sync",
     # A website's content path: writing body copy and committing it into a site
     # repo are both output. Deploy polling is observation and stays ungated —
     # a freeze pauses output, not observation.

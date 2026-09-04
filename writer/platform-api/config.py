@@ -596,6 +596,34 @@ class Settings(BaseSettings):
     # posts). One sync job per client with an ok location, after this hour (UTC).
     gbp_posts_sync_hour_utc: int = 9
     # ------------------------------------------------------------------
+    # Google Business Profile (GBP) Profile Editor module.
+    # Edits three structured, persistent profile fields — the business
+    # description, services, and operating hours — via the Business Information
+    # API v1 `locations.patch`, reusing the same connection layer as GBP Posts.
+    # Every edit is AI-drafted → operator-reviewed → applied on an EXPLICIT click;
+    # nothing is auto-applied (ADR 0004 — the deliberate divergence from Posts).
+    # `gbp_profile_enabled` gates the module on top of the shared `gbp_api_enabled`;
+    # both default off so the routes + reconciler no-op until access lands and the
+    # write path is proven on the agency's own listing (verify_gbp_api_access.py
+    # --edit-test). See docs/modules/gbp-profile-editor-prd-v1_0.md.
+    gbp_profile_enabled: bool = False
+    # Anthropic model for AI-drafted description + services copy (client-facing
+    # tone; hours are never AI-drafted — see the service). Same family as the
+    # other client copy.
+    gbp_profile_draft_model: str = "claude-sonnet-4-6"
+    gbp_profile_draft_max_tokens: int = 1024
+    # Google caps a Business Profile description at 750 chars; enforce app-side.
+    gbp_profile_description_max_chars: int = 750
+    # After an apply, re-read the field this many seconds later to catch an
+    # instant LIVE/REJECTED verdict before the backoff reconciler takes over.
+    gbp_profile_sync_delay_seconds: int = 120
+    # The self-continuing `gbp_profile_sync` reconciler's backoff ladder (seconds
+    # from the apply): +2m / +30m / +2h / +12h / +24h → then give up (stays
+    # pending_review with a manual "Refresh status"). The 30-min stale-job reaper
+    # forbids a sleep-poll, so each check enqueues the next with a future
+    # scheduled_at (the leadoff_geocode pattern).
+    gbp_profile_sync_backoff: list[int] = [120, 1800, 7200, 43200, 86400]
+    # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may
     # not be accepted as a listing Manager (unlike GSC). With a Google Workspace
