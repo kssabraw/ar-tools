@@ -91,6 +91,17 @@ function lintDescription(text: string): { code: string; message: string }[] {
 // ── page shell ───────────────────────────────────────────────────────────────
 export function GbpProfile() {
   const { id: clientId = '' } = useParams()
+  return (
+    <div style={{ maxWidth: 920, margin: '0 auto', padding: '0 4px' }}>
+      <GbpProfileBody clientId={clientId} />
+    </div>
+  )
+}
+
+// The Profile editor body, reusable standalone (above) and embedded in the
+// unified Google Business Profile module. `embedded` hides the back-link, page
+// title, and the shared ConnectionBar (the module renders one above all tabs).
+export function GbpProfileBody({ clientId, embedded }: { clientId: string; embedded?: boolean }) {
   const qc = useQueryClient()
   const [manageOpen, setManageOpen] = useState(false)
   const [selectedLoc, setSelectedLoc] = useState<string | null>(null)
@@ -112,20 +123,23 @@ export function GbpProfile() {
   }, [okLocations, selectedLoc])
 
   return (
-    <div style={{ maxWidth: 920, margin: '0 auto', padding: '0 4px' }}>
-      <Link to={`/clients/${clientId}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#64748b', fontSize: 13, textDecoration: 'none', marginBottom: 14 }}>
-        <ArrowLeft size={14} /> Back to {clientQ.data?.name ?? 'client'}
-      </Link>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-        <Building2 size={22} color={ACCENT} />
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0f172a' }}>Business Profile</h1>
-      </div>
-      <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 18px', lineHeight: 1.6 }}>
-        Edit the client's Google Business Profile <strong>description</strong>, <strong>services</strong>, and
-        <strong> hours</strong>. Every edit is drafted, then <em>you</em> click Apply — nothing is applied automatically.
-      </p>
-
-      <ConnectionBar accent={ACCENT} />
+    <>
+      {!embedded && (
+        <>
+          <Link to={`/clients/${clientId}`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: '#64748b', fontSize: 13, textDecoration: 'none', marginBottom: 14 }}>
+            <ArrowLeft size={14} /> Back to {clientQ.data?.name ?? 'client'}
+          </Link>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <Building2 size={22} color={ACCENT} />
+            <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0, color: '#0f172a' }}>Business Profile</h1>
+          </div>
+          <p style={{ fontSize: 13, color: '#64748b', margin: '0 0 18px', lineHeight: 1.6 }}>
+            Edit the client's Google Business Profile <strong>description</strong>, <strong>services</strong>, and
+            <strong> hours</strong>. Every edit is drafted, then <em>you</em> click Apply — nothing is applied automatically.
+          </p>
+          <ConnectionBar accent={ACCENT} />
+        </>
+      )}
 
       {disabled ? (
         <EnablementNotice />
@@ -150,7 +164,7 @@ export function GbpProfile() {
           {selectedLoc && <ProfileEditor key={selectedLoc} clientId={clientId} locationRowId={selectedLoc} onChanged={() => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, selectedLoc] })} />}
         </>
       )}
-    </div>
+    </>
   )
 }
 

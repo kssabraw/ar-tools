@@ -203,7 +203,7 @@ export function GbpPosts() {
 // The full GBP posts toolkit for one client (Connect + Compose/Posts/Schedule/
 // Trash + listing management). Reused by the standalone page AND embedded in the
 // Local SEO module. `seed` (with a changing nonce) drops text into the composer.
-export function GbpWorkspace({ clientId, seed }: { clientId: string; seed?: { text: string; nonce: number } }) {
+export function GbpWorkspace({ clientId, seed, embedded }: { clientId: string; seed?: { text: string; nonce: number }; embedded?: boolean }) {
   const qc = useQueryClient()
   const [tab, setTab] = useState<'compose' | 'posts' | 'schedule' | 'trash'>('compose')
   const [manageOpen, setManageOpen] = useState(false)
@@ -220,7 +220,8 @@ export function GbpWorkspace({ clientId, seed }: { clientId: string; seed?: { te
 
   return (
     <>
-      <ConnectionBar />
+      {/* The unified GBP module shows one shared ConnectionBar above all tabs. */}
+      {!embedded && <ConnectionBar />}
       {disabled ? (
         <EnablementNotice />
       ) : (

@@ -49,9 +49,7 @@ import { LeadOff } from './pages/LeadOff'
 import { Outreach } from './pages/Outreach'
 import { OutreachLeads } from './pages/OutreachLeads'
 import { Syndication } from './pages/Syndication'
-import { GbpPosts } from './pages/GbpPosts'
-import { GbpProfile } from './pages/GbpProfile'
-import { GbpMetrics } from './pages/GbpMetrics'
+import { GoogleBusinessProfile, GbpTabRedirect } from './pages/GoogleBusinessProfile'
 import { WebsiteBuilder } from './pages/WebsiteBuilder'
 import { Websites } from './pages/Websites'
 import { Citations } from './pages/Citations'
@@ -123,9 +121,11 @@ export default function App() {
                       <Route path="/clients/:id/internal-links" element={<InternalLinks />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
-                      <Route path="/clients/:id/gbp-posts" element={<GbpPosts />} />
-                      <Route path="/clients/:id/gbp-profile" element={<GbpProfile />} />
-                      <Route path="/clients/:id/gbp-metrics" element={<GbpMetrics />} />
+                      <Route path="/clients/:id/gbp" element={<GoogleBusinessProfile />} />
+                      {/* Old per-tool routes → the unified module's matching tab. */}
+                      <Route path="/clients/:id/gbp-posts" element={<GbpTabRedirect tab="posts" />} />
+                      <Route path="/clients/:id/gbp-profile" element={<GbpTabRedirect tab="profile" />} />
+                      <Route path="/clients/:id/gbp-metrics" element={<GbpTabRedirect tab="insights" />} />
                       <Route path="/clients/:id/website" element={<WebsiteBuilder />} />
                       <Route path="/websites" element={<Websites />} />
                       <Route path="/clients/:id/citations" element={<Citations />} />
