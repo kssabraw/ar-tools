@@ -122,9 +122,9 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
 async def list_service_types(client_id: str, location_row_id: str) -> dict:
     """The Google-defined service types the operator can pick for this listing —
     grouped by the listing's own categories (v1 categories.batchGet, view=FULL).
-    This is the services editor's ONLY add path (VAs pick from Google's approved
-    list; free-form ADD was removed). Best-effort per category — a category with
-    no structured services simply contributes an empty group."""
+    The picker is one of two add paths (Google-approved picks + operator-authored
+    custom services). Best-effort per category — a category with no structured
+    services simply contributes an empty group."""
     _assert_enabled()
     location = _location(location_row_id, client_id)
     loc = await asyncio.to_thread(api.get_location, _location_name(location))
@@ -685,6 +685,27 @@ def map_drafted_services(raw: str, categories: list[dict]) -> list[dict]:
     return out
 
 
+def merge_drafted_services(existing: list[dict], additions: list[dict]) -> list[dict]:
+    """Additive AI draft: keep the listing's existing services and append the
+    newly-suggested structured picks not already present (by serviceTypeId), so a
+    'Suggest with AI' never DROPS an existing custom or structured service when
+    applied (the proposed value replaces the whole serviceItems list). Pure
+    (unit-tested)."""
+    have = {
+        (s.get("service_type_id") or s.get("label") or "").strip()
+        for s in existing or [] if (s.get("kind") or "free_form") == "structured"
+    }
+    merged = list(existing or [])
+    for add in additions or []:
+        sid = (add.get("service_type_id") or "").strip()
+        if sid and sid in have:
+            continue
+        if sid:
+            have.add(sid)
+        merged.append(add)
+    return merged
+
+
 def map_drafted_service_types(raw: str, service_types: list[dict]) -> list[dict]:
     """Parse the model's JSON array of serviceTypeIds and map each to a structured
     pick ``{kind:'structured', service_type_id, label, category_id}``. Drops any id
@@ -757,10 +778,13 @@ async def run_draft_job(job: dict) -> None:
                 settings.gbp_profile_service_language_code,
             )
             service_types = api.parse_service_types(resp, parsed["categories"])
-            proposed = await _draft_services(client, parsed["categories"], parsed["services"], card, service_types)
+            ai_picks = await _draft_services(client, parsed["categories"], parsed["services"], card, service_types)
             current = parsed["services"]
-            if not proposed:
+            if not ai_picks:
                 raise HTTPException(status_code=502, detail="empty_draft")
+            # Additive: keep existing services, append the AI's new picks — an AI
+            # draft must never drop the operator's existing custom services.
+            proposed = merge_drafted_services(current, ai_picks)
 
         row = {
             "client_id": client_id, "location_row_id": location["id"], "field": field,

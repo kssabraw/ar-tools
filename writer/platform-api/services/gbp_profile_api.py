@@ -400,8 +400,8 @@ def parse_services(loc: dict) -> list[dict]:
 # ───────────────────────────────────────────────────────────────────────────
 # Service types — the Google-defined services pickable for a listing's
 # categories (v1 ``categories.batchGet`` with ``view=FULL``). Pure parse +
-# the live call. This is the operator's ONLY services ADD path now (Q8 revised —
-# free-form ADD removed; VAs pick from Google's approved list).
+# the live call. One of two services ADD paths: Google-approved picks (here) +
+# operator-authored custom (free-form) services (``build_services_patch``).
 # ───────────────────────────────────────────────────────────────────────────
 def humanize_service_type_id(stid: str) -> str:
     """A serviceTypeId ('job_type_id:flex_office_rentals') → a readable fallback

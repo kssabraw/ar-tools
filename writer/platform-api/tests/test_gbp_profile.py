@@ -403,6 +403,30 @@ def test_map_drafted_service_types_bad_json_degrades():
     assert svc.map_drafted_service_types("not json", _SVC_TYPES) == []
 
 
+def test_merge_drafted_services_keeps_existing_and_appends_new():
+    existing = [
+        {"kind": "free_form", "label": "24/7 Emergency Callout", "category_id": "c", "description": ""},
+        {"kind": "structured", "service_type_id": "job_type_id:roof_repair", "label": "Roof repair", "raw": {}},
+    ]
+    additions = [
+        {"kind": "structured", "service_type_id": "job_type_id:roof_repair", "label": "Roof repair"},  # dup → dropped
+        {"kind": "structured", "service_type_id": "job_type_id:roof_inspection", "label": "Roof inspection"},
+    ]
+    out = svc.merge_drafted_services(existing, additions)
+    # Existing custom + structured preserved; only the genuinely-new pick appended.
+    assert out[0]["label"] == "24/7 Emergency Callout"
+    assert [s.get("service_type_id") for s in out if s["kind"] == "structured"] == [
+        "job_type_id:roof_repair", "job_type_id:roof_inspection",
+    ]
+    assert len(out) == 3
+
+
+def test_merge_drafted_services_empty_existing():
+    additions = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "X"}]
+    assert svc.merge_drafted_services([], additions) == additions
+    assert svc.merge_drafted_services(None, None) == []
+
+
 def test_next_backoff_ladder():
     ladder = svc.settings.gbp_profile_sync_backoff
     assert [svc.next_backoff(i) for i in range(len(ladder))] == ladder
