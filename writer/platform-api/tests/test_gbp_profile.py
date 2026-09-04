@@ -183,6 +183,24 @@ def test_build_services_patch_structured_dedup_across_pick_and_passthrough():
     assert body["serviceItems"] == [raw]
 
 
+def test_build_services_patch_structured_uses_row_description_over_raw():
+    # Editing an existing structured service's description takes effect (the
+    # row's service_type_id + edited description win over the stored raw).
+    raw = {"structuredServiceItem": {"serviceTypeId": "job_type_id:x", "description": "old"}}
+    body, _ = api.build_services_patch([
+        {"kind": "structured", "service_type_id": "job_type_id:x", "description": "new desc", "raw": raw},
+    ])
+    assert body["serviceItems"] == [
+        {"structuredServiceItem": {"serviceTypeId": "job_type_id:x", "description": "new desc"}},
+    ]
+
+
+def test_diff_services_structured_description_change_detected():
+    a = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "X", "description": "d1"}]
+    b = [{"kind": "structured", "service_type_id": "job_type_id:x", "label": "X", "description": "d2"}]
+    assert api.diff_field("services", a, b) is True
+
+
 def test_build_services_patch_mixes_structured_and_kept_free_form():
     body, _ = api.build_services_patch(
         [

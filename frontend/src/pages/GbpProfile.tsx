@@ -219,7 +219,7 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
         </div>
       )}
       <DescriptionCard clientId={clientId} locationRowId={locationRowId} current={p.description} edit={editFor('description')} onChanged={onChanged} />
-      <ServicesCard clientId={clientId} locationRowId={locationRowId} current={p.services} canModify={p.metadata.can_modify_service_list} edit={editFor('services')} onChanged={onChanged} />
+      <ServicesCard clientId={clientId} locationRowId={locationRowId} current={p.services} categories={p.categories} canModify={p.metadata.can_modify_service_list} edit={editFor('services')} onChanged={onChanged} />
       <HoursCard clientId={clientId} locationRowId={locationRowId} current={p.hours} edit={editFor('hours')} onChanged={onChanged} />
     </div>
   )
@@ -303,8 +303,8 @@ function DescriptionCard({ clientId, locationRowId, current, edit, onChanged }: 
 // it in `label`; a fresh pick carries it in `service_type_id`).
 const stId = (r: ServiceItem) => (r.service_type_id || r.label || '')
 
-function ServicesCard({ clientId, locationRowId, current, canModify, edit, onChanged }: {
-  clientId: string; locationRowId: string; current: ServiceItem[]
+function ServicesCard({ clientId, locationRowId, current, categories, canModify, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: ServiceItem[]; categories: Category[]
   canModify: boolean | null; edit?: ProfileEdit; onChanged: () => void
 }) {
   const qc = useQueryClient()
@@ -315,8 +315,7 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
   const proposed = Array.isArray(edit?.proposed_value) ? (edit!.proposed_value as ServiceItem[]) : null
   const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
 
-  // The Google-approved service types for this listing's categories — the only
-  // things a VA can add. Fetched when the editor opens.
+  // The Google-approved service types for this listing's categories (the pick list).
   const typesQ = useQuery<ServiceTypesResponse>({
     queryKey: ['gbp-service-types', clientId, locationRowId],
     queryFn: () => api.get<ServiceTypesResponse>(`/clients/${clientId}/gbp/profile/service-types?location_row_id=${locationRowId}`),
@@ -329,9 +328,15 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
       s.kind === 'structured' ? { ...s, service_type_id: stId(s) } : { ...s }))
     setQuery(''); setEditing(true)
   }
+  const structured = rows.filter((r) => r.kind === 'structured')
   const freeForm = rows.filter((r) => r.kind !== 'structured')
-  const selectedIds = new Set(rows.filter((r) => r.kind === 'structured').map(stId))
-  const structuredCount = selectedIds.size
+  const selectedIds = new Set(structured.map(stId))
+  const structRowFor = (id: string) => rows.find((r) => r.kind === 'structured' && stId(r) === id)
+  const customValid = freeForm.every((r) => r.label.trim() && r.category_id)
+
+  const set = (i: number, patch: Partial<ServiceItem>) => setRows((rs) => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
+  const setDescFor = (id: string, description: string) =>
+    setRows((rs) => rs.map((r) => r.kind === 'structured' && stId(r) === id ? { ...r, description } : r))
 
   const draft = () => { setErr(null); job.start(() => api.post<Job>(`/clients/${clientId}/gbp/profile/draft`, { location_row_id: locationRowId, field: 'services' }).then((j) => j.job_id), undefined) }
   const saveMut = useMutation({
@@ -345,8 +350,9 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
   const toggle = (st: ServiceType, catId: string) => {
     setRows((rs) => selectedIds.has(st.service_type_id)
       ? rs.filter((r) => !(r.kind === 'structured' && stId(r) === st.service_type_id))
-      : [...rs, { kind: 'structured', service_type_id: st.service_type_id, label: st.display_name, category_id: catId }])
+      : [...rs, { kind: 'structured', service_type_id: st.service_type_id, label: st.display_name, category_id: catId, description: '' }])
   }
+  const addCustom = () => setRows((rs) => [...rs, { kind: 'free_form', label: '', category_id: '', description: '' }])
 
   const q = query.trim().toLowerCase()
   const typeCats = (typesQ.data?.categories ?? []).map((c) => ({
@@ -356,7 +362,7 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
   const hasAnyType = (typesQ.data?.categories ?? []).some((c) => c.service_types.length > 0)
 
   return (
-    <Card title="Services" subtitle="Pick from the services Google offers for this listing's categories. (Existing custom services are kept and can be removed, but new ones must come from Google's list.)">
+    <Card title="Services" subtitle="Pick from Google's approved services for this listing's categories, or add your own custom services. Give each an optional short description.">
       {canModify === false && (
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12, color: '#b45309', marginBottom: 8 }}>
           <Info size={13} /> Google reports this listing doesn't allow editing its services list.
@@ -365,7 +371,7 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
       {current.length === 0 ? <CurrentValue empty>No services on the listing yet.</CurrentValue> : (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
           {current.map((s, i) => (
-            <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: s.kind === 'free_form' ? '#fef3c7' : '#eef2ff', color: '#334155' }}>
+            <span key={i} title={s.description || undefined} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: s.kind === 'free_form' ? '#fef3c7' : '#eef2ff', color: '#334155' }}>
               {serviceLabel(s)}{s.kind === 'free_form' ? ' (custom)' : ''}
             </span>
           ))}
@@ -377,28 +383,37 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
       {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
 
       {editing ? (
-        <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
-          {/* Existing custom (free-form) services — kept as-is, removable, never added here. */}
-          {freeForm.length > 0 && (
-            <div style={{ display: 'grid', gap: 6 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 }}>Custom services on the listing</div>
-              {freeForm.map((r) => {
-                const i = rows.indexOf(r)
-                return (
-                  <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-                    <span style={{ flex: 1, color: '#334155' }}>{r.label}</span>
-                    <button onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} title="Remove this custom service" style={btn('#fff', '#b91c1c')}><Trash2 size={13} /> Remove</button>
+        <div style={{ display: 'grid', gap: 14, marginTop: 10 }}>
+          {/* Custom (free-form) services — name + category + optional description. */}
+          <div style={{ display: 'grid', gap: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 }}>Custom services</div>
+            {freeForm.map((r) => {
+              const i = rows.indexOf(r)
+              return (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 6, alignItems: 'start' }}>
+                  <div style={{ display: 'grid', gap: 4 }}>
+                    <input value={r.label} onChange={(e) => set(i, { label: e.target.value })} placeholder="Service name" style={inputStyle} />
+                    <input value={r.description ?? ''} onChange={(e) => set(i, { description: e.target.value })} placeholder="Description (optional)" style={{ ...inputStyle, fontSize: 12 }} />
                   </div>
-                )
-              })}
-            </div>
-          )}
+                  <select value={r.category_id ?? ''} onChange={(e) => set(i, { category_id: e.target.value })} style={inputStyle}>
+                    <option value="">— pick a category —</option>
+                    {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                  <button onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} title="Remove" style={btn('#fff', '#b91c1c')}><Trash2 size={13} /></button>
+                </div>
+              )
+            })}
+            <button onClick={addCustom} style={{ ...btn('#fff', '#334155'), justifySelf: 'start' }}>
+              <Plus size={13} /> Add custom service
+            </button>
+            {!customValid && freeForm.length > 0 && <div style={{ fontSize: 12, color: '#b45309' }}>Each custom service needs a name and a category.</div>}
+          </div>
 
-          {/* The Google-approved service picker. */}
+          {/* Google-approved service picker — each checked service gets an optional description. */}
           <div style={{ display: 'grid', gap: 8 }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: 0.4 }}>Google-approved services</div>
-              <span style={{ fontSize: 12, color: '#64748b' }}>{structuredCount} selected</span>
+              <span style={{ fontSize: 12, color: '#64748b' }}>{selectedIds.size} selected</span>
             </div>
             <div style={{ position: 'relative' }}>
               <Search size={14} style={{ position: 'absolute', left: 10, top: 10, color: '#94a3b8' }} />
@@ -410,20 +425,33 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
               <ErrorDetails message={(typesQ.error as Error)?.message} style={{ marginTop: 2 }} />
             ) : !hasAnyType ? (
               <div style={{ fontSize: 12.5, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 10px' }}>
-                Google offers no structured services for this listing's categories. You can still keep or remove existing custom services above.
+                Google offers no structured services for this listing's categories. Use custom services above instead.
               </div>
             ) : (
-              <div style={{ maxHeight: 340, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 4 }}>
+              <div style={{ maxHeight: 360, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 4 }}>
                 {typeCats.map((cat) => cat.service_types.length > 0 && (
                   <div key={cat.id} style={{ marginBottom: 6 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: '#64748b', padding: '6px 8px 3px' }}>{cat.name}</div>
                     {cat.service_types.map((st) => {
                       const checked = selectedIds.has(st.service_type_id)
+                      const row = checked ? structRowFor(st.service_type_id) : undefined
                       return (
-                        <label key={st.service_type_id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', borderRadius: 6, cursor: 'pointer', background: checked ? '#f0fdfa' : 'transparent', fontSize: 13 }}>
-                          <input type="checkbox" checked={checked} onChange={() => toggle(st, cat.id)} />
-                          <span style={{ color: '#0f172a' }}>{st.display_name}</span>
-                        </label>
+                        <div key={st.service_type_id} style={{ borderRadius: 6, background: checked ? '#f0fdfa' : 'transparent' }}>
+                          <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', cursor: 'pointer', fontSize: 13 }}>
+                            <input type="checkbox" checked={checked} onChange={() => toggle(st, cat.id)} />
+                            <span style={{ color: '#0f172a' }}>{st.display_name}</span>
+                          </label>
+                          {checked && (
+                            <div style={{ padding: '0 8px 7px 30px' }}>
+                              <input
+                                value={row?.description ?? ''}
+                                onChange={(e) => setDescFor(st.service_type_id, e.target.value)}
+                                placeholder="Description (optional)"
+                                style={{ ...inputStyle, fontSize: 12 }}
+                              />
+                            </div>
+                          )}
+                        </div>
                       )
                     })}
                   </div>
@@ -436,7 +464,7 @@ function ServicesCard({ clientId, locationRowId, current, canModify, edit, onCha
           </div>
 
           <div style={{ display: 'flex', gap: 8 }}>
-            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || !customValid} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
             <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
           </div>
         </div>

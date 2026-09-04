@@ -250,42 +250,45 @@ def build_services_patch(
 
     Each service is one of:
 
-    - a **structured pick** ``{kind: 'structured', service_type_id, description?}``
-      — a Google-defined service type the operator chose from the listing's
-      categories (the editor's only ADD path now, decision Q8 revised) → emits a
-      ``structuredServiceItem``;
+    - a **structured** service ``{kind: 'structured', service_type_id,
+      description?}`` — a Google-defined service type (picked from the listing's
+      categories) → emits a ``structuredServiceItem`` with the row's own
+      (editable) description;
     - a **structured passthrough** ``{kind: 'structured', raw: <serviceItem dict>}``
-      — an existing structured item preserved verbatim (keeps its description);
-    - a **free-form** entry ``{kind: 'free_form', label, description?, category_id}``
-      — a legacy custom service the listing already has, kept (the editor no
-      longer ADDs free-form, only preserves/removes them).
+      — a legacy structured row with no explicit ``service_type_id`` preserved
+      verbatim (back-compat for old drafts / strategist stages);
+    - a **free-form (custom)** entry ``{kind: 'free_form', label, description?,
+      category_id}`` — an operator-authored custom service.
 
     Free-form services require ``label`` + ``category_id`` (validated against
     ``allowed_categories`` when given, else ValueError). Structured services are
-    deduped by ``serviceTypeId``, free-form by label (case-insensitive). Pure
-    (unit-tested)."""
+    deduped by ``serviceTypeId``, free-form by label (case-insensitive). Both
+    carry an optional description. Pure (unit-tested)."""
     items: list[dict] = []
     seen_free: set[str] = set()
     seen_struct: set[str] = set()
     for svc in services or []:
         kind = (svc.get("kind") or "free_form").strip()
         if kind == "structured":
-            raw = svc.get("raw")
-            if isinstance(raw, dict):
-                # Passthrough of an existing structured item (description kept).
-                stid = ((raw.get("structuredServiceItem") or {}).get("serviceTypeId") or "").strip()
-                if stid and stid in seen_struct:
-                    continue
-                if stid:
-                    seen_struct.add(stid)
-                items.append(raw)
-                continue
-            stid = (svc.get("service_type_id") or svc.get("label") or "").strip()
+            stid = (svc.get("service_type_id") or "").strip()
             if not stid:
+                # Legacy passthrough (no explicit id on the row) → keep verbatim.
+                raw = svc.get("raw")
+                if isinstance(raw, dict):
+                    rid = ((raw.get("structuredServiceItem") or {}).get("serviceTypeId") or "").strip()
+                    if rid and rid in seen_struct:
+                        continue
+                    if rid:
+                        seen_struct.add(rid)
+                    items.append(raw)
+                    continue
                 raise ValueError("service_type_id_required")
             if stid in seen_struct:
                 continue
             seen_struct.add(stid)
+            # Build from the id + the row's own description, so editing a
+            # structured service's description actually takes effect (the stored
+            # raw would otherwise carry the pre-edit description).
             item: dict = {"structuredServiceItem": {"serviceTypeId": stid}}
             desc = (svc.get("description") or "").strip()
             if desc:
@@ -523,12 +526,13 @@ def _services_key(services) -> set:
     key = set()
     for svc in services or []:
         if (svc.get("kind") or "free_form") == "structured":
-            # Key on the serviceTypeId. A fresh pick carries it in
-            # ``service_type_id`` (``label`` is the human display name); a
+            # Key on the serviceTypeId + description. A fresh pick carries the id
+            # in ``service_type_id`` (``label`` is the human display name); a
             # live-parsed structured item carries it in both — so keying on the
             # id makes a picked service and its live read-back compare equal.
+            # Description is included so a description-only edit is detected.
             sid = (svc.get("service_type_id") or svc.get("label") or "").strip().lower()
-            key.add(("structured", sid))
+            key.add(("structured", sid, (svc.get("description") or "").strip()))
         else:
             key.add((
                 "free_form",
