@@ -323,3 +323,93 @@ def test_revise_prompt_names_the_sections_and_the_faults():
     assert "the body" in prompt
     assert "world-class" in prompt
     assert "reads generic" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Mid-page voice-drift localizer (Lever 2)
+# ---------------------------------------------------------------------------
+
+def test_build_drift_block_filters_unknown_keys_and_dedupes():
+    drift = {"drift": [
+        {"key": "Our Process", "dimensions": ["rhythm", "register"], "note": "clipped list"},
+        {"key": "Ghost Section", "dimensions": ["tone"], "note": "not on the page"},
+        {"key": "Our Process", "dimensions": ["distinctiveness"], "note": "dupe key"},
+    ]}
+    block = vr.build_drift_block(drift, {"Our Process", "Intro"})
+    assert "SECTIONS THAT DRIFT" in block
+    assert "[Our Process]" in block
+    assert "rhythm, register" in block
+    assert "clipped list" in block
+    # Unknown key dropped; duplicate key collapsed to a single line.
+    assert "Ghost Section" not in block
+    assert block.count("[Our Process]") == 1
+
+
+def test_build_drift_block_accepts_bare_list_and_caps_at_six():
+    keys = {f"S{i}" for i in range(10)}
+    items = [{"key": f"S{i}", "dimensions": ["tone"]} for i in range(10)]
+    block = vr.build_drift_block(items, keys)  # bare list, no wrapper
+    assert block.count("  [S") == 6  # capped at 6 lines
+
+
+def test_build_drift_block_empty_when_nothing_usable():
+    assert vr.build_drift_block({"drift": []}, {"A"}) == ""
+    assert vr.build_drift_block({"drift": [{"key": "X"}]}, {"A"}) == ""  # X not on page
+    assert vr.build_drift_block("not a map", {"A"}) == ""
+
+
+def test_section_digest_truncates_long_bodies():
+    long_body = "word " * 1000
+    digest = vr.section_digest(
+        [{"key": "K", "heading": "H", "text": long_body}], max_inner_chars=50,
+    )
+    assert digest.startswith("[K] H:")
+    assert "…" in digest
+    assert len(digest) < 200
+
+
+def test_localize_voice_drift_returns_block_from_audit():
+    seen = {}
+
+    async def judge(system, user, **kwargs):
+        seen["system"] = system
+        seen["user"] = user
+        seen["model"] = kwargs.get("model")
+        return {"drift": [{"key": "Commercial Roofing", "dimensions": ["register"],
+                           "note": "bare bullet list"}]}
+
+    sections = [
+        {"key": "Commercial Roofing", "heading": "Commercial Roofing", "text": "Flat catalogue copy."},
+        {"key": "Intro", "heading": "Intro", "text": "On-brand opening."},
+    ]
+    block = _run(vr.localize_voice_drift(sections, _card(), judge_fn=judge, model="claude-haiku-4-5-20251001"))
+    assert "[Commercial Roofing]" in block
+    assert "register" in block
+    # The guide + the section digest both reach the auditor, at the chosen model.
+    assert "world-class" in seen["user"]  # forbidden list from the rendered card
+    assert "Commercial Roofing" in seen["user"]
+    assert seen["model"] == "claude-haiku-4-5-20251001"
+
+
+def test_localize_voice_drift_noops_without_a_guide_or_sections():
+    calls = []
+
+    async def judge(*a, **k):
+        calls.append(a)
+        return {"drift": [{"key": "A", "dimensions": ["tone"]}]}
+
+    # No card -> empty card -> no audit call.
+    assert _run(vr.localize_voice_drift([{"key": "A", "heading": "A", "text": "x"}], None, judge_fn=judge)) == ""
+    # No sections -> no audit call.
+    assert _run(vr.localize_voice_drift([], _card(), judge_fn=judge)) == ""
+    assert calls == []
+
+
+def test_localize_voice_drift_degrades_on_audit_failure():
+    async def judge(*a, **k):
+        raise RuntimeError("haiku down")
+
+    block = _run(vr.localize_voice_drift(
+        [{"key": "A", "heading": "A", "text": "x"}], _card(), judge_fn=judge,
+    ))
+    assert block == ""  # best-effort: failure -> no block, prior behaviour

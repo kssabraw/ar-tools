@@ -22,6 +22,7 @@ from models.service_writer import (
     WriterSection,
 )
 from modules.service_brief import cost
+from modules.writer import voice_review
 from modules.writer.distillation import distill_brand_voice
 from modules.writer.voice_compliance import check_person, check_preferred_terms
 
@@ -37,6 +38,35 @@ def _objection_map(strategy: dict[str, Any]) -> dict[str, str]:
     for o in strategy.get("objections") or []:
         if isinstance(o, dict) and o.get("where_addressed") and o.get("objection"):
             out[str(o["where_addressed"]).strip().lower()] = str(o["objection"])
+    return out
+
+
+def _prior_sections_for_audit(prior_sections: list[dict]) -> list[dict]:
+    """Flatten the reopt baseline's serialized WriterSections into the
+    `[{key, heading, text}]` shape the voice-drift audit reads. The section
+    heading is the key, because the reopt regenerates by heading — so naming a
+    drifting heading aims the regeneration at exactly that section. Sections with
+    no body text (a bare CTA) are dropped."""
+    out: list[dict] = []
+    for i, sec in enumerate(prior_sections or []):
+        if not isinstance(sec, dict):
+            continue
+        heading = str(sec.get("heading") or "").strip()
+        parts: list[str] = []
+        for b in sec.get("blocks") or []:
+            if not isinstance(b, dict):
+                continue
+            text = str(b.get("text") or "").strip()
+            if text:
+                parts.append(text)
+            for item in b.get("items") or []:
+                item = str(item).strip()
+                if item:
+                    parts.append(item)
+        body = "\n".join(parts)
+        if not body.strip():
+            continue
+        out.append({"key": heading or f"section-{i + 1}", "heading": heading, "text": body})
     return out
 
 
@@ -56,12 +86,13 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
 
     # ---- Brand voice (reuse the blog writer's distillation) ----
     brand_card: Optional[dict] = None
+    brand_card_obj = None  # the BrandVoiceCard object (for the voice-drift audit)
     website_analysis: Optional[dict] = None
     if request.client_context is not None:
         website_analysis = request.client_context.website_analysis
         try:
-            card = await distill_brand_voice(request.client_context)
-            brand_card = card.model_dump() if card else None
+            brand_card_obj = await distill_brand_voice(request.client_context)
+            brand_card = brand_card_obj.model_dump() if brand_card_obj else None
         except Exception as exc:
             logger.warning("service_writer.distill_failed", extra={"error": str(exc)})
         if brand_card is None:
@@ -85,6 +116,26 @@ async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResp
     if request.mode == "reoptimize":
         brand_directive += generation.reopt_directive(request.deficiencies, request.prior_sections)
         notes.append(f"reoptimize:{len(request.deficiencies)}_deficiencies")
+
+        # Mid-page voice-drift localizer (Lever 2): a page-level "voice scored low"
+        # deficiency doesn't say WHERE the voice drifts, and the intro + FAQ usually
+        # hold it while the mid-page service sections slip. One cheap Haiku audit of
+        # the prior draft names the drifting sections so the regeneration re-voices
+        # exactly those. Best-effort — a disabled/failed/empty audit is a no-op and
+        # the reopt falls back to the deficiencies alone (prior behaviour).
+        if settings.service_voice_localize_enabled and brand_card_obj is not None:
+            try:
+                drift_block = await voice_review.localize_voice_drift(
+                    _prior_sections_for_audit(request.prior_sections),
+                    brand_card_obj,
+                    model=settings.service_voice_localize_model,
+                )
+            except Exception as exc:  # localize is best-effort; never block a reopt
+                logger.warning("service_writer.voice_localize_failed", extra={"error": str(exc)})
+                drift_block = ""
+            if drift_block:
+                brand_directive += "\n\n" + drift_block
+                notes.append("voice_drift_localized")
 
     # ---- Title / meta / CTA label ----
     tmc = await generation.generate_title_meta_cta(
