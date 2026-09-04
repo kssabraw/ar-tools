@@ -910,6 +910,19 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
     rg = a.get("review_gap")
     if rg and rg.get("deficit"):
         parts.append(f"close a ~{rg['deficit']}-review gap vs competitors")
+    # Present-but-thin description (a missing one is already in `gaps` above via the
+    # completeness check, so only surface a quality gap when the description exists).
+    dq = a.get("description_quality")
+    if dq and not dq.get("ok") and dq.get("length"):
+        _dq_hint = {
+            "too_short": "expand it",
+            "missing_service_keyword": "name the core service",
+            "missing_location": "name the service area",
+        }
+        hints = ", ".join(_dq_hint[i] for i in dq.get("issues", []) if i in _dq_hint)
+        parts.append(
+            f"improve the thin description ({hints})" if hints else "improve the thin description"
+        )
     if not parts:
         return []
     score = a.get("score")
