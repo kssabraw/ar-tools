@@ -1637,6 +1637,18 @@ class Settings(BaseSettings):
     # (audit_page → an nlp-api scoring run) is capped separately and tighter.
     strategist_max_drilldowns: int = 4
     strategist_max_paid_drilldowns: int = 1
+    # Adaptive investigation budget: a high-stakes run (escalation / goal_recovery
+    # trigger, or any run with a behind/overdue campaign goal) earns a larger
+    # drill-down budget so the strategist can reason to the bottom of the case
+    # instead of emitting early. `_enabled` off → the base budget above (unchanged
+    # behaviour). The `_high` values are ceilings, never lowered below the base.
+    strategist_adaptive_drilldowns: bool = True
+    strategist_max_drilldowns_high: int = 7
+    strategist_max_paid_drilldowns_high: int = 2
+    # Outcome-loop divergence read: a tactic needs at least this many COMMITTED
+    # verdicts (worked/partial/no_effect; pending excluded) before its
+    # working-vs-underperforming read is surfaced to the strategist.
+    strategist_divergence_min_sample: int = 3
     # Each drill-down result is truncated to ~this many characters (~2k tokens).
     strategist_tool_result_chars: int = 8_000
     # The two LLM drill-down subagents (serp_deep_dive / geogrid_history).

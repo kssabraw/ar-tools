@@ -185,6 +185,55 @@ def summarize_effectiveness(interventions: list[dict]) -> dict:
     }
 
 
+def divergence_signals(by_tactic: dict, min_sample: int = 3) -> list[dict]:
+    """Per-tactic read of THIS client's own measured track record, for the
+    tactics with enough committed verdicts to mean something. Pure.
+
+    The reasoning hook for the strategist: it reports where a tactic the SOPs
+    treat as a lever is — or is not — actually moving this client's metric, so a
+    gap between the agency's working model ("link-building is the lever") and the
+    realized result here ("4 of 5 no-effect") can be noticed and named. It is NOT
+    a model prediction and invents nothing — it only re-reads the client's own
+    worked/partial/no_effect split. Each entry:
+      {tactic, read: 'underperforming'|'working'|'mixed', sample, note}
+    where `sample` is the count of COMMITTED verdicts (pending excluded — an
+    unfinished 6-week clock is not evidence either way). Sorted most-actionable
+    first (underperforming → mixed → working). Empty when nothing has enough
+    committed history, so the digest key simply omits it."""
+    order = {"underperforming": 0, "mixed": 1, "working": 2}
+    out: list[dict] = []
+    for tactic, b in (by_tactic or {}).items():
+        worked = int(b.get("worked", 0) or 0)
+        partial = int(b.get("partial", 0) or 0)
+        no_effect = int(b.get("no_effect", 0) or 0)
+        committed = worked + partial + no_effect
+        if committed < min_sample:
+            continue
+        # A read fires only on a STRICT majority of committed outcomes (more than
+        # half) — a 2-of-4 or an even split stays 'mixed' rather than overclaiming.
+        if no_effect * 2 > committed and no_effect >= worked:
+            read = "underperforming"
+            note = (
+                f"{no_effect} of {committed} committed outcomes moved the metric not "
+                f"at all — this lever is not working for this client"
+            )
+        elif worked * 2 > committed and worked >= no_effect:
+            read = "working"
+            note = (
+                f"{worked} of {committed} committed outcomes clearly moved the metric "
+                f"— a lever with a track record here"
+            )
+        else:
+            read = "mixed"
+            note = (
+                f"{worked} worked / {partial} partial / {no_effect} no-effect across "
+                f"{committed} committed outcomes — no clear signal yet"
+            )
+        out.append({"tactic": tactic, "read": read, "sample": committed, "note": note})
+    out.sort(key=lambda e: (order.get(e["read"], 3), -e["sample"], e["tactic"]))
+    return out
+
+
 def proposal_target(proposal: dict) -> Optional[dict]:
     """The sanitized ``target`` off a proposal, or None. Pure.
 

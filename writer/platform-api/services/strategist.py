@@ -202,7 +202,14 @@ WORKED for this client: it is the per-tactic effectiveness of past goal-linked l
 / reoptimization work (worked/partial/no_effect at each intervention's 6-week mark). Cite it \
 to favour tactics with a track record and to justify pausing ones that haven't moved the \
 metric — but it is REPORT-ONLY context, small-sample, never a hard rule; weigh it, don't \
-mechanically obey it, and don't invent a verdict the rollup doesn't show.
+mechanically obey it, and don't invent a verdict the rollup doesn't show. Its `divergence` \
+list names the tactics with enough committed outcomes to read: a tactic marked \
+`underperforming` is one the SOPs treat as a lever that has repeatedly NOT moved this \
+client's metric. Treat that gap between the agency's working model and this client's measured \
+result as a finding in its own right — name it, reason about WHY the model may not hold here \
+(wrong lever, a different bottleneck, a saturated tactic, a measurement lag) and steer effort \
+toward what the record shows works, rather than reflexively proposing more of the same. A \
+`working`/`underperforming` read is still a weight on your judgment, never an automatic rule.
 When proposing a link-building or reoptimization action aimed at a specific tracked keyword / \
 page that maps to a campaign goal, set the proposal's optional `target` (tactic_type + the \
 keyword and/or page_url) so the outcome loop can later measure whether it worked. Omit it for \
@@ -272,6 +279,20 @@ found_pins, a null GSC position read as a rank loss, one AI answer-flip read as 
 The client section's local_campaign flag says whether this client runs a LOCAL campaign at \
 all — when false, local-only setup (target_cities, GBP) reads n/a; that is the correct state \
 for a non-local client, never a gap or a finding.
+
+QUESTION THE WORKING MODEL: the SOPs' causal claims — especially those labeled \
+"(working model)" (the RD sweet spot, the entity-vector/proximity bands, the link-juice \
+multipliers, content decay as the dominant decline driver) — are the agency's operating \
+THEORY of how Google behaves, not settled fact. Reason within that model by default, but when \
+this client's measured evidence contradicts what the model predicts — a lever the model says \
+should work that intervention_outcomes shows isn't; a geo / AI / organic pattern the playbook \
+doesn't explain; a "sweet spot" this client has passed with no result — say so, as a FINDING \
+or a QUESTION, stating plainly what the model predicts, what this client's data actually \
+shows, and your best read of why they diverge. This is the judgment the middle tier exists to \
+add: do not force the observation to fit the recipe. It never overrides a HARD RULE or a \
+mandatory human passthrough, and it never licenses inventing a number — it is \
+evidence-grounded doubt surfaced for a human to weigh, always anchored to a real signal in \
+your input.
 
 DRILL-DOWNS: you may call the provided read-only tools when the digest genuinely isn't \
 enough — they are capped per run (the cap is in your input); the paid audit_page tighter \
@@ -545,6 +566,38 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     return body
 
 
+def drilldown_budget(
+    trigger: str,
+    digest: dict,
+    *,
+    base_dd: int,
+    base_paid: int,
+    high_dd: int,
+    high_paid: int,
+    enabled: bool,
+) -> tuple[int, int]:
+    """(max_drilldowns, max_paid) for this run. Pure.
+
+    A high-stakes run earns a larger investigation budget so the strategist can
+    reason to the bottom of the case instead of emitting early — high-stakes =
+    an escalation / goal_recovery / monthly_plan_review trigger, OR any run where
+    a campaign goal is behind/overdue (read from the precomputed goal statuses;
+    the LLM never re-derives them). Gated by `enabled`: off → the base budget, so
+    behaviour is byte-identical to before. The `_high` values are ceilings — they
+    never lower a base that is already larger."""
+    if not enabled:
+        return base_dd, base_paid
+    high = trigger in ("escalation", "goal_recovery", "monthly_plan_review")
+    if not high and isinstance(digest, dict):
+        goals = digest.get("campaign_goals")
+        counts = (goals or {}).get("counts") if isinstance(goals, dict) else None
+        if isinstance(counts, dict) and (counts.get("behind") or counts.get("overdue")):
+            high = True
+    if high:
+        return max(base_dd, high_dd), max(base_paid, high_paid)
+    return base_dd, base_paid
+
+
 def build_run_prompt(
     digest_json: str,
     sops_text: str,
@@ -697,8 +750,17 @@ async def run_strategy_review(
     digest_budget = max(20_000, total_chars - len(sops_text) - len(cards_text))
     digest_json = strategy_digest.render_digest(digest, digest_budget)
 
-    max_dd = settings.strategist_max_drilldowns
-    max_paid = settings.strategist_max_paid_drilldowns
+    # A high-stakes run (escalation / goal_recovery / monthly_plan_review, or a
+    # behind/overdue goal) earns more investigation budget so the strategist can
+    # reason to the bottom of the case. Gated → base budget when disabled.
+    max_dd, max_paid = drilldown_budget(
+        trigger, digest,
+        base_dd=settings.strategist_max_drilldowns,
+        base_paid=settings.strategist_max_paid_drilldowns,
+        high_dd=settings.strategist_max_drilldowns_high,
+        high_paid=settings.strategist_max_paid_drilldowns_high,
+        enabled=settings.strategist_adaptive_drilldowns,
+    )
     # Self-learning (dark): steer proposals with SerMaStr's own track record —
     # approve/dismiss + worked/no_effect rates per proposal kind. Best-effort +
     # gated: flag off (or thin history) → "" → the prompt is unchanged.

@@ -162,3 +162,52 @@ def test_tactic_types_in_sync_with_strategist():
     from services import strategist
 
     assert strategist._INTERVENTION_TACTICS == iv.TACTIC_TYPES
+
+
+# ---------------------------------------------------------------------------
+# divergence_signals — the working-model-vs-reality reasoning hook
+# ---------------------------------------------------------------------------
+def _bt(worked=0, partial=0, no_effect=0, pending=0):
+    total = worked + partial + no_effect + pending
+    return {"worked": worked, "partial": partial, "no_effect": no_effect,
+            "pending": pending, "total": total}
+
+
+def test_divergence_underperforming_majority_no_effect():
+    by_tactic = {"link_building": _bt(worked=1, no_effect=3)}
+    out = iv.divergence_signals(by_tactic, min_sample=3)
+    assert len(out) == 1
+    assert out[0]["tactic"] == "link_building"
+    assert out[0]["read"] == "underperforming"
+    assert out[0]["sample"] == 4  # committed only (pending excluded)
+
+
+def test_divergence_working_majority_worked():
+    out = iv.divergence_signals({"reoptimization": _bt(worked=3, no_effect=1)}, min_sample=3)
+    assert out[0]["read"] == "working"
+
+
+def test_divergence_mixed_no_clear_majority():
+    # 2 worked / 1 partial / 1 no_effect over 4 → neither ≥ majority(3)
+    out = iv.divergence_signals({"reoptimization": _bt(worked=2, partial=1, no_effect=1)}, min_sample=3)
+    assert out[0]["read"] == "mixed"
+
+
+def test_divergence_pending_excluded_from_sample_floor():
+    # 2 committed + 5 pending → below the min_sample floor of committed verdicts
+    out = iv.divergence_signals({"link_building": _bt(worked=1, no_effect=1, pending=5)}, min_sample=3)
+    assert out == []
+
+
+def test_divergence_sorted_underperforming_first():
+    by_tactic = {
+        "reoptimization": _bt(worked=3, no_effect=1),   # working
+        "link_building": _bt(worked=1, no_effect=3),    # underperforming
+    }
+    reads = [e["read"] for e in iv.divergence_signals(by_tactic, min_sample=3)]
+    assert reads == ["underperforming", "working"]
+
+
+def test_divergence_empty_when_nothing_qualifies():
+    assert iv.divergence_signals({}, min_sample=3) == []
+    assert iv.divergence_signals({"x": _bt(worked=2)}, min_sample=3) == []

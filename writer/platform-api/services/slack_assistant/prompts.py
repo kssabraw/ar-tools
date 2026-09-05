@@ -328,7 +328,21 @@ _SYSTEM = (
     "AI-Mode lean heavily on GBP) — attribute description advice there.\n"
     "- AI visibility: single results are noisy by design — one engine flipping on one "
     "keyword is NOT a trend; read batch rollups and cross-batch trends; engines are "
-    "not interchangeable (AIO/AI-Mode lean on GBP + top organic, ChatGPT leans Bing)."
+    "not interchangeable (AIO/AI-Mode lean on GBP + top organic, ChatGPT leans Bing).\n"
+    "- Keyword research: high volume is NOT the same as a good target — a keyword can "
+    "be on-topic yet wrong-audience (job-seeker / navigational / a competitor brand) or "
+    "low buyer-intent; read audience_fit and the relevance score, not volume alone, and "
+    "prefer buyer-intent terms the client can actually rank for. Topic research (buyer "
+    "problems) answers a different question than keyword expansion (seed variations).\n"
+    "- Competitive intel: a null module on a competitor means no capture yet, not that "
+    "they lack it; competitor RD/DR are tool reads (true RD ≈ ×10), so never compare a "
+    "rival's tool-read RD to the client's true RD; the land-grab signal is what they're "
+    "building in a place the client cares about (a weak grid zone / target suburb), not "
+    "raw size.\n"
+    "- Trends: a suspected algo update is a CROSS-CLIENT co-drop (a Google update, not "
+    "this client's emergency — verify and wait, don't reoptimize into a rolling update); "
+    "seasonal demand explains falling impressions with NO ranking problem, so check it "
+    "before calling an impressions dip a drop."
 )
 
 # Portfolio mode — the turn names no client, so SerMastr answers at agency

@@ -982,3 +982,45 @@ def test_run_goal_recovery_tiers_stores_budget_and_notifies_once(monkeypatch):
     assert notes[0]["kind"] == "goal_chronic" and notes[0]["severity"] == "critical"
     assert "Root cause: Metro built suburb pages north" in notes[0]["summary"]
     assert notes[0]["payload"]["link"] == "clients/c-1/action-plan"
+
+
+# ---------------------------------------------------------------------------
+# drilldown_budget — adaptive investigation budget for high-stakes runs
+# ---------------------------------------------------------------------------
+def _budget(trigger, digest, **over):
+    kw = dict(base_dd=4, base_paid=1, high_dd=7, high_paid=2, enabled=True)
+    kw.update(over)
+    return strategist.drilldown_budget(trigger, digest, **kw)
+
+
+def test_drilldown_budget_disabled_returns_base():
+    assert _budget("goal_recovery", {}, enabled=False) == (4, 1)
+
+
+def test_drilldown_budget_normal_run_is_base():
+    assert _budget("on_demand", {}) == (4, 1)
+    assert _budget("scheduled", {"campaign_goals": {"counts": {"on_track": 2}}}) == (4, 1)
+
+
+def test_drilldown_budget_high_stakes_triggers():
+    for trig in ("escalation", "goal_recovery", "monthly_plan_review"):
+        assert _budget(trig, {}) == (7, 2), trig
+
+
+def test_drilldown_budget_behind_goal_bumps():
+    assert _budget("scheduled", {"campaign_goals": {"counts": {"behind": 1}}}) == (7, 2)
+    assert _budget("scheduled", {"campaign_goals": {"counts": {"overdue": 1}}}) == (7, 2)
+
+
+def test_drilldown_budget_no_goals_sentinel_is_base():
+    assert _budget("scheduled", {"campaign_goals": {"no_goals": True}}) == (4, 1)
+
+
+def test_drilldown_budget_high_is_a_ceiling_never_lowers_base():
+    # a base already larger than the high ceiling is preserved
+    assert _budget("escalation", {}, base_dd=9, base_paid=3) == (9, 3)
+
+
+def test_drilldown_budget_tolerates_missing_or_odd_digest():
+    assert _budget("on_demand", None) == (4, 1)
+    assert _budget("on_demand", {"campaign_goals": None}) == (4, 1)

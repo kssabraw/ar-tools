@@ -848,12 +848,20 @@ def _prov_intervention_outcomes(supabase, client_id: str, today: date, now: date
         }
         for r in evaluated[:10]
     ]
-    return {
+    divergence = interventions.divergence_signals(
+        rollup.get("by_tactic") or {}, settings.strategist_divergence_min_sample
+    )
+    out = {
         "by_tactic": rollup.get("by_tactic"),
         "overall": rollup.get("overall"),
         "recent_verdicts": recent,
         "note": rollup.get("note"),
     }
+    if divergence:
+        # Where a tactic the SOPs treat as a lever is / isn't moving THIS client's
+        # metric — the working-model-vs-reality reasoning hook (prompt reads it).
+        out["divergence"] = divergence
+    return out
 
 
 def _prov_competitors(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
