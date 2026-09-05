@@ -2690,6 +2690,22 @@ DataForSEO location for the submarket — either a numeric `location_code` (a lo
 `location_token` column is TEXT precisely so a stringified code/coordinate needs no migration. Until that
 lands, the fetch will keep failing terminally (safely — no bad data) and the dollar line stays hidden.
 
+**FIX BUILT 2026-09-05 (unit-tested; live-unverified by construction).** `demand_fetch` now resolves a
+numeric `location_code` instead of a `location_name` string: `resolve_location` matches the submarket's
+city (`city_query`) against DataForSEO's own country-scoped Google-Ads locations list (`fetch_locations`
+— a FREE cached GET, mirroring `locations_service`) via the pure `match_location`, and
+`build_search_volume_task` sends `location_code` for an all-digits token — the field the endpoint
+accepts, the shape the suite's `keyword_market` uses in production. It REFUSES (terminal, no bill) when
+nothing matches, never a national fallback. The `location_token` column stays TEXT (stringified code, no
+migration); a stored non-digit token (the stale name the failed first run cached) is re-resolved
+automatically, so the live LA submarket self-heals on its next drain. `location_coordinate` was rejected
+— the Google Ads Keyword Planner doesn't geo-target by arbitrary coordinates, the contract couldn't be
+verified from the sandbox (measure-don't-infer), and city-level volume is what the Census downscale
+(I-123) wants. Full reasoning: DECISIONS 2026-09-05. **Live-unverified by construction** (the sandbox
+can't reach DataForSEO): confirm by merging → the worker redeploys → re-run the one manual
+`demand_fetch_request` (~$0.05) and check a `keyword_demand` row lands with a sane volume/CPC. Until then
+this stays partly open (built, not yet proven live).
+
 ### I-123 · Census downscale needs a per-submarket block-group fill that doesn't exist yet
 The valuation localizes metro search volume to the 5-mile footprint by Census population share
 (`outreach._demand_population_ratio` → `census_demand.blockgroups_in_bbox`). That READ needs no egress

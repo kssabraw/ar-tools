@@ -2422,3 +2422,52 @@ built speculatively. When built: thread an optional `job_value_override` through
 `generate_client_report_pdf` → `prospect_report`/`prospect_justification` → `_valuation_for` →
 `resolve_assumptions`, and it rides into the frozen `report_approval.valuation` snapshot.
 *Revisit:* once real calls produce actual job values worth capturing.
+
+---
+
+## 2026-09-05 — Demand-fetch location resolution: location_code, not a location_name string (I-122 fix)
+
+**Context.** The first live demand fetch (owner-authorized, after #1023 merged and `OUTREACH_COMMAND`
+was flipped to `tick`) FAILED terminally: DataForSEO `40501 Invalid Field: 'location_name'` for the
+token `"Los Angeles, CA, USA"`. The plumbing and every safety invariant held (see ISSUES I-122 UPDATE)
+— the only defect was the location request shape. The spike question ("does a bare name resolve to
+city-granular volume?") is answered: a `location_name` STRING is not the accepted shape for
+`keywords_data/google_ads/search_volume/live`.
+
+**Decision — resolve a numeric `location_code`, matched from DataForSEO's own Google-Ads locations
+list.** The Google Ads Keyword Planner geo-targets by a numeric location_code, and the suite's
+`keyword_market` feeds this exact endpoint a `location_code` in production — that is the provably-
+correct field. `demand_fetch.resolve_location` now matches the submarket's city (`city_query`) against
+the country-scoped Google-Ads locations reference list (`fetch_locations` — a FREE GET, cached
+in-process, mirroring `platform-api/services/locations_service`) and returns that city's numeric
+`location_code`. Using the google_ads family's OWN locations guarantees the code is one search_volume
+accepts (same geo-target space) — the point of the fix.
+
+**Why not `location_coordinate`.** The submarket carries a centre lat/lng, so a coordinate was the
+tempting minimal change, but (1) the Google Ads Keyword Planner does not geo-target by arbitrary
+coordinates the way the Maps/SERP family does, and I could not verify the contract from the sandbox
+(egress to DataForSEO is blocked, creds are on Railway) — so it would be a guess, which this module's
+measure-don't-infer discipline forbids; and (2) it would be wrong for the DESIGN: the valuation wants
+city/metro-level volume that the Census downscale (I-123) localizes to the 5-mile footprint by
+population share, so a hyper-local coordinate would defeat the downscale.
+
+**Refuse, never fall back to national.** No city match (or an unreachable locations list) → the fetch
+REFUSES with a clear problem and records a terminal failure — never a country-level code, since
+national volume ÷ a 5-mile footprint is meaningless (the standing invariant).
+
+**Token stays TEXT; the code is stringified; stale name-tokens self-heal.** The `location_token`
+column is text (the schema was built for exactly this swap — no migration). It now holds the
+stringified code; `build_search_volume_task` branches (all-digits → `location_code`, else
+`location_name` for back-compat). A stored NON-digit token (a pre-fix name — e.g. the one the failed
+first run cached on the LA submarket) is treated as stale and re-resolved automatically, so the fix
+heals the live row on its next drain with no manual DB edit.
+
+**No platform-api change.** The reader (`outreach._valuation_for`) keys `keyword_demand` by the stored
+`submarket.location_token` verbatim; writer stores the code and keys the cache by the same code, so
+reader ↔ writer stay consistent.
+
+**Unverified live, by construction.** The sandbox can't reach DataForSEO, so this is unit-tested only
+(the locations cache is pre-seeded; `resolve_location`/`match_location`/`city_query`/`infer_country_iso`
++ the fetch flow are covered). Live confirmation = merge → the outreach worker redeploys → re-run the
+one manual `demand_fetch_request` (~$0.05, the self-heal re-resolves the stale token) and confirm a
+`keyword_demand` row lands with a sane `search_volume`/`cpc`.

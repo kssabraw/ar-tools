@@ -11,21 +11,27 @@ location_token) and caches it, reused across every prospect and every re-scan. O
 Google-Ads `search_volume/live` call, the suite's `keyword_market` request shape rebuilt in the
 outreach worker (the two-database invariant: platform-api only READS this cache).
 
-Two things are MEASURED on the first live run, not asserted (the dataforseo_client.py discipline):
+**The location — MEASURED, then resolved to a location_code (I-122).** The first live run measured
+the contract the dataforseo_client.py way: a best-effort `location_name` STRING ("Los Angeles, CA,
+USA") is rejected by google_ads/search_volume/live with `40501 Invalid Field: 'location_name'`. The
+endpoint geo-targets by a numeric `location_code` (the suite's keyword_market feeds it one in
+production), so `resolve_location` now matches the submarket's city against DataForSEO's own
+Google-Ads locations list (`fetch_locations`, the free reference endpoint, cached) and returns that
+city's numeric `location_code`. It REFUSES when nothing matches — records a failed order, never a
+fabricated/national code (national volume ÷ a 5-mile footprint is nonsense). The resolved
+(city, code, canonical name) is logged. City-level volume is deliberate: the valuation localizes it
+to the 5-mile footprint by Census population share downstream (I-123), so a hyper-local coordinate
+would defeat that design. The stored `location_token` is the stringified code; a stale non-digit
+token (e.g. a pre-fix name) is re-resolved automatically.
 
-  1. **The location token.** There is NO lat/lng → numeric location_code resolver in the codebase,
-     and the market/submarket rows carry no region/country column, so `resolve_location_token`
-     builds a best-effort DataForSEO `location_name` string from the names it has and REFUSES when it
-     can't (records a failed order, never a fabricated/national code — national volume ÷ a 5-mile
-     footprint is nonsense). Whether that token resolves to city-granular volume is the PRD §12
-     spike; the first run logs the resolved token + the raw response so it is measured, not guessed.
-  2. **The response envelope.** `parse_search_volume` is tolerant and RAISES on a task-level error
-     (an outage must never read as "no demand", which would manufacture the strongest-sounding
-     valuation — zero — exactly the coverage-layer trap).
+**The response envelope — MEASURED.** `parse_search_volume` is tolerant and RAISES on a task-level
+error (an outage must never read as "no demand", which would manufacture the strongest-sounding
+valuation — zero — exactly the coverage-layer trap).
 """
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
@@ -41,6 +47,31 @@ logger = logging.getLogger(__name__)
 # same path). Added to dataforseo_client.CANDIDATE_REVIEW_PATHS so `probe-dataforseo` can confirm it
 # FREE before the first paid call, per the measure-don't-infer discipline.
 SEARCH_VOLUME_PATH = "/v3/keywords_data/google_ads/search_volume/live"
+
+# The Google-Ads locations REFERENCE list, scoped by country ISO. Country-scoped (`/{iso}`) to keep
+# the response small. FREE reference data — a GET, not a per-task billed call — so resolving a code
+# costs nothing. Using the google_ads family's OWN locations guarantees the codes it returns are the
+# codes search_volume/live accepts (same geo-target space), which is the whole point of the I-122 fix.
+GOOGLE_ADS_LOCATIONS_PATH = "/v3/keywords_data/google_ads/locations"
+
+# location_type → sort priority for a city match (lower wins), mirroring the suite's locations_service:
+# a City/Municipality/Town beats a Region/State, which beats a County. Anything else sorts last.
+_TYPE_PRIORITY = {"City": 0, "Municipality": 0, "Town": 0, "Region": 1, "State": 1, "Province": 1,
+                  "County": 2}
+
+# Last-comma-segment country token → ISO, for scoping the locations lookup. Bare "CA" is deliberately
+# absent (California vs Canada is ambiguous, and outreach markets carry it as a middle segment before
+# "USA"); an unrecognised token falls back to the configured default (US). Extend as markets expand.
+_COUNTRY_TOKENS = {
+    "USA": "US", "US": "US", "UNITED STATES": "US",
+    "AU": "AU", "AUS": "AU", "AUSTRALIA": "AU",
+    "UK": "GB", "GB": "GB", "UNITED KINGDOM": "GB",
+    "CANADA": "CA", "NZ": "NZ", "NEW ZEALAND": "NZ",
+}
+
+# country_iso → (fetched_at_monotonic, slim_locations). In-process, like locations_service — the list
+# is near-static, so a long TTL avoids re-GETting the free reference list on every fetch.
+_LOCATIONS_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
 
 # DataForSEO's caps on the search_volume request (from keyword_market): a keyword over these is
 # rejected, so a scan keyword that violates them is skipped with a recorded problem rather than
@@ -88,22 +119,138 @@ def _now() -> datetime:
 # --- pure: token resolution + request + parse -------------------------------------------------
 
 
-def resolve_location_token(submarket: dict[str, Any], market: dict[str, Any] | None) -> str | None:
-    """Best-effort DataForSEO `location_name` for a submarket. Pure.
+def city_query(submarket: dict[str, Any], market: dict[str, Any] | None) -> str | None:
+    """The city string to match against DataForSEO's locations list. Pure.
 
-    SPIKE-GATED (PRD §12 spike 1). There is no lat/lng → location_code resolver and no region/country
-    column, so this builds the most specific plausible name it can from what exists — the submarket
-    name, else the market name — and returns None when it has nothing usable. None → the fetch
-    REFUSES (no national fallback: national volume localized to a 5-mile footprint is meaningless).
-    The resolved token is stored on the submarket and logged on first run so its quality is measured,
-    not assumed; if the first live run shows the name is too ambiguous, the fix is a richer resolver
-    (reverse-geocode + a locations-list match), and the stored-token schema survives that change.
-    """
-    for candidate in (submarket.get("name"), (market or {}).get("name")):
-        token = str(candidate or "").strip()
-        if token:
-            return token
+    The first comma-segment of the submarket name (the city — "Los Angeles, CA, USA" → "Los Angeles",
+    "Van Nuys" → "Van Nuys"), else the market name's first segment, else None. None → the fetch
+    REFUSES (there is nothing to resolve a location from)."""
+    for src in (submarket, market):
+        name = str((src or {}).get("name") or "").strip()
+        if name:
+            seg = name.split(",")[0].strip()
+            if seg:
+                return seg
     return None
+
+
+def infer_country_iso(
+    submarket: dict[str, Any], market: dict[str, Any] | None, default: str = "US"
+) -> str:
+    """The country ISO to scope the locations lookup, from the name's last comma-segment. Pure.
+
+    Reads the trailing country token ("…, USA" → US) off the submarket, else the market, else the
+    configured default. Bare "CA" is intentionally NOT treated as Canada (it is California in the
+    outreach markets and would sit mid-name before "USA")."""
+    for src in (submarket, market):
+        segs = [s.strip().upper() for s in str((src or {}).get("name") or "").split(",") if s.strip()]
+        if segs and segs[-1] in _COUNTRY_TOKENS:
+            return _COUNTRY_TOKENS[segs[-1]]
+    return (default or "US").upper()
+
+
+def match_location(
+    locations: list[dict[str, Any]], query: str
+) -> tuple[str, int] | None:
+    """Best (canonical_name, location_code) for `query` in a locations list, or None. Pure.
+
+    Mirrors locations_service._rank_key: match the query against each location's CITY segment (the
+    part before the first comma), preferring an exact city match, then a prefix, then a substring;
+    ties broken by location_type (City/Town beat Region beat County) then the shorter name. Returns
+    None when nothing matches — the caller then REFUSES rather than sending a bad location."""
+    q = query.strip().lower()
+    if not q:
+        return None
+    best: tuple[tuple[int, int, int], str, int] | None = None
+    for loc in locations:
+        name = str(loc.get("location_name") or "")
+        code = loc.get("location_code")
+        if not name or code is None or isinstance(code, bool):
+            continue
+        first_seg = name.split(",")[0].strip().lower()
+        if first_seg == q:
+            match_rank = 0
+        elif first_seg.startswith(q):
+            match_rank = 1
+        elif q in first_seg:
+            match_rank = 2
+        else:
+            continue
+        key = (match_rank, _TYPE_PRIORITY.get(str(loc.get("location_type") or ""), 3), len(name))
+        if best is None or key < best[0]:
+            best = (key, name, int(code))
+    return (best[1], best[2]) if best else None
+
+
+async def fetch_locations(
+    settings: Settings, country_iso: str, *, client: httpx.AsyncClient | None = None
+) -> list[dict[str, Any]]:
+    """The DataForSEO Google-Ads location list for a country, cached in-process. Impure.
+
+    FREE reference data (a GET, not a per-task billed call). Returns [] on any failure so the caller
+    degrades to a clean refusal rather than an exception. Uses its OWN client (the locations GET is
+    independent of the search_volume POST), so tests pre-seed `_LOCATIONS_CACHE` and no network runs."""
+    iso = (country_iso or "US").upper()
+    ttl = getattr(settings, "demand_locations_cache_ttl_seconds", 24 * 60 * 60)
+    cached = _LOCATIONS_CACHE.get(iso)
+    if cached and (time.monotonic() - cached[0]) < ttl:
+        return cached[1]
+
+    url = f"{BASE_URL}{GOOGLE_ADS_LOCATIONS_PATH}/{iso}"
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=settings.dataforseo_request_timeout_seconds)
+    try:
+        resp = await client.get(url, headers=_auth_header(settings))
+        resp.raise_for_status()
+        body = resp.json()
+    except Exception as exc:  # noqa: BLE001 — a dead reference lookup must degrade to a refusal
+        logger.warning("demand locations fetch failed",
+                       extra={"country": iso, "error": str(exc)[:200]})
+        return []
+    finally:
+        if owns:
+            await client.aclose()
+
+    slim: list[dict[str, Any]] = []
+    for task in (body.get("tasks") or []):
+        for loc in (task.get("result") or []):
+            name = loc.get("location_name")
+            code = loc.get("location_code")
+            if not name or code is None:
+                continue
+            slim.append({
+                "location_name": name,
+                "location_code": code,
+                "location_type": loc.get("location_type") or "",
+            })
+    if slim:
+        _LOCATIONS_CACHE[iso] = (time.monotonic(), slim)
+    else:
+        logger.warning("demand locations empty",
+                       extra={"country": iso, "tasks": len(body.get("tasks") or [])})
+    return slim
+
+
+async def resolve_location(
+    settings: Settings,
+    submarket: dict[str, Any],
+    market: dict[str, Any] | None,
+    *,
+    locations_client: httpx.AsyncClient | None = None,
+) -> tuple[str, int] | None:
+    """Resolve the submarket to a (canonical_name, location_code), or None (→ the fetch REFUSES).
+
+    Matches the submarket's city against DataForSEO's own Google-Ads locations list, so the code it
+    returns is one search_volume/live accepts. City-level by design — the volume is localized to the
+    footprint by Census population share downstream (I-123), not by a hyper-local coordinate."""
+    q = city_query(submarket, market)
+    if not q:
+        return None
+    iso = infer_country_iso(submarket, market, getattr(settings, "demand_default_country_iso", "US"))
+    locations = await fetch_locations(settings, iso, client=locations_client)
+    if not locations:
+        return None
+    return match_location(locations, q)
 
 
 def _keyword_ok(keyword: str) -> str | None:
@@ -123,11 +270,20 @@ def build_search_volume_task(
     keyword: str, location_token: str, *, language_code: str
 ) -> dict[str, Any]:
     """The DataForSEO google_ads/search_volume/live request body for one keyword at one location.
-    Pure. Uses `location_name` (a string) rather than `location_code` (an int) because no lat/lng →
-    code resolver exists — see resolve_location_token."""
+    Pure. Branches on the token: an all-digits token is a numeric `location_code` (the resolved,
+    endpoint-accepted form — see resolve_location); anything else is sent as a `location_name` string
+    for back-compat. The endpoint rejects an unrecognised `location_name` (40501), which is why the
+    resolver produces a code — the digit branch is the live path (I-122)."""
+    loc = str(location_token).strip()
+    if loc.isdigit():
+        return {
+            "keywords": [keyword],
+            "location_code": int(loc),
+            "language_code": language_code,
+        }
     return {
         "keywords": [keyword],
-        "location_name": location_token,
+        "location_name": loc,
         "language_code": language_code,
     }
 
@@ -241,9 +397,11 @@ async def fetch_demand(
         return report
     submarket = sub_rows[0]
 
-    # Resolve (or reuse) the location token. Stored on the submarket so the resolution runs once.
+    # Resolve (or reuse) the location token. Stored on the submarket so the resolution runs once. A
+    # non-digit token is stale (a pre-I-122 location_name string) and is re-resolved to a numeric
+    # location_code, so the fix self-heals an old row without a manual edit.
     token = str(submarket.get("location_token") or "").strip()
-    if not token:
+    if not token or not token.isdigit():
         market = None
         if submarket.get("market_id"):
             m_rows = (
@@ -251,14 +409,25 @@ async def fetch_demand(
                 .eq("id", submarket["market_id"]).limit(1).execute().data or []
             )
             market = m_rows[0] if m_rows else None
-        resolved = resolve_location_token(submarket, market)
+        resolved = await resolve_location(settings, submarket, market)
         if not resolved:
             report.problems.append(
-                "could not resolve a location for the demand fetch (no submarket/market name)"
+                "could not resolve a DataForSEO location_code for the demand fetch "
+                "(no submarket/market city matched the Google-Ads locations list)"
             )
             return report
-        token = resolved
+        canonical_name, code = resolved
+        token = str(code)
         db.table("submarket").update({"location_token": token}).eq("id", submarket_id).execute()
+        logger.info(
+            "resolved demand location",
+            extra={
+                "submarket_id": submarket_id,
+                "query": city_query(submarket, market),
+                "location_code": code,
+                "location_name": canonical_name,
+            },
+        )
     report.location_token = token
 
     kw_key = normalize_keyword(keyword_term)
