@@ -575,6 +575,15 @@ class Settings(BaseSettings):
     # light cadence keeps the number honest without re-billing every 15-day cycle. 0 = fetch once and
     # never auto-refresh (a cached row is always a hit).
     demand_refresh_days: int = 30
+    # Country used to scope the DataForSEO Google-Ads locations lookup that resolves a submarket to a
+    # numeric location_code (I-122 fix). Overridden per-submarket when a name carries an explicit
+    # country token; outreach markets are US today, so US is the default. The search_volume endpoint
+    # geo-targets by location_code, NOT a bare location_name string (which it rejects 40501) — the
+    # resolver matches the submarket's city against this country's location list.
+    demand_default_country_iso: str = "US"
+    # How long the fetched Google-Ads location list is cached in-process. Locations are near-static,
+    # so a long TTL avoids re-fetching the (free) reference list on every demand fetch.
+    demand_locations_cache_ttl_seconds: float = 24 * 60 * 60
 
     # --- Always-on worker (tick-loop daemon) ---------------------------------------------
     # The `tick-loop` command runs `tick` continuously so a UI-placed order (enrich / scan)
