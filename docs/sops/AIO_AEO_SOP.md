@@ -41,7 +41,7 @@ They overlap but draw from **different ranking factors** and surface answers dif
 - **Entity clarity dominates** — who the business is, where it operates, what it offers, whether it's trustworthy — closely tied to relevance/distance/prominence.
 - **Query fan-out:** one local query is decomposed into related sub-questions (emergency availability, coverage, reviews, pricing, licensing, response time), and AIO cites the sources that best support each part — not simply the top blue link.
 - **Top-20 eligibility** *(working model)*: AIO sources typically come from the **top 20 organic results**. You don't need #1 — you need to be Google's most trusted, extractable source for the specific question.
-- **Backlinks are not a primary driver** *(working model)*: pages with few or zero measurable backlinks appear in AIO when entity strength, brand understanding, topical completeness, and Knowledge Graph confidence are high.
+- **Backlinks are not a primary driver** *(working model)*: pages with few or zero measurable backlinks appear in AIO when entity strength, brand understanding, topical completeness, and Knowledge Graph confidence are high. *(These four factors are defined in `SEO_Fundamentals.md` Part 2 — read it there for what each means and how to build it.)*
 - Most likely local source candidates: GBP, location/service-area/service pages, review profiles, directories, local press, chamber pages, BBB, niche directories, Yelp, Trustpilot, Reddit, social profiles — **trust rises when the same core facts are consistent across many sources.**
 
 ## How Other LLMs Select Sources (Local)
