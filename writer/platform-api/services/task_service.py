@@ -653,6 +653,18 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
 
     payload = dict(changes)
     payload["updated_at"] = _now()
+    # Revision tracking: each transition INTO the "for revision" status (client
+    # rejected → rework) bumps a per-task counter, so a task revised repeatedly
+    # flags a deliverable that keeps missing client expectations. Only a real
+    # transition counts (not a re-save while already in that status).
+    from config import settings
+    revision_key = settings.revision_status_key
+    if (
+        revision_key
+        and changes.get("status_key") == revision_key
+        and before.get("status_key") != revision_key
+    ):
+        payload["revision_count"] = int(before.get("revision_count") or 0) + 1
     updated = supabase.table("tasks").update(payload).eq("id", task_id).execute().data[0]
     for entry in diff_activity(before, changes):
         record_activity(task_id, entry["kind"], actor_id=actor_id, detail=entry["detail"])

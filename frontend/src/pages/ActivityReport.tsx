@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, RefreshCw, Download, X } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ActivityReport, ActivityReportDay, OverdueReport, OverdueBucketRow } from '../lib/types'
+import type { ActivityReport, ActivityReportDay, OverdueReport, OverdueBucketRow, RevisionReport } from '../lib/types'
 
 interface ClientListItem { id: string; name: string }
 
@@ -120,6 +120,12 @@ export function ActivityReport() {
   const { data: overdue } = useQuery<OverdueReport>({
     queryKey: ['overdue-tasks', clientId],
     queryFn: () => api.get<OverdueReport>(`/admin/overdue-tasks${qs({ client_id: clientId })}`),
+  })
+
+  // Revisions — deliverables sent back for rework (client rejected). Live snapshot.
+  const { data: revisions } = useQuery<RevisionReport>({
+    queryKey: ['revisions', clientId],
+    queryFn: () => api.get<RevisionReport>(`/admin/revisions${qs({ client_id: clientId })}`),
   })
 
   const byGroup = useMemo(() => {
@@ -344,6 +350,82 @@ export function ActivityReport() {
                   )}
                 </Panel>
               </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Revisions — deliverables sent back for rework (client rejected). Snapshot. */}
+      {revisions && (
+        <div style={{ marginTop: 28 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
+            <h2 style={{ margin: 0, fontSize: 18 }}>Revisions</h2>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>deliverables sent back for rework (client rejected)</span>
+          </div>
+          <p style={{ marginTop: 2, marginBottom: 12, color: '#64748b', fontSize: 12.5 }}>
+            How often work gets bounced back for revision — a task revised repeatedly flags a
+            deliverable that keeps missing client expectations.
+          </p>
+
+          {revisions.total_requests === 0 ? (
+            <Panel title="Revisions">
+              <div style={{ color: '#64748b', fontSize: 13 }}>
+                No revisions recorded yet — this starts counting once a task is moved to the
+                “{revisions.revision_status_key}” (for-revision) status.
+              </div>
+            </Panel>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+                <Stat label="Revision requests" value={revisions.total_requests} big />
+                <Stat label="Deliverables revised" value={revisions.tasks_revised} />
+                <Stat label="Repeat (2×+)" value={revisions.repeat_revised} />
+                <Stat label="In revision now" value={revisions.in_revision_now} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+                <Panel title="By times revised">
+                  {revisions.by_bucket.map((b) => (
+                    <Bar key={b.bucket} label={b.bucket} count={b.count}
+                      max={Math.max(1, ...revisions.by_bucket.map((x) => x.count))} color="#d97706" />
+                  ))}
+                </Panel>
+
+                {!drilled && (
+                  <Panel title="By client">
+                    {revisions.by_client.length === 0 ? <Empty /> : (
+                      revisions.by_client.map((r) => (
+                        <Bar key={r.client_id ?? 'none'} label={r.client_name} count={r.revisions}
+                          max={Math.max(1, ...revisions.by_client.map((x) => x.revisions))} color="#d97706"
+                          onClick={r.client_id ? () => setClientId(r.client_id as string) : undefined} />
+                      ))
+                    )}
+                  </Panel>
+                )}
+
+                <Panel title="By assignee">
+                  {revisions.by_member.length === 0 ? <Empty /> : (
+                    revisions.by_member.map((r) => (
+                      <Bar key={r.member} label={r.member} count={r.revisions}
+                        max={Math.max(1, ...revisions.by_member.map((x) => x.revisions))} color="#d97706"
+                        muted={r.member === 'Unassigned'} />
+                    ))
+                  )}
+                </Panel>
+              </div>
+
+              {revisions.most_revised.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <Panel title="Most-revised deliverables">
+                    {revisions.most_revised.map((t) => (
+                      <div key={t.task_id} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0', fontSize: 12.5 }}>
+                        <span style={{ flex: 1, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.name}>{t.name}</span>
+                        <span style={{ width: 160, flexShrink: 0, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.client_name}</span>
+                        <span style={{ width: 44, flexShrink: 0, textAlign: 'right', fontWeight: 700, color: t.revision_count >= 2 ? '#dc2626' : '#0f172a' }}>{t.revision_count}×</span>
+                      </div>
+                    ))}
+                  </Panel>
+                </div>
+              )}
             </>
           )}
         </div>

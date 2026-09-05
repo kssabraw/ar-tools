@@ -2503,3 +2503,23 @@ export interface OverdueReport {
   by_client: OverdueClientRow[]
   by_member: OverdueMemberRow[]
 }
+
+// Admin Activity Report → Revisions (GET /admin/revisions →
+// services/revision_tracking.py). How often deliverables get sent back for
+// revision (client rejected → rework).
+export interface RevisionBucketRow { bucket: string; count: number }
+export interface RevisionClientRow { client_id: string | null; client_name: string; revisions: number }
+export interface RevisionMemberRow { member: string; revisions: number }
+export interface MostRevisedTask { task_id: string; name: string; client_name: string; revision_count: number }
+export interface RevisionReport {
+  total_requests: number
+  tasks_revised: number
+  repeat_revised: number
+  in_revision_now: number
+  client_id: string | null
+  revision_status_key: string
+  by_bucket: RevisionBucketRow[]
+  by_client: RevisionClientRow[]
+  by_member: RevisionMemberRow[]
+  most_revised: MostRevisedTask[]
+}

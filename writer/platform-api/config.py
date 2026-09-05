@@ -2253,10 +2253,14 @@ class Settings(BaseSettings):
     pulse_retention_days: int = 14        # owner ruling: deleted after 2 weeks
     # Admin Activity Report → Overdue tasks: which task statuses count as
     # "external" (waiting on the client, not the team) when splitting overdue
-    # tasks by cause. Everything else is "internal". Default is just
-    # Sent-to-Client (the ball is in the client's court); add e.g. "blocked" if
-    # your blocks are usually client-side.
-    overdue_external_status_keys: List[str] = ["sent_to_client"]
+    # tasks by cause. Everything else is "internal". Sent-to-Client (awaiting
+    # client approval) and Blocked (owner ruling: treat blocks as client-side)
+    # are external; tune to taste.
+    overdue_external_status_keys: List[str] = ["sent_to_client", "blocked"]
+    # Which status means a task was "marked for revision" (client rejected →
+    # rework). A transition INTO this status bumps tasks.revision_count, so
+    # repeat revisions flag deliverables that keep missing client expectations.
+    revision_status_key: str = "in_review"
     # Narrative mode (owner request): a short LLM pass turns the deterministic,
     # category-filtered facts into a warm client email — what we did AND WHY,
     # what's next and why, closing with a questions invitation. Grounded: the

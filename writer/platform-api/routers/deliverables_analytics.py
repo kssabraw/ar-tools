@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from middleware.auth import require_admin
-from services import deliverables_analytics, overdue_tasks
+from services import deliverables_analytics, overdue_tasks, revision_tracking
 
 router = APIRouter(prefix="/admin", tags=["admin-activity"])
 logger = logging.getLogger(__name__)
@@ -51,4 +51,19 @@ async def get_overdue_tasks(
         return overdue_tasks.build_overdue_report(client_id=client_id)
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("overdue_tasks_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/revisions")
+async def get_revisions(
+    client_id: str | None = Query(default=None, description="Optional: scope to one client."),
+    auth: dict = Depends(require_admin),
+) -> dict:
+    """How often deliverables get sent back for revision (client rejected →
+    rework), across tasks — totals, a 1×/2×/3+× histogram, the most-revised
+    tasks, and revisions by client + assignee."""
+    try:
+        return revision_tracking.build_revision_report(client_id=client_id)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("revisions_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
