@@ -303,6 +303,12 @@ async def collect_ready(
             # organic_scan import cycle; best-effort so it never blocks finalization.
             from . import organic_scan_queue
             organic_scan_queue.enqueue_for_snapshot(db, settings, snapshot_id)
+            # Missed-opportunity valuation (docs/missed-opportunity-valuation-prd-v0_1.md): the DEMAND
+            # signal (search volume + CPC) is fetched once per (keyword, location) on scan finalize,
+            # same auto-enqueue model as organic. Idempotent (cache-level), budget-gated, ≤1/tick.
+            # Local import breaks the same import cycle; best-effort so it never blocks finalization.
+            from . import demand_fetch_queue
+            demand_fetch_queue.enqueue_for_snapshot(db, settings, snapshot_id)
 
     return report
 

@@ -1117,6 +1117,7 @@ def cmd_tick(args) -> int:
 
     from api.services import (
         ai_scan_queue,
+        demand_fetch_queue,
         enigma_queue,
         enrich_queue,
         name_scrape_queue,
@@ -1164,6 +1165,15 @@ def cmd_tick(args) -> int:
         if not r.claimed:
             break
         ai_drains.append(r)
+    # Demand fetch (search volume + CPC for the missed-opportunity valuation). One cheap paid call
+    # per (keyword, location), ≤ demand_orders_per_tick per heartbeat, cache-level idempotent — same
+    # signed-order + terminal-outcome model as the organic queue. An empty queue ends the loop early.
+    demand_drains = []
+    for _ in range(max(0, settings.demand_orders_per_tick)):
+        r = _asyncio.run(demand_fetch_queue.drain_one(client, settings))
+        if not r.claimed:
+            break
+        demand_drains.append(r)
     # Site tech signals — FREE (own HTTP GET, same posture as `collect`), idempotent, and bounded
     # (`tech_scan_per_tick`). Fetches prospects lacking a CURRENT tech signal so every scored
     # prospect carries the Slice-B1 money signal automatically: each new run's survivors, plus any
@@ -1300,6 +1310,19 @@ def cmd_tick(args) -> int:
                     }
                     for o in ai_drains
                 ],
+                "demand": [
+                    {
+                        "order_id": o.order_id,
+                        "snapshot_id": o.snapshot_id,
+                        "keyword": o.keyword,
+                        "location_token": o.location_token,
+                        "outcome": o.outcome,
+                        "already_cached": o.already_cached,
+                        "search_volume": o.search_volume,
+                        "error": o.error,
+                    }
+                    for o in demand_drains
+                ],
                 "tech": tech_out,
             },
             indent=2,
@@ -1311,7 +1334,7 @@ def cmd_tick(args) -> int:
     enrich_failed = any(o.outcome == "failed" for o in enriched.orders)
     enigma_failed = any(o.outcome == "failed" for o in enigma_done.orders)
     signal_failed = any(
-        o.outcome == "failed" for o in (*organic_drains, *ai_drains)
+        o.outcome == "failed" for o in (*organic_drains, *ai_drains, *demand_drains)
     )
     return (
         1

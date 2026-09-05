@@ -436,6 +436,11 @@ CANDIDATE_REVIEW_PATHS: tuple[str, ...] = (
     # both settled by the paid spike, not here. Not yet consumed by any producer.
     "/v3/dataforseo_labs/google/domain_rank_overview/live",
     "/v3/dataforseo_labs/google/bulk_traffic_estimation/live",
+    # Google-Ads search volume — the DEMAND signal for the missed-opportunity valuation
+    # (demand_fetch.SEARCH_VOLUME_PATH). Probed FREE here so the endpoint is confirmed before the
+    # first paid fetch, the measure-don't-infer discipline. The suite's keyword_market uses this
+    # same path, so it is very likely live — which is exactly what probing (not assuming) settles.
+    "/v3/keywords_data/google_ads/search_volume/live",
 )
 
 # A task with no fields. A path that exists answers 200 and rejects the task at the task level
