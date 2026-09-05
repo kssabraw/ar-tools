@@ -371,7 +371,7 @@ export function ActivityReport() {
             <Panel title="Revisions">
               <div style={{ color: '#64748b', fontSize: 13 }}>
                 No revisions recorded yet — this starts counting once a task is moved to the
-                “{revisions.revision_status_key}” (for-revision) status.
+                “For Revision” status on the board.
               </div>
             </Panel>
           ) : (

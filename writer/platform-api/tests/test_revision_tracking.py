@@ -16,7 +16,7 @@ if "db.supabase_client" not in sys.modules:
 
 from services import revision_tracking as rt  # noqa: E402
 
-_REV = "in_review"
+_REV = "for_revision"
 
 
 def _task(id_, count, status="in_progress", client_id=None, assignee=None, created_by=None, name="T", completed=False):

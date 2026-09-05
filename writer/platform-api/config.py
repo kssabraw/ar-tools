@@ -2260,7 +2260,9 @@ class Settings(BaseSettings):
     # Which status means a task was "marked for revision" (client rejected →
     # rework). A transition INTO this status bumps tasks.revision_count, so
     # repeat revisions flag deliverables that keep missing client expectations.
-    revision_status_key: str = "in_review"
+    # This is the dedicated "For Revision" board status (added 20260905193000),
+    # distinct from "In Review".
+    revision_status_key: str = "for_revision"
     # Narrative mode (owner request): a short LLM pass turns the deterministic,
     # category-filtered facts into a warm client email — what we did AND WHY,
     # what's next and why, closing with a questions invitation. Grounded: the
