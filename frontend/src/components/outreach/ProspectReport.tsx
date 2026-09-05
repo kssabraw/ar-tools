@@ -94,6 +94,15 @@ interface ReportData {
     measured: boolean; headline?: string; hook?: string; talking_points: TalkingPoint[]
     caveats?: string[]; message?: string
   }
+  // Estimated missed-opportunity dollars (Phase A — internal only). None/unavailable renders nothing
+  // (the feature is off, or an input is missing — never a fabricated zero). `line` is the rendered
+  // deterministic sentence; the numbers back it up.
+  valuation?: {
+    available: boolean; reason?: string | null; line?: string | null
+    ad_cost_equivalent_monthly?: number | null
+    missed_revenue_low_monthly?: number | null; missed_revenue_high_monthly?: number | null
+    local_monthly_demand?: number; how_estimated?: string
+  } | null
   client_facing: {
     status: string; approved: boolean; note: string
     approved_by?: string | null; approved_at?: string | null
@@ -631,6 +640,19 @@ function InternalBrief({ data }: { data: ReportData }) {
               {j.talking_points.map((p, i) => <li key={i}>{p.text}</li>)}
             </ul>
           )}
+        </>
+      )}
+      {data.valuation?.available && data.valuation.line && (
+        <>
+          <SectionTitle>Estimated missed opportunity</SectionTitle>
+          <div style={{ border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 8, padding: '10px 12px' }}>
+            <div style={{ display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: 0.4,
+              textTransform: 'uppercase', color: '#92400e', background: '#fef3c7', borderRadius: 4,
+              padding: '1px 6px', marginBottom: 6 }}>
+              Estimate · internal only · assumptions adjustable
+            </div>
+            <div style={{ fontSize: 13, color: '#78350f' }}>{data.valuation.line}</div>
+          </div>
         </>
       )}
       {j.caveats && j.caveats.length > 0 && (
