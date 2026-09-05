@@ -559,6 +559,23 @@ class Settings(BaseSettings):
     # distinct from any human, so an auto capture is distinguishable in the ledger from a UI click.
     organic_auto_actor_id: str = "00000000-0000-0000-0000-000000000000"
 
+    # --- Demand fetch (missed-opportunity valuation, docs/missed-opportunity-valuation-prd-v0_1.md) --
+    # The FIRST link of the valuation chain: monthly search volume + CPC for a snapshot's (keyword,
+    # resolved location), cached in keyword_demand. Fetched via ONE DataForSEO Google-Ads
+    # search_volume/live call per (keyword, location_code), shared across every prospect in the
+    # submarket. Same signed-order + ≤1/tick + terminal-outcome model as the organic queue (a single
+    # cheap call, not a batch), auto-enqueued on scan finalize (`demand_auto_enabled`) beside organic.
+    demand_orders_per_tick: int = 1
+    demand_auto_enabled: bool = True
+    # Sentinel actor stamped on auto-enqueued demand orders (requested_by has no FK). Reuses the nil
+    # uuid so an auto fetch is distinguishable in the ledger from a UI click, exactly like organic.
+    demand_auto_actor_id: str = "00000000-0000-0000-0000-000000000000"
+    # A keyword_demand row older than this is considered stale and re-fetched on the next scan;
+    # a fresher row drains as a free cache-hit no-op. Search volume moves on a scale of months, so a
+    # light cadence keeps the number honest without re-billing every 15-day cycle. 0 = fetch once and
+    # never auto-refresh (a cached row is always a hit).
+    demand_refresh_days: int = 30
+
     # --- Always-on worker (tick-loop daemon) ---------------------------------------------
     # The `tick-loop` command runs `tick` continuously so a UI-placed order (enrich / scan)
     # drains within seconds instead of waiting for the cron. This is the sleep between ticks.

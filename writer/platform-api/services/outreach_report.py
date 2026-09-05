@@ -585,6 +585,29 @@ def _client_paid_html(section: dict[str, Any], keyword: str) -> str:
     return lead + table
 
 
+def _client_valuation_html(valuation: Optional[dict[str, Any]]) -> str:
+    """The client-facing missed-opportunity box (Phase B). Leads with — and shows ONLY — the
+    ad-cost-equivalent anchor: the defensible number (measured CPC × the local demand they're missing
+    from the pack), carrying no soft close-rate / job-value assumption. The missed-revenue band stays
+    INTERNAL (the Phase-A brief). Renders nothing unless the valuation is available AND the anchor is
+    present (no CPC → no client-facing figure — a band alone is too soft to put in front of a
+    prospect). Vocabulary: 'estimated missed opportunity', never 'loss'; the estimate shows its work.
+    """
+    if not valuation or not valuation.get("available"):
+        return ""
+    ad_cost = valuation.get("ad_cost_equivalent_monthly")
+    if not isinstance(ad_cost, (int, float)) or ad_cost <= 0:
+        return ""
+    how = valuation.get("how_estimated") or ""
+    return (
+        "<h2>Estimated missed opportunity</h2>"
+        f"<p>To buy the local search traffic you're currently missing from the Google map pack, "
+        f"you'd need to spend roughly <strong>${int(ad_cost):,}/month</strong> on Google Ads. "
+        f"That's the demand going to competitors instead of you, right now.</p>"
+        f"<p class='small muted'>Estimate, not a guarantee. {_esc(how)}</p>"
+    )
+
+
 def render_client_report_html(report: dict[str, Any], *, agency_name: str) -> str:
     """The client-facing report as a standalone HTML document, for WeasyPrint → PDF.
 
@@ -623,6 +646,7 @@ def render_client_report_html(report: dict[str, Any], *, agency_name: str) -> st
         f"{_client_llm_html(signals.get('llm', {}))}"
         "<h2>Paid advertising</h2>"
         f"{_client_paid_html(signals.get('paid', {}), keyword)}"
+        f"{_client_valuation_html(report.get('valuation'))}"
         f"<div class='footer'>Based on a live scan of {_esc(submarket)}. Figures are a point-in-time "
         f"snapshot. Prepared by {_esc(agency_name)}.</div>"
         "</body></html>"
@@ -677,6 +701,11 @@ def build_report(
         },
         "heatmap_available": heatmap_available,
         "justification": justification,
+        # The missed-opportunity dollar valuation (docs/missed-opportunity-valuation-prd-v0_1.md),
+        # surfaced top-level for the internal brief. Carried on the justification (computed once at
+        # read time, deterministic, never LLM-phrased), so it is None when the feature is off or an
+        # input is missing. Phase A is internal-only — this is NOT rendered into the client PDF.
+        "valuation": justification.get("valuation"),
         # The client-facing face is a draft until an approval is on record. `approval` is the latest
         # report_approval row (or None), so the UI flips from "draft" to "approved" after the first
         # explicit human approval and can show who/when.

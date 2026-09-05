@@ -522,3 +522,45 @@ def test_client_pdf_does_not_claim_keyword_spend_from_a_site_tag():
         agency_name="AR")
     assert "You’re paying to advertise for" not in html      # the unmeasured claim
     assert "conversion tracking" in html                     # what was actually observed
+
+
+# --- client-facing valuation box (Phase B) ----------------------------------------------------
+
+
+def test_client_valuation_html_renders_ad_cost_anchor():
+    box = orep._client_valuation_html({
+        "available": True,
+        "ad_cost_equivalent_monthly": 3400,
+        "missed_revenue_low_monthly": 6000,   # present but deliberately NOT shown client-facing
+        "missed_revenue_high_monthly": 14000,
+        "how_estimated": "Estimated from metro search volume, scaled by population.",
+    })
+    assert "Estimated missed opportunity" in box
+    assert "$3,400/month" in box                       # the ad-cost anchor, formatted
+    assert "Estimate, not a guarantee" in box          # honest framing
+    assert "scaled by population" in box               # shows its work
+    # The soft-assumption missed-revenue band is INTERNAL — it must not appear client-facing.
+    assert "6,000" not in box and "14,000" not in box
+
+
+def test_client_valuation_html_omitted_when_unavailable_or_no_anchor():
+    assert orep._client_valuation_html(None) == ""
+    assert orep._client_valuation_html({"available": False}) == ""
+    # available but no CPC → no ad-cost anchor → a band alone is too soft for a client asset.
+    assert orep._client_valuation_html({"available": True, "ad_cost_equivalent_monthly": None}) == ""
+    assert orep._client_valuation_html({"available": True, "ad_cost_equivalent_monthly": 0}) == ""
+
+
+def test_render_client_report_html_includes_valuation_when_present():
+    doc = _report_doc(
+        {"status": "not_measured", "signal": "maps"},
+        orep.not_scanned_section(orep.SIGNAL_ORGANIC, "x"),
+        orep.not_scanned_section(orep.SIGNAL_LLM, "x"),
+    )
+    # No valuation key → box absent (the disabled / unavailable default).
+    assert "Estimated missed opportunity" not in orep.render_client_report_html(doc, agency_name="AR")
+    # With an available valuation → box present.
+    doc["valuation"] = {"available": True, "ad_cost_equivalent_monthly": 1200,
+                        "how_estimated": "Estimated from local demand."}
+    html = orep.render_client_report_html(doc, agency_name="AR")
+    assert "Estimated missed opportunity" in html and "$1,200/month" in html
