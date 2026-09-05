@@ -45,7 +45,7 @@ posts; feed image aspect ratio 4:5–1.91:1.
 ## Provisioning needed before P0 code runs
 
 New credentials/accounts on the **PLATFORM** Railway service (none exist yet):
-- **`POSTPEER_API_KEY`** — PostPeer account + API key.
+- **`POSTPEER_API_KEY`** — the agency's **existing** PostPeer key. Kyle already has a live account (confirmed 2026-09-05, module `CLAUDE.md`), so this is a copy-the-key-onto-PLATFORM step, not a new signup.
 - **`APIFY_API_TOKEN`** — Apify account (+ vet the specific per-platform actors).
 - **`TWELVELABS_API_KEY`** — TwelveLabs account (free tier: 600 min).
 - **`GEMINI_API_KEY`** — ⚠️ **currently dormant** (commented out in `.env.example`, defaults to `""`
