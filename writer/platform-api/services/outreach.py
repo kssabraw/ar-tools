@@ -2437,6 +2437,12 @@ def generate_client_report_pdf(
         row["snapshot_id"] = snap_id
     if storage_path:
         row["storage_path"] = storage_path
+    # Freeze the valuation snapshot the approved PDF carried (Phase B, Q12): the content_hash + stored
+    # bytes freeze the OUTPUT; this freezes the INPUTS so the dollar figure is replayable. Only when
+    # the approval actually carried one (available) — never a fabricated row.
+    valuation = report.get("valuation")
+    if isinstance(valuation, dict) and valuation.get("available"):
+        row["valuation"] = valuation
     written = client.table("report_approval").insert(row).execute().data or []
     approval = written[0] if written else row
     logger.info("outreach_client_report_approved", extra={"prospect_id": prospect_id, "content_hash": content_hash})

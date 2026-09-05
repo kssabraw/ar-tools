@@ -2390,3 +2390,35 @@ a Census fill (I-123) exists for the market — is the Phase A activation step. 
 feature is inert: the worker caches demand, the report path shows no dollar line.
 *Revisit:* Phase B (the approval-gated client PDF box + input freeze) after Phase A's numbers are
 sanity-checked on real calls.
+
+### Phase B — BUILT (2026-09-05, PR #1023)
+
+The approval-gated client-facing PDF dollar box + the input freeze. Owner directed building it now;
+the phasing note above (validate Phase A's numbers on real calls first) still holds for *sending* a
+client PDF with a dollar figure — the code is inert (`outreach_valuation_enabled` off) and the number
+degrades to absent, so building now is safe, but a client PDF should not actually be sent with the
+figure until the Phase-A spikes (I-122 demand resolution, I-123 Census fill) validate it.
+
+**The client PDF shows ONLY the ad-cost-equivalent anchor, never the missed-revenue band.** Q4 said
+"lead with the ad-cost-equivalent"; for a CLIENT-FACING asset the most defensible reading is to show
+only it — a measured `missed_clicks × CPC` figure carrying no soft close-rate/job-value assumption —
+and keep the missed-revenue band (which stacks the two soft assumptions) INTERNAL, where it already
+renders in the Phase-A brief. `_client_valuation_html` renders nothing unless the valuation is
+available AND the anchor is present (no CPC → no client figure; a band alone is too soft to put in
+front of a prospect). *Consequence:* the client PDF doesn't use job value, which makes the operator
+job-value override moot for it (see below).
+
+**Freeze (Q12): the approved bytes were already frozen; this adds the inputs.** `content_hash` +
+the stored PDF object already freeze the OUTPUT a prospect saw. `report_approval.valuation` (jsonb,
+migration `20260905130000`, applied live) additionally freezes the INPUT snapshot at approval so the
+figure is replayable — the `score_factors` discipline applied to a client-facing claim. Written only
+when the approval carried an available valuation.
+
+**Operator job-value override (Q7) — DEFERRED, deliberately.** Since the client PDF uses only the
+ad-cost anchor (no job value), the override would only refine the INTERNAL missed-revenue band — a
+UI-driven refinement of a not-yet-validated number, threaded through the shared justification path.
+Low value until the base figure is validated (I-122/I-123); scoped as a clean follow-up rather than
+built speculatively. When built: thread an optional `job_value_override` through
+`generate_client_report_pdf` → `prospect_report`/`prospect_justification` → `_valuation_for` →
+`resolve_assumptions`, and it rides into the frozen `report_approval.valuation` snapshot.
+*Revisit:* once real calls produce actual job values worth capturing.
