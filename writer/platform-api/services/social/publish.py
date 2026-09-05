@@ -18,7 +18,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Optional
-from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -29,9 +28,7 @@ from services.social.postpeer_adapter import get_adapter, x_credit_cost
 logger = logging.getLogger(__name__)
 
 _PUBLISHABLE = {"scheduled", "failed", "rejected", "blocked_account"}
-_IMAGE_BUCKET = "wordpress_images"  # public; PostPeer fetches media by URL
-_IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
-_VIDEO_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov"}
+from services.social.media_store import get_media_store, media_key, resolve_media_type
 
 
 def _assert_enabled() -> None:
@@ -132,18 +129,18 @@ def list_accounts(client_id: str) -> list[dict]:
     ]
 
 
-def upload_media(data: bytes, content_type: str) -> dict:
-    """Validate an uploaded image/video and store it in the public bucket. Returns
-    {"url", "type"}. Video is size/type-checked only (not decoded)."""
-    _assert_enabled()
-    ct = (content_type or "").lower().split(";")[0].strip()
+def _validate_upload(data: bytes, content_type: str) -> tuple[str, str]:
+    """Size/type-check an upload; images are also decode-verified. Returns
+    (ext, media_type). Raises HTTPException on a bad upload."""
     if not data:
         raise HTTPException(status_code=422, detail="empty_file")
-    max_bytes = int(settings.social_max_upload_mb * 1024 * 1024)
-    if len(data) > max_bytes:
+    if len(data) > int(settings.social_max_upload_mb * 1024 * 1024):
         raise HTTPException(status_code=413, detail="file_too_large")
-    if ct in _IMAGE_TYPES:
-        ext, media_type = _IMAGE_TYPES[ct], "image"
+    try:
+        ext, media_type = resolve_media_type(content_type)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unsupported_media_type")
+    if media_type == "image":
         try:
             import io
 
@@ -153,16 +150,32 @@ def upload_media(data: bytes, content_type: str) -> dict:
                 im.verify()
         except Exception:  # noqa: BLE001 — non-decodable upload is a bad image
             raise HTTPException(status_code=422, detail="invalid_image")
-    elif ct in _VIDEO_TYPES:
-        ext, media_type = _VIDEO_TYPES[ct], "video"
-    else:
-        raise HTTPException(status_code=422, detail="unsupported_media_type")
+    return ext, media_type
 
-    path = f"social/{uuid4()}.{ext}"
-    sb = _sb()
-    sb.storage.from_(_IMAGE_BUCKET).upload(path, data, {"content-type": ct, "upsert": "true"})
-    url = sb.storage.from_(_IMAGE_BUCKET).get_public_url(path).rstrip("?")
+
+def upload_media(data: bytes, content_type: str) -> dict:
+    """Validate an uploaded image/video and store it via the media store (R2, else
+    Supabase). Returns {"url", "type"}. Small-file / server path — big videos
+    should use the presigned direct-upload endpoint instead."""
+    _assert_enabled()
+    ext, media_type = _validate_upload(data, content_type)
+    ct = (content_type or "").lower().split(";")[0].strip()
+    url = get_media_store().put_bytes(media_key(ext, "upload"), data, ct)
     return {"url": url, "type": media_type}
+
+
+def presign_upload(content_type: str) -> dict:
+    """A short-lived direct-upload URL for a big image/video: the browser PUTs the
+    file straight to the store, keeping large bytes out of the API. Returns
+    {"upload_url", "public_url", "headers", "type"}."""
+    _assert_enabled()
+    ct = (content_type or "").lower().split(";")[0].strip()
+    try:
+        ext, media_type = resolve_media_type(ct)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="unsupported_media_type")
+    signed = get_media_store().presigned_put_url(media_key(ext, "upload"), ct)
+    return {**signed, "type": media_type}
 
 
 def get_post(post_id: str) -> dict:

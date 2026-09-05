@@ -32,6 +32,17 @@ class SocialMediaUploadResponse(BaseModel):
     type: str
 
 
+class SocialPresignRequest(BaseModel):
+    content_type: str
+
+
+class SocialPresignResponse(BaseModel):
+    upload_url: str
+    public_url: str
+    type: str
+    headers: dict = Field(default_factory=dict)
+
+
 class SocialPostResponse(BaseModel):
     id: UUID
     client_id: UUID

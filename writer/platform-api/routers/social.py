@@ -18,6 +18,8 @@ from models.social import (
     SocialMediaUploadResponse,
     SocialPostCreateRequest,
     SocialPostResponse,
+    SocialPresignRequest,
+    SocialPresignResponse,
 )
 from services.freeze import assert_not_frozen
 from services.social import publish as social_publish
@@ -58,6 +60,17 @@ async def upload_social_media(
     social_publish._assert_enabled()
     data = await file.read()
     return social_publish.upload_media(data, file.content_type or "")
+
+
+@router.post("/clients/{client_id}/social/media/presign", response_model=SocialPresignResponse)
+async def presign_social_media(
+    client_id: UUID, body: SocialPresignRequest, auth: dict = Depends(require_staff)
+):
+    """A short-lived direct-upload URL for a big image/video: the browser PUTs the
+    file to upload_url, then passes public_url into a post's image_urls/video_urls
+    (keeps large bytes out of the API)."""
+    social_publish._assert_enabled()
+    return social_publish.presign_upload(body.content_type)
 
 
 @router.get("/clients/{client_id}/social/posts", response_model=list[SocialPostResponse])
