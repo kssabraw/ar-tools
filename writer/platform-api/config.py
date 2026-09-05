@@ -81,6 +81,16 @@ class Settings(BaseSettings):
     # above, google_ai_* via DataForSEO) keep working.
     perplexity_api_key: str = ""
     gemini_api_key: str = ""
+    # ── Social Media module — posting provider (ADR-0001) ────────────────
+    # PostPeer is the v1 provider, behind a swappable adapter. One
+    # account-wide key (x-access-key); it is NOT a per-client security
+    # boundary, so client isolation is enforced app-side via each client's
+    # stored profile_id. See docs/modules/social-media/CLAUDE.md.
+    social_posting_provider: str = "postpeer"   # SOCIAL_POSTING_PROVIDER
+    postpeer_api_key: str = ""                   # POSTPEER_API_KEY (PLATFORM)
+    postpeer_base_url: str = "https://api.postpeer.dev/v1"
+    social_enabled: bool = False                # SOCIAL_ENABLED — module master gate
+    social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
     # ── Content illustration (hero + inline body images/charts) ──────────────
     # Master switch for the auto path (after a run completes). Per-client opt-in
     # is clients.illustrate_content (default off); on-demand illustration ignores

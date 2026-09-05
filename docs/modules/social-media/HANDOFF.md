@@ -24,6 +24,25 @@
   nano-banana Pro), 1 Major (budget fail-open → fail-closed), 4 Minor, 4 Advisory — all applied
   or captured as sourced open items. See the PR commit history.
 
+## Live smoke test — PASS (2026-09-05)
+
+The connect-and-post smoke test's read-only half ran against the real API with the
+agency's key (from the owner's own machine — the Claude Code sandbox is egress-blocked
+from api.postpeer.dev). Result:
+
+- **`GET /health/auth` → 200** — key valid, PostPeer reachable. Core dependency proven.
+- **`GET /connect/integrations` → 4 accounts** (3 LinkedIn + 1 Facebook), **all healthy**
+  (no `tokenStatus.reconnectRequired`). Integration listing + the health-flag read work.
+- **`GET /profiles` → 0** — expected, NOT a bug: those accounts sit in PostPeer's implicit
+  "Default" group, which the API doesn't enumerate. Our design creates a named profile per
+  client via `POST /profiles`, so there's nothing to list until we do.
+
+**Not yet run:** the `--post` publish half. The 4 connected accounts are REAL client
+LinkedIn/Facebook accounts, so a test post would publish to a client's audience — defer the
+publish proof to an **agency-owned throwaway account** just before P3 (publish lifecycle).
+Auth + connectivity + listing + token health are the parts the gate needed; those are green,
+so P0 (data model / budget meter / scheduler / freeze) is clear to proceed.
+
 ## The P0 vendor gate — CLOSED (2026-09-02)
 
 (Full readout: `../social-media-vendor-confirm-postpeer-v1_0.md` v1.1 — §6 has the API facts the
