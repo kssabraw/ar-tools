@@ -21,7 +21,15 @@ class SocialPostCreateRequest(BaseModel):
     account_id: str
     copy: str = ""
     image_urls: list[str] = Field(default_factory=list)
+    video_urls: list[str] = Field(default_factory=list)
+    platform_specific: Optional[dict] = None
     format: str = "feed"
+    scheduled_at: Optional[datetime] = None   # future time to publish; omit = now
+
+
+class SocialMediaUploadResponse(BaseModel):
+    url: str
+    type: str
 
 
 class SocialPostResponse(BaseModel):

@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     social_enabled: bool = False                # SOCIAL_ENABLED — module master gate
     social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
+    social_max_upload_mb: float = 200.0   # media upload cap (video-sized)
     # ── Content illustration (hero + inline body images/charts) ──────────────
     # Master switch for the auto path (after a run completes). Per-client opt-in
     # is clients.illustrate_content (default off); on-demand illustration ignores

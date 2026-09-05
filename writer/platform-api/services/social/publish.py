@@ -1,26 +1,24 @@
 """Social Media module — the publish path (PRD §9, GBP-Posts lifecycle template).
 
-Platform-general: the same compose → freeze-gated, idempotent publish job →
-status write works for Facebook (the first live target), Instagram, X, Pinterest.
-Accounts are connected MANUALLY in PostPeer for v1, so there is no connect flow
-here — a client's connected accounts are read live from the provider, scoped to
-the client's ``social_profile_id`` (the PostPeer "Social group"), and a post
-targets one of their ``account_id``s.
+Platform-general: compose → (optional schedule) → freeze-gated, idempotent
+publish job → status write, for Facebook (first live target), Instagram, X,
+Pinterest. Supports text, images (single or carousel), ONE video (Facebook
+video / Instagram Reel), per-platform passthrough options, media uploaded to the
+suite's public bucket, and future-dated scheduling via a per-tick due sweep.
 
-The publish job clones ``gbp_posts_service.run_publish_job``: idempotent against a
-requeue (a post that already has ``provider_post_id`` is done; a post left
-``publishing`` by an interrupted worker is NOT re-posted, to avoid a real
-double-publish), freeze-gated by the worker (``social_publish`` ∈
-FREEZE_GATED_JOB_TYPES), and budget-reserved (fail-closed) before it spends.
+Accounts are connected MANUALLY in PostPeer for v1 (no connect flow) — a client's
+accounts are read live from the provider, scoped to their ``social_profile_id``.
 
-Pure helpers (``validate_post``, ``estimate_cost_usd``) are unit-tested.
+Pure helpers (``validate_post``, ``estimate_cost_usd``, ``build_media``) are
+unit-tested.
 """
 
 from __future__ import annotations
 
-import asyncio
 import logging
+from datetime import datetime, timezone
 from typing import Optional
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -30,8 +28,10 @@ from services.social.postpeer_adapter import get_adapter, x_credit_cost
 
 logger = logging.getLogger(__name__)
 
-# A post is publishable from these states (mirrors GBP _PUBLISHABLE).
 _PUBLISHABLE = {"scheduled", "failed", "rejected", "blocked_account"}
+_IMAGE_BUCKET = "wordpress_images"  # public; PostPeer fetches media by URL
+_IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif"}
+_VIDEO_TYPES = {"video/mp4": "mp4", "video/quicktime": "mov"}
 
 
 def _assert_enabled() -> None:
@@ -41,33 +41,42 @@ def _assert_enabled() -> None:
 
 # ── pure helpers (no network / DB — unit-tested) ─────────────────────────────
 
+def build_media(
+    image_urls: Optional[list[str]] = None, video_urls: Optional[list[str]] = None
+) -> list[dict]:
+    """Typed media list from separate image/video URL lists. Pure."""
+    media: list[dict] = [{"type": "image", "url": u} for u in (image_urls or []) if u]
+    media += [{"type": "video", "url": u} for u in (video_urls or []) if u]
+    return media
+
+
 def validate_post(
-    platform: str, copy: str, image_urls: Optional[list[str]], spec: Optional[dict]
+    platform: str, copy: str, media: Optional[list[dict]], spec: Optional[dict]
 ) -> dict:
-    """Deterministic Platform-Spec check (PRD §6). Returns
-    {"hard": [...], "warnings": [...]}: a hard violation blocks approval/publish;
-    a warning is advisory (e.g. the X link credit cost)."""
+    """Deterministic Platform-Spec check (PRD §6). {"hard": [...], "warnings": [...]}:
+    a hard violation blocks approval/publish; a warning is advisory."""
     copy = copy or ""
-    images = image_urls or []
+    media = media or []
+    images = [m for m in media if (m.get("type") or "image") == "image"]
+    videos = [m for m in media if m.get("type") == "video"]
     hard: list[str] = []
     warnings: list[str] = []
 
-    if not copy.strip() and not images:
+    if not copy.strip() and not media:
         hard.append("empty_post")
-
     if spec:
         char_limit = spec.get("char_limit")
         if char_limit and len(copy) > int(char_limit):
             hard.append(f"over_char_limit:{len(copy)}>{char_limit}")
-        if spec.get("requires_image") and not images:
-            hard.append("image_required")
+        if spec.get("requires_image") and not media:
+            hard.append("media_required")
         max_images = spec.get("max_images")
         if max_images and len(images) > int(max_images):
             hard.append(f"too_many_images:{len(images)}>{max_images}")
-
+    if len(videos) > 1:
+        hard.append(f"too_many_videos:{len(videos)}")
     if (platform or "").lower() in ("twitter", "x") and x_credit_cost(platform, copy) >= 50:
         warnings.append("x_link_post_50_credits")
-
     return {"hard": hard, "warnings": warnings}
 
 
@@ -75,6 +84,17 @@ def estimate_cost_usd(platform: str, copy: str, per_credit_usd: Optional[float] 
     """Estimated USD to publish one post (credits × per-credit price). Pure."""
     price = per_credit_usd if per_credit_usd is not None else settings.social_credit_usd
     return round(x_credit_cost(platform, copy) * float(price), 4)
+
+
+def _ensure_future_iso(scheduled_at: datetime, now: Optional[datetime] = None) -> str:
+    """Return an ISO-8601 UTC string for a future time, else 422. Pure."""
+    now = now or datetime.now(timezone.utc)
+    dt = scheduled_at
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if dt <= now:
+        raise HTTPException(status_code=422, detail="scheduled_in_past")
+    return dt.astimezone(timezone.utc).isoformat()
 
 
 # ── impure layer ─────────────────────────────────────────────────────────────
@@ -101,20 +121,48 @@ def _platform_spec(platform: str) -> Optional[dict]:
 
 
 def list_accounts(client_id: str) -> list[dict]:
-    """The client's connected accounts, live from PostPeer, scoped to their
-    Social group when one is set. Read-only (accounts are connected manually)."""
+    """The client's connected accounts, live from PostPeer, scoped to their Social
+    group when set. Read-only (accounts are connected manually)."""
     _assert_enabled()
-    profile_id = _client_profile_id(client_id)
-    integrations = get_adapter().list_integrations(profile_id=profile_id)
+    integrations = get_adapter().list_integrations(profile_id=_client_profile_id(client_id))
     return [
-        {
-            "account_id": i.account_id,
-            "platform": i.platform,
-            "handle": i.handle,
-            "reconnect_required": i.reconnect_required,
-        }
+        {"account_id": i.account_id, "platform": i.platform, "handle": i.handle,
+         "reconnect_required": i.reconnect_required}
         for i in integrations
     ]
+
+
+def upload_media(data: bytes, content_type: str) -> dict:
+    """Validate an uploaded image/video and store it in the public bucket. Returns
+    {"url", "type"}. Video is size/type-checked only (not decoded)."""
+    _assert_enabled()
+    ct = (content_type or "").lower().split(";")[0].strip()
+    if not data:
+        raise HTTPException(status_code=422, detail="empty_file")
+    max_bytes = int(settings.social_max_upload_mb * 1024 * 1024)
+    if len(data) > max_bytes:
+        raise HTTPException(status_code=413, detail="file_too_large")
+    if ct in _IMAGE_TYPES:
+        ext, media_type = _IMAGE_TYPES[ct], "image"
+        try:
+            import io
+
+            from PIL import Image
+
+            with Image.open(io.BytesIO(data)) as im:
+                im.verify()
+        except Exception:  # noqa: BLE001 — non-decodable upload is a bad image
+            raise HTTPException(status_code=422, detail="invalid_image")
+    elif ct in _VIDEO_TYPES:
+        ext, media_type = _VIDEO_TYPES[ct], "video"
+    else:
+        raise HTTPException(status_code=422, detail="unsupported_media_type")
+
+    path = f"social/{uuid4()}.{ext}"
+    sb = _sb()
+    sb.storage.from_(_IMAGE_BUCKET).upload(path, data, {"content-type": ct, "upsert": "true"})
+    url = sb.storage.from_(_IMAGE_BUCKET).get_public_url(path).rstrip("?")
+    return {"url": url, "type": media_type}
 
 
 def get_post(post_id: str) -> dict:
@@ -137,34 +185,42 @@ def create_post(
     account_id: str,
     copy: str = "",
     image_urls: Optional[list[str]] = None,
+    video_urls: Optional[list[str]] = None,
+    platform_specific: Optional[dict] = None,
     fmt: str = "feed",
+    scheduled_at: Optional[datetime] = None,
 ) -> dict:
-    """Compose one platform-native post and enqueue its publish. Validates against
-    the Platform Spec (hard violation → 422) before anything is written."""
+    """Compose one platform-native post and publish it now, or schedule it for a
+    future time. Validates against the Platform Spec (hard violation → 422) first."""
     _assert_enabled()
     platform = (platform or "").lower()
-    image_urls = image_urls or []
-    verdict = validate_post(platform, copy, image_urls, _platform_spec(platform))
+    media = build_media(image_urls, video_urls)
+    verdict = validate_post(platform, copy, media, _platform_spec(platform))
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
+
+    scheduled_iso = _ensure_future_iso(scheduled_at) if scheduled_at else None
 
     draft = (
         _sb().table("social_drafts").insert({
             "client_id": client_id, "platform": platform, "format": fmt,
             "angle": "manual", "source_ref": {"type": "manual"},
-            "copy": copy, "image_urls": image_urls,
-            "spec_verdict": verdict, "status": "approved",
+            "copy": copy, "media": media,
+            "image_urls": [m["url"] for m in media if m["type"] == "image"],
+            "platform_metadata": platform_specific, "spec_verdict": verdict, "status": "approved",
         }).execute()
     ).data[0]
 
     post = (
         _sb().table("social_posts").insert({
             "draft_id": draft["id"], "client_id": client_id, "platform": platform,
-            "account_id": account_id, "status": "scheduled",
+            "account_id": account_id, "status": "scheduled", "scheduled_at": scheduled_iso,
         }).execute()
     ).data[0]
 
-    _insert_publish_job(client_id, post["id"])
+    # Publish now unless it's future-scheduled (the due sweep enqueues those).
+    if scheduled_iso is None:
+        _insert_publish_job(client_id, post["id"])
     return post
 
 
@@ -178,10 +234,51 @@ def _insert_publish_job(client_id: str, post_id: str) -> str:
     return res.data[0]["id"]
 
 
+def _has_active_publish_job(client_id: str, post_id: str) -> bool:
+    rows = (
+        _sb().table("async_jobs").select("id, payload")
+        .eq("job_type", "social_publish").eq("entity_id", client_id)
+        .in_("status", ["pending", "running"]).execute().data or []
+    )
+    return any((r.get("payload") or {}).get("post_id") == post_id for r in rows)
+
+
+def enqueue_due_social_posts() -> int:
+    """Per-tick sweep: publish any post whose scheduled_at has come due. Skips
+    frozen clients (publish paused until the freeze lifts) and posts with an
+    active publish job. No-op until the module is enabled."""
+    if not settings.social_enabled:
+        return 0
+    from services.freeze import is_frozen
+
+    now = datetime.now(timezone.utc)
+    due = (
+        _sb().table("social_posts").select("id, client_id")
+        .eq("status", "scheduled").not_.is_("scheduled_at", "null")
+        .lte("scheduled_at", now.isoformat()).execute().data or []
+    )
+    count = 0
+    for post in due:
+        cid, pid = post["client_id"], post["id"]
+        if is_frozen(cid) or _has_active_publish_job(cid, pid):
+            continue
+        try:
+            _insert_publish_job(cid, pid)
+            count += 1
+        except Exception as exc:  # noqa: BLE001 — defensive
+            logger.warning("social.scheduled_enqueue_failed",
+                           extra={"post_id": pid, "error": str(getattr(exc, "detail", exc))})
+    if count:
+        logger.info("social.scheduled_published", extra={"posts": count})
+    return count
+
+
 async def run_publish_job(job: dict) -> None:
     """Handler for job_type='social_publish'. Publishes ONE post to ONE account via
-    the adapter, reserves budget first (fail-closed), and reconciles status. The
-    worker's freeze gate holds this for a frozen client. Idempotent on requeue."""
+    the adapter, reserves budget first (fail-closed), reconciles status. Freeze
+    gate is applied by the worker. Idempotent on requeue."""
+    import asyncio
+
     from services import notifications  # lazy — keeps pure helpers importable without the DB layer
 
     payload = job.get("payload") or {}
@@ -206,14 +303,10 @@ async def run_publish_job(job: dict) -> None:
 
     try:
         post = get_post(post_id)
-        # Guard 1 — already published; settle the duplicate without re-posting.
-        if post.get("provider_post_id"):
+        if post.get("provider_post_id"):  # Guard 1 — already published
             _settle_job("complete", result={"post_id": post_id, "already_published": True})
             return
-        # Guard 2 — interrupted mid-publish. PostPeer gives no reliable way to
-        # match an orphan, so do NOT repost (a real double-publish); flag for a
-        # human to verify in PostPeer instead.
-        if post.get("status") == "publishing":
+        if post.get("status") == "publishing":  # Guard 2 — interrupted; never double-post
             _fail("interrupted_verify_in_postpeer", post_status="failed")
             return
 
@@ -222,14 +315,14 @@ async def run_publish_job(job: dict) -> None:
             drows = (sb.table("social_drafts").select("*").eq("id", post["draft_id"]).limit(1).execute()).data or []
             draft = drows[0] if drows else {}
         copy = draft.get("copy") or ""
-        image_urls = draft.get("image_urls") or []
+        media = draft.get("media") or [{"type": "image", "url": u} for u in (draft.get("image_urls") or [])]
+        platform_specific = draft.get("platform_metadata") or None
         platform = post["platform"]
         account_id = post.get("account_id")
         if not account_id:
             _fail("no_account_id")
             return
 
-        # Budget: reserve the estimated cost before spending (fail-closed).
         est = estimate_cost_usd(platform, copy)
         cap = budget.ceiling_for_client(client_id)
         if not budget.reserve(client_id, est, cap=cap):
@@ -241,7 +334,7 @@ async def run_publish_job(job: dict) -> None:
         ).eq("id", post_id).execute()
 
         result = await asyncio.to_thread(
-            get_adapter().post, account_id, platform, copy, image_urls or None
+            get_adapter().post, account_id, platform, copy, media or None, platform_specific
         )
         if result.ok:
             sb.table("social_posts").update({
@@ -262,7 +355,7 @@ async def run_publish_job(job: dict) -> None:
                 summary=(result.detail or "publish_failed")[:200], severity="warning",
                 payload={"post_id": post_id},
             )
-    except Exception as exc:  # noqa: BLE001 — record failure for the poller
+    except Exception as exc:  # noqa: BLE001
         detail = getattr(exc, "detail", None) or str(exc)
         _fail(detail)
         logger.warning("social.publish_failed", extra={"post_id": post_id, "error": str(detail)})

@@ -10,11 +10,12 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 
 from middleware.auth import require_auth, require_staff
 from models.social import (
     SocialAccountResponse,
+    SocialMediaUploadResponse,
     SocialPostCreateRequest,
     SocialPostResponse,
 )
@@ -42,8 +43,21 @@ async def create_social_post(
     assert_not_frozen(str(client_id))
     return social_publish.create_post(
         str(client_id), body.platform, body.account_id,
-        copy=body.copy, image_urls=body.image_urls, fmt=body.format,
+        copy=body.copy, image_urls=body.image_urls, video_urls=body.video_urls,
+        platform_specific=body.platform_specific, fmt=body.format,
+        scheduled_at=body.scheduled_at,
     )
+
+
+@router.post("/clients/{client_id}/social/media", response_model=SocialMediaUploadResponse)
+async def upload_social_media(
+    client_id: UUID, file: UploadFile = File(...), auth: dict = Depends(require_staff)
+):
+    """Upload an image or video to the public bucket; returns a public URL to drop
+    into a post's image_urls/video_urls (PostPeer fetches media by URL)."""
+    social_publish._assert_enabled()
+    data = await file.read()
+    return social_publish.upload_media(data, file.content_type or "")
 
 
 @router.get("/clients/{client_id}/social/posts", response_model=list[SocialPostResponse])
