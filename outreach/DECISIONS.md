@@ -2255,3 +2255,100 @@ un-audited — logged, still unbuilt, confirmed after four live scans).
 *Revisit:* once ~100 prospects have been contacted and real `outcome` rows exist — at that point the
 posture flips from "call to gather data" to "fit the model against the data," and items 2 and 4 become
 buildable rather than guesses.
+
+---
+
+## Missed-opportunity valuation — the dollar pain point (2026-09-05)
+
+Full design in `docs/missed-opportunity-valuation-prd-v0_1.md`. Settled by a grilling session; the
+decisions and their reasoning are below. **Not built.**
+
+**A per-prospect DOLLAR estimate of the local demand forgone by not being in the Maps pack, framed
+as a competitive pain point.** Chain: `local demand × pack-click-share missing × [close × job-value]`.
+Chosen because the map-pack signal already answers *where* a prospect is invisible but never *what
+that is worth* — the dollar figure is the pain point a caller/PDF can lead with.
+
+**Vocabulary: "estimated missed opportunity," never "loss."** Not in the pack ≠ money lost; it is
+demand not captured. "Loss" invites "prove it" and can't be defended; the former survives scrutiny.
+*Revisit:* never — this is a truthfulness constraint, not a tuning knob.
+
+**It is a MODELED number, and it earns its place by showing its work.** The module's governing rule
+is never-fabricate; a dollar figure is unavoidably modeled (only demand is near-measured). Reconciled
+by: a **range not a point**; every soft input **labeled + editable** beside the number; a one–two-
+sentence "how we estimated this" line on every surface; framed as *potential/estimated*, never "you
+are losing $X." Honest because auditable, not because exact — same basis as the heatmap's trust.
+*Revisit:* if a surface ever shows a bare point figure, that is the regression.
+
+**Two framings, different surfaces.** *Ad-cost-equivalent* (`demand × gap × CPC`) carries no soft
+assumptions (CPC is measured, already prices a click) → **leads the client PDF** as the defensible
+anchor. *Missed-revenue* (`× close × job-value`) is the emotional number → **leads the internal call
+hook**. Building both, leading the client-facing surface with the defensible one, was chosen over a
+single number so the punchy figure never has to be the one a prospect can dispute.
+
+**The range is a conservative→high band on the two softest assumptions** (close rate, job value): low
+end runs the conservative pair, high end the aggressive. Ad-cost-equivalent shows as a single anchor
+beside the band. Chosen over a ± band on everything because the softest inputs are exactly close/job-
+value; banding them is where the honesty is.
+
+**Single-keyword demand — value only what was measured.** The visibility gap exists only for the
+scanned keyword; valuing a category basket would multiply real demand by an *assumed* gap on
+keywords never scanned. Also keeps it to one volume call and deliberately conservative.
+*Revisit:* when multi-keyword scanning exists.
+
+**Demand = metro search volume, Census-downscaled to the measured footprint.** Sub-metro absolute
+volume does not exist at the source (Keyword Planner floors at ~metro), so localization is
+necessarily a downscale. `local_demand = metro_volume × (pop in footprint ÷ metro pop)`, footprint =
+the 5-mile grid radius (config-editable) so demand and the grid-measured gap share one geography —
+this is what fixes the metro-volume unit mismatch. Population via the suite's existing
+`census_demand.py` (already runs LeadOff placement, lives in platform-api where the report is
+assembled → free at report time). Chosen over raw metro volume (rejected — unit mismatch) and over
+review-velocity revealed demand (kept as a deferred cross-check). *Known assumption:* searches ∝
+population is reasonable but not measured — see the PRD's unvalidated section.
+
+**Volume+CPC fetched once per (keyword, location), cached — never per prospect.** It is a property of
+the (keyword, location), identical across all prospects in a submarket. Auto-enqueued on snapshot
+finalize as a new **`demand_fetch_request`** signed order (sentinel actor, budget-gated, idempotent),
+drained ≤1/tick — mirrors the organic auto-enqueue path exactly. New cached table `keyword_demand`
+keyed by `(keyword, location_code)`. Chosen because a per-prospect fetch would re-bill one number ~83
+times.
+
+**`search_volume/live` needs a `location_code`, which the module does not store** (everything uses
+`location_coordinate`). Resolve the nearest city/metro `location_code` from the submarket center and
+store it as an additive `submarket.location_code` column (geometry untouched). Port reference: the
+suite's `dataforseo_rank.location_code_for`. *Spike:* confirm the exact resolution endpoint + that
+city-granular volume is populated for small-local keywords, at build.
+
+**Gap from `rank_vector` × a config 3-pack CTR curve; "outside top 3" = missed; uniform grid v1.**
+No new call — the gap is derived from data on disk. The counterfactual is "in the pack," not "#1
+everywhere," keeping it conservative. Published CTR curve as versioned config (distinct from the
+suite's organic curve). Population-weighting the grid is deferred.
+
+**Per-category close-rate + job-value table, keyed on the module's EXISTING vertical taxonomy;
+global fallback for unknown/off_category.** Reusing the `category_status` allow-list avoids a second
+category vocabulary that would drift. `prospect.category` (populated at ingest) resolves the vertical;
+unknowns fall to a conservative global default (the honest behavior — we don't know their economics).
+
+**Defaults + curve as versioned config; internal computed-on-read; client PDF freezes inputs at
+approval.** Per-category defaults + CTR curve follow the `OUTREACH_SCORECARD_COEFFICIENTS_JSON`
+precedent. Call hook/brief are a derived read (like `v_prospect_placeholder_score`, no
+`prospect_score` write — respects I-082). The client PDF freezes every input (volume, CPC,
+location_code, Census figures, curve version, category-default version, override) onto the
+`report_approval`/`report_artifact` record so the figure a prospect saw is reproducible — same
+discipline as contemporaneous coverage. Operator override lands on the frozen record, never mutates
+config.
+
+**Competitive framing: aggregate dollar + named competitors as the "who," never a per-competitor
+dollar amount.** We can't measure a competitor's revenue, and it is the one claim a prospect can
+instantly dispute (consistent with I-099 and the one-directional name-match rule). The named pack
+holders supply the emotional punch; the aggregate demand supplies the number.
+
+**Touches two things the build session must know:** (1) the call-hook composer currently FORBIDS
+money/volume numbers — this carves a **scoped exception** for the range-with-visible-assumptions, and
+only because it is not a bare claim; the prohibition otherwise stands. (2) new `demand_fetch_request`
+order + `keyword_demand` table + additive `submarket.location_code`, all in `outreach/migrations/`.
+
+**Phasing:** Phase A = internal-only (call hook + brief, computed-on-read, no PDF) — the whole model
+at zero client-facing risk, pressure-tested on real calls first; Phase B = the approval-gated client
+PDF box + input freeze. *Revisit:* the deferred items (population-weighted grid, category-basket
+demand, review-velocity cross-check, per-vertical CTR curve) become worthwhile once Phase A's numbers
+are sanity-checked against real markets.
