@@ -2706,6 +2706,19 @@ can't reach DataForSEO): confirm by merging → the worker redeploys → re-run 
 `demand_fetch_request` (~$0.05) and check a `keyword_demand` row lands with a sane volume/CPC. Until then
 this stays partly open (built, not yet proven live).
 
+**RESOLVED 2026-09-05 — verified live end-to-end.** After #1026 merged (squash `d6a6136`) and the
+outreach worker redeployed on it, the owner-authorized re-run confirmed the fix: manual order
+`7288e898` (emergency plumber / snapshot `30455295`) drained to `done` on the next tick (07:50:41Z,
+~1.3s). The stale non-digit token **self-healed** — `submarket.location_token` went `"Los Angeles, CA,
+USA"` → `"1013962"` (the resolved LA `location_code`) — and a `keyword_demand` row landed:
+`emergency plumber` @ `1013962` → `search_volume=1000`, `cpc=117.13`, `competition=0.09`,
+`source=dataforseo_google_ads`. The `location_code` resolution + the search_volume call both work.
+**Data-quality note (not a code issue):** the returned CPC ($117.13 for "emergency plumber" in LA) is
+high — plausible for a high-value emergency-service term but worth an eyeball when the valuation's
+ad-cost-equivalent (missing clicks × CPC) starts reading large; it is DataForSEO's real value for that
+location, carried through faithfully. This issue is now CLOSED; the remaining valuation gate is I-123
+(Census fill for outreach submarkets) before a dollar line renders.
+
 ### I-123 · Census downscale needs a per-submarket block-group fill that doesn't exist yet
 The valuation localizes metro search volume to the 5-mile footprint by Census population share
 (`outreach._demand_population_ratio` → `census_demand.blockgroups_in_bbox`). That READ needs no egress
