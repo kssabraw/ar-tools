@@ -12,6 +12,8 @@ from config import settings
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth, require_staff
 from models.clients import (
+    ClientAsset,
+    ClientAssetCreateRequest,
     ClientCreateRequest,
     ClientDetail,
     ClientListItem,
@@ -398,6 +400,8 @@ async def create_client(
         row["slack_channel_id"] = (body.slack_channel_id.strip() or None)
     if body.everhour_project_id is not None:
         row["everhour_project_id"] = (body.everhour_project_id.strip() or None)
+    if body.trust_signals is not None:
+        row["trust_signals"] = body.trust_signals.model_dump()
     # Reference page structures: seed the pending entries so the row reflects the
     # configured URLs immediately; the scrape jobs are enqueued after insert.
     _assert_single_structure_source(body.page_structure_urls, body.page_structure_guidelines)
@@ -567,6 +571,8 @@ async def update_client(
         updates["gbp"] = body.gbp.model_dump()
     if body.target_cities is not None:
         updates["target_cities"] = body.target_cities
+    if body.trust_signals is not None:
+        updates["trust_signals"] = body.trust_signals.model_dump()
 
     # Reference page structures: diff submitted URLs + written guidelines vs
     # stored, enqueue whatever changed. Both sync passes run over the same merged
@@ -777,3 +783,79 @@ async def reanalyze_page_structures(
         extra={"client_id": str(client_id), "user_id": auth["user_id"], "page_types": reanalyzed},
     )
     return {"reanalyzed": reanalyzed}
+
+
+# ── Trust & Proof media gallery (client_assets) ──────────────────────────────
+# The scalar/list trust facts live on clients.trust_signals (set via client
+# update). The media gallery is 1-to-many, so it's a separate table with its own
+# endpoints. Image files are uploaded via POST /files/logo (a generic public-
+# image uploader) and the returned URL is stored here; a video_embed carries an
+# external embed URL directly. Consumed by the Local SEO writer's Trust & Proof
+# block (services/local_seo_service._client_assets).
+
+
+@router.get("/clients/{client_id}/assets", response_model=list[ClientAsset])
+async def list_client_assets(
+    client_id: UUID,
+    auth: dict = Depends(require_auth),
+) -> list[ClientAsset]:
+    supabase = get_supabase()
+    res = (
+        supabase.table("client_assets")
+        .select("id, kind, url, caption, sort_order")
+        .eq("client_id", str(client_id))
+        .order("sort_order")
+        .order("created_at")
+        .execute()
+    )
+    return [ClientAsset(**row) for row in (res.data or [])]
+
+
+@router.post("/clients/{client_id}/assets", response_model=ClientAsset, status_code=201)
+async def add_client_asset(
+    client_id: UUID,
+    body: ClientAssetCreateRequest,
+    auth: dict = Depends(require_staff),
+) -> ClientAsset:
+    supabase = get_supabase()
+    # Ensure the client exists (the FK would also reject, but a clean 404 is nicer).
+    exists = supabase.table("clients").select("id").eq("id", str(client_id)).execute()
+    if not exists.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    row = {
+        "client_id": str(client_id),
+        "kind": body.kind,
+        "url": body.url.strip(),
+        "caption": (body.caption or "").strip() or None,
+        "sort_order": body.sort_order,
+        "created_by": auth["user_id"],
+    }
+    res = supabase.table("client_assets").insert(row).execute()
+    logger.info(
+        "client_asset_added",
+        extra={"client_id": str(client_id), "user_id": auth["user_id"], "kind": body.kind},
+    )
+    return ClientAsset(**res.data[0])
+
+
+@router.delete("/clients/{client_id}/assets/{asset_id}", response_model=dict)
+async def delete_client_asset(
+    client_id: UUID,
+    asset_id: UUID,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    supabase = get_supabase()
+    res = (
+        supabase.table("client_assets")
+        .delete()
+        .eq("id", str(asset_id))
+        .eq("client_id", str(client_id))
+        .execute()
+    )
+    if not res.data:
+        raise HTTPException(status_code=404, detail="asset_not_found")
+    logger.info(
+        "client_asset_deleted",
+        extra={"client_id": str(client_id), "user_id": auth["user_id"], "asset_id": str(asset_id)},
+    )
+    return {"deleted": str(asset_id)}

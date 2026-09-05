@@ -58,12 +58,18 @@ def test_start_generate_enqueues_one_job_per_cell_with_matrix_payload():
     assert p0["keyword"] == "Roof restoration Melbourne" and p0["location_code"] == 1000567
     assert p1["keyword"] == "Roof restoration Hawthorn" and p1["location_code"] == 21030
     assert p0["matrix_id"] == "m1" and p0["matrix_cell_id"] == "cell-0" and p0["user_id"] == "user-1"
-    # Sibling links planned against the whole grid ride on the payload (Phase 2).
+    # Links planned against the whole grid ride on the payload (Phase 2): the
+    # up-links (service hub + home) come FIRST, then the siblings.
     assert p0["internal_links"] == [
+        {"anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": core.SERVICE_HUB},
+        {"anchor": "Home", "url": "https://fcr.com.au/", "relation": core.HOME},
         {"anchor": "Roof restoration in Hawthorn", "url": "https://fcr.com.au/roof-restoration-hawthorn/",
          "relation": core.SAME_SERVICE},
     ]
-    assert p1["internal_links"][0]["url"] == "https://fcr.com.au/roof-restoration-melbourne/"
+    assert p1["internal_links"][0] == {
+        "anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": core.SERVICE_HUB,
+    }
+    assert any(lk["url"] == "https://fcr.com.au/roof-restoration-melbourne/" for lk in p1["internal_links"])
     assert rows[0]["scheduled_at"] < rows[1]["scheduled_at"]  # staggered
     # Cells flipped to queued with their job ids.
     patched = [c[0][0][0] for c in apply.call_args_list]
@@ -141,10 +147,57 @@ async def test_run_generate_job_records_cell_link_coverage():
         "matrix_id": "m1", "matrix_cell_id": "cell-0",
         "internal_links": [{"anchor": "a", "url": "/a/", "relation": core.SAME_LOCATION}],
     }}
+    # The MagicMock Supabase answers EVERY read with a truthy mock, which the
+    # resume guard (`_page_for_job`) would read as "this job already has a page".
+    # Pin it to a fresh job so the generate path under test actually runs.
     with patch.object(svc, "generate_page", new=_gen), \
          patch.object(svc, "get_supabase", return_value=sb), \
+         patch.object(svc, "_page_for_job", return_value=None), \
          patch.object(store, "record_link_coverage") as record:
         await svc.run_generate_job(job)
     assert fake_generate.call_args.kwargs["internal_links"] == job["payload"]["internal_links"]
     record.assert_called_once_with("cell-0", coverage)
     assert sb.table.return_value.update.call_args[0][0]["result"] == {"page_id": "page-1"}
+
+
+def test_home_link_anchor_uses_client_business_name_else_home():
+    """#4: the homepage up-link is anchored with the client's business name when
+    the lookup succeeds, and falls back to "Home" on any miss/odd result."""
+    cells = _cells()
+    # Branded: the clients lookup returns a real name.
+    sb = _fake_sb(["job-a", "job-b"])
+    sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [
+        {"name": "First Class Roofing"}
+    ]
+    with patch.object(store, "_runnable", return_value=(MATRIX, cells, cells)), \
+         patch.object(store, "get_supabase", return_value=sb), \
+         patch.object(store, "_apply_patches"):
+        store.start_generate("m1", "c1", "user-1")
+    p0 = sb.table.return_value.insert.call_args[0][0][0]["payload"]
+    home = next(lk for lk in p0["internal_links"] if lk["relation"] == core.HOME)
+    assert home == {"anchor": "First Class Roofing", "url": "https://fcr.com.au/", "relation": core.HOME}
+
+    # Fallback: a lookup returning no rows anchors "Home".
+    sb2 = _fake_sb(["job-c", "job-d"])
+    sb2.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = []
+    with patch.object(store, "_runnable", return_value=(MATRIX, cells, cells)), \
+         patch.object(store, "get_supabase", return_value=sb2), \
+         patch.object(store, "_apply_patches"):
+        store.start_generate("m1", "c1", "user-1")
+    p0b = sb2.table.return_value.insert.call_args[0][0][0]["payload"]
+    homeb = next(lk for lk in p0b["internal_links"] if lk["relation"] == core.HOME)
+    assert homeb["anchor"] == "Home"
+
+
+def test_resolve_hub_pattern_requires_only_when_hub_on():
+    """#2: an invalid hub pattern is a 400 only when the hub link is on; with the
+    link off it is silently normalized to the default (never a reject, never a
+    stored invalid pattern)."""
+    assert store._resolve_hub_pattern("/services/{service}/", require=True) == "/services/{service}/"
+    assert store._resolve_hub_pattern("", require=True) == core.DEFAULT_SERVICE_HUB_PATTERN
+    with pytest.raises(HTTPException) as exc:
+        store._resolve_hub_pattern("/no-token/", require=True)
+    assert exc.value.status_code == 400 and exc.value.detail == "hub_pattern_missing_service_token"
+    # Hub off: a bad pattern is normalized, not rejected.
+    assert store._resolve_hub_pattern("/no-token/", require=False) == core.DEFAULT_SERVICE_HUB_PATTERN
+    assert store._resolve_hub_pattern("/{service}/{location}/", require=False) == core.DEFAULT_SERVICE_HUB_PATTERN

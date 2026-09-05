@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Bell, Check, Trash2, X } from 'lucide-react'
 import { api } from '../lib/api'
+import { formatPacificDateTime } from '../lib/datetime'
 import type { Notification } from '../lib/types'
 
 // Per-client notifications panel (the in-app channel of the notifications
@@ -107,7 +108,7 @@ export function ClientNotifications({ clientId }: { clientId: string }) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ ...pill, color: c.fg, background: c.bg }}>{n.severity}</span>
                   <span style={{ fontWeight: 600, fontSize: 13, color: '#0f172a' }}>{n.title}</span>
-                  <span style={{ fontSize: 11, color: '#94a3b8' }}>{new Date(n.created_at).toLocaleDateString()}</span>
+                  <span style={{ fontSize: 11, color: '#94a3b8' }}>{formatPacificDateTime(n.created_at)}</span>
                 </div>
                 {n.summary && <div style={{ fontSize: 12, color: '#64748b', marginTop: 2, lineHeight: 1.5 }}>{n.summary}</div>}
               </div>

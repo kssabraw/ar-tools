@@ -21,13 +21,18 @@ from models.local_seo_matrix import (
     MatrixEstimate,
     MatrixGenerateRequest,
     MatrixGenerateResult,
+    MatrixPublishRequest,
+    MatrixPublishResult,
     MatrixRecheckResult,
+    MatrixReleaseRequest,
+    MatrixReleaseState,
     MatrixSuggestJob,
     MatrixSuggestRequest,
     MatrixSuggestResult,
     MatrixSummary,
     MatrixUpdateRequest,
 )
+from services import local_seo_matrix_release as release
 from services import local_seo_matrix_store as store
 from services.freeze import assert_not_frozen
 
@@ -135,6 +140,63 @@ async def generate_matrix_cells(
         force_refresh=body.force_refresh,
     )
     return MatrixGenerateResult(**result)
+
+
+@router.post(_BASE + "/{matrix_id}/publish", response_model=MatrixPublishResult)
+async def publish_matrix_cells(
+    client_id: UUID, matrix_id: UUID, body: MatrixPublishRequest, auth: dict = Depends(require_auth),
+) -> MatrixPublishResult:
+    """Publish all done cells (or the given ones) to one destination — one
+    background publish job per cell; the grid shows each outcome. Freeze-gated:
+    publishing is output."""
+    _enabled()
+    assert_not_frozen(str(client_id))
+    result = store.start_publish(
+        str(matrix_id), str(client_id), auth["user_id"],
+        destination=body.destination, status=body.status, force_voice=body.force_voice,
+        cell_ids=[str(c) for c in body.cell_ids] if body.cell_ids else None,
+    )
+    return MatrixPublishResult(**result)
+
+
+@router.get(_BASE + "/{matrix_id}/release", response_model=MatrixReleaseState)
+async def get_matrix_release(client_id: UUID, matrix_id: UUID, auth: dict = Depends(require_auth)) -> MatrixReleaseState:
+    """The drip schedule plus how many cells are still releasable."""
+    _enabled()
+    return MatrixReleaseState(**release.get_release(str(matrix_id), str(client_id)))
+
+
+@router.put(_BASE + "/{matrix_id}/release", response_model=MatrixReleaseState)
+async def set_matrix_release(
+    client_id: UUID, matrix_id: UUID, body: MatrixReleaseRequest, auth: dict = Depends(require_auth),
+) -> MatrixReleaseState:
+    """Set (or replace) the drip schedule; the immediate batch is generated +
+    published now, the rest on the cadence. Freeze-gated: a release creates
+    (and publishes) content."""
+    _enabled()
+    assert_not_frozen(str(client_id))
+    return MatrixReleaseState(
+        **release.set_release(str(matrix_id), str(client_id), body.model_dump(), auth["user_id"])
+    )
+
+
+@router.delete(_BASE + "/{matrix_id}/release")
+async def clear_matrix_release(client_id: UUID, matrix_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Stop the drip. Cells already released keep going; nothing new is enqueued."""
+    _enabled()
+    return release.clear_release(str(matrix_id), str(client_id))
+
+
+@router.post(_BASE + "/{matrix_id}/release/run", response_model=MatrixReleaseState)
+async def run_matrix_release(
+    client_id: UUID, matrix_id: UUID, count: int = Query(1, ge=1, le=50), auth: dict = Depends(require_auth),
+) -> MatrixReleaseState:
+    """Release the next `count` cells right now (generate → publish), outside the
+    cadence. Freeze-gated."""
+    _enabled()
+    assert_not_frozen(str(client_id))
+    release.run_release(str(matrix_id), str(client_id), count, auth["user_id"])
+    return MatrixReleaseState(**release.get_release(str(matrix_id), str(client_id)))
 
 
 @router.post(_BASE + "/{matrix_id}/suggest", response_model=MatrixSuggestJob)

@@ -151,3 +151,36 @@ def test_a_clean_run_reports_no_failures():
     assert result["aborted"] is None
     assert result["failed"] == 0
     assert result["failures"] == []
+
+
+def test_marketing_reviews_keeps_strong_reviews_with_text_newest_first():
+    from services import review_analytics as ra
+    reviews = [
+        {"reviewer": "A", "rating": 5, "text": "Great crew", "date": "2026-01-02"},
+        {"reviewer": "B", "rating": 2, "text": "Late", "date": "2026-03-01"},
+        {"reviewer": "C", "rating": 4, "text": "", "date": "2026-02-01"},
+        {"reviewer": "D", "rating": 4.0, "text": "Solid", "date": "2026-02-15"},
+        "junk",
+    ]
+    out = ra.marketing_reviews(reviews)
+    assert [r["reviewer"] for r in out] == ["D", "A"]
+    assert out[0] == {"reviewer": "D", "rating": 4.0, "text": "Solid", "date": "2026-02-15"}
+    assert ra.marketing_reviews([{"reviewer": "X", "rating": 5, "text": f"r{i}", "date": f"2026-01-{i:02d}"} for i in range(1, 15)]).__len__() == 10
+    assert ra.marketing_reviews([]) == []
+
+
+def test_backfill_gbp_reviews_fills_only_an_empty_list(monkeypatch):
+    from unittest.mock import MagicMock
+    from services import review_analytics as ra
+    sb = MagicMock()
+    sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"gbp": {"business_name": "Acme", "reviews": []}}]
+    monkeypatch.setattr(ra, "get_supabase", lambda: sb)
+    n = ra._backfill_gbp_reviews("c1", [{"reviewer": "A", "rating": 5, "text": "Great", "date": "2026-01-01"}])
+    assert n == 1
+    written = sb.table.return_value.update.call_args[0][0]["gbp"]
+    assert written["business_name"] == "Acme" and written["reviews"][0]["text"] == "Great"
+    # reviews already on file are never overwritten
+    sb.table.return_value.select.return_value.eq.return_value.limit.return_value.execute.return_value.data = [{"gbp": {"reviews": [{"reviewer": "Z", "rating": 5, "text": "Kept"}]}}]
+    sb.table.return_value.update.reset_mock()
+    assert ra._backfill_gbp_reviews("c1", [{"reviewer": "A", "rating": 5, "text": "Great", "date": "2026-01-01"}]) == 0
+    sb.table.return_value.update.assert_not_called()

@@ -187,25 +187,118 @@ Generates local landing, service, and location pages (competitor analysis -> AI 
 - The existing-page check reads the client's **live site** (sitemap or Google index), so you don't duplicate pages.""",
     },
     {
+        "slug": "ecommerce",
+        "title": "Ecommerce Writer",
+        "category": "Content",
+        "icon": "Package",
+        "sort_order": 55,
+        "summary": "Write and reoptimize product (PDP) and collection (PLP) pages with an ecommerce-specific SEO + AEO + conversion rubric.",
+        "body": """# Ecommerce Writer
+
+Generates and reoptimizes **product description pages (PDPs)** and **collection/category pages (PLPs)** — the same proven generate -> score -> auto-retry spine as Local SEO, but with an ecommerce rubric (commercial intent, product depth, conversion readiness, structured data) and no geography.
+
+## How to use it
+1. Open a client's workspace -> **Ecommerce Writer** card.
+2. **New** — pick Product or Collection, paste in product facts and/or a source URL to scrape, then generate.
+3. **Reoptimize** — score and improve an existing product/collection URL (single or bulk, or bulk-discover from the site's sitemap).
+4. **Saved / Drafts** — manage generated pages; deleting soft-deletes to Drafts.
+
+## Tips
+- The writer never invents prices, specs, or review counts — missing facts are called out as Content Gaps instead of guessed.
+- For consumable/compound products, invariant public specs (CAS number, molecular weight, solubility, etc.) can be auto-researched with citations — vendor-specific facts (price, this store's claims) are never auto-filled.
+- An optional **house template** (a reference PDP URL) makes every generated product page mirror the client's own layout.""",
+    },
+    {
         "slug": "keyword-research",
-        "title": "Keyword Research & Content Scheduler",
+        "title": "Keyword Research",
         "category": "Content",
         "icon": "Sparkles",
         "sort_order": 60,
-        "summary": "Topic-fanout keyword clustering and a VA content scheduler for mass content creation.",
-        "body": """# Keyword Research & Content Scheduler
+        "summary": "A standalone seed-keyword explorer — clusters, questions, competitor SERPs, and blog topic ideas for one client.",
+        "body": """# Keyword Research
 
-The Topic Fanout tool: expand a seed into clustered keyword silos, then schedule content (blog posts or Local SEO pages) to be produced on a cadence.
+A standalone keyword explorer, separate from the Topic Fanout mass-content tool. Enter one or more seed keywords for a client and get the related keyword universe — clustered, scored, and filtered for relevance and audience fit.
+
+## What it gives you
+- **Topic clusters** with volume, CPC, competition, difficulty, and search intent per keyword.
+- **People Also Ask** questions and the **competitive landscape** (who ranks, who's cited in AI Overview) for your seeds.
+- **Topic Research (BETA)** — genuine buyer-problem topics (not just seed variations), each with a suggested title and supporting keywords.
+- A **client-facing PDF report**, and a **"Write this post"** action that seeds a Blog Writer run straight from a topic card.
 
 ## How to use it
-1. Open a client's workspace -> **Content Scheduler** card.
-2. Run a fanout from a seed topic to get clustered keywords.
-3. Create a **schedule** — choose the content type (blog post or local SEO page) and, for local pages, a target **location** (DataForSEO typeahead).
-4. The scheduler produces content on the cadence; local SEO pages land in the client's Saved Pages (first-class, scorable/publishable).
+1. Open a client's workspace -> **Keyword Research** card.
+2. Enter one or more seed keywords (or use **Suggest topics** to get seeds grounded in the client's site/GBP/ICP).
+3. Review the cluster rail + keyword table; use the questions-only toggle and CSV export as needed.
+4. Check **"What we filtered & why"** if a run looks thin — it explains what was dropped and why.
 
 ## Tips
-- Link the session to a client + location to enable Local SEO page scheduling.
-- This module is mounted under `/fanout`; it shares the same login and database.""",
+- This is not a content generator — it's research. For mass content creation from clustered keywords, see the separate **Topic Fanout** tool.
+- A run needs at least 2 seeds; remove one from an existing multi-seed run with the seed chip's ×.""",
+    },
+    {
+        "slug": "topic-fanout",
+        "title": "Topic Fanout (Mass Posts)",
+        "category": "Content",
+        "icon": "Layers",
+        "sort_order": 62,
+        "summary": "Expand a seed into clustered keyword silos, then schedule mass content production on a cadence.",
+        "body": """# Topic Fanout (Mass Posts)
+
+The mass-content-generation tool: expand a seed into clustered keyword silos (topic discovery + relevance gating + clustering), then schedule content — blog posts or Local SEO pages — to be produced automatically on a cadence.
+
+## How to use it
+1. Open a client's workspace -> **Create Mass Posts** card.
+2. Run silo discovery from a seed topic to get clustered keyword silos; choose which silos to **run** (expand/plan) and which to additionally **deep-mine** (paid competitor mining).
+3. Once you have results, create a **schedule** — choose the content type (blog post or Local SEO page) and, for local pages, a target **location** (DataForSEO typeahead).
+4. The scheduler produces content on the cadence; Local SEO pages land in the client's Saved Pages (first-class, scorable/publishable) instead of a fanout-only table.
+
+## Tips
+- This is a different tool from **Keyword Research** — that one is for research on a single topic; this one is for scaling content production across many keywords at once. There's no automatic handoff between them.
+- Client-linked blog articles here can be scored and reoptimized from the **Articles** view, same as any other blog run.
+- This module is mounted under `/fanout`; it shares the same login and database as the rest of the suite.""",
+    },
+    {
+        "slug": "content-syndication",
+        "title": "Content Syndication",
+        "category": "Content",
+        "icon": "Share2",
+        "sort_order": 64,
+        "summary": "Scan a client's site, rewrite selected pages, and publish them as public Google Docs/Sheets that link back.",
+        "body": """# Content Syndication
+
+Scans a client's site for existing content (blog posts, pages, products), lists what it finds, and lets you pick which pages to rewrite into unique versions and publish as public, search-discoverable **Google Docs and/or Sheets** — each one linking back to the original page. The originals on the site are never touched.
+
+## How to use it
+1. Open a client's workspace -> **Content Syndication** card.
+2. Run (or wait for) a scan — it only *discovers* candidate pages, nothing publishes automatically.
+3. Tick the pages you want (checkboxes + Select all) and click **Publish**.
+4. Check publish status per item; a failed item can be retried individually.
+
+## Tips
+- Turn on the **daily background scan** toggle to have new pages surfaced automatically for review (still never auto-published).
+- Choose **Doc, Sheet, or both** as the publish target, and **public vs. link-only** sharing, in Settings.
+- A page that's already been published is never re-created — retrying reuses the existing Doc/Sheet.""",
+    },
+    {
+        "slug": "gbp-posts",
+        "title": "GBP Posts",
+        "category": "Content",
+        "icon": "Megaphone",
+        "sort_order": 68,
+        "summary": "Draft, schedule, and publish Google Business Profile posts, with AI drafting and image reuse.",
+        "body": """# GBP Posts
+
+Publishes posts directly to a client's **Google Business Profile** listing (the v4 API, via the agency's connected account) — updates, offers, events, and products, with AI-assisted drafting, image upload/reuse, and scheduling.
+
+## How to use it
+1. Open a client's workspace -> **GBP Posts** card. If it says "Connect", an admin needs to complete the one-click GBP OAuth connection first.
+2. **Compose** — pick a post type, write it yourself or let AI draft it, attach an image (upload new or reuse a past one).
+3. Publish immediately, or set it up on the **Schedule** tab (one-off or recurring).
+4. **Posts** tab shows everything published, with a "View on Google" link per post; **Trash** holds removed drafts.
+
+## Tips
+- Auto-publish is opt-in per schedule — nothing goes live without you turning it on for that schedule.
+- Publishing is paused entirely while a client is Frozen, same as every other content-creation module.""",
     },
     {
         "slug": "website-builder",
@@ -311,6 +404,59 @@ Tracks whether a client's brand shows up when AI assistants answer its keywords 
 ## Tips
 - Use the "Show visibility for" selector to view a competitor's results.
 - Export the full scan history as CSV.""",
+    },
+    {
+        "slug": "domain-intelligence",
+        "title": "Domain Intelligence",
+        "category": "Tracking",
+        "icon": "Search",
+        "sort_order": 95,
+        "summary": "Look up any domain's traffic, ranked keywords, and gaps against a client — the suite's competitive-research workspace.",
+        "body": """# Domain Intelligence
+
+Point at any domain — a competitor, a prospect, or the client's own site — and get dated snapshots of its organic footprint: traffic estimate, ranked keywords, domain rating/referring domains, and gaps against the client.
+
+## What it gives you
+- **Domain Overview** — estimated organic traffic, ranked-keyword count, DR/RD, traffic value.
+- **Keyword Gap** — keywords a competitor ranks for that the client doesn't (or ranks poorly for), opportunity-scored.
+- **Backlink Gap** — referring domains linking to a competitor but not the client.
+- **Discover** — SERP-overlap suggestions for new competitors, with one-click add to the client's competitor registry.
+
+## How to use it
+1. Open a client's workspace -> **Domain Intelligence** card.
+2. Pick a mode (Domain lookup / Keyword gap / Backlink gap / Discover) and enter a domain.
+3. Review the snapshot; export any table as CSV.
+
+## Tips
+- Every lookup is a paid call, cached as a dated snapshot — reopening a client's existing snapshot is a free re-read.
+- Keyword gaps refresh weekly on a schedule and can surface directly on the **Action Plan**.""",
+    },
+    {
+        "slug": "leadoff",
+        "title": "LeadOff (market intelligence)",
+        "category": "Tracking",
+        "icon": "Radar",
+        "sort_order": 97,
+        "summary": "The pre-client market scanner — grades US city x category markets A+ through F for lead-gen buildability, before you ever create a client.",
+        "body": """# LeadOff
+
+The suite's **pre-client** tool — before you pick a client, LeadOff helps you pick a *market*. It grades tens of thousands of US city x category combinations (A+ through F) on how buildable they are for lead generation, using sabermetric-style scoring.
+
+## What it gives you
+- A graded, filterable **board** of markets, with ROI sort and CSV export.
+- A **market brief** per market — top-5 competitors, proximity/site/brand pressure, and a Quick-wins read.
+- **Tryout** (score any off-list city) and **Scout** (deeper competitor research for one market) — both paid, budget-guarded.
+- A **GBP Placement Advisor** — demand-aware "where should the GBP live" zone suggestions inside a market.
+- **Create client from market** — hands off straight into a new client, pre-seeded with competitors and goals.
+
+## How to use it
+1. Open **LeadOff** from the sidebar (it's not client-scoped — this is agency-wide market research).
+2. Filter/sort the board to find promising markets; open a brief to dig in.
+3. When you're ready to pursue one, click **Create client** on the brief to hand off into a real client workspace.
+
+## Tips
+- The board itself is free to browse — Tryout and Scout are the paid, on-demand deeper-research actions, each showing its cost before you confirm.
+- A market's grade is relative to the whole board, so use it to rank opportunities, not as an absolute score.""",
     },
     {
         "slug": "gsc-research",
@@ -450,6 +596,40 @@ Two agents that watch the task board so you don't have to chase it by hand. **PA
 ## Tips
 - Link your Slack account on the **Team** page to get PACE's DMs, nudges, and (if enabled) your own morning brief.
 - See the task drawer's **QA** section for the readiness banner, rubric, and past-review history.""",
+    },
+    {
+        "slug": "dora",
+        "title": "DORA (Director of Operations)",
+        "category": "Reporting",
+        "icon": "Compass",
+        "sort_order": 113,
+        "summary": "The read-only lens across every other agent — surfaces where work is stuck, duplicated, or falling through the cracks between SerMaStr, PACE, QA, and the board — and keeps these Guides current when a module changes.",
+        "body": """# DORA (Director of Operations)
+
+DORA watches the seams **between** the other agents — SerMaStr (proposes), PACE (executes), QA (judges), and the deterministic producers that open tasks automatically — and flags where something is stuck, unactioned, or duplicated across them. It's **read-only**: it never reassigns, reprioritizes, or resolves anything itself; it opens a plain task naming the gap, or answers a question about it in chat.
+
+## Where to find it
+- **Slack** — a dedicated channel (`#dora`, ask an admin). No @mention needed.
+- **Dashboard** — sidebar -> **Director** (`/director`), a full-page chat, plus a deterministic **Brief** with no AI involved.
+- Name a client to scope to them, or ask agency-wide ("who's the bottleneck this week?") for a portfolio view.
+
+## What it watches for
+- A **SerMaStr proposal** approved but never turned into a task, or left pending for days with no decision.
+- **QA sitting idle** — finished work not being routed through review.
+- The **autonomy executor** proposing something no one has acted on.
+- The **same target** (a keyword, a page) being worked by two different agents/producers at once.
+- Content that shipped in a degraded state (missing brand context, failed voice check).
+
+## It also keeps these Guides current
+Whenever a module changes in a way a user would notice (a new button, option, default, cadence, or output), DORA is told, re-reads that module's guide here in **Guides**, and rewrites it if it no longer describes the tool — then posts a short note to `#dora` saying which guide changed and what's different for users. Internal changes (refactors, speed-ups, bug fixes) leave the guide alone.
+- A **"DORA updated this guide"** banner at the top of a guide means the rewrite is live; staff can **Revert** to the previous version in one click if it reads wrong.
+- A **"DORA proposes an update"** banner (with **Preview**, **Apply**, **Dismiss**) appears only when auto-apply is off for your environment.
+- **Show DORA sync history** lists every review it ran on that guide, including the "no change needed" ones.
+
+## Tips
+- A weekly **operations flow** digest posts to `#dora` — it says nothing at all on an all-clear week.
+- It's a diagnostic layer, not a decision-maker — treat what it surfaces as a nudge to go look, not an instruction already carried out.
+- The Guides are the one thing DORA writes to — and only documentation, always revertible.""",
     },
     {
         "slug": "asana-tasks",

@@ -68,18 +68,20 @@ def test_handoff_action_plan_creates_and_places():
     from services.task_producers import action_source_ref
     assert created[0]["source"] == "action_plan"
     assert created[0]["source_ref"] == action_source_ref("c1", items[0])
-    assert created[0]["name"] == "Reoptimize the page"
+    # The task name leads with the target keyword so it's legible on the board.
+    assert created[0]["name"] == "roof repair: Reoptimize the page"
 
 
 def test_handoff_action_plan_counts_existing_and_held():
     items = [
-        {"kind": "quick_win", "keyword": "a", "recommendation": "Do A"},
-        {"kind": "opportunity", "keyword": "b", "recommendation": "Do B"},
+        {"kind": "quick_win", "keyword": "roof repair", "recommendation": "Do A"},
+        {"kind": "opportunity", "keyword": "gutter guards", "recommendation": "Do B"},
     ]
 
     def _create(name, kw):
         # first is a brand-new task, second already exists (producer made it).
-        if name == "Do B":
+        # Names now lead with the keyword ("gutter guards: Do B").
+        if name == "gutter guards: Do B":
             return {"id": "task-existing", "_existing": True}
         return {"id": "task-new"}
 
@@ -99,11 +101,11 @@ def test_handoff_action_plan_empty():
 
 
 def test_handoff_action_plan_one_item_failure_does_not_abort_batch():
-    items = [{"kind": "quick_win", "keyword": "a", "recommendation": "Do A"},
-             {"kind": "opportunity", "keyword": "b", "recommendation": "Do B"}]
+    items = [{"kind": "quick_win", "keyword": "roof repair", "recommendation": "Do A"},
+             {"kind": "opportunity", "keyword": "gutter guards", "recommendation": "Do B"}]
 
     def _create(name, kw):
-        if name == "Do A":
+        if name == "roof repair: Do A":
             raise RuntimeError("boom")
         return {"id": "task-b"}
 
@@ -168,6 +170,57 @@ def test_confirm_phrase_pluralizes():
         phrase = ph.confirm_phrase("c1", "both")
     assert "1 Action Plan item " in phrase and "3 open proposals" in phrase
     assert "PACE to assign" in phrase
+
+
+# ---------------------------------------------------------------------------
+# Shared task name/description helpers — every Action Plan task must name its
+# keyword and read completely, so a staff member knows what to do at a glance.
+# ---------------------------------------------------------------------------
+def test_action_task_name_leads_with_keyword():
+    from services.task_producers import action_task_name
+
+    # A generic recommendation gets the keyword prepended so the board is legible.
+    a = {"kind": "quick_win", "keyword": "roof repair", "recommendation": "Reoptimize the page"}
+    assert action_task_name(a) == "roof repair: Reoptimize the page"
+    # No keyword → recommendation as-is; no recommendation → CTA label.
+    assert action_task_name({"recommendation": "Fix it"}) == "Fix it"
+    assert action_task_name({"keyword": "x", "cta_label": "Domain Intelligence"}) == "x: Domain Intelligence"
+    # A concise `title` is preferred over the paragraph-length recommendation.
+    t = {"keyword": "architectural preservation",
+         "title": 'Strengthen your page for "architectural preservation"',
+         "recommendation": "A long paragraph of guidance that would be a poor title. " * 5}
+    assert action_task_name(t) == 'Strengthen your page for "architectural preservation"'
+    # When the chosen text already names the keyword, it is NOT doubled.
+    b = {"keyword": "architectural preservation",
+         "recommendation": 'Strengthen your page for "architectural preservation" now.'}
+    assert action_task_name(b) == 'Strengthen your page for "architectural preservation" now.'
+    # Over-length titles trim on a word boundary (never mid-word) with an ellipsis,
+    # keyword-first so it survives the trim.
+    long = {"keyword": "solar panel installation cost", "recommendation": "alpha bravo " * 40}
+    name = action_task_name(long)
+    assert len(name) <= 200
+    assert name.startswith("solar panel installation cost: ")
+    assert name.endswith("…") and "brav…" not in name  # no mid-word cut
+
+
+def test_action_task_description_is_complete():
+    from services.task_producers import action_task_description
+
+    a = {"keyword": "architectural preservation",
+         "diagnosis": "rival.com ranks #2 while you rank #72.",
+         "recommendation": "Strengthen the existing page.",
+         "cta_label": "Domain Intelligence",
+         "cta_path": "clients/c1/domain-intel"}
+    desc = action_task_description("c1", a)
+    assert "Target keyword / topic: architectural preservation" in desc
+    assert "Situation: rival.com ranks #2 while you rank #72." in desc
+    assert "What to do: Strengthen the existing page." in desc
+    assert "Open the tool (Domain Intelligence): clients/c1/domain-intel" in desc
+    # Missing fields are omitted, never printed as an empty label; the tool link
+    # falls back to the client Action Plan page.
+    bare = action_task_description("c1", {})
+    assert "Target keyword" not in bare and "Situation" not in bare
+    assert bare == "Open the tool: /clients/c1/action-plan"
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import job_priority
 from services.google_docs import create_google_doc, create_google_sheet, resolve_drive_folder
 from services.syndication_discovery import scan_client
 from services.syndication_publish import build_doc_html, build_sheet_rows
@@ -172,6 +173,7 @@ def publish_items(client_id: str, item_ids: list[str]) -> int:
                 "entity_id": item_id,
                 "payload": {"item_id": item_id, "client_id": client_id},
                 "scheduled_at": _item_scheduled_at(len(jobs)),
+                "priority": job_priority.BACKGROUND,
             }
         )
     if jobs:

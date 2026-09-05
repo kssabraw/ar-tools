@@ -58,8 +58,11 @@ export interface MatrixSummary {
   base_url?: string | null
   page_template_url?: string | null
   entity_provider?: string | null
-  publish_destination: 'google_docs' | 'wordpress' | 'github'
+  publish_destination: 'app_only' | 'google_docs' | 'wordpress' | 'github'
   publish_status: 'draft' | 'publish'
+  link_to_service_hub: boolean
+  service_hub_pattern?: string | null
+  link_to_home: boolean
   release_enabled: boolean
   release_mode: 'daily' | 'weekly' | 'monthly'
   release_weekday?: number | null
@@ -105,8 +108,11 @@ export interface MatrixCreateBody {
   base_url?: string | null
   page_template_url?: string | null
   entity_provider?: string | null
-  publish_destination?: 'google_docs' | 'wordpress' | 'github'
+  publish_destination?: 'app_only' | 'google_docs' | 'wordpress' | 'github'
   publish_status?: 'draft' | 'publish'
+  link_to_service_hub?: boolean
+  service_hub_pattern?: string | null
+  link_to_home?: boolean
 }
 
 export type MatrixUpdateBody = Partial<Omit<MatrixCreateBody, 'location' | 'location_code'>>
@@ -125,6 +131,32 @@ export interface MatrixSuggestResult {
   suggestions: MatrixSuggestion[]
   degraded_notes: string[]
   error?: string | null
+}
+
+export interface MatrixReleaseSchedule {
+  enabled: boolean
+  mode: 'daily' | 'weekly' | 'monthly'
+  weekday?: number | null
+  day_of_month?: number | null
+  per_release_count: number
+  status: 'active' | 'complete' | 'paused'
+  next_run_at?: string | null
+  last_run_at?: string | null
+}
+
+export interface MatrixReleaseState {
+  schedule: MatrixReleaseSchedule
+  releasable: number
+  released_now: string[]
+}
+
+export interface MatrixReleaseBody {
+  mode: 'daily' | 'weekly' | 'monthly'
+  weekday?: number | null
+  day_of_month?: number | null
+  immediate_count: number
+  per_release_count: number
+  enabled: boolean
 }
 
 export const URL_PATTERN_PRESETS = [

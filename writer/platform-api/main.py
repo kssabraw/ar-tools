@@ -28,13 +28,17 @@ from routers.keyword_research import router as keyword_research_router
 from routers.content_schedule import router as content_schedule_router
 from routers.dashboard import router as dashboard_router
 from routers.deliverables import router as deliverables_router
+from routers.deliverables_analytics import router as deliverables_analytics_router
+from routers.cost_analytics import router as cost_analytics_router
 from routers.everhour import router as everhour_router
+from routers.feedback import router as feedback_router
 from routers.files import router as files_router
 from routers.forecast import router as forecast_router
 from routers.freeze import router as freeze_router
 from routers.goals import router as goals_router
 from routers.gbp_metrics import router as gbp_metrics_router
 from routers.gbp_posts import router as gbp_posts_router
+from routers.gbp_profile import router as gbp_profile_router
 from routers.gbp_oauth import router as gbp_oauth_router
 from routers.ga4 import router as ga4_router
 from routers.gsc import router as gsc_router
@@ -70,7 +74,9 @@ from routers.syndication import router as syndication_router
 from routers.tasks import router as tasks_router
 from routers.users import router as users_router
 from routers.websites import router as websites_router
+from routers.worker_lanes import router as worker_lanes_router
 from services.gsc_scheduler import gsc_scheduler
+from services import job_priority
 from services.job_worker import drain_inflight_jobs, job_worker
 from services.orchestrator import recover_stuck_runs
 
@@ -169,7 +175,10 @@ async def lifespan(app: FastAPI):
     )
     interactive_worker_task = (
         asyncio.create_task(
-            job_worker(job_types=list(settings.interactive_job_types), lane="interactive")
+            job_worker(
+                job_types=list(settings.interactive_job_types), lane="interactive",
+                priority_min=job_priority.INTERACTIVE,  # never a bulk-batch item
+            )
         )
         if settings.interactive_job_types
         else None
@@ -182,6 +191,19 @@ async def lifespan(app: FastAPI):
     fanout_worker_tasks = [
         asyncio.create_task(job_worker(job_types=_fanout_types, lane="fanout"))
         for _ in range(_fanout_worker_count)
+    ]
+    # BULK lanes (2026-09-02): claim only background-priority rows (bulk-create /
+    # matrix / reoptimize-bulk items), `bulk_lane_workers` wide, so a batch's
+    # throughput is a config knob. The MAIN lane still picks a bulk row up when
+    # nothing else is pending (priority ordering), and the INTERACTIVE lane
+    # never does, so a click stays fast while a batch grinds.
+    bulk_worker_tasks = [
+        asyncio.create_task(
+            job_worker(lane="bulk", exclude_types=_fanout_types or None,
+                       priority_max=job_priority.BACKGROUND,
+                       max_per_client=settings.bulk_lane_max_per_client)
+        )
+        for _ in range(max(0, settings.bulk_lane_workers))
     ]
     scheduler_task = asyncio.create_task(gsc_scheduler())
     # Start the Topic Fanout in-process content scheduler (its own asyncio loop;
@@ -216,7 +238,7 @@ async def lifespan(app: FastAPI):
     tasks = [
         t
         for t in (worker_task, interactive_worker_task, scheduler_task,
-                  *fanout_worker_tasks)
+                  *fanout_worker_tasks, *bulk_worker_tasks)
         if t
     ]
     for task in tasks:
@@ -308,9 +330,12 @@ app.include_router(competitors_router)
 app.include_router(content_schedule_router)
 app.include_router(dashboard_router)
 app.include_router(deliverables_router)
+app.include_router(deliverables_analytics_router)
+app.include_router(cost_analytics_router)
 app.include_router(domain_intel_router)
 app.include_router(ecommerce_router)
 app.include_router(everhour_router)
+app.include_router(feedback_router)
 app.include_router(wheelhouse_router)
 app.include_router(keyword_research_router)
 app.include_router(files_router)
@@ -319,6 +344,7 @@ app.include_router(freeze_router)
 app.include_router(goals_router)
 app.include_router(gbp_metrics_router)
 app.include_router(gbp_posts_router)
+app.include_router(gbp_profile_router)
 app.include_router(gbp_oauth_router)
 app.include_router(gsc_router)
 app.include_router(ga4_router)
@@ -358,6 +384,7 @@ app.include_router(pulse_router)
 _FANOUT_PREFIX = "/fanout"
 app.include_router(fanout_health.router, prefix=_FANOUT_PREFIX)
 app.include_router(websites_router)
+app.include_router(worker_lanes_router)
 
 app.include_router(fanout_projects.router, prefix=_FANOUT_PREFIX)
 app.include_router(fanout_sessions.router, prefix=_FANOUT_PREFIX)

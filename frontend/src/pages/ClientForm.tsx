@@ -2,9 +2,10 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../lib/api'
-import type { Client, GbpProfile, PageStructureType, PageStructureEntry, EverhourStatus, EverhourProject } from '../lib/types'
+import type { Client, GbpProfile, PageStructureType, PageStructureEntry, EverhourStatus, EverhourProject, TrustSignals } from '../lib/types'
 import { ArrowLeft, Check, Image as ImageIcon, RefreshCw, Upload } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
+import { TrustAndProofSection, EMPTY_TRUST_SIGNALS } from '../components/TrustAndProofSection'
 
 interface FormData {
   name: string
@@ -122,6 +123,9 @@ export function ClientForm() {
   const [saving, setSaving] = useState(false)
   const [logoUploading, setLogoUploading] = useState(false)
   const [logoError, setLogoError] = useState<string | null>(null)
+  // Trust & Proof (docs/modules/local-landing-page-structure.md). Kept out of the
+  // flat `form` object since it's a nested structure; sent whole on save.
+  const [trustSignals, setTrustSignals] = useState<TrustSignals>(EMPTY_TRUST_SIGNALS)
   // Page-structure guidelines upload: which page type is mid-upload, and any
   // per-page-type error. Reuses the shared /files/upload parser, so a .docx or
   // .pdf spec lands in the textarea as text the user can review and edit before
@@ -286,6 +290,7 @@ export function ClientForm() {
         slack_channel_id: existing.slack_channel_id ?? '',
         everhour_project_id: existing.everhour_project_id ?? '',
       })
+      setTrustSignals(existing.trust_signals ?? EMPTY_TRUST_SIGNALS)
     }
   }, [existing])
 
@@ -368,6 +373,8 @@ export function ClientForm() {
         target_cities: form.target_cities.split(',').map(s => s.trim()).filter(Boolean),
         gbp_place_id: form.gbp_place_id,
         gbp: form.gbp,
+        // Trust & Proof facts (docs/modules/local-landing-page-structure.md).
+        trust_signals: trustSignals,
         // Recipe Engine budget inputs (66% margin target → 34% deployable).
         ...(form.retainer_monthly.trim() !== '' ? { retainer_monthly: Number(form.retainer_monthly) } : {}),
         is_sab: form.is_sab,
@@ -627,6 +634,17 @@ export function ClientForm() {
             />
             <p style={hintStyle}>Comma-separated. Extra cities the Local SEO silo planner should build location pages for, beyond the seed city. The planner also pulls cities from the GBP service area, this client's own site, and a ~10-mile radius — these are added on top.</p>
           </div>
+        </div>
+
+        <div style={sectionStyle} id="trust-and-proof">
+          <h2 style={sectionTitle}>Trust &amp; Proof</h2>
+          <p style={hintStyle}>
+            Badges, license, tenure, financing partners, and media the Local SEO writer renders in a
+            deterministic Trust &amp; Proof block. Everything here is stated only if you provide it —
+            the writer never invents a badge, rating, license, or photo. The aggregate Google rating
+            comes from the attached GBP automatically.
+          </p>
+          <TrustAndProofSection value={trustSignals} onChange={setTrustSignals} clientId={id} />
         </div>
 
         <div style={sectionStyle}>

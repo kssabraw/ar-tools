@@ -647,6 +647,42 @@ def test_gbp_action_empty_when_no_gaps():
     assert reopt_planner.build_gbp_action(CLIENT, None) == []
 
 
+def test_gbp_action_surfaces_thin_description():
+    # A complete profile whose only weakness is a present-but-thin description:
+    # the completeness checks all pass, but description_quality drives the action.
+    audit = {
+        "score": 100,
+        "competitor_count": 3,
+        "gaps": [],
+        "category_gaps": [],
+        "review_gap": None,
+        "description_quality": {
+            "ok": False,
+            "length": 60,
+            "issues": ["too_short", "missing_location"],
+        },
+    }
+    actions = reopt_planner.build_gbp_action(CLIENT, audit)
+    assert len(actions) == 1
+    rec = actions[0]["recommendation"]
+    assert "improve the thin description" in rec
+    assert "expand it" in rec and "name the service area" in rec
+
+
+def test_gbp_action_ignores_thin_description_when_missing_entirely():
+    # length 0 → the description is missing (already covered by the completeness
+    # gap), so the quality branch must NOT fire on it.
+    audit = {
+        "score": 80,
+        "competitor_count": 0,
+        "gaps": [],
+        "category_gaps": [],
+        "review_gap": None,
+        "description_quality": {"ok": False, "length": 0, "issues": []},
+    }
+    assert reopt_planner.build_gbp_action(CLIENT, audit) == []
+
+
 def test_brand_action_sorts_in_hidden_band():
     decline = {"from_impressions": 400, "to_impressions": 200, "delta_pct": 50.0, "weeks": 4}
     brand = reopt_planner.build_brand_action(CLIENT, decline)[0]

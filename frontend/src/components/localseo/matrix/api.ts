@@ -3,6 +3,8 @@ import type {
   MatrixCreateBody,
   MatrixDetail,
   MatrixEstimate,
+  MatrixReleaseBody,
+  MatrixReleaseState,
   MatrixSuggestResult,
   MatrixSummary,
   MatrixUpdateBody,
@@ -51,6 +53,25 @@ export const matrixApi = {
   ) => api.post<{ job_ids: string[]; cell_ids: string[]; estimate: MatrixEstimate }>(
     `${base(clientId)}/${matrixId}/generate`, body,
   ),
+
+  // Bulk publish: one background publish job per done cell (or the given cells);
+  // the grid shows each outcome. force_voice is honoured only with explicit ids.
+  publish: (
+    clientId: string,
+    matrixId: string,
+    body: { destination?: 'google_docs' | 'wordpress' | 'github' | null; status?: 'draft' | 'publish' | null; force_voice?: boolean; cell_ids?: string[] | null },
+  ) => api.post<{ job_ids: string[]; cell_ids: string[] }>(`${base(clientId)}/${matrixId}/publish`, body),
+
+  // Drip release: immediate batch now, then N per day / week / month — each
+  // cell generated THEN published to the matrix's destination.
+  getRelease: (clientId: string, matrixId: string) =>
+    api.get<MatrixReleaseState>(`${base(clientId)}/${matrixId}/release`),
+  setRelease: (clientId: string, matrixId: string, body: MatrixReleaseBody) =>
+    api.put<MatrixReleaseState>(`${base(clientId)}/${matrixId}/release`, body),
+  clearRelease: (clientId: string, matrixId: string) =>
+    api.delete<{ deleted: boolean }>(`${base(clientId)}/${matrixId}/release`),
+  runRelease: (clientId: string, matrixId: string, count: number) =>
+    api.post<MatrixReleaseState>(`${base(clientId)}/${matrixId}/release/run?count=${count}`, {}),
 
   suggest: (clientId: string, matrixId: string, body: { axis: 'services' | 'locations'; seed_service?: string | null }) =>
     api.post<{ job_id: string; status: string }>(`${base(clientId)}/${matrixId}/suggest`, body),

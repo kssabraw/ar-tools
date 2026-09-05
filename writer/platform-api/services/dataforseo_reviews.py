@@ -159,16 +159,25 @@ def parse_reviews(body: dict[str, Any]) -> list[dict]:
     for r in items:
         if not isinstance(r, dict):
             continue
-        rating_raw = r.get("review_rating")
-        rating = (
-            _to_float(rating_raw.get("value"))
-            if isinstance(rating_raw, dict)
-            else _to_float(r.get("rating"))
-        )
+        # Live envelope (Wheelhouse FL, 2026-09-02): the per-review rating rides
+        # under `rating` as {"rating_type": "Max5", "value": 5, ...} — the same
+        # shape as the business record — NOT `review_rating`. Reading only
+        # `review_rating` stored 85 reviews with a null rating, which the ≥4★
+        # marketing filter then dropped wholesale. Accept every shape seen.
+        rating = None
+        for key in ("review_rating", "rating"):
+            raw = r.get(key)
+            if isinstance(raw, dict):
+                rating = _to_float(raw.get("value"))
+            elif isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                rating = _to_float(raw)
+            if rating is not None:
+                break
         timestamp = r.get("timestamp") or ""
         datetime_utc = r.get("review_datetime_utc") or ""
         if timestamp:
-            review_date = timestamp.split("T")[0]
+            # ISO ("2026-07-12T…") or DataForSEO's "2026-07-12 00:00:00 +00:00"
+            review_date = timestamp.split("T")[0].split(" ")[0]
         elif datetime_utc:
             review_date = datetime_utc.split(" ")[0]
         else:

@@ -1,7 +1,7 @@
 # DORA — User Guide
 
 *A guide to DORA (Director of Operations, Reconciliation & Awareness) — the read-only lens that
-watches the other three agents for each other's blind spots.*
+watches the other three agents for each other's blind spots, and keeps these Guides current.*
 
 > **What this document is not.** This is not the engineering spec (that's
 > `docs/modules/director-of-operations-plan-v1_0.md` and its Phase-1 spec sibling). This is a
@@ -80,7 +80,38 @@ and name the agent that actually owns it (usually PACE or SerMaStr).
 
 ---
 
-## 6. What DORA can NOT do
+## 6. Keeping the Guides current (DORA's one write)
+
+Every time a change to a module lands in the codebase, DORA is told about it. It works out which
+module(s) the change belongs to, reads that module's **guide** (the page you're reading this kind
+of thing on — sidebar → **Guides**), and asks one question: *does this guide still describe the
+tool?* Internal changes (a refactor, a speed-up, a bug fix that makes the tool do what the guide
+already says) → nothing happens, quietly. A change a user would notice — a new button, tab, option,
+default, cadence, or output — → DORA rewrites the guide so it stays accurate, keeps the previous
+version, and posts a short note to **#dora**: which guide, what changed for users.
+
+| What you'll see | What it means |
+|---|---|
+| A **"DORA updated this guide on …"** banner at the top of a guide | The rewrite is live. Read it; if it's wrong, staff can click **Revert** to restore the previous version in one click. |
+| A **"DORA proposes an update"** banner with **Apply / Dismiss** | Only when auto-apply is switched off for your environment: the rewrite is waiting for a person. **Preview** shows the full proposed guide. |
+| A **"DORA couldn't update the … guide"** note in #dora | The change looked user-facing but the rewrite didn't pass DORA's own sanity checks (too long / too short / not a guide). Check that guide by hand. |
+| **Show DORA sync history** under the banner | Every review DORA ran on that guide, including the "no change needed" ones. |
+
+Things to know:
+
+- DORA only ever edits the **in-app guide** (the Markdown page under Guides). The illustrated
+  field guides and the long-form docs are still hand-maintained — a #dora note is your cue to
+  refresh those too if the change was big.
+- It writes for the person *using* the tool: no code, file names, or ticket numbers ever appear
+  in a guide it rewrites.
+- It never invents behaviour. If a change shipped without a clear description, expect a
+  conservative "no update needed" rather than a guess — and tell it in the guide editor.
+- Hand-edits are safe: DORA works from the guide as it is *now*, so an admin's wording survives
+  unless the change made it untrue.
+
+---
+
+## 7. What DORA can NOT do
 
 - **It never acts.** No confirm-gated actions exist for it at all — contrast SerMaStr and PACE,
   which both have a confirm-then-run action set.
@@ -92,10 +123,13 @@ and name the agent that actually owns it (usually PACE or SerMaStr).
   that turns DORA on at all. Don't assume DORA is currently preventing anything from executing.
 - **It doesn't auto-merge duplicates.** A "two agents, same target" flag is informational only —
   a human decides what to do about it.
+- **The Guides are the one exception to "never acts".** Rewriting a module's guide after that
+  module changed (§6) is documentation, not campaign state — and every rewrite is one click to
+  revert from the guide page.
 
 ---
 
-## 7. Quick reference
+## 8. Quick reference
 
 **Access:** Dashboard sidebar → **DORA** → `/director` · Slack **#dora**
 
@@ -106,6 +140,9 @@ itself once the underlying condition clears — you don't need to trash it, thou
 
 **Never expect DORA to:** run a scan, approve anything, reassign a task, or resolve a flag it
 raised. It names the gap; a human or the owning agent closes it.
+
+**A guide changed and you didn't touch it:** DORA rewrote it after a module change (§6). The
+banner at the top says what changed; **Revert** restores the previous version.
 
 ---
 
@@ -125,6 +162,12 @@ trashing it manually doesn't fix the root cause; it closes on its own once the c
 **DORA said something's snagged but I don't see it on any client's board.**
 QA-idle and unrecognized-source seams are portfolio-level, not tied to one client — they show as
 an agency-wide notification instead of a board task.
+
+**DORA changed a guide — can I trust it?**
+It only rewrites what the code change justifies, from the guide as it currently reads, and every
+rewrite keeps the previous version for a one-click **Revert**. Read the banner's summary; if the
+new wording is wrong, revert and fix it in the editor — your edit becomes the version DORA works
+from next time.
 
 **Does DORA stop autonomy from doing something risky?**
 Not currently — the pre-flight veto exists in code but ships off by default as a separate flag.

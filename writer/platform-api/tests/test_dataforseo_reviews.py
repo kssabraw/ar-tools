@@ -159,3 +159,18 @@ def test_parse_task_id():
     assert dfr.parse_task_id(_envelope(None, status_code=20100)) == "task-1"
     with pytest.raises(ReviewFetchError):
         dfr.parse_task_id({"tasks": [{"status_code": 20100}]})
+
+
+def test_parse_reviews_reads_the_live_rating_dict_shape():
+    # The live task_get envelope carries the per-review rating under `rating`
+    # as {"rating_type": "Max5", "value": 5, ...} (not `review_rating`).
+    from services import dataforseo_reviews as dr
+    body = _envelope([{"items": [
+        {"review_text": "great", "rating": {"rating_type": "Max5", "value": 5, "rating_max": 5}, "timestamp": "2026-07-12 00:00:00 +00:00"},
+        {"review_text": "ok", "rating": 4, "review_datetime_utc": "2026-01-01 10:00:00"},
+        {"review_text": "meh", "rating": {"value": None}},
+        {"review_text": "old", "review_rating": {"value": 3}},
+    ]}])
+    reviews = dr.parse_reviews(body)
+    assert [r["rating"] for r in reviews] == [5.0, 4.0, None, 3.0]
+    assert reviews[0]["date"] == "2026-07-12" and reviews[1]["date"] == "2026-01-01"

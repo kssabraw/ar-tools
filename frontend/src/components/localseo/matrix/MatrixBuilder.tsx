@@ -7,6 +7,8 @@ import { Spinner } from '../Spinner'
 import { card, input, label, primaryBtn } from '../shared'
 import { matrixApi } from './api'
 import { MatrixAxesEditor } from './MatrixAxesEditor'
+import { composeLocations, type LocationPins } from './locationPins'
+import { MatrixLocationPins } from './MatrixLocationPins'
 import { splitLines, URL_PATTERN_PRESETS } from './types'
 import type { MatrixDetail } from './types'
 
@@ -31,13 +33,17 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
   const [locationCode, setLocationCode] = useState<number | null>(initialLocation?.locationCode ?? null)
   const [services, setServices] = useState(initialServices ?? '')
   const [locations, setLocations] = useState(initialLocations ?? '')
+  const [pins, setPins] = useState<LocationPins>({})
   const [pattern, setPattern] = useState<string>(URL_PATTERN_PRESETS[0].value)
   const [customPattern, setCustomPattern] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
   const [templateUrl, setTemplateUrl] = useState('')
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
-  const [destination, setDestination] = useState<'google_docs' | 'wordpress' | 'github'>('google_docs')
+  const [destination, setDestination] = useState<'app_only' | 'google_docs' | 'wordpress' | 'github'>('app_only')
   const [publishStatus, setPublishStatus] = useState<'draft' | 'publish'>('draft')
+  const [linkServiceHub, setLinkServiceHub] = useState(true)
+  const [hubPattern, setHubPattern] = useState('/{service}/')
+  const [linkHome, setLinkHome] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -57,13 +63,16 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         location: location.trim(),
         location_code: locationCode,
         services: splitLines(services),
-        locations: splitLines(locations),
+        locations: composeLocations(locations, pins),
         url_pattern: urlPattern,
         base_url: baseUrl.trim() || null,
         page_template_url: templateUrl.trim() || null,
         entity_provider: entityProvider,
         publish_destination: destination,
         publish_status: publishStatus,
+        link_to_service_hub: linkServiceHub,
+        service_hub_pattern: linkServiceHub ? (hubPattern.trim() || '/{service}/') : null,
+        link_to_home: linkHome,
       })
       onCreated(matrix)
     } catch (e) {
@@ -106,6 +115,8 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
 
       <MatrixAxesEditor services={services} locations={locations} onChange={(s, l) => { setServices(s); setLocations(l) }} disabled={saving} />
 
+      <MatrixLocationPins clientId={clientId} locationsText={locations} pins={pins} onChange={setPins} disabled={saving} />
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
           <label style={label}>URL pattern</label>
@@ -124,6 +135,29 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         </div>
       </div>
 
+      <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <label style={label}>Internal linking</label>
+        <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>
+          Every page links across to its siblings (other services here, this service nearby). It can also link <strong>up</strong>:
+        </p>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155' }}>
+          <input type="checkbox" checked={linkServiceHub} onChange={e => setLinkServiceHub(e.target.checked)} disabled={saving} />
+          To the top-level service page
+        </label>
+        {linkServiceHub && (
+          <div style={{ paddingLeft: 24 }}>
+            <input style={{ ...input, maxWidth: 320 }} value={hubPattern} onChange={e => setHubPattern(e.target.value)} placeholder="/{service}/" disabled={saving} />
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>
+              Where your service hub pages live — must contain <code>{'{service}'}</code>, no <code>{'{location}'}</code>. e.g. <code>/{'{service}'}/</code> → <code>/roof-restoration/</code>.
+            </p>
+          </div>
+        )}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155' }}>
+          <input type="checkbox" checked={linkHome} onChange={e => setLinkHome(e.target.checked)} disabled={saving} />
+          To the home page (site root)
+        </label>
+      </div>
+
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
         <div>
           <label style={label}>Page template URL <span style={{ fontWeight: 400, color: '#94a3b8' }}>(optional)</span></label>
@@ -136,10 +170,14 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         <div>
           <label style={label}>Publish destination (default)</label>
           <select style={select} value={destination} onChange={e => setDestination(e.target.value as typeof destination)} disabled={saving}>
+            <option value="app_only">App only — keep in Saved Pages</option>
             <option value="google_docs">Google Docs</option>
             <option value="wordpress">WordPress</option>
             <option value="github">GitHub</option>
           </select>
+          {destination === 'app_only' && (
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>Pages stay in the app (Saved Pages + this grid). Nothing is pushed to Docs / WordPress / GitHub.</p>
+          )}
         </div>
         <div>
           <label style={label}>Publish as</label>

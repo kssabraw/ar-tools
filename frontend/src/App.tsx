@@ -49,8 +49,7 @@ import { LeadOff } from './pages/LeadOff'
 import { Outreach } from './pages/Outreach'
 import { OutreachLeads } from './pages/OutreachLeads'
 import { Syndication } from './pages/Syndication'
-import { GbpPosts } from './pages/GbpPosts'
-import { GbpMetrics } from './pages/GbpMetrics'
+import { GoogleBusinessProfile, GbpTabRedirect } from './pages/GoogleBusinessProfile'
 import { WebsiteBuilder } from './pages/WebsiteBuilder'
 import { Websites } from './pages/Websites'
 import { Citations } from './pages/Citations'
@@ -62,6 +61,9 @@ import { RankReport } from './pages/RankReport'
 import { Articles } from './pages/Articles'
 import { Silos } from './pages/Silos'
 import { Team } from './pages/Team'
+import { FeedbackBoard } from './pages/FeedbackBoard'
+import { ActivityReport } from './pages/ActivityReport'
+import { CostReport } from './pages/CostReport'
 import { SetPassword } from './pages/SetPassword'
 import FanoutApp from './fanout/FanoutApp'
 
@@ -121,8 +123,11 @@ export default function App() {
                       <Route path="/clients/:id/internal-links" element={<InternalLinks />} />
                       <Route path="/clients/:id/gsc-research" element={<GscResearch />} />
                       <Route path="/clients/:id/syndication" element={<Syndication />} />
-                      <Route path="/clients/:id/gbp-posts" element={<GbpPosts />} />
-                      <Route path="/clients/:id/gbp-metrics" element={<GbpMetrics />} />
+                      <Route path="/clients/:id/gbp" element={<GoogleBusinessProfile />} />
+                      {/* Old per-tool routes → the unified module's matching tab. */}
+                      <Route path="/clients/:id/gbp-posts" element={<GbpTabRedirect tab="posts" />} />
+                      <Route path="/clients/:id/gbp-profile" element={<GbpTabRedirect tab="profile" />} />
+                      <Route path="/clients/:id/gbp-metrics" element={<GbpTabRedirect tab="insights" />} />
                       <Route path="/clients/:id/website" element={<WebsiteBuilder />} />
                       <Route path="/websites" element={<Websites />} />
                       <Route path="/clients/:id/citations" element={<Citations />} />
@@ -153,6 +158,9 @@ export default function App() {
                       <Route path="/guides" element={<Guides />} />
                       <Route path="/guides/:slug" element={<Guides />} />
                       <Route path="/team" element={<AdminRoute><Team /></AdminRoute>} />
+                      <Route path="/feedback" element={<AdminRoute><FeedbackBoard /></AdminRoute>} />
+                      <Route path="/activity-report" element={<AdminRoute><ActivityReport /></AdminRoute>} />
+                      <Route path="/cost-report" element={<AdminRoute><CostReport /></AdminRoute>} />
                       <Route path="*" element={<Navigate to="/" replace />} />
                     </Routes>
                   </Layout>

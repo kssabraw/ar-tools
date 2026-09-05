@@ -159,11 +159,69 @@ def _store(client_id: str, place_id: str, is_client: bool, reviews: list[dict]) 
         )
     supabase = get_supabase()
     try:
-        supabase.table("reviews").upsert(rows, on_conflict="client_id,review_key", ignore_duplicates=True).execute()
+        # DO UPDATE on conflict (was DO NOTHING): a re-pull must refresh a row's
+        # rating/text — the rows stored before the rating-shape fix carry null
+        # ratings and would otherwise stay null forever.
+        supabase.table("reviews").upsert(rows, on_conflict="client_id,review_key", ignore_duplicates=False).execute()
     except Exception as exc:
         logger.warning("review_analytics.store_failed", extra={"client_id": client_id, "error": str(exc)})
         return 0
     return len(rows)
+
+
+# ── marketing reviews for the writer ────────────────────────────────────────
+# `clients.gbp.reviews` is the ONLY review text the Local SEO / service writers
+# are handed (the ≥4★ "strong reviews" pull captured with the GBP). When that
+# list is empty — the GBP capture predates the pull, or Outscraper's inline
+# reviews_data came back empty — the client's testimonials block can't be
+# written honestly. The full review pull this module makes is the natural
+# source to backfill it from, in the same shape and with the same policy.
+_MARKETING_MIN_RATING = 4
+_MARKETING_LIMIT = 10
+
+
+def marketing_reviews(reviews: list[dict], limit: int = _MARKETING_LIMIT) -> list[dict]:
+    """Pure: the writer-facing subset of a full review pull — ≥4★ with text,
+    newest first, capped — in the `clients.gbp.reviews` shape
+    ``{reviewer, rating, text, date}``."""
+    keep = []
+    for r in reviews or []:
+        if not isinstance(r, dict):
+            continue
+        text = (r.get("text") or "").strip()
+        rating = r.get("rating")
+        if not text or not isinstance(rating, (int, float)) or rating < _MARKETING_MIN_RATING:
+            continue
+        keep.append({
+            "reviewer": r.get("reviewer") or "Anonymous",
+            "rating": float(rating),
+            "text": text,
+            "date": str(r.get("date") or ""),
+        })
+    keep.sort(key=lambda r: r["date"], reverse=True)
+    return keep[:limit]
+
+
+def _backfill_gbp_reviews(client_id: str, reviews: list[dict]) -> int:
+    """Fill `clients.gbp.reviews` from the full pull when it is empty. Never
+    overwrites reviews already on file (the GBP capture stays the owner of
+    that list once it has one). Best-effort; returns the number written."""
+    picked = marketing_reviews(reviews)
+    if not picked:
+        return 0
+    supabase = get_supabase()
+    try:
+        row = (supabase.table("clients").select("gbp").eq("id", client_id).limit(1).execute().data or [{}])[0]
+        gbp = row.get("gbp") if isinstance(row.get("gbp"), dict) else {}
+        existing = gbp.get("reviews")
+        if isinstance(existing, list) and any(isinstance(r, dict) and (r.get("text") or "").strip() for r in existing):
+            return 0
+        supabase.table("clients").update({"gbp": {**gbp, "reviews": picked}}).eq("id", client_id).execute()
+        logger.info("review_analytics.gbp_reviews_backfilled", extra={"client_id": client_id, "count": len(picked)})
+        return len(picked)
+    except Exception as exc:  # noqa: BLE001 — a backfill must never sink the run
+        logger.warning("review_analytics.gbp_reviews_backfill_failed", extra={"client_id": client_id, "error": str(exc)})
+        return 0
 
 
 class _ShapeUnproven(RuntimeError):
@@ -233,6 +291,7 @@ async def fetch_and_store(client_id: str) -> dict:
     profiles: list[dict] = []
     proven = False
     aborted: str | None = None
+    backfilled = 0
 
     client_rows = supabase.table("clients").select("gbp_place_id").eq("id", client_id).limit(1).execute().data
     client_place = (client_rows[0].get("gbp_place_id") if client_rows else None)
@@ -242,6 +301,7 @@ async def fetch_and_store(client_id: str) -> dict:
             reviews = await _fetch_or_record(client_place, depth, failures, proven=proven)
             proven = True
             stored_client = _store(client_id, client_place, True, reviews)
+            backfilled = _backfill_gbp_reviews(client_id, reviews)
 
         profiles.extend(competitor_gbp.latest_profiles(client_id))
         for p in profiles[: settings.competitor_gbp_max]:
@@ -260,6 +320,7 @@ async def fetch_and_store(client_id: str) -> dict:
 
     return {
         "client_reviews": stored_client,
+        "gbp_reviews_backfilled": backfilled,
         "competitor_reviews": stored_comp,
         "competitors": len(profiles),
         "failures": failures,

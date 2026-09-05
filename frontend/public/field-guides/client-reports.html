@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A boardroom-binder walkthrough for Client Reports — assembling and delivering the deliverable.">
+<title>Client Reports Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Serif+Display:wght@400;500;600;700&family=Sora:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap">
+<style>
+  :root{
+    --paper:#EFEFEA; --paper-raised:#FAFAF7; --ink:#1D2430; --ink-soft:#525B6B; --ink-faint:#8B93A0;
+    --line:#D8DBD4; --line-strong:#C0C4BA;
+    --navy:#23405E; --navy-ink:#152840; --navy-soft:#DCE3EB;
+    --foil:#A9822E; --foil-ink:#7A5D20; --foil-soft:#F1E6C9;
+    --shadow: 0 1px 2px rgba(29,36,48,0.08), 0 10px 26px rgba(29,36,48,0.06); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#13161B; --paper-raised:#1B1F26; --ink:#E4E7EC; --ink-soft:#AEB4C0; --ink-faint:#747B88;
+      --line:#292E36; --line-strong:#393F48;
+      --navy:#6E96BC; --navy-ink:#A9C6E2; --navy-soft:#1B2A38;
+      --foil:#D7B662; --foil-ink:#EBD48F; --foil-soft:#332911;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#13161B; --paper-raised:#1B1F26; --ink:#E4E7EC; --ink-soft:#AEB4C0; --ink-faint:#747B88;
+    --line:#292E36; --line-strong:#393F48;
+    --navy:#6E96BC; --navy-ink:#A9C6E2; --navy-soft:#1B2A38;
+    --foil:#D7B662; --foil-ink:#EBD48F; --foil-soft:#332911;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Sora", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Noto Serif Display", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--navy-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--navy); outline-offset:2px; }
+  code,.mono{ font-family:"Roboto Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Roboto Mono",monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--navy-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Noto Serif Display",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Roboto Mono",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Bound report — the one diagram only this subject has */
+  .binder-wrap{ padding:1.9rem 0 2.1rem; }
+  .binder-cap{ font-family:"Roboto Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .binder{ display:flex; max-width:600px; }
+  .spine{ width:16px; background:var(--navy); border-radius:3px 0 0 3px; flex:none; }
+  .cover{ flex:1; background:var(--paper-raised); border:1px solid var(--line-strong); border-left:none; border-radius:0 4px 4px 0; box-shadow:var(--shadow); padding:1rem 1.2rem; position:relative; }
+  .cover-title{ font-family:"Noto Serif Display",serif; font-weight:700; font-size:1.05rem; }
+  .cover-sub{ font-family:"Roboto Mono",monospace; font-size:0.7rem; color:var(--ink-faint); margin:0.2rem 0 0.8rem; }
+  .tabs{ position:absolute; right:-2px; top:1.4rem; display:flex; flex-direction:column; gap:0.4rem; }
+  .tabchip{ background:var(--foil-soft); border:1px solid var(--foil); color:var(--foil-ink); font-family:"Roboto Mono",monospace; font-size:0.6rem; font-weight:700; padding:0.15rem 0.5rem; border-radius:2px 0 0 2px; text-align:right; }
+  .kpi-row{ display:flex; gap:1.1rem; margin-top:0.4rem; }
+  .kpi{ display:flex; flex-direction:column; }
+  .kpi .n{ font-family:"Noto Serif Display",serif; font-weight:700; font-size:1.2rem; color:var(--navy-ink); }
+  .kpi .l{ font-family:"Roboto Mono",monospace; font-size:0.58rem; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-faint); }
+  .binder-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:44rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Roboto Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--navy-ink); border-left-color:var(--navy); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Roboto Mono",monospace; font-size:0.78rem; color:var(--navy-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .memo{ position:relative; background:var(--navy-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .memo::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--navy); border-radius:2px; }
+  .memo-label{ font-family:"Roboto Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--navy-ink); font-weight:700; margin:0 0 0.3rem; }
+  .memo p{ margin:0; }
+
+  .foil-note{ background:var(--foil-soft); border-left:3px solid var(--foil); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .foil-note p{ margin:0; }
+  .foil-note strong{ color:var(--foil-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Roboto Mono",monospace; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Roboto Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--navy-soft); border-color:var(--navy); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="12" y="8" width="8" height="48" fill="var(--navy)"/>
+          <rect x="20" y="8" width="32" height="48" rx="1.5" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.3"/>
+          <rect x="48" y="18" width="8" height="6" fill="var(--foil-soft)" stroke="var(--foil)" stroke-width="1"/>
+          <rect x="48" y="28" width="8" height="6" fill="var(--foil-soft)" stroke="var(--foil)" stroke-width="1"/>
+          <line x1="26" y1="20" x2="42" y2="20" stroke="var(--ink-faint)" stroke-width="1"/>
+          <line x1="26" y1="26" x2="42" y2="26" stroke="var(--ink-faint)" stroke-width="1"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Reporting</p>
+        <h1>Client Reports, bound and delivered</h1>
+        <p class="dek">One PDF, assembled across the whole suite, written for the business owner
+          — plain, upbeat, and on a clock if you want it to be.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">On-demand report types</span></div>
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">Delivery channels</span></div>
+      <div class="meta-item"><span class="meta-num tnum">6</span><span class="meta-label">Period options</span></div>
+    </div>
+    <div class="binder-wrap">
+      <p class="binder-cap">The binder, cover open</p>
+      <div class="binder">
+        <div class="spine"></div>
+        <div class="cover">
+          <div class="tabs"><span class="tabchip">ORGANIC</span><span class="tabchip">MAPS</span></div>
+          <div class="cover-title">Acme Roofing — Monthly SEO Report</div>
+          <div class="cover-sub">Last 30 days · generated Sep 1</div>
+          <div class="kpi-row">
+            <div class="kpi"><span class="n tnum">+18%</span><span class="l">clicks</span></div>
+            <div class="kpi"><span class="n tnum">#4.2</span><span class="l">avg position</span></div>
+            <div class="kpi"><span class="n tnum">4.8★</span><span class="l">GBP rating</span></div>
+          </div>
+        </div>
+      </div>
+      <p class="binder-note">Every section behind the cover — organic, Maps, GBP, AI visibility —
+        assembles independently. A section with nothing to say just isn't bound in.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Generate on demand</a></li>
+        <li><a href="#s3" data-target="s3">03 · The standing schedule</a></li>
+        <li><a href="#s4" data-target="s4">04 · Read the history</a></li>
+        <li><a href="#s5" data-target="s5">05 · Troubleshooting</a></li>
+        <li><a href="#s6" data-target="s6">06 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">The page always renders — no hard gate. Every section degrades
+          independently: a missing or failing data source is simply omitted from the PDF, never a
+          blocker for the rest of the report.</p>
+        <p>Email needs SMTP configured agency-wide; a Drive copy needs a Drive folder set on the
+          client. Neither failing blocks the report — delivery is recorded "skipped," not
+          "failed."</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Generate on demand</h2></div>
+        <p><strong>Report type</strong> — Monthly SEO or AI Visibility (a third, Local Rank/Maps,
+          is schedule-only — see below). <strong>Period</strong> — 30/60/90/120 days, last year,
+          or since campaign start. Tick <strong>"Email &amp; save to Drive when done"</strong> to
+          deliver this one report; a scheduled run always delivers regardless. Click
+          <strong>Generate report</strong> — the history table polls while anything's pending.
+          <strong>Download</strong> always re-signs the link fresh.</p>
+        <div class="memo">
+          <p class="memo-label">which period</p>
+          <p>30 days is the default check-in window. 60/90 days suits a slower-moving campaign
+            (SEO, link building) where a month alone is too short to show real movement — reach
+            for these when a client is asking "is this actually working" after a quiet month.
+            120 days or last year is for a genuinely long view — a QBR, an annual renewal
+            conversation. Since campaign start is the strongest argument for a young account that
+            hasn't accrued enough history for the longer fixed windows to mean much yet.</p>
+        </div>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>The standing schedule</h2></div>
+        <p><strong>Recipients</strong> (comma-separated), <strong>Schedule</strong> — Off / Weekly
+          / Monthly with a day and hour — and <strong>"Report covers"</strong>, which defaults to
+          Auto (7 days weekly, 30 monthly) or a fixed period if you want it to look further back
+          than the delivery cadence.</p>
+        <div class="memo">
+          <p class="memo-label">which cadence, and what it should cover</p>
+          <p>Weekly suits a client who wants to see movement often, or the early stretch of a new
+            campaign where you want to build trust with frequent proof of work. Monthly is the
+            standard retainer default — enough time for real change to show without flooding the
+            client's inbox. Leave "Report covers" on Auto unless you deliberately want the report
+            to look further back than its own cadence — e.g. a monthly delivery that always shows
+            a 90-day trend line so a single soft month doesn't read as the whole story.</p>
+        </div>
+        <div class="memo">
+          <p class="memo-label">two extras ride the same clock</p>
+          <p><strong>"AI Visibility report"</strong> and <strong>"Local Rank (Maps) report"</strong>
+            — each only actually generates for a client tracking the matching keywords, so it's
+            safe to leave both on for every client.</p>
+        </div>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Read the history</h2></div>
+        <p>Columns: Generated · Type · Period · <strong>Includes</strong> (which sections actually
+          came back with data) · Status · <strong>Delivered</strong> (separate ✓/✗/— marks for
+          email and Drive, hover a ✗ for the stored error) · PDF.</p>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Troubleshooting</h2></div>
+        <div class="foil-note">
+          <p><strong>A section is blank in the PDF?</strong> Not a bug — that section had no data
+            or failed to gather, and was simply left out rather than blocking the report.</p>
+        </div>
+        <table><tbody>
+          <tr><td class="term">Delivered shows a dash, not a check</td><td>SMTP isn't configured, or Recipients is empty — both cause a silent "skipped."</td></tr>
+          <tr><td class="term">A toggled extra report never showed up</td><td>The client doesn't track the matching keywords yet — deliberate, not a bug.</td></tr>
+          <tr><td class="term">Old download link 404s</td><td>Shouldn't happen — Download always re-fetches a fresh signed URL first.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Generate a one-off report</td><td>Report type + Period → <strong>Generate report</strong></td></tr>
+            <tr><td class="term">Turn on recurring reports</td><td>Delivery &amp; schedule → Weekly/Monthly</td></tr>
+            <tr><td class="term">Add the AI-visibility deliverable</td><td>Check "AI Visibility report"</td></tr>
+            <tr><td class="term">Add the Maps deliverable</td><td>Check "Local Rank (Maps) report"</td></tr>
+            <tr><td class="term">Re-download an old report</td><td>History row → Download</td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Client Reports Field Guide · AR Tools new-hire series · full text at <code>docs/client-reporting-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

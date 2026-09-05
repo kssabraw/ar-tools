@@ -1,9 +1,12 @@
 import { api } from '../../lib/api'
 import type {
   AnalysisResult,
+  LengthReport,
   LocalSeoPageDetail,
   LocalSeoPageListItem,
   LocationSuggestion,
+  PageSpec,
+  PageSpecEnvelope,
   RankabilityResult,
   ScoreHistoryRow,
   CustomTargetsResult,
@@ -20,6 +23,21 @@ import type {
 // result. Running server-side means they finish — and the result is retrievable
 // via a reconnecting poll — even if the user navigates away.
 export const localSeoApi = {
+  // ── page spec (length + structure kept on file) ──────────────────────────
+  // Reads never spend a paid call: built from the cached SERP analysis + the
+  // client's reference layout, else the market's standing target (flagged).
+  getPageSpec: (clientId: string, keyword: string, location: string, locationCode?: number | null) =>
+    api.get<PageSpecEnvelope>(
+      `/clients/${clientId}/local-seo/page-spec?keyword=${encodeURIComponent(keyword)}&location=${encodeURIComponent(location)}`
+      + (locationCode != null ? `&location_code=${locationCode}` : ''),
+    ),
+  editPageSpec: (clientId: string, body: { keyword: string; location: string; location_code?: number | null; spec: PageSpec }) =>
+    api.put<PageSpecEnvelope>(`/clients/${clientId}/local-seo/page-spec`, body),
+  rebuildPageSpec: (clientId: string, body: { keyword: string; location: string; location_code?: number | null }) =>
+    api.post<PageSpecEnvelope>(`/clients/${clientId}/local-seo/page-spec/rebuild`, body),
+  lengthReport: (clientId: string) =>
+    api.get<LengthReport>(`/clients/${clientId}/local-seo/length-report`),
+
   // Background generation — enqueue a job and poll, so the UI can navigate away
   // (even to other clients) while the page generates server-side. The page lands
   // in the client's pages when done.
@@ -37,7 +55,7 @@ export const localSeoApi = {
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/generate-async`, body),
 
   getGenerateJob: (clientId: string, jobId: string) =>
-    api.get<{ status: string; page_id?: string | null; error?: string | null }>(
+    api.get<{ status: string; page_id?: string | null; error?: string | null; retrying?: boolean; progress_message?: string | null }>(
       `/clients/${clientId}/local-seo/generate/${jobId}`,
     ),
 

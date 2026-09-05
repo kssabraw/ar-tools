@@ -7,9 +7,14 @@ import { card, label, primaryBtn } from '../shared'
 import { matrixApi } from './api'
 import { MatrixAxesEditor } from './MatrixAxesEditor'
 import { MatrixGrid } from './MatrixGrid'
+import { composeLocations, pinsFromRows, type LocationPins } from './locationPins'
+import { MatrixLocationPins } from './MatrixLocationPins'
+import { MatrixLinkSettings } from './MatrixLinkSettings'
+import { MatrixPublishBar } from './MatrixPublishBar'
+import { MatrixReleaseCard } from './MatrixReleaseCard'
 import { MatrixRunBar } from './MatrixRunBar'
 import { IN_FLIGHT, splitLines } from './types'
-import type { MatrixDetail as MatrixDetailT, MatrixLocationIn } from './types'
+import type { MatrixDetail as MatrixDetailT } from './types'
 import { useSuggest } from './useSuggest'
 
 interface Props {
@@ -47,6 +52,7 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
   const [editing, setEditing] = useState(false)
   const [services, setServices] = useState('')
   const [locations, setLocations] = useState('')
+  const [pins, setPins] = useState<LocationPins>({})
   const [saving, setSaving] = useState(false)
   const [rechecking, setRechecking] = useState(false)
   const [deleting, setDeleting] = useState(false)
@@ -59,6 +65,7 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
     if (!matrix) return
     setServices(matrix.services.map(s => s.label).join('\n'))
     setLocations(matrix.locations.map(l => l.name).join('\n'))
+    setPins(pinsFromRows(matrix.locations))
     setEditing(true)
   }
 
@@ -69,13 +76,9 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
     setSaving(true)
     setError('')
     try {
-      // Keep a pinned location's code when its name survives the edit.
-      const existing = new Map(matrix.locations.map(l => [l.name.toLowerCase(), l]))
-      const locs: (MatrixLocationIn | string)[] = splitLines(locations).map(name => {
-        const row = existing.get(name.toLowerCase())
-        return row ? { name, location_code: row.location_code ?? null, canonical: row.canonical ?? null, source: row.source ?? null } : name
-      })
-      await matrixApi.update(clientId, matrixId, { services: splitLines(services), locations: locs })
+      // Pins (seeded from the saved rows, edited in the pins list) ride on the
+      // rows by name, so a pin survives re-ordering and is dropped with its line.
+      await matrixApi.update(clientId, matrixId, { services: splitLines(services), locations: composeLocations(locations, pins) })
       setEditing(false)
       await refresh()
     } catch (e) {
@@ -95,6 +98,18 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
       setError(e instanceof Error ? e.message : 'Could not re-check coverage')
     } finally {
       setRechecking(false)
+    }
+  }
+
+  // "Publish anyway" for one blocked cell: the same explicit override the
+  // per-page Publish button offers, scoped to that cell (force_voice needs ids).
+  const forcePublish = async (cellId: string) => {
+    setError('')
+    try {
+      await matrixApi.publish(clientId, matrixId, { cell_ids: [cellId], force_voice: true })
+      await refresh()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not publish')
     }
   }
 
@@ -189,6 +204,7 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
             }}
           />
           {suggest.error && <ErrorDetails message={suggest.error} />}
+          <MatrixLocationPins clientId={clientId} locationsText={locations} pins={pins} onChange={setPins} disabled={saving} />
           <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
             <button style={{ ...primaryBtn, opacity: saving ? 0.6 : 1 }} disabled={saving} onClick={saveAxes}>
               {saving ? <Spinner size={16} color="#fff" /> : null} Save axes
@@ -198,9 +214,15 @@ export function MatrixDetail({ clientId, matrixId, onBack, onDeleted, onOpenPage
         </div>
       )}
 
-      <MatrixGrid matrix={matrix} selected={selected} onToggle={onToggle} onOpenPage={onOpenPage} />
+      <MatrixGrid matrix={matrix} selected={selected} onToggle={onToggle} onOpenPage={onOpenPage} onForcePublish={forcePublish} />
 
       <MatrixRunBar clientId={clientId} matrix={matrix} selected={selected} setSelected={setSelected} onStarted={refresh} />
+
+      <MatrixPublishBar clientId={clientId} matrix={matrix} onStarted={refresh} />
+
+      <MatrixReleaseCard clientId={clientId} matrix={matrix} onChanged={refresh} />
+
+      <MatrixLinkSettings clientId={clientId} matrix={matrix} onChanged={refresh} />
     </div>
   )
 }

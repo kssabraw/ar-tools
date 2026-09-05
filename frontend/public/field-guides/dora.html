@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A control-tower walkthrough for DORA — watching the seams between the other three agents.">
+<title>DORA Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Albert+Sans:wght@400;500;600;700&family=Azeret+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --paper:#E7EBEC; --paper-raised:#F7F9F9; --ink:#1B2226; --ink-soft:#4F5A60; --ink-faint:#818C91;
+    --line:#D0D7D9; --line-strong:#B7C0C3;
+    --control:#2E7A9E; --control-ink:#1E5470; --control-soft:#DCE9EF;
+    --alert:#C99A2E; --alert-ink:#8F6D1F; --alert-soft:#F1E3C4;
+    --shadow: 0 1px 2px rgba(27,34,38,0.08), 0 10px 26px rgba(27,34,38,0.06); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#101315; --paper-raised:#181B1E; --ink:#E3E8EA; --ink-soft:#ABB4B8; --ink-faint:#707A7E;
+      --line:#262B2E; --line-strong:#363C40;
+      --control:#6FB2D6; --control-ink:#A8D3EA; --control-soft:#182833;
+      --alert:#E0BB5C; --alert-ink:#F0D68E; --alert-soft:#332911;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#101315; --paper-raised:#181B1E; --ink:#E3E8EA; --ink-soft:#ABB4B8; --ink-faint:#707A7E;
+    --line:#262B2E; --line-strong:#363C40;
+    --control:#6FB2D6; --control-ink:#A8D3EA; --control-soft:#182833;
+    --alert:#E0BB5C; --alert-ink:#F0D68E; --alert-soft:#332911;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Albert Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Instrument Serif", Georgia, serif; color:var(--ink); font-weight:400; text-wrap:balance; margin:0; }
+  a{ color:var(--control-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--control); outline-offset:2px; }
+  code,.mono{ font-family:"Azeret Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Azeret Mono",monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--control-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.9rem,1.5rem + 1.8vw,2.8rem); line-height:1.06; font-weight:400; font-style:italic; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; font-family:"Albert Sans",sans-serif; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Instrument Serif",serif; font-size:1.7rem; }
+  .meta-label{ font-family:"Azeret Mono",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Instrument panel — the one diagram only this subject has */
+  .panel-wrap{ padding:1.9rem 0 2.1rem; }
+  .panel-cap{ font-family:"Azeret Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .panel{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); max-width:640px; overflow:hidden; }
+  .prow{ display:flex; align-items:center; gap:0.8rem; padding:0.6rem 1.1rem; border-bottom:1px solid var(--line); font-size:0.86rem; }
+  .prow:last-child{ border-bottom:none; }
+  .lamp{ width:11px; height:11px; border-radius:50%; flex:none; box-shadow:0 0 0 2px var(--paper-raised) inset; }
+  .lamp.clear{ background:var(--control); box-shadow:0 0 6px 1px color-mix(in srgb, var(--control) 60%, transparent); }
+  .lamp.flag{ background:var(--alert); box-shadow:0 0 6px 1px color-mix(in srgb, var(--alert) 60%, transparent); }
+  .prow .name{ flex:1; font-weight:600; }
+  .prow .state{ font-family:"Azeret Mono",monospace; font-size:0.7rem; color:var(--ink-faint); }
+  .panel-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:44rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Azeret Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--control-ink); border-left-color:var(--control); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Azeret Mono",monospace; font-size:0.78rem; color:var(--control-ink); flex:none; }
+  .block h2{ font-size:1.6rem; font-weight:400; }
+  .block h3{ font-size:1.06rem; margin-top:1.8rem; margin-bottom:0.6rem; font-family:"Albert Sans",sans-serif; font-weight:700; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.06rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:700; }
+
+  .log{ position:relative; background:var(--control-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .log::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--control); border-radius:2px; }
+  .log-label{ font-family:"Azeret Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--control-ink); font-weight:700; margin:0 0 0.3rem; }
+  .log p{ margin:0; }
+
+  .caution{ background:var(--alert-soft); border-left:3px solid var(--alert); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .caution p{ margin:0; }
+  .caution strong{ color:var(--alert-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Azeret Mono",monospace; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  .chat{ border:1px solid var(--line); border-radius:var(--radius); padding:1rem 1.2rem; margin:1.2rem 0; background:var(--paper-raised); box-shadow:var(--shadow); }
+  .chat .turn{ margin:0.6rem 0; color:var(--ink); }
+  .chat .who{ font-family:"Azeret Mono",monospace; font-size:0.66rem; letter-spacing:.08em; text-transform:uppercase; margin-right:0.5rem; font-weight:700; }
+  .chat .who.you{ color:var(--ink-faint); }
+  .chat .who.bot{ color:var(--control-ink); }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--control-soft); border-color:var(--control); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="8" y="14" width="48" height="30" rx="2" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"/>
+          <circle cx="20" cy="29" r="4" fill="var(--control)"/>
+          <circle cx="32" cy="29" r="4" fill="var(--control)"/>
+          <circle cx="44" cy="29" r="4" fill="var(--alert)"/>
+          <line x1="32" y1="44" x2="32" y2="52" stroke="var(--ink)" stroke-width="1.4"/>
+          <line x1="22" y1="52" x2="42" y2="52" stroke="var(--ink)" stroke-width="1.4"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Oversight</p>
+        <h1>DORA, from the tower</h1>
+        <p class="dek">Three agents work the client board. DORA doesn't touch any of it — it
+          watches the seams between them, and calls out the ones that need a human look.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">7</span><span class="meta-label">Watched seams</span></div>
+      <div class="meta-item"><span class="meta-num tnum">0</span><span class="meta-label">Actions it can take</span></div>
+      <div class="meta-item"><span class="meta-num tnum">1</span><span class="meta-label">Weekly digest, silent if clear</span></div>
+    </div>
+    <div class="panel-wrap">
+      <p class="panel-cap">The board, this morning</p>
+      <div class="panel">
+        <div class="prow"><span class="lamp clear"></span><span class="name">Proposal → board task</span><span class="state">clear</span></div>
+        <div class="prow"><span class="lamp flag"></span><span class="name">Proposal left pending</span><span class="state">flagged · 5d</span></div>
+        <div class="prow"><span class="lamp clear"></span><span class="name">Autonomy candidate acted on</span><span class="state">clear</span></div>
+        <div class="prow"><span class="lamp flag"></span><span class="name">QA idle, portfolio-wide</span><span class="state">flagged · 9d</span></div>
+        <div class="prow"><span class="lamp clear"></span><span class="name">Content shipped complete</span><span class="state">clear</span></div>
+      </div>
+      <p class="panel-note">A lit lamp is a gap, not a verdict — DORA opens the ticket and names
+        it. It never reaches for the switch itself.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · The one-paragraph version</a></li>
+        <li><a href="#s2" data-target="s2">02 · Where to find it</a></li>
+        <li><a href="#s3" data-target="s3">03 · The seams it watches</a></li>
+        <li><a href="#s4" data-target="s4">04 · The weekly digest</a></li>
+        <li><a href="#s5" data-target="s5">05 · Keeping the Guides current</a></li>
+        <li><a href="#s6" data-target="s6">06 · Talking to DORA</a></li>
+        <li><a href="#s7" data-target="s7">07 · What it can NOT do</a></li>
+        <li><a href="#s8" data-target="s8">08 · Troubleshooting</a></li>
+        <li><a href="#s9" data-target="s9">09 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>The one-paragraph version</h2></div>
+        <p class="lede"><strong>DORA is read-only.</strong> It never resolves anything, never
+          reassigns a task, never approves a proposal, never runs a scan. Its whole job is to
+          notice when the other agents' work has a gap between them and surface it — as a plain
+          board task or a weekly digest.</p>
+        <p>On top of that read-only lens it also has a conversational persona, but even in chat it
+          has zero tools — it can explain a gap and point you at who owns fixing it; it cannot fix
+          anything itself.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Where to find it</h2></div>
+        <table><tbody>
+          <tr><td class="term">Dashboard chat</td><td>Sidebar → <strong>DORA</strong> (Compass icon) → <code>/director</code>. Shown only once the module is enabled.</td></tr>
+          <tr><td class="term">Slack — #dora</td><td>A dedicated Slack app and channel, separate from SerMaStr's and PACE's bots.</td></tr>
+          <tr><td class="term">Board tasks</td><td>Any client's board — look for a card titled "Director seam: …"</td></tr>
+        </tbody></table>
+        <p><strong>Dashboard vs. Slack.</strong> Either works equally well — pick whichever you're
+          already in. #dora is the natural fit if you want the answer visible to the rest of the
+          team (a shared "why is this flagged" conversation); the dashboard chat is better for a
+          quick, private check that doesn't need to be seen by anyone else.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>The seams it watches</h2></div>
+        <p>Each tripped seam opens <strong>one</strong> board task per client, auto-closing the
+          instant the condition clears — except the portfolio-only one, which posts a
+          notification instead since there's no single client to file it against.</p>
+        <table><tbody>
+          <tr><td class="term">Approved, unplaced</td><td>A SerMaStr proposal was approved but never became a real task.</td></tr>
+          <tr><td class="term">Stuck pending</td><td>A proposal sitting unapproved and undismissed.</td></tr>
+          <tr><td class="term">Autonomy unactioned</td><td>An autonomy candidate was proposed but never acted on.</td></tr>
+          <tr><td class="term">QA gone idle <span class="mono" style="font-size:0.7rem">(portfolio)</span></td><td>Nothing has entered QA review in a while.</td></tr>
+          <tr><td class="term">Content shipped degraded</td><td>A finished run or page shows signs the voice/context pass didn't fully run.</td></tr>
+          <tr><td class="term">Duplicate target</td><td>Two agents' work points at the same keyword or page — flagged, never auto-merged.</td></tr>
+          <tr><td class="term">Unrecognized source</td><td>A task exists whose producer DORA doesn't recognize.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>The weekly digest</h2></div>
+        <div class="log">
+          <p class="log-label">deterministic, no LLM</p>
+          <p>Named clients per seam, not just counts, plus autonomy activity and open capacity
+            holds. It's <strong>silent on an all-clear week</strong> — zero seams, zero autonomy
+            activity, nothing posts.</p>
+        </div>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Keeping the Guides current</h2></div>
+        <p class="lede"><strong>DORA's one write.</strong> Every change that lands in a module is
+          reported to DORA. It works out which module the change belongs to, re-reads that
+          module's in-app guide (sidebar → <strong>Guides</strong>), and rewrites it only if the
+          change is something a user would notice — a new button, tab, option, default, cadence,
+          or output. Internal changes leave the guide alone, quietly.</p>
+        <table><tbody>
+          <tr><td class="term">"DORA updated this guide on …"</td><td>The rewrite is live. Read the banner's summary; staff can <strong>Revert</strong> to the previous version in one click.</td></tr>
+          <tr><td class="term">"DORA proposes an update"</td><td>Auto-apply is off for your environment — <strong>Preview</strong>, then <strong>Apply</strong> or <strong>Dismiss</strong>.</td></tr>
+          <tr><td class="term">"DORA couldn't update the … guide" (#dora)</td><td>The change looked user-facing but the rewrite failed DORA's own sanity checks — check that guide by hand.</td></tr>
+          <tr><td class="term">Show DORA sync history</td><td>Every review it ran on that guide, including the "no change needed" ones.</td></tr>
+        </tbody></table>
+        <div class="log">
+          <p class="log-label">what it will and won't do to a guide</p>
+          <p>It writes for the person <em>using</em> the tool — never code, file names, or ticket
+            numbers. It never invents behaviour: an unclear change gets a conservative "no update
+            needed", not a guess. It works from the guide as it reads <em>now</em>, so an admin's
+            hand-edits survive unless the change made them untrue. Only the in-app guide is
+            touched — this illustrated field guide and the long-form docs are still
+            hand-maintained; a #dora note is the cue to refresh them after a big change.</p>
+        </div>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Talking to DORA</h2></div>
+        <p>Ask about a client, or ask agency-wide with none named — same scoping as SerMaStr. It
+          answers strictly from the same data the reconciler uses.</p>
+        <div class="chat">
+          <p class="turn"><span class="who you">You</span>where are we bottlenecked this week?</p>
+          <p class="turn"><span class="who bot">DORA</span>Two things stand out. Acme Roofing has
+            a SerMaStr proposal approved 4 days ago with no board task yet. Portfolio-wide, QA
+            hasn't reviewed anything in over a week — usually means finished work isn't being
+            routed through In QA, not that QA itself is broken.</p>
+        </div>
+        <p>Ask it to fix something and it declines, naming the agent that actually owns it —
+          usually PACE or SerMaStr.</p>
+        <div class="log">
+          <p class="log-label">when to actually ask it something</p>
+          <p>Skip the chat and just look at the board when you already know which client you're
+            worried about — a seam task, if one exists, will already be sitting there. Reach for
+            DORA's chat when you don't have a specific client in mind and want the portfolio-wide
+            read ("where are we falling behind this week"), or when you want the plain-English
+            explanation of <em>why</em> a flag exists rather than just its one-line name.</p>
+        </div>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>What it can NOT do</h2></div>
+        <div class="caution">
+          <p><strong>It doesn't block autonomy, either.</strong> A pre-flight veto exists in code
+            but ships off by default, as a separate flag from the one that turns DORA on at all —
+            don't assume DORA is currently preventing anything from executing.</p>
+        </div>
+        <ul>
+          <li>No confirm-gated actions exist for it at all — contrast SerMaStr and PACE.</li>
+          <li>Never touches the reoptimization planner's priority, PACE's assignment logic, or the
+            autonomy executor's decisions.</li>
+          <li>Never auto-merges a duplicate-target flag — a human decides.</li>
+          <li>The Guides are the one exception (§05): rewriting a module's guide after that module
+            changed is documentation, not campaign state — and always one click to revert.</li>
+        </ul>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">DORA flagged something — does it fix it?</td><td>No. It opens a task naming the gap; a human or the owning agent does the fixing.</td></tr>
+          <tr><td class="term">A seam task reappeared after I trashed it</td><td>The reconciler re-opens it each run while the condition holds — it closes on its own once resolved.</td></tr>
+          <tr><td class="term">A flag isn't on any client's board</td><td>QA-idle and unrecognized-source are portfolio-level — agency-wide notification, not a board task.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Ask about a client's gaps</td><td>/director, or #dora</td></tr>
+            <tr><td class="term">Ask agency-wide</td><td>Same surface, name no client</td></tr>
+            <tr><td class="term">A "Director seam" task appeared</td><td>Auto-closes once the condition clears</td></tr>
+            <tr><td class="term">Fix what it flagged</td><td>Go to the agent it names — never DORA itself</td></tr>
+            <tr><td class="term">A guide changed on its own</td><td>DORA rewrote it after a module change — banner says what; <strong>Revert</strong> restores the old one</td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">DORA Field Guide · AR Tools new-hire series · full text at <code>docs/dora-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

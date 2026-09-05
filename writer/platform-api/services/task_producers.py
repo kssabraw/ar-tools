@@ -143,20 +143,61 @@ def on_maps_alerts(client_id: str, opened: list[dict], resolved_ids: list[str]) 
 ACTION_PLAN_SKIP_KINDS = {"rank_drop", "sitewide_decline", "maps_decline", "maps_competitor"}
 
 
+def _clip_title(text: str, limit: int = 200) -> str:
+    """Trim a title to ``limit`` chars on a word boundary (never mid-word), adding
+    an ellipsis when it had to cut. Pure."""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    sp = cut.rfind(" ")
+    if sp > limit // 2:  # only fall back to a boundary if one is reasonably close
+        cut = cut[:sp]
+    return cut.rstrip() + "…"
+
+
 def action_task_name(action: dict) -> str:
-    """The task name for an Action Plan item — the recommendation, else the CTA
-    label. Pure. Shared by the producer and the plan→PACE handoff so a task
-    created either way is identical (same name → the same idempotency behaviour)."""
-    return (action.get("recommendation") or action.get("cta_label") or "Action Plan item")[:200]
+    """The task name for an Action Plan item — a concise, self-explanatory title.
+    Prefers a short ``title`` the producer set, else the recommendation, else the
+    CTA label. Leads with the target keyword/topic when the action carries one AND
+    the chosen text doesn't already name it, so the staff member sees WHAT the task
+    is about at a glance (a bare recommendation like "create or strengthen a page
+    targeting this term" is what left the keyword invisible on the board). Pure.
+    Shared by the producer and the plan→PACE handoff so a task created either way is
+    identical (same name → the same idempotency behaviour).
+
+    Leading (not appending) the keyword keeps it visible even after the 200-char cap
+    trims a long title. The source_ref keys on kind+keyword, not the name, so
+    changing the name never affects idempotency."""
+    base = action.get("title") or action.get("recommendation") or action.get("cta_label") or "Action Plan item"
+    kw = (action.get("keyword") or "").strip()
+    if kw and kw.casefold() not in base.casefold():
+        base = f"{kw}: {base}"
+    return _clip_title(base)
 
 
 def action_task_description(client_id: str, action: dict) -> str:
-    """The task description for an Action Plan item (diagnosis + a link into the
-    tool that does it). Pure. Shared by the producer and the handoff."""
-    return (
-        f"{action.get('diagnosis') or ''}\n\n"
-        f"Open the tool: {action.get('cta_path') or f'/clients/{client_id}/action-plan'}"
-    ).strip()
+    """The task description for an Action Plan item, filled out so the staff member
+    knows exactly what to do without opening anything first: the target
+    keyword/topic, the situation (diagnosis), the recommended action, and a link
+    into the tool that does it. Pure. Shared by the producer and the handoff.
+
+    Every section is best-effort — an action missing a field simply omits that
+    line rather than printing an empty label."""
+    lines: list[str] = []
+    kw = (action.get("keyword") or "").strip()
+    if kw:
+        lines.append(f"Target keyword / topic: {kw}")
+    diag = (action.get("diagnosis") or "").strip()
+    if diag:
+        lines.append(f"Situation: {diag}")
+    rec = (action.get("recommendation") or "").strip()
+    if rec:
+        lines.append(f"What to do: {rec}")
+    cta_path = action.get("cta_path") or f"/clients/{client_id}/action-plan"
+    label = action.get("cta_label")
+    lines.append(f"Open the tool ({label}): {cta_path}" if label else f"Open the tool: {cta_path}")
+    return "\n\n".join(lines).strip()
 
 
 def action_source_ref(client_id: str, action: dict) -> str:

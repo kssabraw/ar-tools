@@ -72,3 +72,30 @@ def test_coordination_metrics_no_false_loop_on_clean_handoff():
         _msg(correlation_id=corr, from_agent="pace", to_agent="sermastr", kind="ack", created_at=_iso(9)),
     ]
     assert agent_bus.coordination_metrics(clean, now=NOW)["loops"] == []
+
+
+# ---------------------------------------------------------------------------
+# Placement-blocker resolve helpers (WS3 follow-up)
+# ---------------------------------------------------------------------------
+def test_placement_correlation_format():
+    assert agent_bus.placement_correlation("t1") == "placement:t1"
+
+
+def test_resolve_placement_blocker_delegates_to_mark_acted(monkeypatch):
+    seen = {}
+
+    def _fake_mark_acted(*, correlation_id, by_agent, status="acted"):
+        seen.update(correlation_id=correlation_id, by_agent=by_agent)
+        return 2
+
+    monkeypatch.setattr(agent_bus, "mark_acted", _fake_mark_acted)
+    assert agent_bus.resolve_placement_blocker("t9", by_agent="pace") == 2
+    # It must key on the SAME correlation id the pm_assign post uses.
+    assert seen == {"correlation_id": "placement:t9", "by_agent": "pace"}
+
+
+def test_resolve_placement_blocker_empty_task_is_noop(monkeypatch):
+    called = []
+    monkeypatch.setattr(agent_bus, "mark_acted", lambda **k: called.append(k) or 1)
+    assert agent_bus.resolve_placement_blocker("") == 0
+    assert called == []  # never touched the bus

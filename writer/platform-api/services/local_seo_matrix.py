@@ -38,6 +38,18 @@ from services.website_plan import MATRIX_SIGNOFF_THRESHOLD, slugify
 # the most common client site; the second is the Website Builder's
 # location-first matrix, so a later matrix → site-plan bridge is a no-op.
 DEFAULT_URL_PATTERN = "/{service}-{location}/"
+
+# "App only" is a publish destination that keeps every generated page in the app
+# (Saved Pages + the matrix grid) and never pushes it to Google Docs / WordPress
+# / GitHub. A cell's terminal state stays `done`; the auto-publish-after-generate
+# (drip) and the bulk "publish done cells" both short-circuit on it.
+APP_ONLY = "app_only"
+
+
+def publishes_externally(destination: Optional[str]) -> bool:
+    """True when a destination actually pushes a page off the app. `app_only`
+    (and an empty destination, which is never a real external target) do not."""
+    return bool(destination) and destination != APP_ONLY
 URL_PATTERN_PRESETS: tuple[str, ...] = (
     DEFAULT_URL_PATTERN,
     "/{location}/{service}/",
@@ -232,6 +244,19 @@ def select_release_batch(cells: Iterable[dict], count: int) -> list[dict]:
 
 SAME_LOCATION = "same_location_other_service"
 SAME_SERVICE = "same_service_other_location"
+# The "up" links every location page also carries (plan §4.1): its top-level
+# (location-agnostic) service page and the site root.
+SERVICE_HUB = "service_hub"
+HOME = "home"
+DEFAULT_SERVICE_HUB_PATTERN = "/{service}/"
+
+
+def service_hub_anchor(cell: dict) -> str:
+    """"Roof restoration" — the service in natural case, no location."""
+    label = (cell.get("service_label") or "").strip()
+    if label:
+        return f"{label[:1].upper()}{label[1:]}"
+    return (cell.get("service_slug") or "").replace("-", " ").strip().title() or "Our services"
 
 
 def anchor_text(cell: dict) -> str:
@@ -317,6 +342,100 @@ def sibling_links(
     return out
 
 
+def validate_hub_pattern(pattern: str) -> list[str]:
+    """A service-hub pattern must contain ``{service}`` and must NOT contain
+    ``{location}`` — the top-level service page is location-agnostic."""
+    p = (pattern or "").strip()
+    errors: list[str] = []
+    if "{service}" not in p:
+        errors.append("hub_pattern_missing_service_token")
+    if "{location}" in p:
+        errors.append("hub_pattern_has_location_token")
+    return errors
+
+
+def service_hub_url(service_slug: str, base_url: str = "", pattern: str = DEFAULT_SERVICE_HUB_PATTERN) -> str:
+    """The URL of the top-level (location-agnostic) service page, e.g.
+    ``/roof-restoration/``. `pattern` carries a single ``{service}`` token."""
+    path = (pattern or DEFAULT_SERVICE_HUB_PATTERN).replace("{service}", (service_slug or "").strip("/"))
+    if not path.startswith("/"):
+        path = "/" + path
+    base = (base_url or "").strip().rstrip("/")
+    return f"{base}{path}" if base else path
+
+
+def home_url(base_url: str = "") -> str:
+    """The site root."""
+    base = (base_url or "").strip().rstrip("/")
+    return f"{base}/" if base else "/"
+
+
+def up_links(
+    cell: dict,
+    base_url: str = "",
+    *,
+    service_hub: bool = True,
+    service_hub_pattern: str = DEFAULT_SERVICE_HUB_PATTERN,
+    home: bool = True,
+    home_anchor: str = "Home",
+) -> list[dict]:
+    """The "up" links a location page carries in addition to its siblings
+    (plan §4.1): the top-level service page (``service_hub``) and the site root
+    (``home``). Both are silo-spine links pointing above the cell in the site
+    hierarchy — the enhancement that makes ``/roof-restoration/melbourne/`` link
+    up to ``/roof-restoration/`` and ``/`` as well as across to its siblings."""
+    out: list[dict] = []
+    if service_hub:
+        out.append({
+            "anchor": service_hub_anchor(cell),
+            "url": service_hub_url(cell.get("service_slug") or "", base_url, service_hub_pattern),
+            "relation": SERVICE_HUB,
+        })
+    if home:
+        out.append({
+            "anchor": (home_anchor or "Home").strip() or "Home",
+            "url": home_url(base_url),
+            "relation": HOME,
+        })
+    return out
+
+
+def plan_cell_links(
+    cell: dict,
+    cells: Iterable[dict],
+    base_url: str = "",
+    *,
+    location_cap: int = 4,
+    max_links: int = 10,
+    coords: Optional[dict[str, tuple]] = None,
+    service_hub: bool = True,
+    service_hub_pattern: str = DEFAULT_SERVICE_HUB_PATTERN,
+    home: bool = True,
+    home_anchor: str = "Home",
+) -> list[dict]:
+    """Every internal link a cell page should carry: the up-links (service hub +
+    home) FIRST so they always survive the cap, then the siblings. Deduped by
+    URL path and never linking to the cell's own page; capped at `max_links`."""
+    ups = up_links(
+        cell, base_url,
+        service_hub=service_hub, service_hub_pattern=service_hub_pattern,
+        home=home, home_anchor=home_anchor,
+    )
+    sibs = sibling_links(cell, cells, base_url, location_cap=location_cap, max_links=max_links, coords=coords)
+    out: list[dict] = []
+    seen: set[str] = set()
+    self_path = _path_key(cell_url(cell, base_url))
+    for link in [*ups, *sibs]:
+        if len(out) >= max_links:
+            break
+        key = _path_key(link["url"])
+        if key in seen or key == self_path:
+            continue
+        seen.add(key)
+        out.append(link)
+    return out
+
+
 # ── deterministic link guarantee ──────────────────────────────────────────────
 
 _HREF_RE = re.compile(r"""href\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
@@ -366,7 +485,12 @@ def render_links_block(
     for link in links:
         groups.setdefault(link.get("relation") or SAME_LOCATION, []).append(link)
     parts: list[str] = []
-    for relation, heading in ((SAME_LOCATION, services_heading), (SAME_SERVICE, areas_heading)):
+    for relation, heading in (
+        (SAME_LOCATION, services_heading),
+        (SAME_SERVICE, areas_heading),
+        (SERVICE_HUB, "Main service page"),
+        (HOME, "Home"),
+    ):
         items = groups.get(relation) or []
         if not items:
             continue
@@ -580,21 +704,32 @@ def apply_coverage(cells: Iterable[dict], items: Iterable[dict]) -> list[tuple[s
 
 # async_jobs status → cell status for a cell's generate job.
 _JOB_TO_CELL = {"pending": "queued", "running": "generating", "complete": "done", "failed": "failed"}
-_IN_FLIGHT = frozenset({"queued", "generating"})
+_GENERATING = frozenset({"queued", "generating"})
+_IN_FLIGHT = frozenset({"queued", "generating", "publishing"})
 
 
 def reconcile_cell_updates(cells: Iterable[dict], jobs: dict[str, dict]) -> list[tuple[str, dict]]:
     """Read-side reconciliation (plan §5.1): for every in-flight cell whose job row
     is in `jobs` (``{job_id: {status, result, error}}``), the patch that brings the
-    cell up to date, or nothing when it already is. A ``complete`` job with no
-    ``page_id`` in its result is treated as failed (the generator persists the
-    page before completing, so that would mean the page write was lost). A job row
-    that is missing entirely (reaped/deleted) fails the cell so it can be re-run."""
+    cell up to date, or nothing when it already is.
+
+    Generate jobs: a ``complete`` job with no ``page_id`` in its result is treated
+    as failed (the generator persists the page before completing, so that would
+    mean the page write was lost). Publish jobs (a ``publishing`` cell): the job
+    result carries the outcome ``{status, url, error}`` the job also wrote to the
+    cell directly — re-applied here in case that write was lost; a ``failed``
+    job is `publish_failed`. A job row that is missing entirely (reaped/deleted)
+    fails the cell so it can be re-run."""
     patches: list[tuple[str, dict]] = []
     for c in cells:
         if c.get("status") not in _IN_FLIGHT or not c.get("job_id"):
             continue
         job = jobs.get(str(c["job_id"]))
+        if c.get("status") == "publishing":
+            patch = _reconcile_publishing(job)
+            if patch:
+                patches.append((c["id"], patch))
+            continue
         if job is None:
             patches.append((c["id"], {"status": "failed", "error": "job_not_found"}))
             continue
@@ -613,6 +748,44 @@ def reconcile_cell_updates(cells: Iterable[dict], jobs: dict[str, dict]) -> list
         if patch:
             patches.append((c["id"], patch))
     return patches
+
+
+def _reconcile_publishing(job: Optional[dict]) -> dict:
+    """The patch for a `publishing` cell given its publish job row (or None)."""
+    if job is None:
+        return {"status": "publish_failed", "error": "job_not_found"}
+    js = job.get("status") or ""
+    if js in ("pending", "running"):
+        return {}
+    if js == "failed":
+        return {"status": "publish_failed", "error": (job.get("error") or "publish_failed")[:500]}
+    result = job.get("result") or {}
+    status = result.get("status") or "publish_failed"
+    if status not in {"published", "publish_failed", "publish_blocked"}:
+        status = "publish_failed"
+    return {"status": status, "url": result.get("url"), "error": result.get("error")}
+
+
+# Cells a bulk publish acts on by default: generated but never (successfully)
+# published. `publish_blocked` needs the explicit per-cell override (force_voice)
+# and `published` an explicit re-publish, so both are only reachable by id.
+PUBLISHABLE_DEFAULT = frozenset({"done", "publish_failed"})
+PUBLISHABLE_BY_ID = frozenset({"done", "publish_failed", "publish_blocked", "published"})
+
+
+def select_publishable(cells: Iterable[dict], cell_ids: Optional[Iterable[str]] = None) -> list[dict]:
+    """The cells a bulk publish enqueues (plan §5.3): with no ids, every cell that
+    has a page and is `done` / `publish_failed`; with ids, exactly those cells if
+    they have a page and are not in flight (a `publish_blocked` cell re-tried with
+    `force_voice`, or a `published` cell re-published on purpose)."""
+    wanted = set(cell_ids) if cell_ids is not None else None
+    allowed = PUBLISHABLE_BY_ID if wanted is not None else PUBLISHABLE_DEFAULT
+    return [
+        c for c in cells
+        if c.get("page_id")
+        and c.get("status") in allowed
+        and (wanted is None or c.get("id") in wanted)
+    ]
 
 
 def service_labels_from_pages(per_silo: Iterable[dict], city: str) -> list[dict]:
@@ -652,3 +825,25 @@ def coverage_counts(cells: Iterable[dict]) -> dict[str, int]:
         counts[c.get("status") or "missing"] = counts.get(c.get("status") or "missing", 0) + 1
     counts["total"] = total
     return counts
+
+
+# ── auto-publish outcome (drip release, plan §5.2) ────────────────────────────
+
+
+def publish_outcome_from_error(detail: str) -> tuple[str, Optional[str], str]:
+    """Map a failed `publish_page` into a cell outcome ``(status, url, error)``.
+    A voice block (409 ``voice_violation[: words]``) is `publish_blocked` — the
+    page exists and a human can "Publish anyway"; anything else is
+    `publish_failed`."""
+    text = (detail or "").strip() or "publish_failed"
+    code = text.split(":", 1)[0].strip()
+    if code == "voice_violation":
+        return "publish_blocked", None, text[:500]
+    return "publish_failed", None, text[:500]
+
+
+def publish_outcome_from_result(result: dict) -> tuple[str, Optional[str], Optional[str]]:
+    """A successful `publish_page` → ``("published", url, None)``; the URL is the
+    first the destination reports (site URL, Doc URL, edit URL)."""
+    url = result.get("url") or result.get("doc_url") or result.get("edit_url") or None
+    return "published", url, None

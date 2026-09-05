@@ -836,3 +836,58 @@ def test_advance_not_premature_with_marker_named_work_item():
     # Once the real "Complete Guide" work item is actually done → In QA.
     subs[1]["completed"] = True
     assert task_service.parent_advance_target("in_progress", False, subs) == "in_qa"
+
+
+# ---------------------------------------------------------------------------
+# WS3 follow-up — a task leaving the unstaffed state clears its capacity blocker
+# ---------------------------------------------------------------------------
+def test_update_task_assignment_clears_placement_blocker(monkeypatch):
+    """Assigning a task closes any open PACE→DORA capacity blocker for it."""
+    from services import agent_bus
+
+    before = {"id": "t1", "assignee_id": None, "assignee_name": None, "parent_task_id": None}
+    after = {"id": "t1", "assignee_id": "m1", "assignee_name": "Ivy", "parent_task_id": None}
+
+    class _Q:
+        def __init__(self): self._mode = "select"
+        def select(self, *a, **k): self._mode = "select"; return self
+        def update(self, *a, **k): self._mode = "update"; return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            return type("R", (), {"data": [after] if self._mode == "update" else [before]})()
+
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, n: _Q()})())
+    monkeypatch.setattr(task_service, "_resolve_member",
+                        lambda *a, **k: {"assignee_id": "m1", "assignee_name": "Ivy"})
+    monkeypatch.setattr(task_service, "record_activity", lambda *a, **k: None)
+    monkeypatch.setattr(task_service, "_notify_assignment", lambda *a, **k: None)
+    resolved = []
+    monkeypatch.setattr(agent_bus, "resolve_placement_blocker", lambda tid, **k: resolved.append(tid) or 1)
+
+    task_service.update_task("t1", {"assignee_id": "m1"})
+    assert resolved == ["t1"]
+
+
+def test_complete_task_clears_placement_blocker(monkeypatch):
+    """Completing a task closes any open PACE→DORA capacity blocker for it."""
+    from services import agent_bus
+
+    after = {"id": "t1", "parent_task_id": None}
+
+    class _Q:
+        def update(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def execute(self): return type("R", (), {"data": [after]})()
+
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, n: _Q()})())
+    monkeypatch.setattr(task_service, "get_statuses", lambda *a, **k: STATUSES)
+    monkeypatch.setattr(task_service, "record_activity", lambda *a, **k: None)
+    monkeypatch.setattr(task_service, "auto_tick_subtasks", lambda *a, **k: 0)
+    resolved = []
+    monkeypatch.setattr(agent_bus, "resolve_placement_blocker", lambda tid, **k: resolved.append(tid) or 1)
+
+    task_service.complete_task("t1")
+    assert resolved == ["t1"]

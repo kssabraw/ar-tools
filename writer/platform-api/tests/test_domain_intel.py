@@ -223,21 +223,83 @@ def test_build_domain_intel_actions():
     from services import reopt_planner as rp
     gaps = [
         {"keyword": "roof repair", "competitor_domain": "rival.com", "competitor_position": 3,
-         "client_position": None, "volume": 2000, "opportunity_score": 500},
+         "client_position": None, "volume": 2000, "cpc_usd": 4.2, "keyword_difficulty": 22.0,
+         "gap_type": "missing", "opportunity_score": 500},
         {"keyword": "roof restoration", "competitor_domain": "rival.com", "competitor_position": 5,
-         "client_position": 34, "volume": 800, "opportunity_score": 200},
+         "client_position": 34, "volume": 800, "cpc_usd": 3.5, "keyword_difficulty": 15.0,
+         "gap_type": "weak", "opportunity_score": 200},
     ]
     actions = rp.build_domain_intel_actions("c1", gaps)
     assert len(actions) == 2
     a = actions[0]
     assert a["kind"] == "keyword_gap" and a["source"] == "organic"
     assert a["keyword"] == "roof repair"
-    assert "rival.com" in a["diagnosis"] and "you don't rank" in a["diagnosis"]
+    # The diagnosis names the keyword, the competitor, the gap, and the metrics.
+    assert "rival.com" in a["diagnosis"]
+    assert '"roof repair"' in a["diagnosis"]
+    assert "no page ranking for it" in a["diagnosis"]
+    assert "~2000/mo searches" in a["diagnosis"] and "difficulty 22/100" in a["diagnosis"]
+    assert "$4.20 CPC" in a["diagnosis"]
+    # A missing gap → create net-new; the recommendation + concise title name the
+    # keyword + action.
+    assert a["recommendation"].startswith('Create a new page targeting "roof repair"')
+    assert a["title"] == 'Create a page targeting "roof repair"'
     assert a["cta_path"] == "clients/c1/domain-intel"
-    # the deeper-position gap names the client's current rank
-    assert "you rank #34" in actions[1]["diagnosis"]
+    # The weak gap → strengthen the existing page, naming the client's current rank.
+    b = actions[1]
+    assert "your best page only ranks #34" in b["diagnosis"]
+    assert b["title"] == 'Strengthen your page for "roof restoration"'
+    assert b["recommendation"].startswith('Strengthen / reoptimize your existing page for "roof restoration"')
+    assert "gap type: weak" in b["recommendation"]
     # empty → no actions (additive: unchanged plan behavior)
     assert rp.build_domain_intel_actions("c1", []) == []
+
+
+def test_build_domain_intel_actions_filters_navigational_and_brand():
+    from services import reopt_planner as rp
+    matchers = [{"sedgwick"}]  # the client's competitor brand
+    gaps = [
+        # navigational lookup — dropped whatever the brand
+        {"keyword": "sedgwick claim phone number", "competitor_domain": "sedgwick.com",
+         "competitor_position": 1, "client_position": None, "volume": 27100, "opportunity_score": 900},
+        # bare competitor brand — dropped
+        {"keyword": "my sedgwick", "competitor_domain": "sedgwick.com",
+         "competitor_position": 2, "client_position": None, "volume": 49500, "opportunity_score": 800},
+        # comparison term — KEPT (competitor content a challenger should write)
+        {"keyword": "sedgwick alternatives", "competitor_domain": "sedgwick.com",
+         "competitor_position": 4, "client_position": None, "volume": 300, "opportunity_score": 100},
+        # street address — dropped (single-location lookup, never a content page)
+        {"keyword": "190 bowery new york ny 10012", "competitor_domain": "rival.com",
+         "competitor_position": 8, "client_position": None, "volume": 320, "opportunity_score": 85},
+        # genuine topical gap — kept
+        {"keyword": "claims outsourcing", "competitor_domain": "rival.com",
+         "competitor_position": 6, "client_position": None, "volume": 500, "opportunity_score": 90},
+    ]
+    kept = rp.build_domain_intel_actions("c1", gaps, matchers=matchers)
+    kws = [a["keyword"] for a in kept]
+    assert kws == ["sedgwick alternatives", "claims outsourcing"]
+    # filter_intent=False → intent filtering off, so the brand/navigational rows
+    # survive (subject only to the action cap).
+    off = rp.build_domain_intel_actions("c1", gaps, matchers=matchers, filter_intent=False)
+    assert "my sedgwick" in [a["keyword"] for a in off]
+    assert "sedgwick claim phone number" in [a["keyword"] for a in off]
+
+
+def test_build_domain_intel_actions_filters_before_cap(monkeypatch):
+    """A navigational term at the top of the pool must not consume an action slot —
+    filtering happens before the top-N cap."""
+    from config import settings
+    from services import reopt_planner as rp
+    monkeypatch.setattr(settings, "domain_intel_action_max", 1)
+    gaps = [
+        {"keyword": "acme phone number", "competitor_domain": "acme.com",
+         "competitor_position": 1, "client_position": None, "volume": 9000, "opportunity_score": 999},
+        {"keyword": "claims automation software", "competitor_domain": "rival.com",
+         "competitor_position": 5, "client_position": None, "volume": 400, "opportunity_score": 80},
+    ]
+    kept = rp.build_domain_intel_actions("c1", gaps)
+    # The navigational top row is dropped and the real gap fills the single slot.
+    assert [a["keyword"] for a in kept] == ["claims automation software"]
 
 
 def test_summarize_plan_counts_keyword_gap():

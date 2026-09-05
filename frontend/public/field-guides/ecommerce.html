@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A spec-sheet walkthrough for the Ecommerce Writer — product and collection pages, labeled and verified.">
+<title>Ecommerce Writer Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bitter:wght@400;500;600;700&family=Work+Sans:wght@400;500;600;700&family=PT+Mono&display=swap">
+<style>
+  :root{
+    --paper:#F6F1E4; --paper-raised:#FFFDF6; --ink:#211E15; --ink-soft:#5A5443; --ink-faint:#948C74;
+    --line:#E5DABE; --line-strong:#D0C1A0;
+    --label:#B8842A; --label-ink:#835F1D; --label-soft:#F3E6C7;
+    --verified:#2E6E63; --verified-ink:#1F4B43; --verified-soft:#DCEAE6;
+    --shadow: 0 1px 2px rgba(33,30,21,0.07), 0 10px 26px rgba(33,30,21,0.06); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#1A1710; --paper-raised:#221E15; --ink:#EFE7D2; --ink-soft:#BAB093; --ink-faint:#7E765E;
+      --line:#3A3220; --line-strong:#4C4229;
+      --label:#E0A94F; --label-ink:#F2C87F; --label-soft:#33260F;
+      --verified:#6BAE9E; --verified-ink:#A6D9CB; --verified-soft:#17281F;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#1A1710; --paper-raised:#221E15; --ink:#EFE7D2; --ink-soft:#BAB093; --ink-faint:#7E765E;
+    --line:#3A3220; --line-strong:#4C4229;
+    --label:#E0A94F; --label-ink:#F2C87F; --label-soft:#33260F;
+    --verified:#6BAE9E; --verified-ink:#A6D9CB; --verified-soft:#17281F;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Work Sans", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Bitter", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--label-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--label); outline-offset:2px; }
+  code,.mono{ font-family:"PT Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"PT Mono",monospace; font-size:0.7rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--label-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Bitter",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"PT Mono",monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Spec label — the one diagram only this subject has */
+  .labelwrap{ padding:1.9rem 0 2.1rem; }
+  .label-cap{ font-family:"PT Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.9rem; }
+  .speclabel{ max-width:520px; border:1.5px solid var(--ink); border-radius:4px; background:var(--paper-raised); box-shadow:var(--shadow); padding:1.1rem 1.3rem 1.3rem; position:relative; }
+  .speclabel-title{ font-family:"Bitter",serif; font-weight:700; font-size:1.05rem; margin:0 0 0.15rem; }
+  .speclabel-sub{ font-family:"PT Mono",monospace; font-size:0.72rem; color:var(--ink-faint); margin:0 0 0.8rem; }
+  .specrow{ display:flex; justify-content:space-between; gap:1rem; padding:0.4rem 0; border-bottom:1px dashed var(--line-strong); font-size:0.86rem; }
+  .specrow:last-child{ border-bottom:none; }
+  .specrow .k{ color:var(--ink-faint); font-family:"PT Mono",monospace; font-size:0.76rem; }
+  .specrow .v{ font-weight:600; text-align:right; }
+  .stamp-verified{ position:absolute; top:1rem; right:1rem; border:2px solid var(--verified); color:var(--verified-ink); font-family:"PT Mono",monospace; font-weight:700; font-size:0.62rem; letter-spacing:0.08em; text-transform:uppercase; padding:0.3rem 0.55rem; border-radius:999px; transform:rotate(4deg); background:var(--verified-soft); }
+  .label-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:42rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"PT Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--label-ink); border-left-color:var(--label); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"PT Mono",monospace; font-size:0.82rem; color:var(--label-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .caution{ position:relative; background:var(--label-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .caution::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--label); border-radius:2px; }
+  .caution-label{ font-family:"PT Mono",monospace; font-size:0.64rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--label-ink); font-weight:700; margin:0 0 0.3rem; }
+  .caution p{ margin:0; }
+
+  .verified-note{ background:var(--verified-soft); border-left:3px solid var(--verified); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .verified-note p{ margin:0; }
+  .verified-note strong{ color:var(--verified-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"PT Mono",monospace; font-size:0.63rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"PT Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--label-soft); border-color:var(--label); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="12" y="8" width="34" height="46" rx="2" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"/>
+          <line x1="18" y1="18" x2="40" y2="18" stroke="var(--ink-faint)" stroke-width="1.1"/>
+          <line x1="18" y1="24" x2="40" y2="24" stroke="var(--ink-faint)" stroke-width="1.1"/>
+          <line x1="18" y1="30" x2="34" y2="30" stroke="var(--ink-faint)" stroke-width="1.1"/>
+          <circle cx="47" cy="42" r="10" fill="var(--verified-soft)" stroke="var(--verified)" stroke-width="1.6" transform="rotate(-8 47 42)"/>
+          <path d="M42 42 L46 46 L53 38" fill="none" stroke="var(--verified)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" transform="rotate(-8 47 42)"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Content</p>
+        <h1>Ecommerce Writer, spec to shelf</h1>
+        <p class="dek">Product and collection pages, grounded in real facts, labeled with what
+          was verified and what wasn't. This is how to read the sheet before you ship it.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">10–12</span><span class="meta-label">Minutes per page</span></div>
+      <div class="meta-item"><span class="meta-num tnum">75</span><span class="meta-label">Reoptimize threshold</span></div>
+      <div class="meta-item"><span class="meta-num tnum">2</span><span class="meta-label">Page types</span></div>
+    </div>
+    <div class="labelwrap">
+      <p class="label-cap">A generated page's spec panel — what got auto-sourced, and what still needs you</p>
+      <div class="speclabel">
+        <span class="stamp-verified">verified</span>
+        <div class="speclabel-title">BPC-157 — Research Peptide</div>
+        <div class="speclabel-sub">auto-sourced public specifications</div>
+        <div class="specrow"><span class="k">CAS number</span><span class="v">137525-51-0</span></div>
+        <div class="specrow"><span class="k">Molecular formula</span><span class="v">C₆₂H₉₈N₁₆O₂₂</span></div>
+        <div class="specrow"><span class="k">Molecular weight</span><span class="v tnum">1419.53 g/mol</span></div>
+        <div class="specrow"><span class="k">Solubility</span><span class="v">Water-soluble</span></div>
+        <div class="specrow"><span class="k">Price, dosing, claims</span><span class="v" style="color:var(--label-ink)">— never auto-sourced —</span></div>
+      </div>
+      <p class="label-note">Identity and handling facts get researched and cited. Price, dosing,
+        and clinical claims never do — those stay a gap for you to fill, on purpose.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Write a new page</a></li>
+        <li><a href="#s3" data-target="s3">03 · Review the auto-sourced facts</a></li>
+        <li><a href="#s4" data-target="s4">04 · Score &amp; reoptimize</a></li>
+        <li><a href="#s5" data-target="s5">05 · Saved Pages &amp; Drafts</a></li>
+        <li><a href="#s6" data-target="s6">06 · Publishing</a></li>
+        <li><a href="#s7" data-target="s7">07 · What's not built yet</a></li>
+        <li><a href="#s8" data-target="s8">08 · Troubleshooting</a></li>
+        <li><a href="#s9" data-target="s9">09 · Practice exercises</a></li>
+        <li><a href="#s10" data-target="s10">10 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">Brand Voice and ICP are shared with the rest of the suite — set once,
+          used everywhere. A house template (Step 2) makes every new product page mirror a
+          reference layout you already like, adapting the copy per product rather than reusing
+          generic boilerplate. Collections don't use a house template.</p>
+        <div class="caution">
+          <p class="caution-label">read before you ship</p>
+          <p>Public specs get auto-researched, but always click through and confirm the cited
+            source actually says what the page claims — the panel is flagged "verify" for a
+            reason.</p>
+        </div>
+        <p>A frozen client can't generate or reoptimize.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Write a new page</h2></div>
+        <p>Open the client → <strong>Ecommerce Writer</strong> → <strong>New Page</strong>. Pick
+          <strong>Product</strong> or <strong>Collection</strong> at the top — it changes the
+          form and the writing rubric underneath.</p>
+        <ul>
+          <li><strong>Target keyword</strong> — e.g. "wireless noise-cancelling headphones."</li>
+          <li><strong>Source URL (optional)</strong> — scrapes a live page for real facts.</li>
+          <li><strong>Product details (optional)</strong> — paste specs/price/variants directly.</li>
+          <li><strong>Notes (optional)</strong> — freeform guidance for the writer.</li>
+        </ul>
+        <div class="verified-note">
+          <p><strong>Product vs. Collection.</strong> Product is the workhorse — one page for one
+            item, and most sessions will be this. Collection is for a category/listing page that
+            groups several products together — use it only when the client's site actually has a
+            category landing page structure worth covering, not for every product.</p>
+          <p><strong>Source URL vs. Product details.</strong> Give a Source URL when a real page
+            already exists somewhere (the client's own site, a manufacturer's page, a competitor's
+            listing) — it scrapes real facts instead of generic ones. Paste into Product details
+            when you have the specs/price/variants in hand but no single URL to point at — a spec
+            sheet, an internal doc, a conversation with the client. Do both when you have a
+            starting URL but want to add or correct specifics it's missing.</p>
+        </div>
+        <p><strong>House template (products only)</strong> — paste a reference product page's URL
+          and click Save to set the client's default; the writer reproduces that page's section
+          structure for every product page after.</p>
+        <div class="verified-note">
+          <p><strong>When a house template is worth setting.</strong> Worth it once you've
+            generated a page or two you're happy with and want every future product page to match
+            that layout automatically — most useful on a client with many similar products
+            (variants of one line, a consistent catalog structure). Skip it for a one-off page or
+            a client whose products don't share a common shape.</p>
+        </div>
+        <p>Click <strong>Create product/collection page</strong> — 10–12 minutes, or
+          <strong>Leave &amp; finish in the background</strong>. <strong>"Bulk from a keyword
+          list"</strong> switches to a mode where each line becomes its own background job with a
+          shared batch-wide notes field (keyword-only — no per-item facts in bulk mode yet).</p>
+        <div class="verified-note">
+          <p><strong>Single page vs. bulk.</strong> Use single-page generation whenever you have
+            real facts to hand it (a Source URL or pasted details) — bulk mode can't take
+            per-item facts yet, so a bulk-generated page leans more on the model's own research.
+            Bulk is the better call for a long keyword list where individually sourcing facts for
+            each one isn't worth the time, or for a first pass you plan to review and reoptimize
+            with real facts afterward.</p>
+        </div>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Review the auto-sourced facts</h2></div>
+        <p>A green <strong>"Auto-sourced public specs — verify"</strong> panel lists each
+          researched fact with its value, unit, and a source link — identity/handling specs (CAS,
+          formula, weight, solubility, reconstitution) and receptor-pharmacology facts only.
+          Clinical efficacy, dosing, and regulatory claims are hard-excluded, never researched.</p>
+        <div class="verified-note">
+          <p>A <strong>"How to reach 100/100"</strong> card, a Search coverage panel, and the
+            brand-voice panel all sit alongside it — plus Preview / HTML / JSON-LD Schema tabs and
+            a featured-image picker at the bottom of the page.</p>
+        </div>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Score &amp; reoptimize</h2></div>
+        <p><strong>Score tab</strong> — composite score and per-engine breakdown, no rewriting. A
+          freshly generated page also gets a one-click <strong>"Score &amp; Improve"</strong>
+          shortcut straight into this view.</p>
+        <p><strong>Reoptimize tab</strong> — a "Page URLs — one per line" box (one line handles a
+          single page fine); each line can carry <code>URL | keyword</code>. Or switch the mode
+          pills to "Discover from site" and click <strong>Discover product pages / Discover
+          collection pages</strong> to crawl the client's sitemap for candidates.</p>
+        <div class="verified-note">
+          <p><strong>Score first, or straight to Reoptimize?</strong> Score first when you're not
+            sure a page actually needs work — it's the read-only, no-cost check. Go straight to
+            Reoptimize when you already know it's underperforming (a client complaint, a rank
+            drop) and just want it fixed.</p>
+          <p><strong>Paste URLs vs. Discover from site.</strong> Paste when you already know
+            exactly which pages need attention. Use Discover when you don't have a working list of
+            the client's product/collection URLs — it crawls the sitemap for you, which is
+            slower but saves you from hunting them down by hand.</p>
+        </div>
+        <p>A page gets rewritten when it's below <strong>75/100 on SEO, or fails its brand-voice
+          bar</strong> — clearing both is a deliberate skip. Add your own notes to force a rewrite
+          regardless of score. Up to 3 rewrite-and-rescore passes run under the hood, keeping the
+          best result.</p>
+        <div class="verified-note">
+          <p><strong>When to force a rewrite with notes.</strong> A page can clear both bars and
+            still be worth touching — new specs to add, a promotion to mention, a competitor
+            angle you want addressed. The score gate protects against needless spend; your own
+            notes are the deliberate override when you know something the scorer doesn't.</p>
+        </div>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Saved Pages &amp; Drafts</h2></div>
+        <p>Same soft-delete pattern as Local SEO: delete from Saved Pages → lands in Drafts →
+          Restore or delete permanently, or <strong>Empty drafts</strong> clears it all.</p>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Publishing</h2></div>
+        <p><strong>Publish to Google Doc</strong> and <strong>Publish to WordPress</strong> live
+          on the detail view. <strong>Re-publishing creates a new Doc/post each time</strong> — it
+          does not update the previous one, so avoid clicking Publish repeatedly on a page already
+          live.</p>
+        <div class="verified-note">
+          <p><strong>Which destination.</strong> Google Doc is the review copy — use it when the
+            client wants to sign off before anything goes live. WordPress publishes straight to
+            the client's actual site — reserve it for a page you're confident is ready, since
+            (per the note above) hitting Publish again doesn't update the live one, it creates a
+            second post.</p>
+        </div>
+        <p>Blocked by a voice violation? Fix the wording, or <strong>Publish anyway</strong> to
+          override deliberately — same rule as everywhere else in the suite.</p>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>What's not built yet</h2></div>
+        <table><tbody>
+          <tr><td class="term">Per-item bulk facts</td><td>Bulk generation is keyword-only — the source URL / product-details box is single-page only.</td></tr>
+          <tr><td class="term">Score History tab</td><td>Local SEO has one; Ecommerce doesn't, even though the data exists.</td></tr>
+          <tr><td class="term">GitHub/WordPress as reoptimize destinations</td><td>Only Google Doc auto-publish is wired in; use Saved Pages afterward.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Specs look generic or invented</td><td>Give it a Source URL or paste real details into Product details.</td></tr>
+          <tr><td class="term">Reoptimize skipped a page</td><td>Under 75/100 and passing voice, by default. Add a note to force it regardless.</td></tr>
+          <tr><td class="term">Want a per-generation house template</td><td>Not exposed in this form — only the persistent client default is.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>Practice exercises</h2></div>
+        <ul class="exercise">
+          <li>Generate a product page from a Source URL and read the auto-sourced specs panel.</li>
+          <li>Set a house template, then generate a second product and compare the structure.</li>
+          <li>Score a page, then Reoptimize it with a note and check the before/after.</li>
+          <li>Publish to Google Doc, then publish again and confirm it created a new Doc.</li>
+        </ul>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Write one page</td><td><strong>New Page</strong> → pick Product/Collection</td></tr>
+            <tr><td class="term">Mirror a reference layout</td><td>House template panel</td></tr>
+            <tr><td class="term">Ground the copy in real specs</td><td>Source URL or Product details</td></tr>
+            <tr><td class="term">Write many at once</td><td>"Bulk from a keyword list"</td></tr>
+            <tr><td class="term">Check without rewriting</td><td><strong>Score</strong></td></tr>
+            <tr><td class="term">Fix an underperformer</td><td><strong>Reoptimize</strong> → paste URL, or Discover</td></tr>
+            <tr><td class="term">Ship a page</td><td>Google Doc / WordPress</td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">Ecommerce Writer Field Guide · AR Tools new-hire series · full text at <code>docs/ecommerce-writer-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

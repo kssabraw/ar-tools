@@ -35,6 +35,92 @@ export interface LocalSeoPageListItem {
   published_doc_url?: string | null
   published_url?: string | null
   published_at?: string | null
+  // Target vs actual length + the deterministic verdict against the page spec
+  // (docs/modules/local-seo-page-spec-plan-v1_0.md). Null for pre-spec pages.
+  target_words?: number | null
+  actual_words?: number | null
+  length_status?: 'in_band' | 'over_length' | 'under_length' | null
+  // Structure verdict vs the spec (Phase 4): ok / drift. Null for pre-spec pages.
+  structure_status?: 'ok' | 'drift' | null
+}
+
+export interface StructureIssue {
+  key?: string | null
+  code: string
+  detail: string
+  advisory?: boolean
+}
+
+// ── page spec (length + structure kept on file) ─────────────────────────────
+
+export interface PageSpecSection {
+  key: string
+  level: 'H1' | 'H2'
+  required: boolean
+  intent: string
+  heading_pattern?: string
+  reference_heading?: string | null
+  min_words: number
+  max_words: number
+  blocks?: { type: string; count: number; items?: number }[]
+  source: 'template' | 'reference' | string
+  subsections?: { min: number; max: number }
+  items?: { min: number; max: number }
+}
+
+export interface PageSpec {
+  schema_version: number
+  id?: string | null
+  version?: number | null
+  edited_at?: string | null
+  keyword: string
+  location: string
+  location_code?: number | null
+  page_type: string
+  generated_at?: string
+  // 'client' = the client's reference layout IS the structure (its sections,
+  // order and blocks override the app's template); 'template' = the default
+  // 12-section skeleton (no usable reference on file, or the override is off).
+  structure_mode?: 'client' | 'template'
+  total: {
+    min: number; target: number; max: number; basis: 'serp' | 'fallback'
+    released_min?: number
+    // set when the client's section floors lifted the band above the SERP (2026-09-03)
+    serp_min?: number; serp_target?: number; serp_max?: number; lifted_by?: 'client_floors'
+  }
+  structure: { max_sections: number; max_h3_per_h2: number; faq: { min: number; max: number } }
+  sections: PageSpecSection[]
+  provenance: {
+    reference?: { page_type?: string | null; url?: string | null; total_words?: number | null; usable: boolean; reason?: string | null }
+    serp?: { avg_words?: number | null; target?: number | null; competitor_pages?: number | null }
+    template?: string
+    fallback_reason?: string | null
+    flags?: string[]
+  }
+  validation_errors?: string[]
+}
+
+export interface PageSpecEnvelope {
+  spec: PageSpec
+  id?: string | null
+  version?: number | null
+  edited_at?: string | null
+  validation_errors: string[]
+  versions: { id: string; version: number; edited_at?: string | null; superseded_at?: string | null; created_at: string }[]
+}
+
+export interface LengthReport {
+  pages: number
+  with_spec: number
+  in_band: number
+  over_length: number
+  under_length: number
+  in_band_pct: number | null
+  avg_overage_pct: number | null
+  structure_checked: number
+  structure_ok: number
+  structure_drift: number
+  recent: { id: string; keyword: string; target_words: number; actual_words: number; length_status: string; structure_status?: string | null; created_at: string }[]
 }
 
 /**
@@ -92,6 +178,9 @@ export interface LocalSeoPageDetail extends LocalSeoPageListItem {
   schema_json: string
   content_gaps: ContentGap[]
   voice_violations?: VoiceCompliance | null
+  // The structure verdict's issue list (required sections, order, caps, block
+  // composition, FAQ range, per-section intent + sentiment). Null without a spec.
+  structure_issues?: StructureIssue[] | null
   // Full per-engine scoring verdict; carries serp_signal_coverage (entities /
   // zones) surfaced in the Search-coverage panel. Absent on older saved pages.
   engine_scores?: Record<string, EngineScore> | null

@@ -116,13 +116,74 @@ _inflight_jobs: set[str] = set()
 _CLAIM_SCAN_LIMIT = 10
 
 
+def order_candidates_by_fairness(
+    candidates: list[dict], running_by_client: dict[str, int], max_per_client: int | None
+) -> list[dict]:
+    """Reorder bulk-lane claim candidates so a client already at the per-client
+    in-flight cap is tried LAST. One client's bulk batch thus yields a slot to
+    any OTHER client with pending work, but never IDLES a slot: a capped client
+    alone in the window is still claimed (just after everyone else), so the cap
+    is contention-only. Stable — the priority/scheduled_at order is preserved
+    within the under-cap and at-cap groups. Pure; no cap (or 0) → order unchanged.
+
+    NB: this only engages when a client can hold >1 slot at once, i.e. with more
+    than one bulk worker (bulk_lane_workers > 1). At the default single bulk
+    worker a client's running count never exceeds 1, so the cap is a no-op."""
+    if not max_per_client:
+        return candidates
+    return sorted(
+        candidates,
+        key=lambda j: running_by_client.get(j.get("entity_id"), 0) >= max_per_client,
+    )
+
+
+def _running_counts_by_client(
+    job_types: list[str] | None, exclude_types: list[str] | None,
+    priority_min: int | None, priority_max: int | None,
+) -> dict[str, int]:
+    """RUNNING job count per client (entity_id) under the SAME filter the lane
+    claims with — the bulk lane's per-client fairness input, one query per claim
+    tick. Best-effort: a failure returns {} so the cap simply doesn't engage."""
+    try:
+        q = get_supabase().table("async_jobs").select("entity_id").eq("status", "running")
+        if job_types:
+            q = q.in_("job_type", job_types)
+        if exclude_types:
+            q = q.not_.in_("job_type", exclude_types)
+        if priority_min is not None:
+            q = q.gte("priority", priority_min)
+        if priority_max is not None:
+            q = q.lte("priority", priority_max)
+        rows = q.execute().data or []
+    except Exception as exc:  # pragma: no cover - best-effort
+        logger.warning("job_worker.running_count_failed", extra={"error": str(exc)})
+        return {}
+    counts: dict[str, int] = {}
+    for r in rows:
+        cid = r.get("entity_id")
+        if cid:
+            counts[cid] = counts.get(cid, 0) + 1
+    return counts
+
+
 async def _claim_next_job(
-    job_types: list[str] | None = None, exclude_types: list[str] | None = None
+    job_types: list[str] | None = None,
+    exclude_types: list[str] | None = None,
+    priority_min: int | None = None,
+    priority_max: int | None = None,
+    max_per_client: int | None = None,
 ) -> dict | None:
-    """Claim the oldest claimable pending job (optionally restricted to
-    `job_types` — the interactive/fanout lane's filter — or with `exclude_types`
-    held back for the MAIN lane, so long dedicated-lane jobs never block it) and
-    atomically mark it running.
+    """Claim the highest-priority, then oldest, claimable pending job (optionally
+    restricted to `job_types` — the interactive/fanout lane's filter — or with
+    `exclude_types` held back for the MAIN lane, so long dedicated-lane jobs
+    never block it) and atomically mark it running.
+
+    Ordering is `priority DESC, scheduled_at ASC` (see `services/job_priority.py`):
+    an interactive job (0) beats a bulk-batch item (-1) however old the batch
+    rows are — the old scheduled_at stagger decayed within ~7 jobs of a batch and
+    left clicks queued behind 30+ page generations. `priority_min` /
+    `priority_max` fence a lane to a band: the INTERACTIVE lane claims only
+    `>= 0` so it is always free for a click; the BULK lanes claim only `<= -1`.
 
     Scans a small window of the oldest rows rather than just the single oldest:
     an exhausted (`attempts >= max_attempts`) pending row would otherwise sit at
@@ -138,9 +199,19 @@ async def _claim_next_job(
             query = query.in_("job_type", job_types)
         if exclude_types:
             query = query.not_.in_("job_type", exclude_types)
-        result = query.order("scheduled_at").limit(_CLAIM_SCAN_LIMIT).execute()
+        if priority_min is not None:
+            query = query.gte("priority", priority_min)
+        if priority_max is not None:
+            query = query.lte("priority", priority_max)
+        result = (
+            query.order("priority", desc=True).order("scheduled_at")
+            .limit(_CLAIM_SCAN_LIMIT).execute()
+        )
         jobs = result.data or []
 
+        # Pre-pass: fail exhausted rows (they'd freeze the lane — nothing settles a
+        # *pending* row) and collect the live candidates.
+        candidates: list[dict] = []
         for job in jobs:
             if job.get("attempts", 0) >= job.get("max_attempts", 2):
                 # Exhausted but never settled to a terminal state (e.g. a failed
@@ -161,8 +232,22 @@ async def _claim_next_job(
                                "attempts": job.get("attempts", 0)},
                     )
                 continue
+            candidates.append(job)
 
-            # Atomic claim: the status='pending' guard means when the two in-process
+        # Bulk-lane per-client fairness: try under-cap clients first so one
+        # client's batch can't hold every bulk slot while another client's batch
+        # waits (see order_candidates_by_fairness — a no-op at one bulk worker).
+        # Best-effort: the running count and the atomic claim below aren't one
+        # operation, so a brief overshoot past the cap self-corrects next tick.
+        if max_per_client and candidates:
+            candidates = order_candidates_by_fairness(
+                candidates,
+                _running_counts_by_client(job_types, exclude_types, priority_min, priority_max),
+                max_per_client,
+            )
+
+        for job in candidates:
+            # Atomic claim: the status='pending' guard means when the in-process
             # lanes race for the same row, exactly one PATCH matches — the loser
             # gets an empty result and steps to the next candidate.
             update_result = (
@@ -264,6 +349,11 @@ def plan_job_retry(
         "started_at": None,
         "scheduled_at": when.isoformat(),
         "error": f"transient (attempt {attempts}/{max_attempts}, retrying in {delay}m): {error}"[:500],
+        # Reset the progress the failed attempt left behind ("Scoring your page…
+        # 90%") so a poller doesn't show a frozen near-done spinner through the
+        # backoff; the message names the wait instead.
+        "progress": None,
+        "progress_message": f"Temporary provider error — retrying in {delay} min",
     }, "requeued"
 
 
@@ -781,6 +871,18 @@ async def _process_job(job: dict) -> None:
         await gbp_posts_service.run_generate_job(job)
     elif job_type == "gbp_posts_sync":
         await gbp_posts_service.run_sync_job(job)
+    elif job_type == "gbp_profile_apply":
+        from services import gbp_profile_service
+        await gbp_profile_service.run_apply_job(job)
+    elif job_type == "gbp_profile_draft":
+        from services import gbp_profile_service
+        await gbp_profile_service.run_draft_job(job)
+    elif job_type == "gbp_profile_sync":
+        from services import gbp_profile_service
+        await gbp_profile_service.run_sync_job(job)
+    elif job_type == "gbp_profile_monitor":
+        from services import gbp_monitor
+        await gbp_monitor.run_monitor_job(job)
     elif job_type == "gsc_materialize":
         await run_gsc_materialize_job(job)
     elif job_type == "dataforseo_rank":
@@ -823,6 +925,10 @@ async def _process_job(job: dict) -> None:
         from services.local_seo_matrix_store import run_suggest_job
 
         await run_suggest_job(job)
+    elif job_type == "local_seo_matrix_publish":
+        from services.local_seo_matrix_store import run_publish_job
+
+        await run_publish_job(job)
     elif job_type == "local_seo_generate":
         await run_generate_job(job)
     elif job_type == "local_seo_reoptimize_url":
@@ -908,6 +1014,10 @@ async def _process_job(job: dict) -> None:
     elif job_type == "autonomy_run":
         from services.autonomy_executor import run_autonomy_job
         await run_autonomy_job(job)
+    elif job_type == "guide_sync":
+        from services import guide_sync
+
+        await guide_sync.run_guide_sync_job(job)
     elif job_type == "internal_link_analyze":
         await run_internal_link_analyze_job(job)
     elif job_type == "internal_link_apply":
@@ -1060,6 +1170,9 @@ async def job_worker(
     job_types: list[str] | None = None,
     lane: str = "main",
     exclude_types: list[str] | None = None,
+    priority_min: int | None = None,
+    priority_max: int | None = None,
+    max_per_client: int | None = None,
 ) -> None:
     """Background loop: poll async_jobs every N seconds and process one job per tick.
 
@@ -1068,7 +1181,10 @@ async def job_worker(
     Fanout pipeline jobs, which get their own dedicated lane so a ~10-min run
     can't stall the reaper or other background work (issue #686). The INTERACTIVE
     lane is restricted to short, user-awaited job types (`interactive_job_types`)
-    so a just-clicked action never waits behind a long background job.
+    AND to non-background priority, so a just-clicked action never waits behind a
+    long background job or a bulk batch. The BULK lanes (`bulk_lane_workers`
+    wide) claim only background-priority rows — a batch's throughput is that
+    knob, not "whichever lanes happen to be idle" (2026-09-02).
     The claim's status='pending' guard makes the lanes race-safe.
     """
     interval = settings.job_worker_poll_interval_seconds
@@ -1078,7 +1194,9 @@ async def job_worker(
         try:
             if lane == "main":
                 await _reap_stale_jobs()
-            job = await _claim_next_job(job_types, exclude_types)
+            job = await _claim_next_job(
+                job_types, exclude_types, priority_min, priority_max, max_per_client
+            )
             if job:
                 logger.info(
                     "async_job_claimed",

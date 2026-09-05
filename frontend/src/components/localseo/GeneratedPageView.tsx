@@ -10,6 +10,7 @@ import type { LocalSeoPageDetail, SocialPostsResult } from './types'
 import { SearchCoveragePanel } from '../coverage/SearchCoveragePanel'
 import { RelatedPagesList } from './RelatedPagesList'
 import { VoiceCompliancePanel } from './VoiceCompliancePanel'
+import { LengthChip, PageSpecPanel, StructureIssues } from './PageSpecPanel'
 import { BulkCreateBar } from './BulkCreateBar'
 import { useSiloPlan } from './useSiloPlan'
 import { useBulkCreate } from './useBulkCreate'
@@ -299,6 +300,15 @@ export function GeneratedPageView({
             <div className="seo-preview" dangerouslySetInnerHTML={{ __html: content_html }} />
           </div>
           <VoiceCompliancePanel compliance={voice_violations} />
+          {(page.target_words != null || page.actual_words != null) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12, color: '#64748b' }}>
+              <span style={{ fontWeight: 600, color: '#0f172a' }}>Length</span>
+              <LengthChip target={page.target_words} actual={page.actual_words} status={page.length_status} />
+              {page.length_status === 'over_length' && <span>Over its spec band after the trim passes — review the page spec below or reoptimize before publishing.</span>}
+            </div>
+          )}
+          <StructureIssues status={page.structure_status} issues={page.structure_issues} />
+          <PageSpecPanel clientId={clientId} keyword={keyword} location={location} />
           <SearchCoveragePanel coverage={engine_scores?.serp_signal_coverage} />
           {content_gaps && content_gaps.length > 0 && (
             <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, overflow: 'hidden' }}>

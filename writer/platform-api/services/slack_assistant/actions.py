@@ -1484,6 +1484,58 @@ async def _act_reoptimize_page(client_id: str, args: Optional[dict] = None) -> s
     return f"✅ Reoptimizing {url} — the improved version lands when scoring completes."
 
 
+async def _stage_update_gbp_profile(client_id: str, args: dict) -> tuple[str, dict | str]:
+    from services import gbp_profile_service as gps
+
+    if not gps.is_enabled():
+        return "reply", "The GBP Profile Editor isn't turned on yet — nothing to stage."
+    field = (args.get("field") or "").strip().lower()
+    if field not in ("description", "services"):
+        return "reply", "I can stage a *description* or *services* edit. Hours are entered by hand in the editor."
+    location_row_id = gps.primary_location_row_id(client_id)
+    if not location_row_id:
+        return "reply", (
+            "No registered Google Business Profile for this client — register the listing "
+            "in the Business Profile tool first."
+        )
+    text = (args.get("text") or "").strip() if field == "description" else ""
+    if text:
+        verb = "stage a new business description for review"
+    else:
+        verb = f"draft a {field} edit with AI and stage it for review"
+    return "confirm", {
+        "field": field, "text": text, "location_row_id": location_row_id,
+        "_confirm": f"{verb} — it will NOT be applied (a human clicks Apply in the Business Profile editor)",
+    }
+
+
+async def _act_update_gbp_profile(client_id: str, args: Optional[dict] = None) -> str:
+    from services import gbp_profile_service as gps
+
+    args = args or {}
+    if not gps.is_enabled():
+        return "The GBP Profile Editor isn't turned on yet."
+    field = (args.get("field") or "").strip().lower()
+    location_row_id = args.get("location_row_id") or gps.primary_location_row_id(client_id)
+    if not location_row_id:
+        return "No registered Google Business Profile for this client — register it first."
+    text = (args.get("text") or "").strip() if field == "description" else ""
+    try:
+        if text:
+            await gps.stage_strategist_draft(client_id, location_row_id, "description", text)
+            return (
+                "✅ Staged a description edit for review — open the Business Profile editor to "
+                "review current → proposed and *Apply*. (Nothing was applied.)"
+            )
+        gps.enqueue_draft(client_id, location_row_id, field, None, source="strategist")
+    except Exception as exc:  # noqa: BLE001 — surface a friendly reason
+        return f"Couldn't stage that edit: {getattr(exc, 'detail', None) or exc}"
+    return (
+        f"✅ Drafting a {field} edit with AI — it'll land in the Business Profile editor's "
+        "review queue for a human to review & *Apply*. (Nothing is applied automatically.)"
+    )
+
+
 # (tool name) → {label, paid, run} + optional:
 #   note   — the parenthetical in the reply-*yes* confirm (default: API-budget
 #            wording). `paid` really means "confirm-gated": paid API spend OR
@@ -1676,6 +1728,27 @@ _ACTIONS: dict[str, dict] = {
                 },
             },
             "required": ["field", "value"],
+        },
+    },
+    "update_gbp_profile": {
+        "label": "stage a GBP profile edit",
+        "paid": True,
+        "note": "stages a Google Business Profile description/services edit for review — it does NOT apply (a human clicks Apply in the editor)",
+        "run": _act_update_gbp_profile,
+        "stage": _stage_update_gbp_profile,
+        "params": {
+            "properties": {
+                "field": {
+                    "type": "string",
+                    "enum": ["description", "services"],
+                    "description": "Which GBP field to draft. Only description and services can be AI-drafted; hours are entered by hand.",
+                },
+                "text": {
+                    "type": "string",
+                    "description": "OPTIONAL. A specific business description to stage verbatim (description only). Omit to have the AI draft it.",
+                },
+            },
+            "required": ["field"],
         },
     },
     "add_target_cities": {

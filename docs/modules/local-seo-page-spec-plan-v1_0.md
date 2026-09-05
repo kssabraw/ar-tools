@@ -1,0 +1,142 @@
+# Local SEO Page Spec — length & structure as a kept, enforceable file (plan v1.0)
+
+**Status:** approved 2026-09-02 (owner) — build in phases below.
+**Owner decisions:** the spec format (§3) is the one shown from Wheelhouse IT Fort Lauderdale's stored reference structure, extended with min/max bands; the guardrails in §5 are the agreed set; no new prompt rules.
+
+## 1. Why
+
+Page length and structure have been a recurring defect on Local SEO pages. The SERP-length control (#781, 2026-08-27) and the three bypass fixes (#966, 2026-09-02) each closed a gap, but on the 15 pages that *did* get a target since Aug 27, only **1 landed within 10% of it**; the rest ran 16–33% over before any outage or time-budget starvation. That is the control loop's normal-case result, not a bug.
+
+Root causes, measured:
+
+1. **Length is requested, not enforced.** The writer gets a `TOTAL WORD BUDGET` line and every corrective step is another whole-page LLM rewrite that asks again. The only deterministic part is the measurement afterwards (`length_fit`).
+2. **Three structure sources compete and the writer reconciles them in its head.** The nlp 12-section template carries absolute per-section counts whose *minimums* alone sum to ~1,900 words; the client's reference layout (`clients.page_structures`, rescaled by `page_structure_render.scale_analysis_words`) and "cover every competitor heading + information gain" sit on top; then hard count floors stack (multiple H2s, every sub-service as an H3, ≥4 FAQ, ≥4 benefit pairs, ≥3 differentiators). Those floors do not fit into a 1,300-word target.
+3. **The gates are downstream and weak.** `length_fit` is 10% of the composite; the generate trim fires only ≥40% over; the reoptimize loop is composite-gated; a 25%-over page passes everything by design.
+4. **The combined spec is thrown away.** The reference layout + SERP target are merged at generate time inside `generate_page` and never persisted — nobody can see what the writer was told, nobody can edit it, and it is rebuilt from scratch every run.
+
+## 2. What exists (reuse, don't rebuild)
+
+| Piece | Where | Reuse |
+|---|---|---|
+| Reference page structures per client × page type (outline, intents, blocks, exact per-section `word_count`) | `clients.page_structures` via `services/page_structure_scraper.py` | The **layout input**. Wheelhouse FL local landing: 38 outline rows / 972 words; FCR local landing: 22 / 2,358. |
+| SERP analysis per keyword × location (`serp_avg_word_count`, `serp_word_target`, `competitor_headings`) | `keyword_analyses` via `services/analysis_cache.py` | The **length input**. |
+| Deterministic outline extractor (`extract_outline_from_html`) + fidelity scorer | `services/page_structure_eval.py` | Measures the *generated* page per section. |
+| Section-scoped edits (`split_sections` / `apply_section_edits` / `section_digest`) | `writer/nlp-api/section_edit.py` | Targeted trims by stable section key. |
+| Deterministic length engine | `writer/nlp-api/length_fit.py` | Whole-page band scoring (kept). |
+| Structure gate (keep-best regen vs reference) | `services/structure_gate.py` | Replaced on the Local SEO path by the spec gate (§6, Phase 2); untouched for Ecommerce. |
+
+## 3. The spec (format)
+
+One JSON document per **client × keyword × location**, produced by the analysis step, stored, downloadable, editable. Schema v1:
+
+```json
+{
+  "schema_version": 1,
+  "client_id": "…", "keyword": "roof restoration", "location": "Melbourne,Victoria,Australia", "location_code": 1000567,
+  "page_type": "local_landing",
+  "generated_at": "2026-09-02T…", "edited_at": null,
+  "total": { "min": 1309, "target": 1571, "max": 1728, "basis": "serp" },
+  "structure": { "max_sections": 12, "max_h3_per_h2": 6, "faq": { "min": 4, "max": 7 } },
+  "sections": [
+    { "key": "intro",        "level": "H1", "required": true,  "intent": "hero",
+      "heading_pattern": "Exact keyword + 1–2 service entities", "min_words": 90, "max_words": 150,
+      "blocks": [{ "type": "paragraph", "count": 3 }], "source": "template" },
+    { "key": "usp",          "level": "H2", "required": true,  "intent": "value_prop", "min_words": 120, "max_words": 200, "blocks": [ … ], "source": "reference" },
+    { "key": "services",     "level": "H2", "required": true,  "intent": "service_detail", "min_words": 500, "max_words": 760,
+      "subsections": { "min": 3, "max": 6 }, "blocks": [ … ], "source": "reference+serp" },
+    { "key": "faq",          "level": "H2", "required": true,  "intent": "faq", "min_words": 160, "max_words": 420, "items": { "min": 4, "max": 7 }, "source": "template" },
+    { "key": "industries",   "level": "H2", "required": false, "intent": "coverage", "min_words": 0, "max_words": 60, "blocks": [{ "type": "list", "count": 1, "items": 12 }], "source": "reference" }
+  ],
+  "provenance": {
+    "reference": { "page_type": "local_landing", "url": "…", "analyzed_at": "…", "total_words": 972, "usable": true },
+    "serp":      { "keyword": "…", "location": "…", "analyzed_at": "…", "avg_words": 1309, "target": 1571, "competitor_pages": 15 },
+    "template":  "local_landing_v13",
+    "fallback_reason": null
+  }
+}
+```
+
+Rules that make it a spec rather than a measurement:
+
+- **Ranges, not one number.** Page band: `min` = SERP average, `max` = target + 10% (the band `length_fit` already gives full credit for). Section bands allocated from the layout's proportions (§4).
+- **Feasibility floors (owner ruling 2026-09-03).** In client mode a section's minimum is never below **80% of its own reference words** (`CLIENT_FLOOR_RATIO`); in either mode never below its **structural floor** (`structural_floor`: ~4 words per required list item, 25 per required H3 sub-section, 20 per quote — testimonials always two — the FAQ's words-per-item, plus a 30-word prose baseline). When the required sections' floors add up to more than the SERP band, **the page band is lifted to them** (`lift_page_band`: min = Σ floors, target = min × 1.2, max = target × 1.1; the SERP numbers stay on `total.serp_min/serp_target/serp_max`, `total.lifted_by = client_floors`) and the spec is flagged `client_length_over_serp` — **the client's length beats the SERP average whenever the client's reference is the longer**; the SERP average is then a record, not the minimum. Live trigger: Wheelhouse Orlando's 2,287-word reference on a 1,058-word suburb SERP scaled testimonials to a 6–7-word band and the 13-item services block to 22–28 words. `validate_spec` rejects a band its structural floor cannot fit (`structural_floor_does_not_fit:<key>`).
+- **Heading-only rows are folded into their parent** as a `list` block with `items` (Wheelhouse's 16 zero-word industry/testimonial headings). The writer never gets an empty-heading row to reproduce or pad.
+- **Stable `key` per section** (the nlp `<section id>` vocabulary: `intro`, `usp`, `offers`, `cta-primary`, `features`, `services`, `testimonials`, `cta-secondary`, `getting-started`, `geo`, `faq`; reference-derived extras get a slug key). Keys are what the section-scoped trim addresses.
+- **`required` flag.** Template mode: template must-haves (intro, both CTAs, geo, FAQ, schema) are required, reference-derived extras optional. Client mode: every client section with prose is required (it defines the page); a heading-only extra (a folded list) is optional; only `intro` is a hard must.
+- **Testimonials without reviews.** In client mode a reviews block the client's page has but the client has no review text for is `required:false` + `no_reviews:true` (the writer is told to OMIT it — never invent quotes); its minimum is released to the page (`total.released_min`). Pulling reviews (`review_intel` now backfills `clients.gbp.reviews`) rebuilds the spec with it required.
+- **`structure_mode`** (`client` | `template`) says which frame the section list is — and in client mode the spec block tells the writer the list REPLACES the template's Section 1–12 skeleton entirely, and the structure verdict treats a template section the client's page lacks as drift (removed by the fix loop).
+- **`source` on every section** and full **provenance** so every number is traceable to the reference, the SERP, or the template.
+- **Edits stick** (`edited_at` set): a re-analysis produces a new *candidate* spec and a diff; the edited spec stays active until the user accepts.
+
+## 4. Building the spec (pure, deterministic)
+
+`services/page_spec.py` (platform-api), no LLM, no I/O:
+
+1. **Length band** from the SERP analysis (`serp_avg_word_count`, `serp_word_target`); when absent, the market fallback target from #966 (`basis: "fallback"`, `fallback_reason` set) — never no band.
+2. **Layout** from the client's usable reference (`local_landing` preferred, else `location`), *validated* (§5.2); else the template's default section list.
+3. **Normalise the layout — the client's structure overrides the template (owner ruling 2026-09-02, `structure_mode: "client"`, config `local_seo_client_structure_overrides`, default on):** fold heading-only rows into their parent; then every reference section becomes a spec section **in the client's order**, keeping its own level, intent, heading and blocks — nothing is merged into an absorber and **no template section is inserted**. A section whose intent maps cleanly to a free template key takes it (the first H1 → `intro` always; `value_prop→usp/features`, `cta→cta-primary/secondary`, first `service_detail→services`, `process→getting-started`, `coverage→local`, `faq→faq`, real reviews → `testimonials`) so the id-keyed checks (FAQ entries, sub-section bands) still apply; everything else (objections, comparisons, about, a second service body) is its own `ref-<slug>` section. Template must-haves the client's page lacks are only *recorded* (`provenance.flags: client_structure_omits:faq,…`) — the scorers still reward them, so such a page scores lower on AEO by design. With the override off, or no usable reference, `structure_mode: "template"`: the reference is mapped ONTO the template skeleton (`objection/comparison/other→services subsections`) and missing required sections are inserted — the pre-ruling behaviour.
+4. **Allocate bands:** each section's share = its reference words ÷ reference total (template proportions when no reference); `min_words = share × total.min`, `max_words = share × total.max`. In template mode per-key floors/ceilings keep fixed-size sections sane (CTA 40–80, intro 80–160, FAQ items × 40–80) and `services` absorbs the residual at ≥30% of the page; in client mode the client's proportions rule (a template clamp applies only to a section the reference left heading-only) and the largest client section absorbs the residual at its own share. Either way the sums close on the page band.
+5. **Validate** (§5.1) and emit.
+
+Every step is a small pure function with unit tests (`tests/test_page_spec.py`): fold, map, allocate, validate, measure, verdict.
+
+## 5. Guardrails (all deterministic, in code)
+
+### 5.1 Before writing — spec validation
+- `Σ min_words ≤ total.max` and `Σ max_words ≥ total.min` (feasible), required sections present, count floors (FAQ ≥4, benefits ≥4) fit inside their section's `max_words` at a minimum words-per-item. An infeasible spec **fails loudly** (`page_spec_infeasible`) — it is never handed to the model to reconcile.
+
+### 5.2 Before writing — input validation
+- **Reference sanity:** usable only if `total_words ≥ 300`, `≥ 4` sections, URL not on a staging/dev host and not redirected; otherwise `provenance.reference.usable=false` + reason and the template layout is used. (Wheelhouse's `location` reference is 70 words / 9 sections; FCR's local landing is a staging URL.)
+- **SERP sanity:** target requires `≥ 3` valid competitor pages (today ≥2) and must fall in `[900, 2500]`; outside → the fallback target + a `serp_target_suspect` flag on the spec for review.
+
+### 5.3 During writing — structure caps
+- `structure.max_sections`, `max_h3_per_h2`, `faq.max` are emitted into the prompt as hard caps AND measured after writing. Structural bloat is the second inflation source and nothing measures it today.
+
+### 5.4 After writing — per-section measurement + targeted trim
+- Measure the generated page per section (`extract_outline_from_html` keyed by `<section id>`); any section over its `max_words` gets a **section-scoped trim** (`section_edit.apply_section_edits`), ≤ 2 passes, with the LENGTH TRIM OVERRIDE (#966) scoped to those sections. The measure-and-trim step never yields to the time budget; only optional passes do.
+- Any later pass (voice, SEO) is section-scoped, re-measured, and **rejected if it pushes a section or the page outside its band** (keep-best on length as well as score).
+
+### 5.4b After writing — structure enforcement + per-section intent/sentiment (Phase 4)
+- `page_spec.structure_verdict(measure, spec, audit)` (pure) checks: every required section present, spec order, `max_sections` + per-section `max_h3_per_h2`, block composition (a spec `list`/`table`/`quote` block must appear in that section), the `items` band (FAQ entries / list items), the services `subsections` band, and — from a cheap per-section audit — **intent** (does the section do its assigned job) and **sentiment** (must be `positive`; `neutral` and `negative` both fail — owner: strictly enforced). An extra section the spec doesn't know is advisory under the section cap, blocking over it.
+- nlp `_enforce_spec_structure` runs BEFORE the length trim (an added section is then trimmed into its band): reorder + drop extras deterministically, WRITE the missing required sections in at their spec position (business facts only), rewrite only the sections with a named issue; ≤ `PAGE_SPEC_STRUCTURE_PASSES` (2), keep-best by blocking-issue count, never gated on the time budget. The verdict is re-audited if a later voice/SEO pass changed the text.
+- The legacy `structure_gate` (whole-page regen vs the raw reference) is retired for spec-driven pages; it still runs when no spec resolved.
+
+### 5.5 At save — hard ceiling + honest status
+- A page still over `total.max × 1.15` after trims is saved with `length_status = "over_length"` + a `content_over_length` warning notification, never as a clean page. Within band → `"in_band"`; under `total.min` → `"under_length"` (advisory).
+- The page row records `page_spec_id` + `spec_version`, `target_words`, `actual_words`, `length_status` so target vs actual is a column, not buried in `engine_scores`.
+
+### 5.6 Operational
+- **Edits stick; re-analysis diffs.** `PUT …/page-spec` marks `edited_at`; a re-analysis stores a candidate and the UI shows the diff.
+- **Drift report:** per client, target vs actual over the last N pages + per-section overage frequency (`GET …/local-seo/length-report`), so the next regression shows in a table.
+- **No new prompt rules.** The template's absolute per-section counts become proportions consumed *through the spec*; the prompt receives the spec's per-section bands, not a second set of numbers.
+
+## 6. Phasing
+
+| Phase | Scope | Deliverable |
+|---|---|---|
+| **0** | Pure core: `services/page_spec.py` — schema, fold/map/allocate/validate, `measure_page`, `length_verdict`; unit tests. | Module + tests. No behaviour change. |
+| **1** | Persistence + API: `local_seo_page_specs` table (client × keyword × location, versioned, `edited_at`); build-on-analysis (`generate_page` builds/loads the spec and threads it), `GET/PUT/POST-rebuild …/local-seo/page-spec` + JSON download; spec id/version + target/actual/status columns on `local_seo_pages`. | Spec kept on file; visible via API; pages record target vs actual. |
+| **2** | Enforcement: nlp `GeneratePageRequest.page_spec` (rendered per-section bands + caps replace `reference_page_structure` + the budget line on the Local SEO path); per-section measure + section-scoped trim after writing and after every later pass; save gate + `over_length` notification. Reoptimize consumes the same spec. | Pages land in band by construction; over-length never ships silently. |
+| **3** | Frontend: spec viewer/editor + download on the page/New form; Saved Pages target-vs-actual column + status chip; per-client length report. | Team can see, edit, and monitor. |
+| **4** | Structure enforcement (§5.4b): `structure_verdict` + the nlp audit/add/fix loop; `structure_status` + `structure_issues` on `local_seo_pages` (`20260902160000`); `content_structure_drift` notification; legacy gate retired for spec pages; structure chip + issue panel + report counts. **Built 2026-09-02.** | Structure and per-section intent/sentiment land by construction; drift never ships silently. |
+
+Blog/service/ecommerce writers are out of scope for v1 (they keep `page_structure_render`/`structure_gate`); the schema is generic so they can adopt it later.
+
+## 7. Acceptance test
+
+On a run of 10 fresh Local SEO pages across ≥2 clients after Phase 2:
+- ≥ 9 of 10 land inside `[total.min, total.max]` on the deterministic body count (today: 1 of 15 within 10% of target);
+- 0 pages saved as clean while over `total.max × 1.15`;
+- every page row carries a `page_spec_id`, `target_words`, `actual_words`, `length_status`;
+- composite and voice scores do not regress vs the #792 baseline (voice 83.5 / composite 84.4 on FCR "roof restoration") by more than 2 points on the same keyword.
+
+Measured with the eval CLI (`scripts/eval_page_structure.py`, extended to read the spec) on live-generated pages — the sandbox can't call the live LLM/SERP stack.
+
+## 8. Decisions log
+- 2026-09-02 — spec kept **per keyword × location** (SERP length differs per query); the per-client reference stays the layout input. Owner.
+- 2026-09-02 — edits stick until the user accepts a re-analysis diff. Owner.
+- 2026-09-02 — no new prompt rules; every guardrail is a deterministic check in code. Owner.
+- 2026-09-02 — **The client's page structure overrides the app's default template** whenever a usable reference is on file (`structure_mode: "client"`): client sections, client order, no template insertions; omitted template must-haves are recorded, not added. Owner.
+- 2026-09-02 — A suspect SERP target never defines the market fallback (clamped into the plausible window); testimonials optional without reviews on file; the audit judges intent by what the copy does. From the first live client-mode run.
+- 2026-09-02 — Client mode: a `coverage` section maps to the geographic `local` slot only when its heading/note names places; "industry coverage" is its own section and the geo block is recorded as omitted (owner: option 2). The client's list items (folded headings) ride on the spec for the writer to reproduce. Owner.
+- 2026-09-02 — Phase 4: per-section **sentiment is strictly enforced** — only `positive` passes; the audit is one Haiku call per pass, the verdict + fixes stay deterministic/section-scoped. Owner.

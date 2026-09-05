@@ -15,18 +15,19 @@ entry stays hidden (see `GET /director/status`).
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from config import settings
 from middleware.auth import require_auth
-from services import assistant_store, director_agent
+from services import assistant_store, director_agent, guide_sync
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +136,109 @@ async def director_status(auth: dict = Depends(require_auth)) -> dict:
     """Whether DORA is enabled, so the frontend can gate the sidebar entry. Cheap
     config read — no side effects."""
     return {"enabled": bool(settings.director_enabled)}
+
+
+# ---------------------------------------------------------------------------
+# Guide sync inbound — CI reports a merged module change (services/guide_sync.py)
+# ---------------------------------------------------------------------------
+class ModuleCommit(BaseModel):
+    sha: str = ""
+    title: str = ""
+    body: str = ""
+
+    @field_validator("sha", "title", "body")
+    @classmethod
+    def _clip_commit(cls, v: str) -> str:
+        return (v or "")[:4000]
+
+
+class ModuleChange(BaseModel):
+    module: str = Field(min_length=1, max_length=64)
+    files: list[str] = Field(default_factory=list)
+    diff: str = ""
+    commits: list[ModuleCommit] = Field(default_factory=list, max_length=50)
+
+    @field_validator("files")
+    @classmethod
+    def _cap_files(cls, v: list[str]) -> list[str]:
+        # Clip, never reject: a giant squash merge (500+ files in one module)
+        # must still be reviewed — the diff is what DORA reads, the list is context.
+        return [str(f)[:400] for f in (v or [])[:500]]
+
+    @field_validator("diff")
+    @classmethod
+    def _clip_diff(cls, v: str) -> str:
+        # The reporter bounds this already; a hard ceiling keeps a runaway
+        # payload out of the row (the service clips again to the prompt bound).
+        return (v or "")[:400_000]
+
+
+class ModuleChangesRequest(BaseModel):
+    commit_sha: str = Field(min_length=7, max_length=40)
+    commit_range: Optional[str] = Field(default=None, max_length=120)
+    repository: Optional[str] = Field(default=None, max_length=200)
+    changes: list[ModuleChange] = Field(default_factory=list, max_length=60)
+
+
+def _presented_secret(request: Request) -> str:
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return (request.headers.get("x-guide-sync-secret") or "").strip()
+
+
+def secret_matches(presented: str, configured: str) -> bool:
+    """Constant-time bearer check. Compared as UTF-8 bytes so a non-ASCII
+    header can't raise out of compare_digest into a 500 (it's just wrong)."""
+    if not presented or not configured:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), configured.encode("utf-8"))
+
+
+def guard_module_changes_request(request: Request) -> None:
+    """Everything that must be true BEFORE the body is read: the feature is on,
+    a secret is configured, the caller presented it, and the declared size is
+    sane. Raising here keeps an unauthenticated caller from making the server
+    parse a multi-megabyte JSON body."""
+    if not guide_sync.gate_open():
+        raise HTTPException(status_code=503, detail="guide_sync_disabled")
+    if not settings.guide_sync_secret:
+        raise HTTPException(status_code=503, detail="guide_sync_not_configured")
+    if not secret_matches(_presented_secret(request), settings.guide_sync_secret):
+        raise HTTPException(status_code=401, detail="invalid_secret")
+    declared = request.headers.get("content-length")
+    try:
+        if declared is not None and int(declared) > settings.guide_sync_max_body_bytes:
+            raise HTTPException(status_code=413, detail="guide_sync_payload_too_large")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="bad_content_length")
+
+
+@router.post("/director/module-changes")
+async def report_module_changes(request: Request) -> dict:
+    """The CI reporter's inbound (``scripts/report_module_changes.py``): one
+    entry per module a merge to ``main`` touched, with the user-facing files,
+    commit messages, and a bounded diff. Public endpoint guarded ONLY by the
+    shared bearer secret (``GUIDE_SYNC_SECRET``) — fail-closed: no secret
+    configured ⇒ 503 and nothing recorded; wrong secret ⇒ 401; oversized ⇒ 413.
+    The body is read and validated only after those checks pass (a raw
+    ``Request`` rather than a body parameter, so FastAPI doesn't parse it
+    first). Idempotent per (commit, module), so a re-run of the workflow can't
+    double-review."""
+    guard_module_changes_request(request)
+    raw = await request.body()
+    if len(raw) > settings.guide_sync_max_body_bytes:
+        raise HTTPException(status_code=413, detail="guide_sync_payload_too_large")
+    try:
+        body = ModuleChangesRequest.model_validate_json(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid_payload: {str(exc)[:300]}")
+    try:
+        result = await run_in_threadpool(guide_sync.ingest_module_changes, body.model_dump())
+    except Exception as exc:
+        logger.exception("guide_sync_ingest_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=502, detail="guide_sync_error")
+    return {"ok": True, **result}
 
 
 @router.post("/director/chat", response_model=DirectorChatResponse)

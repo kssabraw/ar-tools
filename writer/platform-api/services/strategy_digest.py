@@ -1124,14 +1124,18 @@ def _prov_gbp_audit(supabase, client_id: str, today: date, now: datetime) -> Opt
             "competitors. category_gaps = categories on at least half the competitors "
             "but missing from the client (usually worth adding). review_gap = deficit "
             "vs the competitor median (the Recipe Engine funds reviews first when "
-            "gating). gaps = failed profile-completeness checks. Remember the module "
-            "card: the GBP description is an AI-visibility factor, not a local-pack "
-            "ranking factor."
+            "gating). gaps = failed profile-completeness checks. description_quality "
+            "= a present-but-weak description (issues: too_short / "
+            "missing_service_keyword / missing_location) — a quality signal distinct "
+            "from the binary completeness check, and the trigger for a GBP description "
+            "rewrite. Remember the module card: the GBP description is an "
+            "AI-visibility factor, not a local-pack ranking factor."
         ),
         "score": audit.get("score"),
         "gaps": audit.get("gaps"),
         "category_gaps": audit.get("category_gaps"),
         "review_gap": audit.get("review_gap"),
+        "description_quality": audit.get("description_quality"),
         "competitor_count": audit.get("competitor_count"),
     }
 

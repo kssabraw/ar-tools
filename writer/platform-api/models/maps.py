@@ -344,6 +344,14 @@ class MapsGbpReviewGap(BaseModel):
     deficit: int = 0
 
 
+class MapsGbpDescriptionQuality(BaseModel):
+    """A present-but-weak GBP description (distinct from the binary completeness
+    check). issues ∈ {too_short, missing_service_keyword, missing_location}."""
+    ok: bool = True
+    length: int = 0
+    issues: list[str] = Field(default_factory=list)
+
+
 class MapsGbpAuditResponse(BaseModel):
     score: Optional[int] = None              # 0–100 completeness
     competitor_count: int = 0
@@ -351,6 +359,7 @@ class MapsGbpAuditResponse(BaseModel):
     gaps: list[str] = Field(default_factory=list)            # failed-check labels
     category_gaps: list[str] = Field(default_factory=list)   # categories competitors have, client lacks
     review_gap: Optional[MapsGbpReviewGap] = None
+    description_quality: Optional[MapsGbpDescriptionQuality] = None
 
 
 class MapsThreat(BaseModel):

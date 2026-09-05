@@ -349,6 +349,8 @@ async def _judge_assertion(page_text: str, business_name: str, service: str) -> 
                 ),
             }],
         )
+        from services import qa_cost
+        qa_cost.record_from_message(msg, settings.qa_assertion_model)
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
         m = _ASSERTION_RE.search(text)
         if not m:
@@ -406,6 +408,8 @@ async def _synthesize_narrative(
                 ),
             }],
         )
+        from services import qa_cost
+        qa_cost.record_from_message(msg, settings.qa_narrative_model)
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text").strip()
         return text or None
     except Exception as exc:
@@ -646,6 +650,8 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
         logger.warning("qa_review_task_gone", extra={"task_id": task_id})
         return None
     task = rows[0]
+    from services import qa_cost
+    qa_cost.start_accounting()  # meter this review's LLM calls (assertion/narrative/visual)
     # The enqueue guard ran at transition time; the task may have been
     # completed or trashed while the job sat in the queue. Reviewing it then
     # would bounce a completed task's status (completed=true + In Progress on
@@ -712,6 +718,8 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
             "urls": urls,
             "narrative": narrative,
             "trigger": trigger,
+            "token_usage": qa_cost.total_tokens(),
+            "cost_usd": qa_cost.total_cost(),
         })
         .execute()
     ).data[0]

@@ -34,6 +34,85 @@ def test_sanitize_defaults_and_status():
     assert p["requires"] == "approval"  # bogus enum → default
 
 
+def test_sanitize_unescapes_html_entities_in_prose():
+    # Competitor names arrive HTML-escaped in the digest; the model echoes them
+    # verbatim into its prose. sanitize must collapse the entities so the stored
+    # review + the goal_chronic notification read "&", not "&amp;".
+    out = strategist.sanitize_review(
+        {
+            "assessment": "Beaten by Melbourne Roof Restoration &amp; Repair.",
+            "root_cause": "Incumbent &amp; its sister brand own the pack.",
+            "findings": [
+                {"synthesis": "Coverage gap vs A &amp; B.", "signal_refs": ["s1"]}
+            ],
+            "proposals": [
+                {
+                    "title": "Match A &amp; B",
+                    "action": "Build links &amp; content.",
+                    "rationale": "They out-link us 3&#215;.",
+                }
+            ],
+        },
+        frozen=False,
+    )
+    assert out["assessment"] == "Beaten by Melbourne Roof Restoration & Repair."
+    assert out["root_cause"] == "Incumbent & its sister brand own the pack."
+    assert out["findings"][0]["synthesis"] == "Coverage gap vs A & B."
+    prop = out["proposals"][0]
+    assert prop["title"] == "Match A & B"
+    assert prop["action"] == "Build links & content."
+    assert prop["rationale"] == "They out-link us 3\u00d7."
+    # questions are prose too — they must be decoded (Finding 2).
+    q_out = strategist.sanitize_review(
+        {"assessment": "a",
+         "questions": ["Respond to Melbourne Roof Restoration &amp; Repair?"]},
+        frozen=False,
+    )
+    assert q_out["questions"] == ["Respond to Melbourne Roof Restoration & Repair?"]
+
+
+def test_sanitize_does_not_corrupt_bare_ampersands():
+    # A blanket html.unescape would mangle a stray "&word" that happens to start
+    # with a semicolon-less legacy entity; only "&…;" tokens may decode.
+    out = strategist.sanitize_review(
+        {
+            "assessment": "Q&A and R&D and AT&T stay intact.",
+            "root_cause": "target &notindexed pages; budget &pound500; url ?a=1&copy=2",
+            "proposals": [
+                {"title": "M&A play", "action": "audit ?utm=x&reg=1 landing page"}
+            ],
+        },
+        frozen=False,
+    )
+    assert out["assessment"] == "Q&A and R&D and AT&T stay intact."
+    assert out["root_cause"] == "target &notindexed pages; budget &pound500; url ?a=1&copy=2"
+    p0 = out["proposals"][0]
+    assert p0["title"] == "M&A play"
+    assert p0["action"] == "audit ?utm=x&reg=1 landing page"
+    # a well-formed "&…;" entity still decodes.
+    dec = strategist.sanitize_review(
+        {"assessment": "cost &pound;500 &amp; rising"}, frozen=False
+    )
+    assert dec["assessment"] == "cost £500 & rising"
+
+
+def test_sanitize_findings_skips_non_string_synthesis():
+    # A non-string synthesis (model returns a list) must be skipped, not crash
+    # the whole review (Finding 3 hardening).
+    out = strategist.sanitize_review(
+        {
+            "assessment": "a",
+            "findings": [
+                {"synthesis": [1, 2]},
+                {"synthesis": "   "},
+                {"synthesis": "Real finding &amp; kept", "signal_refs": ["s1"]},
+            ],
+        },
+        frozen=False,
+    )
+    assert [f["synthesis"] for f in out["findings"]] == ["Real finding & kept"]
+
+
 def test_sanitize_forces_senior_on_passthrough_territory():
     cases = [
         _proposal(title="Lift the freeze", action="Unfreeze the client and resume links"),
@@ -889,7 +968,11 @@ def test_run_goal_recovery_tiers_stores_budget_and_notifies_once(monkeypatch):
     )])
     calls, updates, notes = _run_with_responses(monkeypatch, [full], trigger="goal_recovery")
 
-    assert "CHRONIC-GOAL RECOVERY PLAN" in calls[0]["messages"][0]["content"]
+    # The first user message is sent as an ephemeral-cached text-block list
+    # (services/prompt_cache); read its text regardless of whether caching wraps it.
+    _msg0 = calls[0]["messages"][0]["content"]
+    _msg0_text = _msg0 if isinstance(_msg0, str) else "".join(b["text"] for b in _msg0)
+    assert "CHRONIC-GOAL RECOVERY PLAN" in _msg0_text
     done = next(u for u in updates if u.get("status") == "complete")
     assert done["budget"]["root_cause"] == "Metro built suburb pages north"
     assert done["budget"]["envelope"] == {"deployable": 340.0}

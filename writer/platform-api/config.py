@@ -68,6 +68,13 @@ class Settings(BaseSettings):
     # Empty ⇒ no second key and every failover path degrades to primary-only. Set
     # on all three services (PLATFORM/pipeline/nlp) since each calls Anthropic.
     anthropic_api_key_secondary: str = ""
+    # Comma-separated pool of FURTHER Anthropic account keys (any length) — the
+    # canonical multi-account form (2026-09-02); `anthropic_api_key_secondary`
+    # is the original two-account form and is merged into the same pool. Every
+    # failover path (report_llm chain, the direct FailoverAsyncAnthropic sites,
+    # the agentic loops) tries them in order after the primary on a transient
+    # limit. Same models, more headroom. Set on all three services.
+    anthropic_api_keys: str = ""
     # AI Visibility module (Brand Strength) — the two scan engines whose keys
     # aren't already shared. Absent either, that engine fails its scans with a
     # "not configured" reason; the other engines (chatgpt/claude via the keys
@@ -119,6 +126,17 @@ class Settings(BaseSettings):
     # secondary account. Low, so a saturated primary yields to the second account
     # quickly instead of burning a long backoff (2 → ~2s + 4s, then switch).
     anthropic_key_failover_max_retries: int = 2
+    # ── Anthropic prompt caching (cache_control) ─────────────────────────────
+    # Wrap the large, re-sent context of the agentic loops (SerMaStr strategist,
+    # the Slack/web assistants, PACE, QA, DORA) in an ephemeral cache block so a
+    # multi-round loop pays full price for the big system/context on the first
+    # round and reads it from cache (≈10% of input price) on later rounds; the
+    # invariant system prompt is also reused across the bursty back-to-back calls
+    # of a weekly fan-out. Transparent to output — it only changes cost, never
+    # the response — and a block below the model's minimum cacheable size is
+    # simply not cached by the API (no error). Kill switch: False ⇒ every helper
+    # passes the plain string through unchanged (exact prior request shape).
+    prompt_cache_enabled: bool = True
     job_worker_poll_interval_seconds: int = 10
     # Stale-job reaper. In-process jobs (asyncio.to_thread) aren't resumable, so a
     # redeploy or crash mid-run orphans them as status='running' forever. Each
@@ -188,6 +206,27 @@ class Settings(BaseSettings):
     # is an atomic guarded UPDATE, so N workers never double-claim a row). Set to
     # 1 to throttle to one paid DataForSEO pipeline run at a time.
     fanout_lane_workers: int = 2
+    # BULK lanes (2026-09-02): dedicated workers that claim ONLY background-
+    # priority async_jobs (bulk-create / matrix / reoptimize-bulk items, stamped
+    # `job_priority.BACKGROUND` at enqueue). Each lane runs one ~10-min page
+    # generation at a time, so this is the batch-throughput knob: 3 runs three
+    # bulk pages at once (plus the MAIN lane, which still picks a bulk row up when
+    # nothing else is pending). The nlp container serves every lane, so watch its
+    # memory when raising this, and size the Anthropic key pool
+    # (`ANTHROPIC_API_KEY_SECONDARY` on nlp + PLATFORM) to match — 3 concurrent
+    # multi-pass generations lean hard on the single Anthropic account, so pair
+    # this with the second key or watch for 429 backoff (see the HANDOFF
+    # bulk-throughput tuning recipe). 0 disables. Owner ruling 2026-09-02: 3.
+    bulk_lane_workers: int = 3
+    # Soft per-client fairness cap on the BULK lanes: at most this many of a
+    # single client's background jobs run CONCURRENTLY while another client also
+    # has bulk work pending — so one client's 40-page batch can't hold every bulk
+    # slot and make another client's batch wait. Contention-only (a client alone
+    # still uses every slot; the cap only yields to a DIFFERENT client) and
+    # best-effort (a brief overshoot self-corrects). Only ENGAGES when
+    # bulk_lane_workers > 1 — at the default single bulk worker a client can hold
+    # at most one slot, so the cap is a no-op. Keep < bulk_lane_workers. 0 disables.
+    bulk_lane_max_per_client: int = 2
     # NOTE: the fanout_resumable_expand_enabled flag (issue #686 Phase 2) lives in
     # the VENDORED fanout config (fanout/config.py), not here — fanout/jobs.py
     # reads it via fanout.config.get_settings(), a different Settings class, so a
@@ -556,6 +595,45 @@ class Settings(BaseSettings):
     # Daily live-state reconciliation (catches async REJECTED + imports external
     # posts). One sync job per client with an ok location, after this hour (UTC).
     gbp_posts_sync_hour_utc: int = 9
+    # ------------------------------------------------------------------
+    # Google Business Profile (GBP) Profile Editor module.
+    # Edits three structured, persistent profile fields — the business
+    # description, services, and operating hours — via the Business Information
+    # API v1 `locations.patch`, reusing the same connection layer as GBP Posts.
+    # Every edit is AI-drafted → operator-reviewed → applied on an EXPLICIT click;
+    # nothing is auto-applied (ADR 0004 — the deliberate divergence from Posts).
+    # `gbp_profile_enabled` gates the module on top of the shared `gbp_api_enabled`;
+    # both default off so the routes + reconciler no-op until access lands and the
+    # write path is proven on the agency's own listing (verify_gbp_api_access.py
+    # --edit-test). See docs/modules/gbp-profile-editor-prd-v1_0.md.
+    gbp_profile_enabled: bool = False
+    # Anthropic model for AI-drafted description + services copy (client-facing
+    # tone; hours are never AI-drafted — see the service). Same family as the
+    # other client copy.
+    gbp_profile_draft_model: str = "claude-sonnet-4-6"
+    gbp_profile_draft_max_tokens: int = 1024
+    # Google caps a Business Profile description at 750 chars; enforce app-side.
+    gbp_profile_description_max_chars: int = 750
+    # After an apply, re-read the field this many seconds later to catch an
+    # instant LIVE/REJECTED verdict before the backoff reconciler takes over.
+    gbp_profile_sync_delay_seconds: int = 120
+    # The self-continuing `gbp_profile_sync` reconciler's backoff ladder (seconds
+    # from the apply): +2m / +30m / +2h / +12h / +24h → then give up (stays
+    # pending_review with a manual "Refresh status"). The 30-min stale-job reaper
+    # forbids a sleep-poll, so each check enqueues the next with a future
+    # scheduled_at (the leadoff_geocode pattern).
+    gbp_profile_sync_backoff: list[int] = [120, 1800, 7200, 43200, 86400]
+    # The services editor offers Google-defined service types picked from the
+    # listing's categories (via categories.batchGet, which is region/language-
+    # scoped; the suite is US/English by default) alongside operator-authored
+    # custom services. Overridable per env if a client's market differs.
+    gbp_profile_service_region_code: str = "US"
+    gbp_profile_service_language_code: str = "en"
+    # Profile monitor: a daily read of each 'ok' listing that alerts on a
+    # suspension / access loss or an out-of-band profile change (Google or an
+    # outside source). Alert-only (never auto-freezes/reverts). Ships dark on top
+    # of gbp_profile_enabled; flip on PLATFORM to activate (like freeze_check).
+    gbp_profile_monitor_enabled: bool = False
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may
@@ -1034,6 +1112,22 @@ class Settings(BaseSettings):
     domain_intel_gap_alert_min: int = 5
     # How many top keyword-gap opportunities surface as Action Plan items.
     domain_intel_action_max: int = 3
+    # Drop navigational + competitor-brand + street-address keyword gaps from the
+    # Action Plan keyword-gap items (e.g. "sedgwick phone number", "my sedgwick",
+    # "190 bowery new york ny 10012") — a competitor lookup, portal login or
+    # single-address search is never a page a challenger should build. Reuses the
+    # Keyword Research navigational/competitor/address guard; a comparison term
+    # ("sedgwick alternatives") is kept. Off → prior behaviour.
+    domain_intel_navigational_filter: bool = True
+    # On top of the deterministic gate, a best-effort LLM pass judges each surfaced
+    # gap keyword as a real content topic vs a competitor brand/PRODUCT name
+    # ("autoclaims", "timeoff", "absenceone"), a navigational lookup, or a
+    # person/address — the coined product-brand class the token rules can't name
+    # without semantics. One cheap Haiku call per rebuild; degrades to the
+    # deterministic gate on no key / failure. Off → deterministic gate only.
+    domain_intel_gap_llm_filter: bool = True
+    domain_intel_gap_filter_model: str = "claude-haiku-4-5-20251001"
+    domain_intel_gap_filter_max_tokens: int = 600
 
     # Keyword Research module (the seed-keyword explorer) — per-client keyword
     # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.
@@ -1235,6 +1329,17 @@ class Settings(BaseSettings):
     # stays fresh before it's re-scraped. Shared across clients by (keyword,
     # location). Set to 0 to disable caching.
     analysis_cache_ttl_days: int = 14
+    # A failed SERP analysis at generate time must not silently cost the page
+    # its length target (the writer then falls back to the template's per-section
+    # counts and ships 3,000+ words with length neither budgeted nor graded — seen
+    # on First Class Roofing during an nlp restart window, 2026-09-02). Retry the
+    # analysis once after this delay (the common failure is a seconds-long
+    # restart), then fall back to the market's standing target: the median
+    # `serp_word_target` of the newest cached analyses at the same DataForSEO
+    # location, else `local_seo_fallback_word_target`. 0 disables the retry.
+    local_seo_analysis_retry_delay_seconds: float = 20.0
+    local_seo_fallback_word_target: int = 1200
+    local_seo_fallback_target_samples: int = 8
 
     # Silo candidate management (Platform PRD v1.4 §7.7 / §8.5)
     # Recalibrated 0.85->0.87 for gemini-embedding-2 (P99 of cross-silo cosines +
@@ -1298,6 +1403,13 @@ class Settings(BaseSettings):
     # specific corrections fed back — keep-best by structural composite, capped at
     # `max_passes`. Only fires when a reference structure actually drove the page;
     # fully best-effort (a scoring/regen failure keeps the best page so far).
+    # Page spec (docs/modules/local-seo-page-spec-plan-v1_0.md): when the client
+    # has a usable reference page layout, that layout IS the page structure —
+    # its sections, order, blocks and sub-section counts override the app's
+    # default 12-section template (which is used only when no reference is on
+    # file). Off = the older behaviour (the reference is mapped ONTO the
+    # template's skeleton and missing template sections are inserted).
+    local_seo_client_structure_overrides: bool = True
     local_seo_structure_gate_enabled: bool = True
     local_seo_structure_min_composite: float = 85.0
     local_seo_structure_max_passes: int = 2
@@ -2555,6 +2667,24 @@ class Settings(BaseSettings):
     # these two vars + director_slack_channel.
     director_slack_bot_token: str = ""          # DIRECTOR_SLACK_BOT_TOKEN — the DORA app's xoxb- bot token
     director_slack_signing_secret: str = ""     # DIRECTOR_SLACK_SIGNING_SECRET — the DORA app's signing secret
+
+    # ── DORA guide sync (services/guide_sync.py) — owner ask 2026-09-02 ──────
+    # When a module change lands on main, CI (.github/workflows/guide-sync.yml →
+    # scripts/report_module_changes.py) POSTs the user-facing diff to
+    # POST /director/module-changes and DORA reviews whether the module's in-app
+    # guide still describes it, rewriting it when not (prior body kept for a
+    # one-click revert). Rides director_enabled. The endpoint is fail-closed:
+    # without guide_sync_secret it answers 503 and nothing is recorded.
+    guide_sync_enabled: bool = True
+    guide_sync_secret: str = ""                 # GUIDE_SYNC_SECRET — bearer the CI reporter sends (also a GitHub repo secret)
+    guide_sync_auto_apply: bool = True          # False → rewrites wait as `proposed` runs an admin applies/dismisses
+    guide_sync_model: str = "claude-sonnet-4-6" # the guide review + rewrite (whole guide re-emitted)
+    guide_sync_max_tokens: int = 16000
+    guide_sync_diff_chars: int = 60000          # per-module diff bound in the prompt
+    guide_sync_min_ratio: float = 0.5           # rewrite must be within [min, max] × the prior body length
+    guide_sync_max_ratio: float = 2.5
+    guide_sync_recent_days: int = 30            # window for DORA's read-model `guide_sync` block
+    guide_sync_max_body_bytes: int = 8_000_000  # inbound payload ceiling (checked before the body is parsed)
 
     class Config:
         env_file = ".env"

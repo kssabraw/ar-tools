@@ -27,9 +27,18 @@ logger = logging.getLogger(__name__)
 # prior (15/75) estimate overcharging Opus LLM cost by 3x. The gpt-5.4 rate remains
 # an estimate (OpenAI list price not re-verified here) but silo_discovery meters
 # within a few cents of the §8.1 estimate, so it is in the right range.
+# USD per 1M tokens (input, output), Anthropic list prices. The sonnet/haiku
+# rows were missing, so every Claude call that isn't Opus (the sonnet-4-6 writer,
+# the haiku brief/short models, and a sonnet-5 orchestrator) fell through to the
+# $5/$15 default and OVERSTATED its cost — e.g. haiku metered at 5× its real
+# rate. `_match_rate` also longest-prefix-matches, so a dated variant like
+# `claude-haiku-4-5-20251001` resolves to the `claude-haiku-4-5` row.
 _LLM_RATES: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (5.0, 25.0),
     "claude-opus-4-7": (5.0, 25.0),
+    "claude-sonnet-5": (2.0, 10.0),
+    "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-haiku-4-5": (1.0, 5.0),
     "gpt-5.4": (5.0, 15.0),
 }
 _DEFAULT_LLM_RATE = (5.0, 15.0)

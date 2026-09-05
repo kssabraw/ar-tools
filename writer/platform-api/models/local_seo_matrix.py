@@ -12,7 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-PublishDestination = Literal["google_docs", "wordpress", "github"]
+PublishDestination = Literal["app_only", "google_docs", "wordpress", "github"]
 PublishStatus = Literal["draft", "publish"]
 
 
@@ -40,6 +40,11 @@ class MatrixCreateRequest(BaseModel):
     entity_provider: Optional[str] = None
     publish_destination: PublishDestination = "google_docs"
     publish_status: PublishStatus = "draft"
+    # Internal linking: besides interlinking siblings, each page can also link UP
+    # to its top-level service page and the site root (both default on).
+    link_to_service_hub: bool = True
+    service_hub_pattern: Optional[str] = None
+    link_to_home: bool = True
 
 
 class MatrixUpdateRequest(BaseModel):
@@ -54,6 +59,9 @@ class MatrixUpdateRequest(BaseModel):
     entity_provider: Optional[str] = None
     publish_destination: Optional[PublishDestination] = None
     publish_status: Optional[PublishStatus] = None
+    link_to_service_hub: Optional[bool] = None
+    service_hub_pattern: Optional[str] = None
+    link_to_home: Optional[bool] = None
 
 
 class MatrixCell(BaseModel):
@@ -96,6 +104,9 @@ class MatrixSummary(BaseModel):
     entity_provider: Optional[str] = None
     publish_destination: str = "google_docs"
     publish_status: str = "draft"
+    link_to_service_hub: bool = True
+    service_hub_pattern: Optional[str] = None
+    link_to_home: bool = True
     release_enabled: bool = False
     release_mode: str = "daily"
     release_weekday: Optional[int] = None
@@ -166,6 +177,53 @@ class MatrixSuggestResult(BaseModel):
     suggestions: list[MatrixSuggestion] = Field(default_factory=list)
     degraded_notes: list[str] = Field(default_factory=list)
     error: Optional[str] = None
+
+
+class MatrixReleaseRequest(BaseModel):
+    """The drip schedule (plan §5.2): `immediate_count` cells now, then
+    `per_release_count` per cadence tick, each generated THEN published to the
+    matrix's publish destination."""
+
+    mode: Literal["daily", "weekly", "monthly"] = "daily"
+    weekday: Optional[int] = Field(None, ge=0, le=6)        # weekly: 0=Mon..6=Sun
+    day_of_month: Optional[int] = Field(None, ge=1, le=28)  # monthly
+    immediate_count: int = Field(0, ge=0)
+    per_release_count: int = Field(1, ge=1)
+    enabled: bool = True
+
+
+class MatrixReleaseSchedule(BaseModel):
+    enabled: bool = False
+    mode: str = "daily"
+    weekday: Optional[int] = None
+    day_of_month: Optional[int] = None
+    per_release_count: int = 1
+    status: str = "active"
+    next_run_at: Optional[str] = None
+    last_run_at: Optional[str] = None
+
+
+class MatrixReleaseState(BaseModel):
+    schedule: MatrixReleaseSchedule
+    releasable: int = 0
+    released_now: list[UUID] = Field(default_factory=list)
+
+
+class MatrixPublishRequest(BaseModel):
+    """"Publish all done cells" (plan §5.3). No `cell_ids` → every `done` /
+    `publish_failed` cell; explicit ids may also re-publish a `published` cell or
+    retry a `publish_blocked` one with `force_voice` (the deliberate brand-guide
+    override, honoured only with explicit ids)."""
+
+    destination: Optional[PublishDestination] = None  # default: the matrix's
+    status: Optional[PublishStatus] = None            # default: the matrix's
+    force_voice: bool = False
+    cell_ids: Optional[list[UUID]] = None
+
+
+class MatrixPublishResult(BaseModel):
+    job_ids: list[UUID] = Field(default_factory=list)
+    cell_ids: list[UUID] = Field(default_factory=list)
 
 
 class MatrixRecheckResult(BaseModel):

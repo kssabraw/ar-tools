@@ -52,3 +52,13 @@ def test_request_models_accept_internal_links():
     assert main.GeneratePageRequest(
         keyword="k", location="l", business_name="b", gbp_category="c", address="a",
     ).internal_links is None
+
+
+def test_block_labels_up_links_to_service_hub_and_home():
+    up = [
+        {"anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": "service_hub"},
+        {"anchor": "First Class Roofing", "url": "https://fcr.com.au/", "relation": "home"},
+    ]
+    block = main._internal_links_block(up)
+    assert "Roof restoration → https://fcr.com.au/roof-restoration/  (the main service page (link up to it))" in block
+    assert "First Class Roofing → https://fcr.com.au/  (the homepage (link up to it))" in block

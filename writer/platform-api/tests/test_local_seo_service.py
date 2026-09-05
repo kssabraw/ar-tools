@@ -434,22 +434,282 @@ async def test_analyze_force_refresh_bypasses_cache():
 
 @pytest.mark.asyncio
 async def test_generate_degrades_when_analysis_unavailable():
-    # analysis can't be computed (thin SERP / provider outage) → generate should
-    # still produce a page, with run_analysis flipped off so nlp doesn't re-scrape.
+    # analysis can't be computed (provider outage) even after one retry →
+    # generate still produces a page, with run_analysis flipped off so nlp
+    # doesn't re-scrape — but NOT silently: the page carries the market's
+    # fallback length target, the degrade is notified, and the persisted row
+    # records that no analysis informed it.
     inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
     supabase = _supabase_for_client(_client_row(), insert_row=inserted)
     nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    analysis = AsyncMock(return_value=None)
     with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
-         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=None)), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=analysis), \
+         patch.object(local_seo_service, "_resolve_fallback_length_target", return_value=1234), \
+         patch.object(local_seo_service, "_notify_analysis_degraded") as notify, \
+         patch("services.local_seo_service.asyncio.sleep", new=AsyncMock()) as sleep, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    assert analysis.await_count == 2            # first attempt + one retry
+    sleep.assert_awaited_once()
+    payload = stream.await_args[0][1]
+    assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
+    assert "serp_analysis" not in payload
+    assert payload["length_target"] == 1234     # length is still budgeted + graded
+    notify.assert_called_once_with("client-1", "k", "Melbourne,Victoria,Australia", 1234)
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["run_analysis"] is False   # honest provenance: no analysis informed this page
+
+
+@pytest.mark.asyncio
+async def test_generate_retry_recovers_the_analysis():
+    # The failure seen in production was a seconds-long nlp restart window: the
+    # first analysis attempt fails, the retry succeeds → normal (non-degraded)
+    # generation, no fallback target, no notification.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    serp = {"serp_word_target": 1500, "serp_avg_word_count": 1250}
+    analysis = AsyncMock(side_effect=[None, serp])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=analysis), \
+         patch.object(local_seo_service, "_notify_analysis_degraded") as notify, \
+         patch("services.local_seo_service.asyncio.sleep", new=AsyncMock()), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    assert analysis.await_count == 2
+    payload = stream.await_args[0][1]
+    assert payload["serp_analysis"] == serp
+    assert "run_analysis" not in payload or payload["run_analysis"] is True
+    assert "length_target" not in payload
+    notify.assert_not_called()
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["run_analysis"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_uses_fallback_target_when_serp_has_no_length():
+    # The analysis ran but measured no usable competitor length (thin SERP):
+    # still budget the page on the market's standing target — but that is not
+    # a degrade, so no notification and run_analysis stays True.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    serp = {"serp_urls": ["https://a.com"], "serp_word_target": None}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_fallback_length_target", return_value=1200), \
+         patch.object(local_seo_service, "_notify_analysis_degraded") as notify, \
          patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
         await local_seo_service.generate_page(
             "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
         )
     payload = stream.await_args[0][1]
-    assert payload["run_analysis"] is False     # degraded → nlp won't re-attempt the scrape
-    assert "serp_analysis" not in payload
+    assert payload["serp_analysis"] == serp
+    assert payload["length_target"] == 1200
+    notify.assert_not_called()
     persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
-    assert persisted["run_analysis"] is True    # provenance: analysis always runs first
+    assert persisted["run_analysis"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_threads_the_page_spec_and_records_the_length_verdict():
+    # The kept page spec rides on the nlp payload, its target drives the
+    # reference scaling, and the persisted row records spec id/version + the
+    # deterministic target-vs-actual verdict.
+    from services import page_spec as ps
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-1", 1
+    html = "<article>" + "".join(
+        f'<section id="{s["key"]}"><h2>{s["key"]}</h2><p>' + " ".join(["w"] * s["min_words"]) + "</p></section>"
+        for s in spec["sections"]
+    ) + "</article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec) as resolve, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        page = await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    resolve.assert_called_once()
+    payload = stream.await_args[0][1]
+    assert payload["page_spec"]["id"] == "spec-1"
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["page_spec_id"] == "spec-1" and persisted["spec_version"] == 1
+    assert persisted["target_words"] == 1058
+    assert persisted["actual_words"] == sum(s["min_words"] for s in spec["sections"])
+    assert persisted["length_status"] == "in_band"
+    assert page["length_verdict"]["status"] == "in_band"
+
+
+@pytest.mark.asyncio
+async def test_generate_survives_a_spec_failure():
+    # A spec that can't be built must never fail the page: the payload simply
+    # carries no spec and the row's spec columns stay null.
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp_word_target": 1000})), \
+         patch.object(local_seo_service.page_spec_store, "resolve_spec", side_effect=RuntimeError("db down")), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    payload = stream.await_args[0][1]
+    assert "page_spec" not in payload
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["page_spec_id"] is None and persisted["length_status"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_over_ceiling_is_saved_honestly_and_notified():
+    # Plan §5.5: a page still over the spec ceiling is saved with
+    # length_status=over_length AND surfaced through the notifications service.
+    from services import page_spec as ps
+    inserted = {"id": "page-x", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-1", 1
+    html = '<article><section id="services"><h2>s</h2><p>' + " ".join(["w"] * 3000) + "</p></section></article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec), \
+         patch("services.notifications.emit") as emit, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)):
+        page = await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["length_status"] == "over_length" and persisted["actual_words"] == 3000
+    assert page["length_verdict"]["over_ceiling"] is True
+    over = [c for c in emit.call_args_list if c.kwargs["kind"] == "content_over_length"]
+    assert len(over) == 1
+    assert over[0].kwargs["dedupe_key"] == "content_over_length:page-x"
+
+
+@pytest.mark.asyncio
+async def test_generate_with_a_spec_skips_the_legacy_gate_and_records_structure_drift():
+    # Phase 4: a spec-driven page is never run through the old reference
+    # structure gate (nlp enforces structure against the spec section by
+    # section); a page still off its spec is saved structure_status=drift with
+    # its issue list (incl. nlp's per-section sentiment audit) AND notified.
+    from services import page_spec as ps
+    inserted = {"id": "page-s", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-4", 4
+    # every section present at its min band … but cta-primary is missing and
+    # nlp's audit read the usp as negative
+    html = "<article>" + "".join(
+        f'<section id="{s["key"]}"><h2>{s["key"]}</h2><p>' + " ".join(["w"] * s["min_words"]) + "</p></section>"
+        for s in spec["sections"] if s["key"] != "cta-primary"
+    ) + "</article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "content_gaps": [],
+                  "structure_verdict": {"status": "drift", "issues": [],
+                                        "audit": {"usp": {"intent_ok": True, "sentiment": "negative", "note": "gloomy"}}}}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value=serp)), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec), \
+         patch.object(local_seo_service, "_apply_structure_gate", new=AsyncMock(side_effect=AssertionError("legacy gate must not run"))), \
+         patch("services.notifications.emit") as emit, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)):
+        page = await local_seo_service.generate_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1"
+        )
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["structure_status"] == "drift"
+    codes = {(i.get("key"), i["code"]) for i in persisted["structure_issues"]}
+    assert ("cta-primary", "missing_required") in codes and ("usp", "sentiment") in codes
+    assert page["structure_verdict"]["audit"]["usp"]["sentiment"] == "negative"
+    kinds = [c.kwargs["kind"] for c in emit.call_args_list]
+    assert "content_structure_drift" in kinds
+    drift = next(c for c in emit.call_args_list if c.kwargs["kind"] == "content_structure_drift")
+    assert drift.kwargs["dedupe_key"] == "content_structure_drift:page-s"
+    assert "structure issue(s)" in drift.kwargs["summary"]
+    assert any(i["code"] == "sentiment" for i in drift.kwargs["payload"]["issues"])
+
+
+@pytest.mark.asyncio
+async def test_generate_without_a_spec_still_runs_the_legacy_gate():
+    inserted = {"id": "page-l", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    nlp_result = {"content_html": "<a/>", "schema_json": "{}", "content_gaps": []}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp_word_target": 1000})), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=None), \
+         patch.object(local_seo_service, "_apply_structure_gate", new=AsyncMock(side_effect=lambda r, p, a: r)) as gate, \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)):
+        await local_seo_service.generate_page("client-1", "k", "Melbourne,Victoria,Australia", 1000567, "user-1")
+    gate.assert_awaited_once()
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["structure_status"] is None and persisted["structure_issues"] is None
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_threads_the_spec_and_records_the_verdict():
+    from services import page_spec as ps
+    inserted = {"id": "page-r", "client_id": "client-1", "keyword": "k"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    serp = {"serp_word_target": 1058, "serp_avg_word_count": 882, "serp_urls": ["a"] * 15}
+    spec = ps.build_spec(client_id="client-1", keyword="k", location="L", location_code=1000567,
+                         serp_analysis=serp, reference_entry=None, reference_page_type=None,
+                         fallback_target=1200)
+    spec["id"], spec["version"] = "spec-2", 2
+    html = "<article>" + "".join(
+        f'<section id="{s["key"]}"><h2>{s["key"]}</h2><p>' + " ".join(["w"] * s["min_words"]) + "</p></section>"
+        for s in spec["sections"]
+    ) + "</article>"
+    nlp_result = {"content_html": html, "schema_json": "{}", "composite_score": 88.0, "composite_status": "good"}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Melbourne,Victoria,Australia", 1000567))), \
+         patch.object(local_seo_service, "_resolve_fallback_length_target", return_value=1200), \
+         patch.object(local_seo_service, "_resolve_page_spec", return_value=spec) as resolve, \
+         patch.object(local_seo_service.voice_card_service if hasattr(local_seo_service, "voice_card_service") else local_seo_service, "get_voice_card", new=AsyncMock(return_value={}), create=True), \
+         patch("services.voice_card_service.get_voice_card", new=AsyncMock(return_value={})), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=nlp_result)) as stream:
+        page = await local_seo_service.reoptimize_page(
+            "client-1", "k", "Melbourne,Victoria,Australia", "<p>old</p>", None, [], serp, "user-1"
+        )
+    resolve.assert_called_once()
+    assert resolve.call_args[0][3] == 1000567  # keyed on the resolved DataForSEO code, like generate
+    payload = stream.await_args[0][1]
+    assert payload["page_spec"]["id"] == "spec-2"
+    persisted = supabase.table.return_value.insert.call_args_list[0][0][0]
+    assert persisted["page_spec_id"] == "spec-2" and persisted["spec_version"] == 2
+    assert persisted["length_status"] == "in_band" and persisted["mode"] == "reoptimize"
+
+
+def test_fallback_word_target_is_the_median_of_recent_targets_else_default():
+    # median is robust to one unusually long SERP in the market
+    assert local_seo_service.fallback_word_target([1232, 1627, 1326, 1321, 1240], 1200) == 1321
+    assert local_seo_service.fallback_word_target([1300, 1500], 1200) == 1400
+    # junk / empty → the config default
+    assert local_seo_service.fallback_word_target([], 1200) == 1200
+    assert local_seo_service.fallback_word_target([0, -5, None], 1200) == 1200
+    assert local_seo_service.fallback_word_target([], 0) == 1
+    # an implausible target (a bloated or thin SERP) never defines the market —
+    # least of all when it is the only cached analysis at the location
+    assert local_seo_service.fallback_word_target([2782], 1200) == 1200
+    assert local_seo_service.fallback_word_target([2782, 1321, 1240, 600], 1200) == 1280
 
 
 @pytest.mark.asyncio
@@ -937,3 +1197,78 @@ async def test_stream_nlp_skips_a_non_object_sse_payload():
         result = await local_seo_service._stream_nlp("/generate-page", {})
     # The junk lines are skipped, not fatal, and the real event still lands.
     assert result == {"id": "page-1"}
+
+
+# ── Trust & Proof (docs/modules/local-landing-page-structure.md) ─────────────
+
+def test_trust_signal_fields_maps_jsonb():
+    row = _client_row(trust_signals={
+        "certifications": [{"name": "BBB", "logo_url": "b.png"}],
+        "affiliations": [{"name": "MPA"}],
+        "financing_partners": [{"name": "Wisetack", "logo_url": "w.png"}],
+        "license_number": "CCC123",
+        "years_founded": "1998",   # string coerces to int
+        "founding_date": "1998",
+    })
+    out = local_seo_service._trust_signal_fields(row)
+    assert out["certifications"] == [{"name": "BBB", "logo_url": "b.png"}]
+    assert out["affiliations"] == [{"name": "MPA"}]
+    assert out["financing_partners"][0]["name"] == "Wisetack"
+    assert out["license_number"] == "CCC123"
+    assert out["years_founded"] == 1998
+    assert out["founding_date"] == "1998"
+
+
+def test_trust_signal_fields_defaults_when_absent_or_malformed():
+    # No trust_signals at all → empty lists / None, never a crash.
+    out = local_seo_service._trust_signal_fields(_client_row())
+    assert out["certifications"] == []
+    assert out["affiliations"] == []
+    assert out["financing_partners"] == []
+    assert out["license_number"] is None
+    assert out["years_founded"] is None
+    # Malformed types degrade gracefully.
+    bad = local_seo_service._trust_signal_fields(
+        _client_row(trust_signals={"certifications": "nope", "years_founded": "n/a"})
+    )
+    assert bad["certifications"] == []
+    assert bad["years_founded"] is None
+    # trust_signals present but not a dict.
+    assert local_seo_service._trust_signal_fields(_client_row(trust_signals=[]))["certifications"] == []
+
+
+def test_generate_payload_includes_trust_fields_and_gbp_rating():
+    row = _client_row(trust_signals={"license_number": "L-9"})
+    row["gbp"]["gbp_rating"] = 4.8
+    row["gbp"]["gbp_review_count"] = 57
+    payload = local_seo_service._gbp_to_generate_payload(row, "plumber", "Anaheim, CA")
+    assert payload["license_number"] == "L-9"
+    assert payload["gbp_rating"] == 4.8
+    assert payload["gbp_review_count"] == 57
+    assert payload["certifications"] == []  # absent field → empty, still present as a key
+
+
+def test_client_assets_reads_and_shapes_rows():
+    supabase = MagicMock()
+    table = MagicMock()
+    supabase.table.return_value = table
+    for method in ("select", "eq", "order"):
+        getattr(table, method).return_value = table
+    table.execute.return_value = MagicMock(data=[
+        {"kind": "team_photo", "url": "t.jpg", "caption": "Crew", "sort_order": 0},
+        {"kind": "video_embed", "url": "", "caption": "", "sort_order": 1},  # no url → dropped
+        {"kind": "vehicle", "url": "v.jpg", "caption": None, "sort_order": 2},
+    ])
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        assets = local_seo_service._client_assets("client-1")
+    assert assets == [
+        {"kind": "team_photo", "url": "t.jpg", "caption": "Crew"},
+        {"kind": "vehicle", "url": "v.jpg", "caption": ""},
+    ]
+
+
+def test_client_assets_degrades_on_read_error():
+    supabase = MagicMock()
+    supabase.table.side_effect = RuntimeError("boom")
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        assert local_seo_service._client_assets("client-1") == []

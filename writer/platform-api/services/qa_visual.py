@@ -199,6 +199,8 @@ async def judge_render(image: bytes, media_type: str) -> tuple[Optional[bool], s
                 ],
             }],
         )
+        from services import qa_cost
+        qa_cost.record_from_message(msg, settings.qa_visual_model)
         text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
         return verdict_to_ok(parse_visual_verdict(text))
     except Exception as exc:

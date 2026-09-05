@@ -63,6 +63,31 @@ export interface GbpProfile {
   service_area_places?: string[]
 }
 
+export interface TrustBadge {
+  name: string
+  logo_url: string
+}
+
+export interface TrustSignals {
+  certifications: TrustBadge[]
+  affiliations: TrustBadge[]
+  financing_partners: TrustBadge[]
+  license_number: string | null
+  years_founded: number | null
+  founding_date: string | null
+}
+
+export type ClientAssetKind =
+  | 'team_photo' | 'owner_photo' | 'vehicle' | 'before_after' | 'video_embed' | 'other'
+
+export interface ClientAsset {
+  id: string
+  kind: ClientAssetKind
+  url: string
+  caption: string | null
+  sort_order: number
+}
+
 export interface Client extends ClientListItem {
   website_analysis: Record<string, unknown> | null
   website_analysis_error: string | null
@@ -107,6 +132,10 @@ export interface Client extends ClientListItem {
   slack_channel_id: string | null
   // Everhour project this client's time is logged against; null → unmapped.
   everhour_project_id: string | null
+  // Trust & Proof facts the Local SEO writer renders deterministically
+  // (docs/modules/local-landing-page-structure.md). Media assets are the
+  // separate client_assets table, fetched via the assets endpoints.
+  trust_signals: TrustSignals | null
   updated_at: string
 }
 
@@ -1311,6 +1340,38 @@ export interface Guide {
   updated_at: string | null
 }
 
+// DORA guide sync (services/guide_sync.py) — one review per (commit, module)
+// after a module change lands on main. `prior_body`/`proposed_body` ride only
+// on the single-run read (GET /guides/sync-runs/:id).
+export type GuideSyncStatus =
+  | 'queued' | 'running' | 'no_change' | 'applied' | 'proposed'
+  | 'rejected' | 'no_guide' | 'failed' | 'reverted' | 'dismissed'
+export interface GuideSyncCommit { sha: string; title: string; body?: string }
+export interface GuideSyncRun {
+  id: string
+  module_key: string
+  module_label: string
+  guide_slug: string | null
+  guide_id: string | null
+  commit_sha: string
+  commit_range: string | null
+  commits: GuideSyncCommit[]
+  files: string[]
+  status: GuideSyncStatus
+  needs_update: boolean | null
+  reason: string | null
+  change_summary: string | null
+  proposed_summary: string | null
+  error: string | null
+  applied_at: string | null
+  reverted_at: string | null
+  decided_by: string | null
+  created_at: string
+  updated_at: string | null
+  prior_body?: string | null
+  proposed_body?: string | null
+}
+
 // Share of Local Voice (SoLV) — Maps geo-grid.
 export interface MapsSolvCompetitorShare {
   place_id: string | null
@@ -2283,4 +2344,127 @@ export interface PaceDispositionResult {
   status: string | null
   message: string
   result?: PaceInterventionResult
+}
+
+// ── Feedback Board (internal, admin-only: bugs + wishlist) ──
+export type FeedbackKind = 'bug' | 'wishlist'
+export type FeedbackStatus = 'new' | 'triaged' | 'in_progress' | 'done' | 'declined'
+export type FeedbackPriority = 'low' | 'medium' | 'high' | 'critical'
+
+export interface FeedbackComment {
+  id: string
+  item_id: string
+  author_id: string | null
+  author_name: string | null
+  body: string
+  created_at: string
+}
+
+export interface FeedbackItem {
+  id: string
+  kind: FeedbackKind
+  title: string
+  body: string | null
+  status: FeedbackStatus
+  priority: FeedbackPriority
+  labels: string[]
+  created_by: string | null
+  created_by_name: string | null
+  resolved_at: string | null
+  created_at: string
+  updated_at: string | null
+  comment_count: number
+}
+
+export interface FeedbackItemDetail extends FeedbackItem {
+  comments: FeedbackComment[]
+}
+
+// Admin Activity Report — agency-wide deliverables analytics
+// (routers/deliverables_analytics.py → services/deliverables_analytics.py).
+export interface ActivityReportTypeRow {
+  type: string
+  label: string
+  group: string
+  count: number
+  prev_count: number
+  delta: number
+}
+export interface ActivityReportClientRow {
+  client_id: string | null
+  client_name: string
+  count: number
+  prev_count: number
+  delta: number
+}
+export interface ActivityReportMemberRow {
+  member: string
+  count: number
+  prev_count: number
+  delta: number
+}
+export interface ActivityReportDay {
+  date: string
+  count: number
+}
+export interface ActivityReport {
+  from: string
+  to: string
+  prev_from: string | null
+  prev_to: string | null
+  compare: boolean
+  client_id: string | null
+  total: number
+  prev_total: number
+  total_delta: number
+  truncated: boolean
+  by_type: ActivityReportTypeRow[]
+  by_client: ActivityReportClientRow[]
+  by_member: ActivityReportMemberRow[]
+  daily: ActivityReportDay[]
+}
+
+// Admin Cost & Usage Report — agency-wide spend + LLM token analytics
+// (routers/cost_analytics.py → services/cost_analytics.py).
+export interface CostMetrics {
+  cost: number
+  prev_cost: number
+  cost_delta: number
+  input_tokens: number
+  output_tokens: number
+  tokens: number
+  prev_tokens: number
+  tokens_delta: number
+  events: number
+}
+export interface CostTypeRow extends CostMetrics {
+  type: string
+  label: string
+  group: string
+}
+export interface CostClientRow extends CostMetrics {
+  client_id: string | null
+  client_name: string
+}
+export interface CostMemberRow extends CostMetrics {
+  member: string
+}
+export interface CostDay {
+  date: string
+  cost: number
+  tokens: number
+}
+export interface CostReport {
+  from: string
+  to: string
+  prev_from: string | null
+  prev_to: string | null
+  compare: boolean
+  client_id: string | null
+  truncated: boolean
+  total: CostMetrics
+  by_type: CostTypeRow[]
+  by_client: CostClientRow[]
+  by_member: CostMemberRow[]
+  daily: CostDay[]
 }

@@ -17,12 +17,20 @@ The preflight check for the GBP Posts module (docs/modules/gbp-posts-module-prd-
   6. Optionally (``--post-test accounts/X/locations/Y``) creates a minimal
      STANDARD post and immediately deletes it — proving write access. Only point
      this at a listing you own (the agency's own, not a client's).
+  7. Optionally (``--edit-test locations/Y``) reads the three GBP Profile Editor
+     fields (description / regularHours / serviceItems + categories) via the v1
+     Business Information ``locations.get`` and does a **no-op**
+     ``locations.patch`` of ``profile.description`` back to its current value —
+     proving the WRITE path (auth + edit-right + field path) for the GBP Profile
+     Editor module (docs/modules/gbp-profile-editor-prd-v1_0.md §3) with zero
+     visible change to the listing. Point it at the AGENCY'S OWN listing.
 
 Run it wherever the key lives:
 
     # Railway shell on PLATFORM (key already in the env), or locally:
     export GOOGLE_SERVICE_ACCOUNT_KEY="$(cat key.json)"
-    python scripts/verify_gbp_api_access.py [--post-test accounts/X/locations/Y]
+    python scripts/verify_gbp_api_access.py [--post-test accounts/X/locations/Y] \
+        [--edit-test locations/Y]
 
 Every failure prints the classified cause + the fix (API not enabled vs quota
 not granted vs SA not a Manager). Exit code 0 = both read surfaces (Posts v4 +
@@ -125,6 +133,12 @@ def main() -> int:
         "--post-test",
         metavar="accounts/X/locations/Y",
         help="ALSO create+delete a minimal test post on this location (use a listing you own)",
+    )
+    parser.add_argument(
+        "--edit-test",
+        metavar="locations/Y",
+        help="ALSO read the GBP Profile Editor fields + do a no-op profile.description "
+        "patch round-trip on this location, proving the write path (use the agency's own listing)",
     )
     args = parser.parse_args()
 
@@ -265,6 +279,15 @@ def main() -> int:
         d = client.delete(f"{V4}/{post_name}")
         _print("6. write test cleanup (localPosts.delete)", d.status_code == 200, f"HTTP {d.status_code}")
 
+    # ------------------------------------------------------------------ step 7
+    # GBP Profile Editor write path: read the three editable fields via the v1
+    # Business Information API, then a NO-OP profile.description patch (set it to
+    # its own current value) — proving auth + edit-right + field path with zero
+    # visible change. Point --edit-test at the agency's OWN listing.
+    edit_ok = None
+    if args.edit_test:
+        edit_ok = _edit_test(client, args.edit_test)
+
     print("\nPosts (v4) read path green — the account can reach the Posts API surface.")
     if perf_ok:
         print("Performance API read path green — the GBP reporting/metrics layer can go live.")
@@ -272,7 +295,60 @@ def main() -> int:
         print("Performance API NOT ready — GBP reporting stays dark until the step-5 fix lands.")
     if not args.post_test:
         print("Re-run with --post-test accounts/X/locations/Y (a listing you own) to prove write access.")
+    if edit_ok is None:
+        print("Re-run with --edit-test locations/Y (the agency's own) to prove the Profile Editor write path.")
+    elif not edit_ok:
+        print("GBP Profile Editor write path NOT proven — keep gbp_profile_enabled off until step 7 is PASS.")
+    else:
+        print("GBP Profile Editor write path green — the Profile Editor module can go live.")
+    if edit_ok is False:
+        return 7
     return 0 if perf_ok else 5
+
+
+def _edit_test(client: httpx.Client, location: str) -> bool:
+    """Read the GBP Profile Editor fields (v1 locations.get) then no-op patch
+    profile.description back to its own value (v1 locations.patch). Returns True
+    when both round-trip, proving the write path. Prints each step."""
+    # Accept 'locations/Y', a bare id, or an 'accounts/X/locations/Y' pair —
+    # the v1 get/patch key on 'locations/{id}' alone (no account parent).
+    raw = location.strip().strip("/")
+    loc_id = raw.split("locations/")[-1].split("/")[0] if "locations/" in raw else raw
+    loc_name = f"locations/{loc_id}"
+    read_mask = "name,title,profile.description,regularHours,specialHours,serviceItems,categories,metadata"
+    get_url = f"{V1_INFO}/{loc_name}"
+    resp = client.get(get_url, params={"readMask": read_mask})
+    if resp.status_code != 200:
+        _print("7. Profile Editor read (locations.get)", False, diagnose(resp, "My Business Business Information API"))
+        return False
+    loc = resp.json()
+    desc = (loc.get("profile") or {}).get("description")
+    n_services = len(loc.get("serviceItems") or [])
+    has_hours = bool((loc.get("regularHours") or {}).get("periods"))
+    meta = loc.get("metadata") or {}
+    _print(
+        "7. Profile Editor read (locations.get)", True,
+        f"description={'set' if desc else 'empty'}, {n_services} service(s), "
+        f"regularHours={'set' if has_hours else 'empty'}, "
+        f"canModifyServiceList={meta.get('canModifyServiceList')}, "
+        f"hasPendingEdits={meta.get('hasPendingEdits')}",
+    )
+    # No-op write: patch profile.description back to its exact current value.
+    # (An unset description patches to an empty string — still proves the path
+    # and restores the same state.) updateMask scopes the write to that one field.
+    body = {"profile": {"description": desc or ""}}
+    presp = client.patch(get_url, params={"updateMask": "profile.description"}, json=body)
+    if presp.status_code != 200:
+        _print("7. Profile Editor write (locations.patch profile.description)", False,
+               diagnose(presp, "My Business Business Information API"))
+        print("    !! This is the WRITE path the GBP Profile Editor module uses. A 403 here"
+              "\n       usually means the connected account lists but can't EDIT this listing"
+              "\n       (unverified, or not a full Manager). Use a listing you fully manage.")
+        return False
+    pmeta = (presp.json().get("metadata") or {})
+    _print("7. Profile Editor write (locations.patch profile.description)", True,
+           f"no-op description patch accepted; hasPendingEdits={pmeta.get('hasPendingEdits')}")
+    return True
 
 
 if __name__ == "__main__":

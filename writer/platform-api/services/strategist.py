@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import re
 from datetime import date, datetime, timedelta, timezone
+from html.entities import html5 as _HTML5_ENTITIES
 from typing import Optional
 
 from config import settings
@@ -420,6 +421,39 @@ def _assistant_turn(content) -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 # Pure helpers (unit-tested)
 # ─────────────────────────────────────────────────────────────────────────────
+# Decode only an EXACT, semicolon-terminated HTML entity — a named entity that is
+# a verbatim key of the html5 table (``&amp;`` / ``&pound;``) or a numeric ref
+# (``&#215;`` / ``&#x2019;``). Everything else is left byte-for-byte: a bare ``&``
+# (Q&A, R&D, AT&T), a semicolon-less legacy entity (``&pound500``, ``?a=1&copy=2``,
+# ``&notindexed``), and even a ``;``-terminated token whose prefix merely happens
+# to be an entity (``&pound500;`` stays — ``html.unescape`` would bleed it to
+# ``£500;``). This kills the only corruption class blanket unescaping introduces
+# while still fixing every real ``&amp;``/``&#215;`` the scraped digest carries.
+_ENTITY_RE = re.compile(r"&(#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);")
+
+
+def _decode_entity(match: "re.Match") -> str:
+    tok, inner = match.group(0), match.group(1)
+    if inner[0] == "#":  # numeric character reference
+        try:
+            cp = int(inner[2:], 16) if inner[1] in "xX" else int(inner[1:])
+            return chr(cp)
+        except (ValueError, OverflowError):
+            return tok
+    decoded = _HTML5_ENTITIES.get(inner + ";")  # exact match only — no prefix bleed
+    return decoded if decoded is not None else tok
+
+
+def _clean_prose(value) -> str:
+    """Strip + decode exact, semicolon-terminated HTML entities. The strategy
+    digest carries scraped competitor names ("Melbourne Roof Restoration
+    &amp; Repair"), and the model echoes them verbatim into its assessment /
+    root_cause / findings / proposal / question prose. Pure."""
+    if not isinstance(value, str):
+        return ""
+    return _ENTITY_RE.sub(_decode_entity, value).strip()
+
+
 def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     """Enforce the §3 output contract on the model's emit payload. Pure.
 
@@ -429,27 +463,30 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
     - disavow proposals dropped and surfaced as a question instead;
     - frozen client → proposals emptied (observation-only), noted in questions.
     """
-    assessment = (raw.get("assessment") or "").strip()
-    root_cause = (raw.get("root_cause") or "").strip() if isinstance(raw.get("root_cause"), str) else ""
+    assessment = _clean_prose(raw.get("assessment"))
+    root_cause = _clean_prose(raw.get("root_cause"))
     findings = []
     for f in raw.get("findings") or []:
-        if not isinstance(f, dict) or not (f.get("synthesis") or "").strip():
+        if not isinstance(f, dict):
+            continue
+        synthesis = _clean_prose(f.get("synthesis"))
+        if not synthesis:
             continue
         findings.append(
             {
                 "signal_refs": [str(s) for s in (f.get("signal_refs") or []) if s],
-                "synthesis": f["synthesis"].strip(),
+                "synthesis": synthesis,
                 "sop_citation": (f.get("sop_citation") or "").strip(),
             }
         )
-    questions = [str(q).strip() for q in (raw.get("questions") or []) if str(q).strip()]
+    questions = [cq for q in (raw.get("questions") or []) if (cq := _clean_prose(str(q)))]
 
     proposals = []
     for p in raw.get("proposals") or []:
         if not isinstance(p, dict):
             continue
-        title = (p.get("title") or "").strip()
-        action = (p.get("action") or "").strip()
+        title = _clean_prose(p.get("title"))
+        action = _clean_prose(p.get("action"))
         if not (title and action):
             continue
         blob = f"{title} {action} {p.get('rationale') or ''}"
@@ -472,7 +509,7 @@ def sanitize_review(raw: dict, *, frozen: bool) -> dict:
         proposal = {
             "title": title,
             "action": action,
-            "rationale": (p.get("rationale") or "").strip(),
+            "rationale": _clean_prose(p.get("rationale")),
             "sop_citation": (p.get("sop_citation") or "").strip(),
             "est_cost_usd": est,
             "cost_basis": cost_basis,
@@ -699,10 +736,17 @@ async def run_strategy_review(
     )
 
     tools = strategist_tools.anthropic_tool_defs() + [_EMIT_TOOL]
-    from services import anthropic_failover
+    from services import anthropic_failover, prompt_cache
 
     clients = anthropic_failover.build_async_clients(timeout=_LLM_TIMEOUT)
-    messages: list[dict] = [{"role": "user", "content": user}]
+    # The first user message carries the whole run context — a client digest
+    # (up to `strategist_digest_budget_tokens`), the SOP corpus and the module
+    # cards, ~10k–40k tokens re-sent on every drill-down/emit round. Cache it so
+    # only the first round pays full price; later rounds read it at ≈10%. The
+    # (invariant) system prompt is cached too, so the weekly fan-out reuses
+    # tools+system across back-to-back client runs.
+    messages: list[dict] = [{"role": "user", "content": prompt_cache.cache_text(user)}]
+    cached_system = prompt_cache.cache_text(_SYSTEM)
     usage = {"input_tokens": 0, "output_tokens": 0}
     drilldowns: list[dict] = []
     paid_used = 0
@@ -725,7 +769,7 @@ async def run_strategy_review(
             lambda c: c.messages.create(
                 model=settings.strategist_model,
                 max_tokens=settings.strategist_max_tokens,
-                system=_SYSTEM,
+                system=cached_system,
                 tools=tools,
                 tool_choice={"type": "tool", "name": "emit_strategy_review"} if force_emit else {"type": "auto"},
                 messages=messages,
@@ -734,6 +778,10 @@ async def run_strategy_review(
         )
         usage["input_tokens"] += getattr(resp.usage, "input_tokens", 0) or 0
         usage["output_tokens"] += getattr(resp.usage, "output_tokens", 0) or 0
+        # Cache-accounting totals, so the persisted token_usage shows whether the
+        # cached system + first-message prefix (the #989 win) is actually being
+        # read back — cache_read should dominate input on rounds 2..N of the loop.
+        prompt_cache.add_cache_usage(usage, resp.usage)
 
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         emit_block = next((b for b in tool_uses if b.name == "emit_strategy_review"), None)

@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Megaphone, Globe2, Server, BarChart3,
+  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -300,10 +300,10 @@ export function ClientWorkspace() {
           />
         )}
         <ActionCard
-          icon={<Megaphone size={22} />}
-          label="GBP Posts"
-          description="Compose & publish Google Business Profile posts — Updates, Offers, Events & Products — with AI drafting, scheduling, and image upload."
-          to={id ? `/clients/${id}/gbp-posts` : undefined}
+          icon={<MapPin size={22} />}
+          label="Google Business Profile"
+          description="Insights, profile editing (description / services / hours), and posts for the client's Google Business Profile — performance, AI-drafted edits (reviewed then applied), and Updates / Offers / Events, all in one place."
+          to={id ? `/clients/${id}/gbp` : undefined}
           cta="Open"
         />
         <ActionCard
@@ -439,13 +439,6 @@ export function ClientWorkspace() {
         title="Reporting"
         subtitle="Generate client-facing performance reports."
       >
-        <ActionCard
-          icon={<BarChart3 size={22} />}
-          label="GBP Insights"
-          description="Google Business Profile performance over time — profile views, calls, website clicks, direction requests & messages, with period-over-period growth pulled from the Business Profile Performance API."
-          to={id ? `/clients/${id}/gbp-metrics` : undefined}
-          cta="Open"
-        />
         <ActionCard
           icon={<FileBarChart size={22} />}
           label="Client Reports"

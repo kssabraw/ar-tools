@@ -617,6 +617,20 @@ def _notify_assignment(task: dict) -> None:
         logger.warning("task_assign_notify_failed", extra={"task_id": task.get("id"), "error": str(exc)})
 
 
+def _clear_placement_blocker(task_id: str) -> None:
+    """Best-effort: close any open PACE→DORA capacity blocker for a task once it
+    no longer needs staffing (it got assigned, or completed), so DORA's
+    open-blocker view reflects reality instead of accumulating resolved walls.
+    Lazy import keeps task_service free of the bus's deps; self-gated on
+    agent_bus_enabled inside; never raises into the board write."""
+    try:
+        from services import agent_bus
+
+        agent_bus.resolve_placement_blocker(task_id)
+    except Exception as exc:  # noqa: BLE001 — a bus write must never break a task update
+        logger.warning("agent_bus_blocker_resolve_failed", extra={"task_id": task_id, "error": str(exc)})
+
+
 def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) -> dict:
     """Partial-update a task; every meaningful field change writes an activity
     row; an assignee change notifies. Returns the updated row."""
@@ -648,6 +662,8 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
         and changes["assignee_id"] != before.get("assignee_id")
     ):
         _notify_assignment(updated)
+        # The task just got staffed — clear any open capacity blocker (WS3).
+        _clear_placement_blocker(task_id)
     # A forward status drag ticks the process-marker subtasks it implies
     # (top-level tasks only — subtasks have no children to tick).
     if (
@@ -674,17 +690,21 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
         # the registration hook when the NEW status is a done status. Idempotent
         # (unique source_ref), flag-gated, best-effort — safe even if
         # complete_task also fires for the same task.
-        try:
-            new_key = changes.get("status_key")
-            if any(
-                s.get("key") == new_key and (s.get("is_done") or s.get("category") == "done")
-                for s in get_statuses()
-            ):
+        new_key = changes.get("status_key")
+        new_is_done = any(
+            s.get("key") == new_key and (s.get("is_done") or s.get("category") == "done")
+            for s in get_statuses()
+        )
+        if new_is_done:
+            try:
                 from services import interventions
 
                 interventions.on_task_done(updated)
-        except Exception as exc:
-            logger.warning("intervention_status_hook_failed", extra={"task_id": task_id, "error": str(exc)})
+            except Exception as exc:
+                logger.warning("intervention_status_hook_failed", extra={"task_id": task_id, "error": str(exc)})
+            # Dragging to done is a completion path (the board can skip
+            # complete_task) — clear any open capacity blocker (WS3).
+            _clear_placement_blocker(task_id)
     return updated
 
 
@@ -696,6 +716,8 @@ def complete_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
         payload["status_key"] = done_key
     updated = get_supabase().table("tasks").update(payload).eq("id", task_id).execute().data[0]
     record_activity(task_id, "completed", actor_id=actor_id)
+    # A completed task no longer needs staffing — clear any open capacity blocker (WS3).
+    _clear_placement_blocker(task_id)
     # Completing a top-level task implies the whole pipeline ran — tick every
     # remaining process marker (deliverables-sheet reminders stay manual).
     if updated.get("parent_task_id") is None:

@@ -43,6 +43,8 @@ import httpx
 
 from config import settings
 
+from . import cost
+
 logger = logging.getLogger(__name__)
 
 CLAUDE_MODEL = "claude-sonnet-4-6"
@@ -94,12 +96,47 @@ def get_anthropic_secondary() -> Optional[AsyncAnthropic]:
     return _anthropic_secondary
 
 
+def parse_key_pool(raw: Optional[str]) -> list[str]:
+    """Comma-separated key list → ordered, de-duplicated, stripped. Pure."""
+    out: list[str] = []
+    for part in (raw or "").split(","):
+        key = part.strip()
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
+def pool_keys() -> list[str]:
+    """The extra account keys to fail over to, after the primary (and after the
+    legacy secondary): `anthropic_api_keys` minus the primary/secondary keys.
+    Empty when failover is disabled. Pure over settings."""
+    if not settings.anthropic_key_failover_enabled:
+        return []
+    skip = {settings.anthropic_api_key, settings.anthropic_api_key_secondary}
+    return [k for k in parse_key_pool(settings.anthropic_api_keys) if k not in skip]
+
+
+# One client per pool key, built lazily and reused (like the primary/secondary).
+_anthropic_pool: dict[str, AsyncAnthropic] = {}
+
+
+def _pool_clients() -> list[AsyncAnthropic]:
+    clients = []
+    for key in pool_keys():
+        if key not in _anthropic_pool:
+            _anthropic_pool[key] = AsyncAnthropic(api_key=key)
+        clients.append(_anthropic_pool[key])
+    return clients
+
+
 def _failover_clients(primary: AsyncAnthropic) -> list[AsyncAnthropic]:
-    """`primary` first, then the secondary account when configured."""
+    """`primary` first, then the legacy secondary account, then the key pool
+    (`anthropic_api_keys`), each only when configured."""
     clients = [primary]
     secondary = get_anthropic_secondary()
     if secondary is not None and secondary is not primary:
         clients.append(secondary)
+    clients.extend(c for c in _pool_clients() if c is not primary)
     return clients
 
 
@@ -137,7 +174,18 @@ async def _create_message(client: AsyncAnthropic, create_kwargs: dict[str, Any])
         while True:
             try:
                 async with semaphore:
-                    return await acct_client.messages.create(**create_kwargs)
+                    message = await acct_client.messages.create(**create_kwargs)
+                # Single choke point for every blog-module Anthropic call — record
+                # token usage into the per-request tally so module_outputs.cost_usd
+                # is honest. No-op unless a blog request started accounting.
+                usage = getattr(message, "usage", None)
+                if usage is not None:
+                    cost.record_usage(
+                        create_kwargs.get("model", ""),
+                        getattr(usage, "input_tokens", 0) or 0,
+                        getattr(usage, "output_tokens", 0) or 0,
+                    )
+                return message
             except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
                 if not _is_transient_anthropic_error(exc):
                     raise

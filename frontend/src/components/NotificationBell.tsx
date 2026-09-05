@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { Bell } from 'lucide-react'
 import { api } from '../lib/api'
+import { formatPacificDateTime } from '../lib/datetime'
 
 // Personal notification bell in the sidebar header. Polls the logged-in user's
 // own notifications (nudges / task assignments / @mentions), shows an unread
@@ -105,7 +106,7 @@ export function NotificationBell() {
                 </div>
                 {n.summary && <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>{n.summary}</div>}
                 <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3 }}>
-                  {new Date(n.created_at).toLocaleString()}
+                  {formatPacificDateTime(n.created_at)}
                 </div>
               </div>
             ))}

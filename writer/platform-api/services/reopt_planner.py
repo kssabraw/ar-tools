@@ -896,9 +896,17 @@ def build_head_to_head_landgrab_actions(
     return actions
 
 
-def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[dict]:
+def build_gbp_action(
+    client_id: str, gbp_audit_result: "dict | None", profile_editor_enabled: bool = False
+) -> list[dict]:
     """A single consolidated 'strengthen your GBP' action from the profile audit
-    (missing fields + category gaps + a review deficit vs competitors). Pure."""
+    (missing fields + category gaps + a review deficit vs competitors). Pure.
+
+    When ``profile_editor_enabled`` and the gap is one the GBP Profile Editor can
+    fix (a thin/missing description or missing hours — its two auto-loop triggers),
+    the CTA deep-links into that editor so the board task lands where the fix is
+    made (Q6); category/review-only gaps keep the Maps CTA (out of the editor's
+    v1 scope)."""
     a = gbp_audit_result
     if not a:
         return []
@@ -910,6 +918,19 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
     rg = a.get("review_gap")
     if rg and rg.get("deficit"):
         parts.append(f"close a ~{rg['deficit']}-review gap vs competitors")
+    # Present-but-thin description (a missing one is already in `gaps` above via the
+    # completeness check, so only surface a quality gap when the description exists).
+    dq = a.get("description_quality")
+    if dq and not dq.get("ok") and dq.get("length"):
+        _dq_hint = {
+            "too_short": "expand it",
+            "missing_service_keyword": "name the core service",
+            "missing_location": "name the service area",
+        }
+        hints = ", ".join(_dq_hint[i] for i in dq.get("issues", []) if i in _dq_hint)
+        parts.append(
+            f"improve the thin description ({hints})" if hints else "improve the thin description"
+        )
     if not parts:
         return []
     score = a.get("score")
@@ -927,6 +948,19 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
         )
     else:
         diagnosis = "GBP has optimization gaps."
+    # Deep-link into the GBP Profile Editor when it's enabled AND the gap is one
+    # it edits (a thin/missing description or missing hours); else keep the Maps
+    # CTA (category/review gaps are out of the editor's v1 scope).
+    editable_here = bool(
+        (dq and not dq.get("ok") and dq.get("length"))
+        or "Business description" in (a.get("gaps") or [])
+        or "Opening hours" in (a.get("gaps") or [])
+    )
+    cta_label = "Open Maps tracker"
+    cta_path = f"clients/{client_id}/maps"
+    if profile_editor_enabled and editable_here:
+        cta_label = "Open Business Profile editor"
+        cta_path = f"clients/{client_id}/gbp-profile"
     return [
         {
             "kind": "gbp_gap",
@@ -934,8 +968,8 @@ def build_gbp_action(client_id: str, gbp_audit_result: "dict | None") -> list[di
             "keyword": "Google Business Profile",
             "diagnosis": diagnosis,
             "recommendation": "Strengthen the Google Business Profile: " + "; ".join(parts) + ".",
-            "cta_label": "Open Maps tracker",
-            "cta_path": f"clients/{client_id}/maps",
+            "cta_label": cta_label,
+            "cta_path": cta_path,
             "severity": "info",
             "sort": _SORT_MAPS + _within(_MAPS_GBP_WITHIN),
         }
@@ -1120,36 +1154,104 @@ def build_brand_action(client_id: str, brand_decline: "dict | None") -> list[dic
     ]
 
 
-def build_domain_intel_actions(client_id: str, gaps: list[dict]) -> list[dict]:
+def build_domain_intel_actions(
+    client_id: str,
+    gaps: list[dict],
+    matchers: "list[set[str]] | None" = None,
+    filter_intent: bool = True,
+) -> list[dict]:
     """Top competitor keyword-gap opportunities (Domain Intelligence) as Action
     Plan items — keywords a competitor ranks for that the client doesn't. Pure.
 
     ``gaps`` is opportunity-sorted domain_keyword_gaps rows; the top N surface as
-    'create/strengthen a page' actions deep-linking into Domain Intelligence."""
-    from config import settings
+    'create/strengthen a page' actions deep-linking into Domain Intelligence.
 
-    actions: list[dict] = []
-    for i, g in enumerate(gaps[: settings.domain_intel_action_max]):
+    When ``filter_intent`` (config-gated by the caller), navigational/support
+    lookups ("sedgwick phone number"), competitor-brand terms ("my sedgwick") and
+    street-address / location strings ("190 bowery new york ny 10012") are dropped
+    BEFORE the top-N cap — a competitor lookup, portal login or single-address
+    search is never a page a challenger should build, and letting them occupy the
+    cap starves the real opportunities beneath them. Comparison terms ("sedgwick
+    alternatives") are kept — that's competitor content worth writing. ``matchers``
+    are the client's competitor brand token-sets (empty → navigational-only)."""
+    from config import settings
+    from services import keyword_research_navigational as krn
+
+    matchers = matchers or []
+    # Filter first, then cap — a dropped navigational term must not consume a slot.
+    eligible: list[dict] = []
+    for g in gaps:
         kw = g.get("keyword")
         if not kw:
             continue
+        if filter_intent and (
+            krn.classify_intent(kw, matchers) in ("navigational", "competitor")
+            or krn.is_address(kw)
+        ):
+            continue
+        eligible.append(g)
+
+    actions: list[dict] = []
+    for i, g in enumerate(eligible[: settings.domain_intel_action_max]):
+        kw = g.get("keyword")
         comp = g.get("competitor_domain") or "a competitor"
         comp_pos = g.get("competitor_position")
         cli_pos = g.get("client_position")
-        where = "you don't rank" if cli_pos is None else f"you rank #{cli_pos}"
+        gap_type = (g.get("gap_type") or "").strip().lower()
+        comp_txt = f"{comp} ranks" + (f" #{comp_pos}" if comp_pos else "")
+
+        # Metrics line — everything the staff member needs to size the opportunity
+        # without opening the tool. Each is best-effort (bad/absent value → omitted).
+        metrics: list[str] = []
         vol = g.get("volume")
-        vol_txt = f" ~{vol}/mo searches." if vol else ""
+        if vol:
+            metrics.append(f"~{vol}/mo searches")
+        try:
+            kd = g.get("keyword_difficulty")
+            if kd is not None:
+                metrics.append(f"difficulty {float(kd):g}/100")
+        except (TypeError, ValueError):
+            pass
+        try:
+            cpc = g.get("cpc_usd")
+            if cpc:
+                metrics.append(f"${float(cpc):.2f} CPC")
+        except (TypeError, ValueError):
+            pass
+        metric_txt = f" ({', '.join(metrics)})" if metrics else ""
+
+        # A "weak" gap (the client already ranks, just poorly) is a reoptimize job;
+        # a "missing" gap (no ranking page) is net-new content. Naming which one the
+        # staff member is looking at makes the task actionable on its own.
+        if cli_pos is None:
+            where = "you have no page ranking for it"
+            title = f'Create a page targeting "{kw}"'
+            rec = (
+                f'Create a new page targeting "{kw}". {comp_txt} for it and you have no '
+                "ranking page, so this is net-new content. "
+            )
+        else:
+            where = f"your best page only ranks #{cli_pos}"
+            title = f'Strengthen your page for "{kw}"'
+            rec = (
+                f'Strengthen / reoptimize your existing page for "{kw}" — you rank #{cli_pos}, '
+                f"so a page exists but is underperforming (gap type: {gap_type or 'weak'}). "
+            )
+        rec += (
+            "Review the full ranked gap list — with backlink gaps and competitor "
+            "discovery — in Domain Intelligence."
+        )
         actions.append(
             {
                 "kind": "keyword_gap",
                 "source": "organic",
                 "keyword": kw,
-                "diagnosis": f"{comp} ranks"
-                + (f" #{comp_pos}" if comp_pos else "")
-                + f" for this; {where}.{vol_txt}",
-                "recommendation": "Competitive keyword gap — create or strengthen a page targeting this "
-                "term. Review the full ranked gap list (with backlink gaps and competitor discovery) "
-                "in Domain Intelligence.",
+                # A concise, keyword-bearing task title; the full detail lives in
+                # the recommendation/diagnosis (shown in the Action Plan + the task
+                # description) so the title stays legible on the board.
+                "title": title,
+                "diagnosis": f'{comp_txt} for "{kw}" while {where}.{metric_txt}',
+                "recommendation": rec,
                 "cta_label": "Domain Intelligence",
                 "cta_path": f"clients/{client_id}/domain-intel",
                 "severity": "info",
@@ -1574,15 +1676,38 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
     # Competitive keyword-gap opportunities (Domain Intelligence). Additive:
     # no stored gaps → no actions → unchanged behavior.
     try:
+        from services import gap_intel_filter
+        from services import keyword_research_navigational as krn
+
+        # Competitor-brand matchers for the intent filter (best-effort registry
+        # read; empty → navigational-only filtering).
+        matchers = (
+            krn.brand_matchers(krn.get_client_competitors(client_id))
+            if settings.domain_intel_navigational_filter
+            else []
+        )
+        # Fetch a pool wider than the action cap so navigational/brand drops leave
+        # room for the real opportunities beneath them (the producer re-caps).
         gap_rows = (
             supabase.table("domain_keyword_gaps")
-            .select("keyword, competitor_domain, competitor_position, client_position, volume, opportunity_score")
+            .select(
+                "keyword, competitor_domain, competitor_position, client_position, "
+                "volume, cpc_usd, keyword_difficulty, gap_type, opportunity_score"
+            )
             .eq("client_id", client_id)
             .order("opportunity_score", desc=True)
-            .limit(settings.domain_intel_action_max)
+            .limit(max(settings.domain_intel_action_max * 8, 24))
             .execute()
         ).data or []
-        organic += build_domain_intel_actions(client_id, gap_rows)
+        # Single quality chokepoint (protects the board + PACE for all clients):
+        # deterministic navigational/brand/address gate + a best-effort LLM pass
+        # that catches the coined competitor product-brand class ("autoclaims").
+        kept_gaps, gap_report = gap_intel_filter.filter_gap_rows(gap_rows, matchers, client_id)
+        if gap_report.get("dropped_deterministic") or gap_report.get("dropped_llm"):
+            logger.info("reopt_plan_gap_filter", extra={"client_id": client_id, **{
+                k: gap_report[k] for k in ("input", "kept", "dropped_deterministic", "dropped_llm")}})
+        # Rows are already filtered; build the actions without re-filtering.
+        organic += build_domain_intel_actions(client_id, kept_gaps, filter_intent=False)
     except Exception as exc:
         logger.warning("reopt_plan_domain_intel_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions = build_maps_actions(client_id, maps_alerts, weak_areas, solv_drop, landgrab)
@@ -1618,7 +1743,10 @@ def build_plan(client_id: str, trigger: str = "manual") -> dict:
         except Exception as exc:
             logger.warning("reopt_plan_landgrab_layers_failed", extra={"client_id": client_id, "error": str(exc)})
     maps_actions += build_relevance_action(client_id, relevance_gap)
-    maps_actions += build_gbp_action(client_id, gbp_audit_result)
+    maps_actions += build_gbp_action(
+        client_id, gbp_audit_result,
+        profile_editor_enabled=bool(settings.gbp_api_enabled and settings.gbp_profile_enabled),
+    )
     maps_actions += build_review_action(client_id, review_gap)
     maps_actions += build_content_action(client_id, content_gap)
     brand_actions = build_brand_action(client_id, brand_decline)

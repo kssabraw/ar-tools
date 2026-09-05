@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A galley-to-print walkthrough for the Blog Writer — the five-stage pipeline that turns a keyword into a published article.">
+<title>Blog Writer Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=Source+Sans+3:wght@400;500;600;700&family=Courier+Prime:wght@400;700&display=swap">
+<style>
+  :root{
+    --paper:#F5EFE1; --paper-raised:#FFFEF9; --ink:#241F19; --ink-soft:#5E5445; --ink-faint:#99907A;
+    --line:#E0D5BC; --line-strong:#CDBE9C;
+    --proof:#A63A2B; --proof-ink:#7A2A1F; --proof-soft:#F3DCD3;
+    --stamp:#33506E; --stamp-ink:#213A50; --stamp-soft:#DEE7EE;
+    --shadow: 0 1px 2px rgba(36,31,25,0.07), 0 10px 26px rgba(36,31,25,0.06); --radius: 3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#1A1613; --paper-raised:#221D18; --ink:#EEE6D8; --ink-soft:#B7AC96; --ink-faint:#7C7360;
+      --line:#3A3226; --line-strong:#4C422F;
+      --proof:#D97361; --proof-ink:#F0AA9B; --proof-soft:#33201B;
+      --stamp:#7FA3C4; --stamp-ink:#B9D2E6; --stamp-soft:#1B2A38;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#1A1613; --paper-raised:#221D18; --ink:#EEE6D8; --ink-soft:#B7AC96; --ink-faint:#7C7360;
+    --line:#3A3226; --line-strong:#4C422F;
+    --proof:#D97361; --proof-ink:#F0AA9B; --proof-soft:#33201B;
+    --stamp:#7FA3C4; --stamp-ink:#B9D2E6; --stamp-soft:#1B2A38;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 26px rgba(0,0,0,0.28);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Source Sans 3", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Source Serif 4", Georgia, "Times New Roman", serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--proof-ink); }
+  a:focus-visible, button:focus-visible, summary:focus-visible{ outline:2px solid var(--proof); outline-offset:2px; }
+  code, .mono, .type{ font-family:"Courier Prime", ui-monospace, "SF Mono", Menlo, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding: 0 1.5rem 6rem; }
+  img,svg{ max-width:100%; }
+
+  /* ---- Masthead ---- */
+  .masthead{ padding: 3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:60px; height:60px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Courier Prime", monospace; font-size:0.72rem; letter-spacing:0.12em; text-transform:uppercase; color:var(--proof-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem, 1.4rem + 1.8vw, 2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin: 1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Source Serif 4", serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Courier Prime", monospace; font-size:0.66rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* ---- Pipeline strip (the one diagram only this subject has) ---- */
+  .pipeline{ padding: 1.9rem 0 2.1rem; }
+  .pipeline-cap{ font-family:"Courier Prime", monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.9rem; }
+  .press{ display:flex; align-items:stretch; gap:0; overflow-x:auto; padding-bottom:0.3rem; }
+  .stage{ flex:1 1 0; min-width:132px; display:flex; flex-direction:column; align-items:center; text-align:center; position:relative; padding: 0 0.6rem; }
+  .stage-badge{ width:38px; height:38px; border-radius:50%; border:1.5px solid var(--ink); background:var(--paper-raised); display:flex; align-items:center; justify-content:center; font-family:"Courier Prime",monospace; font-weight:700; font-size:0.82rem; color:var(--ink); box-shadow:var(--shadow); flex:none; transform:rotate(-2deg); }
+  .stage:nth-child(2) .stage-badge{ transform:rotate(1.5deg); }
+  .stage:nth-child(3) .stage-badge{ transform:rotate(-1deg); }
+  .stage:nth-child(4) .stage-badge{ transform:rotate(2deg); }
+  .stage:nth-child(5) .stage-badge{ transform:rotate(-1.5deg); border-color:var(--proof); color:var(--proof-ink); }
+  .stage-name{ font-weight:600; font-size:0.84rem; margin-top:0.6rem; }
+  .stage-time{ font-family:"Courier Prime",monospace; font-size:0.68rem; color:var(--ink-faint); margin-top:0.2rem; }
+  .feed{ flex:none; width:2.2rem; align-self:flex-start; margin-top:19px; height:0; border-top:2px dashed var(--line-strong); position:relative; }
+  .feed::after{ content:"›"; position:absolute; right:-3px; top:-11px; color:var(--ink-faint); font-size:1rem; }
+  .press-note{ margin: 1rem 0 0; font-size:0.88rem; color:var(--ink-soft); }
+
+  .layout{ display:grid; grid-template-columns: 240px minmax(0,1fr); gap: 3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Courier Prime", monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; transition:color .15s ease, border-color .15s ease; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--proof-ink); border-left-color:var(--proof); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding: 2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Courier Prime", monospace; font-size:0.85rem; color:var(--proof-ink); letter-spacing:0.03em; flex:none; }
+  .block h2{ font-size:1.48rem; }
+  .block h3{ font-size:1.05rem; margin-top:1.8rem; margin-bottom:0.6rem; font-weight:600; }
+  .block p{ margin:0.9rem 0; color:var(--ink); max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul, .block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  /* Marginalia callout — a proofreader's red-pencil note in the margin */
+  .marginalia{ position:relative; background:var(--proof-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem 0.95rem 1.5rem; margin:1.3rem 0; }
+  .marginalia::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--proof); border-radius:2px; }
+  .marginalia-label{ font-family:"Courier Prime", monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--proof-ink); margin:0 0 0.3rem; font-weight:700; display:inline-block; transform:rotate(-0.6deg); }
+  .marginalia p{ margin:0; color:var(--ink); }
+
+  .note{ background:var(--stamp-soft); border-left:3px solid var(--stamp); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .note p{ margin:0; }
+  .note strong{ color:var(--stamp-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Courier Prime", monospace; font-size:0.64rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); font-weight:700; }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; color:var(--ink); }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; color:var(--ink); }
+
+  /* Galley — a worked run, shown like a proof sheet log */
+  .galley{ border:1px solid var(--line); border-radius:var(--radius); background:var(--paper-raised); box-shadow:var(--shadow); margin:1.2rem 0; overflow:hidden; }
+  .galley-head{ display:flex; align-items:center; justify-content:space-between; padding:0.7rem 1.1rem; border-bottom:1px solid var(--line); background:var(--paper); }
+  .galley-head span{ font-family:"Courier Prime",monospace; font-size:0.66rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+  .galley-body{ padding:0.9rem 1.1rem 1.1rem; }
+  .galley-row{ display:flex; gap:0.85rem; align-items:baseline; padding:0.42rem 0; font-size:0.88rem; }
+  .galley-row .t{ font-family:"Courier Prime",monospace; color:var(--ink-faint); flex:none; width:4.6rem; }
+  .galley-row .stage-tag{ flex:none; width:9.5rem; font-weight:600; }
+  .galley-row .msg{ color:var(--ink-soft); }
+  .galley-row.done .stage-tag::before{ content:"✓ "; color:var(--stamp-ink); }
+  .galley-row.now .stage-tag::before{ content:"… "; color:var(--proof-ink); }
+
+  /* Stamp — pass/hold verdict */
+  .stamp-row{ display:flex; gap:1rem; flex-wrap:wrap; margin:1.2rem 0; }
+  .stamp-badge{ display:inline-flex; align-items:center; gap:0.5rem; border:2px solid; border-radius:999px; padding:0.5rem 1rem; font-family:"Courier Prime",monospace; font-weight:700; font-size:0.78rem; letter-spacing:0.05em; text-transform:uppercase; transform:rotate(-2deg); }
+  .stamp-badge.pass{ border-color:var(--stamp); color:var(--stamp-ink); background:var(--stamp-soft); }
+  .stamp-badge.hold{ border-color:var(--proof); color:var(--proof-ink); background:var(--proof-soft); transform:rotate(1.5deg); }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Courier Prime",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .refcard h3{ margin-top:0; font-size:1rem; }
+  .refcard h3:first-child{ margin-top:0; }
+
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-title{ margin-bottom:0.5rem; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--proof-soft); border-color:var(--proof); }
+  }
+  @media (max-width:640px){ .masthead-inner{ gap:1rem; } .mark{ width:46px; height:46px; } .masthead{ padding-top:2rem; } .stage{ min-width:112px; } }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <rect x="10" y="8" width="38" height="48" rx="1.5" fill="var(--paper-raised)" stroke="var(--ink)" stroke-width="1.4"/>
+          <line x1="16" y1="18" x2="42" y2="18" stroke="var(--ink-faint)" stroke-width="1.2"/>
+          <line x1="16" y1="24" x2="42" y2="24" stroke="var(--ink-faint)" stroke-width="1.2"/>
+          <line x1="16" y1="30" x2="34" y2="30" stroke="var(--ink-faint)" stroke-width="1.2"/>
+          <path d="M40 34 L54 34 L54 50 L40 50 Z" fill="none" stroke="var(--proof)" stroke-width="1.6" transform="rotate(-6 47 42)"/>
+          <path d="M43 45 L51 45" stroke="var(--proof)" stroke-width="1.6" transform="rotate(-6 47 42)"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Content</p>
+        <h1>Blog Writer, galley to print</h1>
+        <p class="dek">A keyword goes in one end of a five-stage pipeline; a publication-ready,
+          scored, source-cited article comes out the other. This is how to run the press.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">5</span><span class="meta-label">Pipeline stages</span></div>
+      <div class="meta-item"><span class="meta-num tnum">8</span><span class="meta-label">Scoring engines</span></div>
+      <div class="meta-item"><span class="meta-num tnum">3</span><span class="meta-label">Publish destinations</span></div>
+      <div class="meta-item"><span class="meta-num tnum">5</span><span class="meta-label">Runs in flight, max</span></div>
+    </div>
+
+    <div class="pipeline">
+      <p class="pipeline-cap">The press — what a run actually does, in order</p>
+      <div class="press">
+        <div class="stage"><div class="stage-badge">01</div><div class="stage-name">Brief</div><div class="stage-time tnum">~20–40s</div></div>
+        <div class="feed"></div>
+        <div class="stage"><div class="stage-badge">02</div><div class="stage-name">Search&nbsp;Intent</div><div class="stage-time tnum">~15–30s</div></div>
+        <div class="feed"></div>
+        <div class="stage"><div class="stage-badge">03</div><div class="stage-name">Research</div><div class="stage-time tnum">~30–60s</div></div>
+        <div class="feed"></div>
+        <div class="stage"><div class="stage-badge">04</div><div class="stage-name">Writer</div><div class="stage-time tnum">~2–5min</div></div>
+        <div class="feed"></div>
+        <div class="stage"><div class="stage-badge">05</div><div class="stage-name">Sources&nbsp;Cited</div><div class="stage-time tnum">~5–15s</div></div>
+      </div>
+      <p class="press-note">Stages 01 and 02 actually run in parallel under the hood — you'll just see one combined "running" state for both. Nothing below skips this order; Score/Reoptimize and the silo tools all feed back into it.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Start a run</a></li>
+        <li><a href="#s3" data-target="s3">03 · Watch it run</a></li>
+        <li><a href="#s4" data-target="s4">04 · When a stage fails</a></li>
+        <li><a href="#s5" data-target="s5">05 · Review the article</a></li>
+        <li><a href="#s6" data-target="s6">06 · Publish — and the voice gate</a></li>
+        <li><a href="#s7" data-target="s7">07 · Score &amp; reoptimize</a></li>
+        <li><a href="#s8" data-target="s8">08 · Content Silos</a></li>
+        <li><a href="#s9" data-target="s9">09 · A worked run</a></li>
+        <li><a href="#s10" data-target="s10">10 · Troubleshooting</a></li>
+        <li><a href="#s11" data-target="s11">11 · Practice exercises</a></li>
+        <li><a href="#s12" data-target="s12">12 · Quick reference</a></li>
+      </ol>
+    </nav>
+
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">Two client-level settings shape every article this tool ever writes:
+          <strong>Brand Voice</strong> and <strong>ICP</strong>. Set them on the client's own
+          pages before you write anything real — every generator in the suite (Blog Writer, Local
+          SEO, Ecommerce) reads the same record. Your own typed text always wins over whatever the
+          app auto-generates; leave it unset and it still works, just less precisely.</p>
+        <div class="marginalia">
+          <p class="marginalia-label">stet — leave standing</p>
+          <p>The brief the pipeline builds is <strong>cached and client-agnostic</strong> — it gets
+            reused across clients targeting the same keyword. The client-specific flavor (voice,
+            ICP, page structure) only enters at the writing stage, not the brief.</p>
+        </div>
+        <table><tbody>
+          <tr><td class="term">5 runs at a time</td><td>Only 5 generation jobs can be in flight across the whole suite. Bulk jobs and "reoptimize existing article" runs deliberately skip this cap — they don't count against it, they just queue and process sequentially in the background.</td></tr>
+          <tr><td class="term">Frozen clients</td><td>Publish, Score, and Reoptimize all show a clear "This client is frozen" explanation when blocked. The New Run form is blunter — it just prints the raw <code>client_frozen</code> code — so check the red freeze banner on the client's workspace page first if something won't start.</td></tr>
+          <tr><td class="term">Length limits</td><td>Keyword: 150 characters. Notes for the writer: 4,000 characters.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Start a run</h2></div>
+        <p>Open the client → <strong>Runs</strong> → <strong>New Run</strong>.</p>
+        <ul>
+          <li><strong>Keyword</strong> — required, e.g. <em>best hvac systems 2026</em>.</li>
+          <li><strong>Format</strong> — an optional override on the brief's own classifier: Auto
+            (detect from keyword), Standard blog post, Listicle (ranked / "Best X"), How-to
+            guide, Comparison (X vs Y), or Buying guide (commercial).</li>
+          <li><strong>Notes for the writer</strong> — freeform guidance for stage 04 only (e.g.
+            "mention Zero Down Supply Chain Services as one of the top 10 best"). It never enters
+            the cached brief — it's a per-run instruction, not a permanent change to how that
+            keyword gets briefed for anyone else.</li>
+        </ul>
+        <div class="note">
+          <p><strong>When to override Format.</strong> Leave it on Auto for almost everything —
+            the classifier reads the keyword well. Override it when the keyword is genuinely
+            ambiguous ("best hvac systems" could read as a listicle or a buying guide) and you
+            already know which one the client wants, or when a past run on this keyword picked
+            the wrong shape and you're re-running specifically to fix that.</p>
+        </div>
+        <p>Click <strong>Start</strong>. If a cached brief already exists for that exact keyword,
+          a dialog asks whether to reuse it (faster, cheaper) or force a fresh one — worth forcing
+          if the SERP landscape has genuinely shifted since it was last researched.</p>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Watch it run</h2></div>
+        <p>The <strong>Pipeline Progress</strong> card lists all five stages live — a spinner +
+          elapsed time while running, a check + duration + cost once done, a clock + typical range
+          while waiting its turn. You don't have to babysit it; it polls itself and reconnects if
+          you navigate away and come back.</p>
+        <div class="galley">
+          <div class="galley-head"><span>Pipeline Progress — live</span><span class="mono tnum">3m 12s elapsed</span></div>
+          <div class="galley-body">
+            <div class="galley-row done"><span class="t mono tnum">0:24</span><span class="stage-tag">Brief</span><span class="msg">done · $0.04</span></div>
+            <div class="galley-row done"><span class="t mono tnum">0:24</span><span class="stage-tag">Search Intent</span><span class="msg">done · $0.02</span></div>
+            <div class="galley-row done"><span class="t mono tnum">0:58</span><span class="stage-tag">Research</span><span class="msg">done · $0.11</span></div>
+            <div class="galley-row now"><span class="t mono tnum">now</span><span class="stage-tag">Writer</span><span class="msg">drafting the full article…</span></div>
+            <div class="galley-row"><span class="t mono tnum">—</span><span class="stage-tag">Sources Cited</span><span class="msg">waiting its turn</span></div>
+          </div>
+        </div>
+        <p>While it's running, a <strong>Cancel</strong> button lets you stop it — it confirms
+          first: "In-progress modules will finish, but no further stages will run."</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>When a stage fails</h2></div>
+        <p>An amber box reading <strong>"Auto-retry"</strong> means exactly that — it's
+          automatically retrying a transient upstream error, not broken. Leave it. A genuine
+          failure shows "Failed at the &lt;stage&gt; stage" plus an expandable error accordion
+          ("What to do" / "Hide") — a plain-English explanation, numbered fix steps, and, when
+          there is one, a one-click fix button.</p>
+        <p>From there you get three buttons, and they are not interchangeable:</p>
+        <table><tbody>
+          <tr><td class="term">Resume</td><td>Picks up from the last completed stage, reusing everything already done. Try this first — it's the cheapest.</td></tr>
+          <tr><td class="term">Restart</td><td>Failed/cancelled runs only. Spawns a <strong>brand-new run</strong> with the same client and keyword, and defaults to regenerating the brief and SIE from scratch (you still get the usual cache-decision dialog first).</td></tr>
+          <tr><td class="term">Rerun</td><td>Complete runs only. Same as Restart — a new run, cache regenerated by default — for when you want a genuinely fresh pass at a keyword you already published.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Review the article</h2></div>
+        <p>Once complete, you'll see:</p>
+        <ul>
+          <li><strong>QA Checks</strong> — a green "All QA checks passed" line, or an amber list
+            flagging a format mismatch, an unhonored writer note, thin entity coverage,
+            keyword-stuffing, or a low-confidence intent read.</li>
+          <li><strong>Title &amp; H1</strong> — the SEO/meta title and the on-page H1, separately
+            copyable (they're often intentionally different).</li>
+          <li><strong>Generated Article</strong> — Markdown/HTML toggle, Copy, Download, and a
+            Featured image picker.</li>
+          <li><strong>Term Usage by Zone</strong> — which related keywords/entities landed in the
+            title, H1, subheadings, and body, without re-reading the whole thing.</li>
+        </ul>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Publish — and the voice gate</h2></div>
+        <p>A run has to be <strong>Complete</strong> before any publish button works. Three
+          destinations, each its own button on the article card:</p>
+        <ul>
+          <li><strong>Publish to Google Docs</strong> — drops into the client's Drive folder; the
+            button becomes "Open Doc" on success.</li>
+          <li><strong>Publish to WP</strong> — pick Draft or Publish from the dropdown first.</li>
+          <li><strong>Publish to GitHub</strong> — commits the markdown; if hero/body-image
+            generation is configured for the client it runs as a background job ("Generating
+            images…"), otherwise it commits synchronously with no images at all.</li>
+        </ul>
+        <div class="note">
+          <p><strong>Which destination to pick.</strong> Google Docs is the default for a client
+            who reviews before anything goes live — it lands as a draft doc, not a publish, so
+            it's the safe choice when you're not sure. WP (WordPress) is for a client whose site
+            the suite can publish to directly: choose <strong>Draft</strong> if a human still
+            needs to hit publish on their end, or <strong>Publish</strong> only for a client
+            you already trust the pipeline's output for — it goes live immediately. GitHub is for
+            a client with a suite-built website (the Website Builder module) — that site's repo
+            is its actual source of truth, so this is the only destination that's "publishing"
+            in the sense of shipping to the real site, not a review copy.</p>
+        </div>
+        <div class="stamp-row">
+          <span class="stamp-badge pass">approved</span>
+          <span class="stamp-badge hold">on hold — voice</span>
+        </div>
+        <p>If the article used a word from the client's "never use" list, publish is blocked — a
+          hard, provable gate. A low voice <em>score</em> alone never blocks; only a forbidden
+          word does. Fix the wording and regenerate, or, if you're confident it's fine, click
+          <strong>Publish anyway</strong> — a deliberate, one-extra-click override.</p>
+        <div class="marginalia">
+          <p class="marginalia-label">no stet on this one</p>
+          <p><strong>Regulated clients</strong> (dosing, branded-drug claims, guaranteed-results
+            language) carry a separate compliance gate that is <strong>not</strong> overridable
+            from the UI. That one needs an actual rewrite — there's no stamp that gets around it.</p>
+        </div>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Score &amp; reoptimize</h2></div>
+        <h3>An article you already generated</h3>
+        <p>On any complete run, the <strong>Article score</strong> card checks it against the
+          blog/AEO rubric — Organic Ranking, AEO/LLM Retrieval, Content Depth, Entity &amp; Topic
+          Coverage, E-E-A-T &amp; Citations, ICP Alignment, Structural AEO, SERP Signal Coverage.
+          Click <strong>Score</strong> (becomes <strong>Re-score</strong> after the first pass).
+          Deficiencies surface as checkboxes — tick the ones to fix (or leave none ticked to fix
+          everything) and click <strong>Reoptimize</strong>; it rewrites against exactly those
+          issues, then re-scores automatically, in the background. Both panels also carry an
+          <strong>Entity engine</strong> selector (TextRazor by default, or Google NLP).</p>
+        <div class="note">
+          <p><strong>Which entity engine.</strong> Leave it on TextRazor — it's the default for a
+            reason and usually the better read. Switch to Google NLP mainly to cross-check a
+            borderline entity-coverage score, or when the topic is technical/niche enough that
+            Google's model might have better coverage of the specific entities involved.</p>
+        </div>
+        <h3>A URL that isn't a suite run</h3>
+        <p>From the Runs page (not inside a specific run), two toggles: <strong>Score an
+          article</strong> — point at a live URL or paste content, plus a required keyword; scores
+          only, rewrites nothing. <strong>Reoptimize an article</strong> — same inputs, plus
+          optional notes, accepts either one URL or a pasted list of several. Unlike scoring, this
+          spawns a genuine <strong>new run</strong> — full brief → research → writer — since
+          there's no existing brief to reuse.</p>
+        <div class="note">
+          <p><strong>Score first, reoptimize second.</strong> Score is the cheap move — run it on
+            a competitor's page or a not-yet-suite page just to see where it stands. Only spend on
+            Reoptimize once the score actually tells you it's worth a full rewrite; on a URL that
+            isn't a suite run, that rewrite is a genuine new pipeline pass, not a cheap patch.</p>
+        </div>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Content Silos</h2></div>
+        <p>As briefs get generated, the suite quietly groups related keywords into <strong>content
+          silos</strong> — topic clusters it noticed recurring across your briefs, no tagging
+          required. Check the <strong>Silos</strong> page in the sidebar periodically: a banner
+          flags topics worth a real look, and each row has icon buttons to <strong>Approve</strong>,
+          <strong>Reject</strong>, or approve-and-immediately-dispatch a run. The bulk toolbar
+          mirrors the same three actions as buttons: <strong>Approve &amp; generate</strong>,
+          <strong>Approve only</strong>, <strong>Reject</strong>.</p>
+        <div class="note">
+          <p><strong>Approve only vs. Approve &amp; generate.</strong> Approve only when you want
+            the topic on record for later — building out a content calendar without committing
+            spend yet. Approve &amp; generate when you're ready to write it now. Reject a
+            grouping that's genuinely a bad fit (unrelated keywords lumped together by
+            coincidence) rather than leaving it sitting in the list for someone else to puzzle
+            over.</p>
+        </div>
+      </section>
+
+      <section id="s9" class="block">
+        <div class="block-head"><span class="block-num">09</span><h2>A worked run</h2></div>
+        <p class="chat-cap mono" style="font-size:0.66rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 0.6rem;">Acme Roofing · keyword: "emergency roof tarping"</p>
+        <div class="galley">
+          <div class="galley-head"><span>Run log</span><span class="mono">run #4417</span></div>
+          <div class="galley-body">
+            <div class="galley-row done"><span class="t mono tnum">0:00</span><span class="stage-tag">Started</span><span class="msg">no cached brief for this keyword — fresh research</span></div>
+            <div class="galley-row done"><span class="t mono tnum">0:31</span><span class="stage-tag">Brief + SIE</span><span class="msg">outline built from 11 competitor pages</span></div>
+            <div class="galley-row done"><span class="t mono tnum">1:22</span><span class="stage-tag">Research</span><span class="msg">14 sources gathered, 9 kept</span></div>
+            <div class="galley-row done"><span class="t mono tnum">4:47</span><span class="stage-tag">Writer</span><span class="msg">1,840 words, brand voice applied</span></div>
+            <div class="galley-row done"><span class="t mono tnum">4:58</span><span class="stage-tag">Sources Cited</span><span class="msg">9 inline citations, references assembled</span></div>
+          </div>
+        </div>
+        <p>QA came back clean. Score landed at 79/100 with one deficiency flagged — thin E-E-A-T —
+          so one tick + Reoptimize, then <strong>Publish to Google Docs</strong>. Total time from
+          click to shipped: under seven minutes of pipeline work, most of it unattended.</p>
+      </section>
+
+      <section id="s10" class="block">
+        <div class="block-head"><span class="block-num">10</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Stuck on "Retrying"</td><td>Not a failure — an automatic retry on a transient upstream error. Leave it; it'll either succeed or eventually surface a real failure with the error accordion.</td></tr>
+          <tr><td class="term">Can I edit the article by hand?</td><td>The generated content publishes as-is. Steer it with the Notes field on the next run, or Score → Reoptimize, rather than hand-editing in the dashboard.</td></tr>
+          <tr><td class="term">Reoptimize spawned a new run instead of editing this one</td><td>Only happens from the "Reoptimize an article" path for content that isn't already a suite run — there's no brief/research to reuse. Reoptimizing a run you already generated rewrites in place and is much cheaper.</td></tr>
+          <tr><td class="term">Hit the 5-run cap</td><td>Wait a minute for something in flight to finish. A big bulk batch running elsewhere doesn't block you outright — a smaller ad-hoc run just queues briefly behind it.</td></tr>
+          <tr><td class="term">Voice or ICP not showing up in the writing</td><td>Check the client's Brand Voice and ICP pages — unset, the suite auto-generates a reasonable default from the site/GBP, which isn't the same as your own guidance.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s11" class="block">
+        <div class="block-head"><span class="block-num">11</span><h2>Practice exercises</h2></div>
+        <ul class="exercise">
+          <li>Start a run on a client with no cached brief for the keyword, and watch all five stages complete without touching the page.</li>
+          <li>Deliberately trigger the cache-decision dialog by re-running a keyword you've already briefed — choose reuse, then try again and choose regenerate.</li>
+          <li>Publish a completed run to Google Docs, then confirm the button flips to "Open Doc."</li>
+          <li>Score a complete run, tick exactly one deficiency, and Reoptimize — compare the before/after score.</li>
+          <li>Find a keyword's Content Silo (if one exists yet) and Approve it from the Silos page.</li>
+        </ul>
+      </section>
+
+      <section id="s12" class="block">
+        <div class="block-head"><span class="block-num">12</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap">
+            <table><tbody>
+              <tr><td class="term">Write a new post</td><td>Runs → <strong>New Run</strong></td></tr>
+              <tr><td class="term">Force a fresh brief</td><td>The cache-decision dialog on run creation</td></tr>
+              <tr><td class="term">Steer without changing the permanent brief</td><td><strong>Notes for the writer</strong> field</td></tr>
+              <tr><td class="term">Stop a run in progress</td><td><strong>Cancel</strong></td></tr>
+              <tr><td class="term">Continue a failed run, cheaply</td><td><strong>Resume</strong></td></tr>
+              <tr><td class="term">Start clean on the same keyword</td><td><strong>Restart</strong> / <strong>Rerun</strong></td></tr>
+              <tr><td class="term">Ship it</td><td><strong>Publish to Google Docs / WP / GitHub</strong></td></tr>
+              <tr><td class="term">Get past a brand-guide block, deliberately</td><td><strong>Publish anyway</strong></td></tr>
+              <tr><td class="term">Improve a run you already made</td><td><strong>Score</strong> → tick deficiencies → <strong>Reoptimize</strong></td></tr>
+              <tr><td class="term">Check/rewrite content that isn't a suite run</td><td>Runs page → <strong>Score an article</strong> / <strong>Reoptimize an article</strong></td></tr>
+              <tr><td class="term">See recurring topics across briefs</td><td>Sidebar → <strong>Silos</strong></td></tr>
+            </tbody></table>
+          </div>
+        </div>
+      </section>
+
+      <div class="colophon">
+        Blog Writer Field Guide · part of the AR Tools new-hire series · the plain-text
+        walkthrough this is illustrated from lives at <code>docs/blog-writer-user-guide.md</code>.
+      </div>
+
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120;
+      var active = 0;
+      for (var i = 0; i < sections.length; i++){
+        if (sections[i] && sections[i].offsetTop <= y) active = i;
+      }
+      links.forEach(function(a, i){ a.classList.toggle('active', i === active); });
+    }
+    document.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+  })();
+</script>
+</body>
+</html>

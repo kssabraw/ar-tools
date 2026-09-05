@@ -601,6 +601,8 @@ async def gsc_scheduler() -> None:
         enqueue_due_gbp_post_syncs,
         enqueue_due_gbp_scheduled_posts,
     )
+    from services.gbp_profile_service import enqueue_due_gbp_profile_syncs
+    from services.gbp_monitor import enqueue_due_gbp_profile_monitor
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
     from services.freeze import enqueue_due_freeze_checks
@@ -613,6 +615,7 @@ async def gsc_scheduler() -> None:
         enqueue_due_deploy_polls as enqueue_due_website_deploy_polls,
     )
     from services.website_release import enqueue_due_website_releases
+    from services.local_seo_matrix_release import enqueue_due_matrix_releases
     from services.domain_intel import enqueue_due_domain_intel
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
@@ -695,6 +698,9 @@ async def gsc_scheduler() -> None:
                 _safe("syndication_scans", enqueue_due_syndication_scans)
                 # Daily Freeze Protocol check (homepage deindex detection).
                 _safe("freeze_checks", enqueue_due_freeze_checks)
+                # Daily GBP profile monitor (suspension / out-of-band change
+                # detection; no-op until gbp_profile_monitor_enabled).
+                _safe("gbp_profile_monitor", enqueue_due_gbp_profile_monitor)
                 # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
                 _safe("episode_sync", run_episode_sync)
                 # Daily chronic-emergency escalation: re-surface a campaign goal
@@ -981,6 +987,11 @@ async def gsc_scheduler() -> None:
             # they fire near their local time. No-op until the module is enabled.
             _safe("gbp_post_schedules", enqueue_due_gbp_post_schedules)
             _safe("gbp_scheduled_posts", enqueue_due_gbp_scheduled_posts)
+            # GBP Profile Editor — the pending-review reconciler. Backoff lives on
+            # the edit row (next_sync_at); the worker claims by scheduled_at with
+            # no <=now gate, so a per-cycle sweep is what honours the ladder (the
+            # leadoff_geocode self-continuing shape). No-op until enabled.
+            _safe("gbp_profile_syncs", enqueue_due_gbp_profile_syncs)
             # Client Reporting scheduled reports (Phase 5) — same self-clocked
             # next_run_at pattern; delivery runs after each scheduled render.
             _safe("report_schedules", enqueue_due_report_schedules)
@@ -1007,5 +1018,9 @@ async def gsc_scheduler() -> None:
             # planned posts (generate + publish) for any site whose cadence has
             # come due. Self-gated on website_builder_enabled, so inert while dark.
             _safe("website_releases", enqueue_due_website_releases)
+            # Local SEO matrix drip release: generate + publish the next batch of
+            # cells for any matrix whose cadence has come due. Self-gated on
+            # local_seo_matrix_enabled; a frozen client's matrix is skipped.
+            _safe("local_seo_matrix_releases", enqueue_due_matrix_releases)
         except Exception as exc:
             logger.error("gsc_scheduler.per_cycle_block_failed", extra={"error": str(exc)})

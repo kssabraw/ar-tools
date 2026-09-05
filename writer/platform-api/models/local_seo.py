@@ -28,6 +28,21 @@ class LocalSeoGenerateRequest(BaseModel):
     entity_provider: Optional[str] = None
 
 
+class LocalSeoPageSpecEditRequest(BaseModel):
+    """A hand-edited page spec to persist as the next (edited) version."""
+    keyword: str
+    location: str
+    location_code: Optional[int] = None
+    spec: dict[str, Any]
+
+
+class LocalSeoPageSpecRebuildRequest(BaseModel):
+    """Rebuild the spec from the current inputs, discarding any edit."""
+    keyword: str
+    location: str
+    location_code: Optional[int] = None
+
+
 class PageTemplateDefaultRequest(BaseModel):
     """Set/clear the client's default Local SEO page-template URL."""
 
@@ -375,6 +390,17 @@ class LocalSeoPageDetail(BaseModel):
     voice_score: Optional[float] = None
     # Saved GBP post suggestions for this page (generated once, re-read on return).
     social_posts: Optional[dict[str, Any]] = None
+    # The page spec this page was written against + the deterministic length
+    # verdict (plan: docs/modules/local-seo-page-spec-plan-v1_0.md). Null for
+    # pages generated before specs existed.
+    page_spec_id: Optional[UUID] = None
+    spec_version: Optional[int] = None
+    target_words: Optional[int] = None
+    actual_words: Optional[int] = None
+    length_status: Optional[str] = None
+    # Structure verdict vs the spec (Phase 4): ok / drift + the issue list.
+    structure_status: Optional[str] = None
+    structure_issues: Optional[list[dict[str, Any]]] = None
     mode: str
     token_usage: Optional[dict[str, Any]] = None
     cost_breakdown: Optional[dict[str, Any]] = None
@@ -405,3 +431,9 @@ class LocalSeoPageListItem(BaseModel):
     published_doc_url: Optional[str] = None
     published_url: Optional[str] = None
     published_at: Optional[str] = None
+    # Target vs actual length + the deterministic verdict (a column, not a
+    # number buried in engine_scores). Null for pre-spec pages.
+    target_words: Optional[int] = None
+    actual_words: Optional[int] = None
+    length_status: Optional[str] = None
+    structure_status: Optional[str] = None

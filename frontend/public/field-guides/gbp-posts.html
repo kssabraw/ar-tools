@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="A shopfront walkthrough for GBP Posts — what goes on the sandwich board outside a client's Google listing.">
+<title>GBP Posts Field Guide</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Domine:wght@400;500;600;700&family=Rubik:wght@400;500;600;700&family=Chivo+Mono:wght@400;600&display=swap">
+<style>
+  :root{
+    --paper:#F0E9DC; --paper-raised:#FBF7EE; --ink:#231D16; --ink-soft:#5B5140; --ink-faint:#948A74;
+    --line:#E1D3B9; --line-strong:#CBB98F;
+    --awning:#B2452E; --awning-ink:#7E3020; --awning-soft:#F2DAD1;
+    --gold:#C9A24A; --gold-ink:#8F7130; --gold-soft:#F1E6C7;
+    --shadow: 0 1px 2px rgba(35,29,22,0.08); --radius:3px;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#191410; --paper-raised:#211B15; --ink:#EFE6D6; --ink-soft:#BAB097; --ink-faint:#7E765F;
+      --line:#372E1E; --line-strong:#49402A;
+      --awning:#D97E67; --awning-ink:#EFAF9C; --awning-soft:#332019;
+      --gold:#DBB768; --gold-ink:#EED597; --gold-soft:#332911;
+      --shadow: 0 1px 2px rgba(0,0,0,0.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#191410; --paper-raised:#211B15; --ink:#EFE6D6; --ink-soft:#BAB097; --ink-faint:#7E765F;
+    --line:#372E1E; --line-strong:#49402A;
+    --awning:#D97E67; --awning-ink:#EFAF9C; --awning-soft:#332019;
+    --gold:#DBB768; --gold-ink:#EED597; --gold-soft:#332911;
+    --shadow: 0 1px 2px rgba(0,0,0,0.35);
+  }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--paper); color:var(--ink); font-family:"Rubik", ui-sans-serif, system-ui, sans-serif; line-height:1.65; -webkit-font-smoothing:antialiased; }
+  h1,h2,h3{ font-family:"Domine", Georgia, serif; color:var(--ink); font-weight:600; text-wrap:balance; margin:0; }
+  a{ color:var(--awning-ink); }
+  a:focus-visible, button:focus-visible{ outline:2px solid var(--awning); outline-offset:2px; }
+  code,.mono{ font-family:"Chivo Mono", ui-monospace, monospace; }
+  .tnum{ font-variant-numeric: tabular-nums; }
+  .page{ max-width:1180px; margin:0 auto; padding:0 1.5rem 6rem; }
+
+  .masthead{ padding:3.25rem 0 0; border-bottom:1px solid var(--line); }
+  .masthead-inner{ display:flex; align-items:flex-start; gap:1.5rem; }
+  .mark{ flex:none; width:58px; height:58px; }
+  .mark svg{ width:100%; height:100%; display:block; }
+  .masthead-text{ max-width:46rem; }
+  .eyebrow{ font-family:"Chivo Mono",monospace; font-size:0.66rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--awning-ink); margin:0 0 0.6rem; }
+  h1{ font-size:clamp(1.8rem,1.4rem + 1.8vw,2.6rem); line-height:1.08; }
+  .dek{ margin:0.85rem 0 0; color:var(--ink-soft); font-size:1.05rem; max-width:38rem; }
+  .masthead-meta{ display:flex; gap:2.25rem; flex-wrap:wrap; margin:1.9rem 0 0; }
+  .meta-item{ display:flex; flex-direction:column; gap:0.15rem; }
+  .meta-num{ font-family:"Domine",serif; font-weight:600; font-size:1.5rem; }
+  .meta-label{ font-family:"Chivo Mono",monospace; font-size:0.6rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); }
+
+  /* Sandwich board — the one diagram only this subject has */
+  .board-wrap{ padding:1.9rem 0 2.1rem; }
+  .board-cap{ font-family:"Chivo Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 1rem; }
+  .board{ max-width:420px; background:var(--paper-raised); border:3px solid var(--ink); border-radius:2px; box-shadow:var(--shadow); padding:1.1rem 1.2rem 1.3rem; position:relative; transform:rotate(-0.6deg); }
+  .board::after{ content:""; position:absolute; left:50%; bottom:-14px; width:2px; height:14px; background:var(--ink); }
+  .board-type{ display:inline-block; font-family:"Chivo Mono",monospace; font-size:0.64rem; font-weight:700; letter-spacing:0.06em; text-transform:uppercase; color:var(--awning-ink); background:var(--awning-soft); border-radius:999px; padding:0.2rem 0.6rem; margin-bottom:0.5rem; }
+  .board-title{ font-family:"Domine",serif; font-weight:700; font-size:1.15rem; margin:0 0 0.4rem; }
+  .board-copy{ font-size:0.88rem; color:var(--ink-soft); margin:0 0 0.7rem; }
+  .board-cta{ display:inline-block; background:var(--gold-soft); border:1px solid var(--gold); color:var(--gold-ink); font-weight:600; font-size:0.8rem; padding:0.3rem 0.8rem; border-radius:3px; }
+  .board-note{ margin:1rem 0 0; font-size:0.88rem; color:var(--ink-soft); max-width:44rem; }
+
+  .layout{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:3rem; margin-top:1.5rem; align-items:start; }
+  .rail{ position:sticky; top:1.75rem; }
+  .rail-title{ font-family:"Chivo Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--ink-faint); margin:0 0 0.85rem; }
+  .rail-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.05rem; border-left:1px solid var(--line); }
+  .rail-list a{ display:block; text-decoration:none; color:var(--ink-soft); font-size:0.83rem; padding:0.36rem 0 0.36rem 0.9rem; border-left:2px solid transparent; margin-left:-1px; }
+  .rail-list a:hover{ color:var(--ink); }
+  .rail-list a.active{ color:var(--awning-ink); border-left-color:var(--awning); font-weight:500; }
+  .content{ max-width:44rem; min-width:0; }
+
+  .block{ padding:2.6rem 0; border-bottom:1px solid var(--line); scroll-margin-top:1.5rem; }
+  .block:first-child{ padding-top:0; }
+  .block:last-of-type{ border-bottom:none; }
+  .block-head{ display:flex; align-items:baseline; gap:0.9rem; margin-bottom:1rem; }
+  .block-num{ font-family:"Chivo Mono",monospace; font-size:0.78rem; color:var(--awning-ink); flex:none; }
+  .block h2{ font-size:1.46rem; }
+  .block h3{ font-size:1.04rem; margin-top:1.8rem; margin-bottom:0.6rem; }
+  .block p{ margin:0.9rem 0; max-width:40rem; }
+  .block p.lede{ font-size:1.05rem; }
+  .block ul,.block ol{ margin:0.9rem 0; padding-left:1.3rem; }
+  .block li{ margin:0.42rem 0; }
+  .block li::marker{ color:var(--ink-faint); }
+  strong{ font-weight:600; }
+
+  .chalk{ position:relative; background:var(--awning-soft); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.3rem 0; }
+  .chalk::before{ content:""; position:absolute; left:0; top:0.35rem; bottom:0.35rem; width:3px; background:var(--awning); border-radius:2px; }
+  .chalk-label{ font-family:"Chivo Mono",monospace; font-size:0.6rem; letter-spacing:0.1em; text-transform:uppercase; color:var(--awning-ink); font-weight:700; margin:0 0 0.3rem; }
+  .chalk p{ margin:0; }
+
+  .storefront{ background:var(--gold-soft); border-left:3px solid var(--gold); border-radius:0 var(--radius) var(--radius) 0; padding:0.95rem 1.2rem; margin:1.2rem 0; }
+  .storefront p{ margin:0; }
+  .storefront strong{ color:var(--gold-ink); }
+
+  .table-wrap{ overflow-x:auto; margin:1.1rem 0; }
+  table{ width:100%; border-collapse:collapse; font-size:0.89rem; }
+  thead th{ text-align:left; font-family:"Chivo Mono",monospace; font-size:0.58rem; letter-spacing:0.08em; text-transform:uppercase; color:var(--ink-faint); padding:0 0.9rem 0.55rem 0; border-bottom:1px solid var(--line-strong); }
+  tbody td{ padding:0.7rem 0.9rem 0.7rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  tbody tr:last-child td{ border-bottom:none; }
+  td.term{ font-weight:600; white-space:nowrap; }
+
+  ul.exercise{ list-style:none; padding-left:0; margin:0.7rem 0; }
+  ul.exercise li{ padding-left:1.7rem; position:relative; margin:0.5rem 0; color:var(--ink-soft); }
+  ul.exercise li::before{ content:"\2610"; position:absolute; left:0; top:0; color:var(--ink-faint); font-family:"Chivo Mono",monospace; }
+
+  .refcard{ background:var(--paper-raised); border:1px solid var(--line-strong); border-radius:var(--radius); box-shadow:var(--shadow); padding:1.6rem 1.7rem; margin:1.2rem 0; }
+  .colophon{ margin-top:2.5rem; padding-top:1.5rem; border-top:1px solid var(--line); color:var(--ink-faint); font-size:0.85rem; }
+
+  @media (max-width:900px){
+    .layout{ grid-template-columns:1fr; gap:1.5rem; }
+    .rail{ position:static; }
+    .rail-list{ flex-direction:row; overflow-x:auto; border-left:none; gap:0.4rem; padding-bottom:0.3rem; }
+    .rail-list a{ border-left:none; border:1px solid var(--line); border-radius:999px; padding:0.35rem 0.85rem; white-space:nowrap; margin-left:0; }
+    .rail-list a.active{ background:var(--awning-soft); border-color:var(--awning); }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="mark" aria-hidden="true">
+        <svg viewBox="0 0 64 64">
+          <path d="M14 46 L32 12 L50 46 Z" fill="none" stroke="var(--ink)" stroke-width="1.5"/>
+          <line x1="14" y1="46" x2="50" y2="46" stroke="var(--ink)" stroke-width="1.5"/>
+          <rect x="24" y="30" width="16" height="16" fill="var(--awning-soft)" stroke="var(--awning)" stroke-width="1.2"/>
+        </svg>
+      </div>
+      <div class="masthead-text">
+        <p class="eyebrow">New&nbsp;Hire Field Guide · Content</p>
+        <h1>GBP Posts, on the sandwich board</h1>
+        <p class="dek">A post here goes straight onto the client's real Google listing — this is
+          the shopfront, and "Publish now" means it's live in the window today.</p>
+      </div>
+    </div>
+    <div class="masthead-meta">
+      <div class="meta-item"><span class="meta-num tnum">4</span><span class="meta-label">Post types</span></div>
+      <div class="meta-item"><span class="meta-num tnum">1500</span><span class="meta-label">Character limit</span></div>
+      <div class="meta-item"><span class="meta-num tnum">4</span><span class="meta-label">Tabs</span></div>
+    </div>
+    <div class="board-wrap">
+      <p class="board-cap">Today's board</p>
+      <div class="board">
+        <span class="board-type">offer</span>
+        <div class="board-title">Free Gutter Inspection — This Week Only</div>
+        <p class="board-copy">Book before Friday and we'll check your gutters at no charge before
+          the fall rains hit. Licensed, insured, local.</p>
+        <span class="board-cta">Book →</span>
+      </div>
+      <p class="board-note">Offers, Events, and Updates all work this way — Products publish as a
+        framed Update, since Google has no real product-post API.</p>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="rail" aria-label="Contents">
+      <p class="rail-title">Contents</p>
+      <ol class="rail-list" id="railList">
+        <li><a href="#s1" data-target="s1">01 · Before you start</a></li>
+        <li><a href="#s2" data-target="s2">02 · Compose</a></li>
+        <li><a href="#s3" data-target="s3">03 · Posts</a></li>
+        <li><a href="#s4" data-target="s4">04 · Publish</a></li>
+        <li><a href="#s5" data-target="s5">05 · Recurring Schedule</a></li>
+        <li><a href="#s6" data-target="s6">06 · Trash</a></li>
+        <li><a href="#s7" data-target="s7">07 · Troubleshooting</a></li>
+        <li><a href="#s8" data-target="s8">08 · Quick reference</a></li>
+      </ol>
+    </nav>
+    <main class="content">
+
+      <section id="s1" class="block">
+        <div class="block-head"><span class="block-num">01</span><h2>Before you start</h2></div>
+        <p class="lede">A connection bar at the top tells you the state: green means connected,
+          blue means someone staff+ needs to click Connect, grey means an admin hasn't configured
+          it. A verified location is required to publish — drafting works either way.</p>
+        <p>Freeze pauses publishing, not drafting — a frozen client blocks Publish now and
+          scheduled auto-publish, but drafting and syncing keep working.</p>
+      </section>
+
+      <section id="s2" class="block">
+        <div class="block-head"><span class="block-num">02</span><h2>Compose</h2></div>
+        <p>Pick a type — <strong>Update</strong>, <strong>Offer</strong>, <strong>Event</strong>,
+          <strong>Product</strong> — each with its own fields (Offer/Event add title + dates,
+          Offer adds a coupon code). <strong>Draft with AI</strong> generates copy grounded in
+          the client's brand voice + ICP. <strong>"Create posts from a page URL"</strong> drafts
+          several distinct posts (1–99) from one page, each with a different angle so they don't
+          read like paraphrases. Image field: Upload, Generate with AI, From URL, or
+          <strong>Reuse existing</strong> (the client's own prior blog/Local SEO images).</p>
+        <div class="chalk">
+          <p class="chalk-label">picking a type and an image</p>
+          <p><strong>Post type.</strong> Update for general news with no real deadline. Offer only
+            for a genuine time-bound promotion (Google shows a start/end date and a coupon field —
+            using it for something that isn't actually an offer looks wrong to a searcher). Event
+            for a specific date/time happening. Product to spotlight one item from the catalog —
+            it publishes as a framed Update since Google's API has no true product-post type.</p>
+          <p><strong>Where the image comes from.</strong> Reuse existing is the fastest and
+            keeps visual consistency with the client's other content — check it first. Upload when
+            you have the client's own real photo (a job site, a team photo) that nothing generated
+            could replace. Generate with AI for a type that has no natural existing photo (an
+            abstract "Update" topic). From URL when the client already has the exact image
+            somewhere public you want to pull in directly.</p>
+        </div>
+      </section>
+
+      <section id="s3" class="block">
+        <div class="block-head"><span class="block-num">03</span><h2>Posts</h2></div>
+        <p>Filter chips — All / Drafts / Scheduled / Live — with live counts.
+          <strong>Sync from Google</strong> pulls in anything posted directly there. Status
+          badges: Draft, Scheduled (with the time), Publishing…, Live (with a View on Google
+          link), Rejected/Failed, Deleted.</p>
+      </section>
+
+      <section id="s4" class="block">
+        <div class="block-head"><span class="block-num">04</span><h2>Publish</h2></div>
+        <p><strong>Publish now</strong> goes live immediately. A future datetime pick or the
+          recurring schedule with auto-publish on both go out on their own — the status badge is
+          always the tell for which kind a post is.</p>
+        <div class="storefront">
+          <p><strong>Which timing.</strong> Publish now for a single post you've already reviewed
+            and want live today. A future datetime is for a specific planned moment — a launch,
+            an event's start, timing around something the client asked for. The recurring schedule
+            is the right call once you want a standing cadence and don't want to hand-compose
+            every single post — see Recurring Schedule below for whether it should also
+            auto-publish or just draft for review.</p>
+        </div>
+      </section>
+
+      <section id="s5" class="block">
+        <div class="block-head"><span class="block-num">05</span><h2>Recurring Schedule</h2></div>
+        <p>Off / Weekly / Every 2 weeks / Monthly, an hour, a post type, and theme/rotation notes
+          to guide the AI draft.</p>
+        <div class="chalk">
+          <p class="chalk-label">off by default, on purpose</p>
+          <p><strong>Auto-publish</strong> is a separate checkbox — scheduled posts land as
+            drafts for review unless you turn it on, which shows an explicit warning: posts will
+            publish live with no human review.</p>
+        </div>
+        <div class="storefront">
+          <p><strong>Which cadence, and whether to auto-publish.</strong> Weekly suits a client
+            who wants consistent visibility and has enough happening to say something new each
+            time. Every 2 weeks or Monthly fits a quieter business where weekly posts would start
+            repeating themselves. Only turn auto-publish on once you've reviewed several drafts
+            for this client and trust the AI copy's quality and voice fit unattended — for a new
+            client, leave it off and review each draft yourself for the first few cycles.</p>
+        </div>
+      </section>
+
+      <section id="s6" class="block">
+        <div class="block-head"><span class="block-num">06</span><h2>Trash</h2></div>
+        <div class="storefront">
+          <p>Deleted posts get Restore or permanent delete, plus <strong>Empty trash</strong> —
+            though a post still live on Google is kept out of a bulk empty until it's removed
+            from Google first.</p>
+        </div>
+      </section>
+
+      <section id="s7" class="block">
+        <div class="block-head"><span class="block-num">07</span><h2>Troubleshooting</h2></div>
+        <table><tbody>
+          <tr><td class="term">Scheduled auto-publish didn't go out</td><td>Check if the client is frozen — due posts skip or hold until it lifts.</td></tr>
+          <tr><td class="term">AI copy ignores brand voice</td><td>It only pulls from the client's saved Voice Card / ICP — fill those in first.</td></tr>
+          <tr><td class="term">Image got rejected</td><td>JPG/PNG only, ≥250×250px, 10KB–25MB.</td></tr>
+        </tbody></table>
+      </section>
+
+      <section id="s8" class="block">
+        <div class="block-head"><span class="block-num">08</span><h2>Quick reference</h2></div>
+        <div class="refcard">
+          <div class="table-wrap"><table><tbody>
+            <tr><td class="term">Write a post by hand</td><td>Compose → pick a type</td></tr>
+            <tr><td class="term">Draft with AI</td><td>Compose → <strong>Draft with AI</strong></td></tr>
+            <tr><td class="term">Publish immediately</td><td><strong>Publish now</strong></td></tr>
+            <tr><td class="term">Set up recurring drafting</td><td>Schedule tab</td></tr>
+            <tr><td class="term">Pull in posts made in Google</td><td>Posts → <strong>Sync from Google</strong></td></tr>
+            <tr><td class="term">Recover a deleted post</td><td>Trash → <strong>Restore</strong></td></tr>
+          </tbody></table></div>
+        </div>
+      </section>
+
+      <div class="colophon">GBP Posts Field Guide · AR Tools new-hire series · full text at <code>docs/gbp-posts-user-guide.md</code>.</div>
+    </main>
+  </div>
+</div>
+<script>
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.rail-list a'));
+    var sections = links.map(function(a){ return document.getElementById(a.getAttribute('data-target')); });
+    function onScroll(){
+      var y = window.scrollY + 120, active = 0;
+      for (var i=0;i<sections.length;i++){ if (sections[i] && sections[i].offsetTop <= y) active = i; }
+      links.forEach(function(a,i){ a.classList.toggle('active', i===active); });
+    }
+    document.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

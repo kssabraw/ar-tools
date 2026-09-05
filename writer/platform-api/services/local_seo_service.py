@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import statistics
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable, Optional
 
@@ -22,7 +23,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import analysis_cache, locations_service
+from services import analysis_cache, job_priority, locations_service, page_spec, page_spec_store
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -107,7 +108,75 @@ def _gbp_to_generate_payload(
         # nlp's default. Threaded from the UI so the SERP entity analysis inside
         # nlp uses the chosen engine.
         "entity_provider": entity_provider,
+        # ── Trust & Proof (docs/modules/local-landing-page-structure.md) ───────
+        # Business-supplied badges / facts the deterministic Trust & Proof block
+        # renders (never model-authored). Scalar/list facts come from the
+        # clients.trust_signals JSONB; the aggregate rating is the GBP capture,
+        # never estimated. The media gallery (assets) is a separate table, set by
+        # generate_page after this mapper.
+        **_trust_signal_fields(client),
+        "gbp_rating": gbp.get("gbp_rating"),
+        "gbp_review_count": gbp.get("gbp_review_count"),
     }
+
+
+def _trust_signal_fields(client: dict) -> dict:
+    """Extract the nlp trust-signal payload fields from clients.trust_signals.
+
+    Pure: reads the JSONB (a missing/blank field just becomes None/[]), so the
+    generator's Trust & Proof block and the §1/§8/§10 prompt conditionals get
+    exactly what the client has on file and nothing invented."""
+    ts = client.get("trust_signals") or {}
+    if not isinstance(ts, dict):
+        ts = {}
+
+    def _list(key: str) -> list:
+        v = ts.get(key)
+        return v if isinstance(v, list) else []
+
+    years = ts.get("years_founded")
+    try:
+        years = int(years) if years not in (None, "") else None
+    except (TypeError, ValueError):
+        years = None
+    return {
+        "certifications": _list("certifications"),
+        "affiliations": _list("affiliations"),
+        "financing_partners": _list("financing_partners"),
+        "license_number": (ts.get("license_number") or None),
+        "years_founded": years,
+        "founding_date": (ts.get("founding_date") or None),
+    }
+
+
+def _client_assets(client_id: str) -> list[dict]:
+    """Load a client's media-gallery assets (client_assets table) as the nlp
+    payload shape [{kind, url, caption}], ordered as stored. Best-effort — a
+    read failure returns [] so page generation never fails over a gallery."""
+    try:
+        res = (
+            get_supabase()
+            .table("client_assets")
+            .select("kind, url, caption, sort_order")
+            .eq("client_id", client_id)
+            .order("sort_order")
+            .order("created_at")
+            .execute()
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("local_seo.client_assets_read_failed", extra={"error": str(exc)})
+        return []
+    out: list[dict] = []
+    for row in res.data or []:
+        url = (row.get("url") or "").strip()
+        if not url:
+            continue
+        out.append({
+            "kind": row.get("kind") or "other",
+            "url": url,
+            "caption": row.get("caption") or "",
+        })
+    return out
 
 
 def _gbp_to_rankability_payload(
@@ -291,9 +360,15 @@ def _job_progress_writer(job_id: Optional[str]):
 
 # ── persistence ─────────────────────────────────────────────────────────────
 
-def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None) -> dict:
+def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None, job_id: Optional[str] = None) -> dict:
     row = {
         "client_id": client_id,
+        # The async job that produced this page (None for streaming/sync paths).
+        # The job handlers look this up FIRST on every attempt, so a retry after
+        # a post-persist failure (the completion write to async_jobs raising a
+        # transport error, a reaper requeue) resumes with the page that already
+        # exists instead of generating — and paying for — a duplicate.
+        "generated_by_job_id": job_id,
         "keyword": keyword,
         "location": location,
         "run_analysis": run_analysis,
@@ -317,6 +392,17 @@ def _persist_page(client_id: str, keyword: str, location: str, run_analysis: boo
         # guide on file — which is not the same as scoring zero.
         "voice_violations": result.get("voice_compliance"),
         "voice_score": (result.get("voice_compliance") or {}).get("score"),
+        # The page spec this page was written against + how it landed
+        # (attach_length_verdict). All null for pages generated without a spec.
+        "page_spec_id": result.get("page_spec_id"),
+        "spec_version": result.get("spec_version"),
+        "target_words": result.get("target_words"),
+        "actual_words": result.get("actual_words"),
+        "length_status": result.get("length_status"),
+        # Structure verdict vs the spec (Phase 4): status + the issue list incl.
+        # the nlp per-section intent/sentiment audit. Null without a spec.
+        "structure_status": result.get("structure_status"),
+        "structure_issues": result.get("structure_issues"),
         "mode": mode,
         "token_usage": result.get("token_usage"),
         "cost_breakdown": result.get("cost_breakdown"),
@@ -438,6 +524,59 @@ async def _compute_and_store(
     return result
 
 
+def fallback_word_target(targets: list[int], default: int) -> int:
+    """Pure: the standing length target for a market when a keyword's own SERP
+    analysis is unavailable — the median of the newest cached targets at the
+    same location (robust to one unusually long/short SERP), else `default`.
+    Never below 1."""
+    # Only plausible targets count as "the market": an outlier SERP (thin or
+    # bloated) is exactly what the fallback exists to step around, so it must
+    # not be able to define the fallback — least of all when it is the only
+    # cached analysis at the location and would feed itself straight back.
+    clean = [
+        int(t) for t in (targets or [])
+        if isinstance(t, (int, float)) and page_spec.SERP_TARGET_MIN <= t <= page_spec.SERP_TARGET_MAX
+    ]
+    if not clean:
+        return max(1, int(default))
+    return max(1, int(round(statistics.median(clean))))
+
+
+def _resolve_fallback_length_target(location_code: Optional[int], location: str) -> int:
+    """Impure: the market's standing word target (see `fallback_word_target`)."""
+    targets = analysis_cache.recent_word_targets(
+        location_code, location, limit=settings.local_seo_fallback_target_samples
+    )
+    return fallback_word_target(targets, settings.local_seo_fallback_word_target)
+
+
+def _notify_analysis_degraded(client_id: str, keyword: str, location: str, target: int) -> None:
+    """Surface a generate that ran WITHOUT competitor analysis. Before this the
+    degrade was invisible — the job completed, the page looked normal, and only
+    the SERP-coverage engine's neutral 50 hinted anything was missing. One
+    notification per client+keyword (a bulk batch must not fire N)."""
+    try:
+        from services import notifications  # lazy: keep this module's import graph small
+
+        notifications.emit(
+            client_id,
+            kind="content_no_serp_analysis",
+            title="Local SEO page written without competitor analysis",
+            summary=(
+                f"The competitor SERP analysis for '{keyword}' ({location}) could not be "
+                f"run (provider unavailable), so the page was written from business data "
+                f"alone with a fallback length target of ~{target} words. Its SERP-coverage "
+                f"score is neutral. Once the provider is back, reoptimize the page from "
+                f"Saved Pages to write it against the real competitor set."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "location": location, "length_target": target},
+            dedupe_key=f"content_no_serp_analysis:{client_id}:{keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — a notification failure never blocks generation
+        logger.warning("local_seo.analysis_degraded_notify_failed", extra={"error": str(exc)})
+
+
 async def _get_or_compute_analysis(
     keyword: str,
     location: str,
@@ -512,6 +651,119 @@ async def _apply_structure_gate(
     )
 
 
+def _resolve_page_spec(
+    client: dict, keyword: str, location: str, location_code: Optional[int],
+    serp: Optional[dict], fallback_target: Optional[int],
+) -> Optional[dict]:
+    """The page spec this generation is written against (plan §6 Phase 1):
+    the active stored version (an edit sticks), else a freshly built + saved
+    one. Best-effort — None on any failure, and generation carries on exactly
+    as before (a page must never fail because its spec couldn't be built)."""
+    try:
+        return page_spec_store.resolve_spec(
+            client, keyword, location, location_code, serp, fallback_target,
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort by contract
+        logger.warning(
+            "local_seo.page_spec_unavailable",
+            extra={"client_id": client.get("id"), "keyword": keyword, "error": str(exc)},
+        )
+        return None
+
+
+def _notify_over_length(client_id: str, keyword: str, page_id: Optional[str], verdict: Optional[dict]) -> None:
+    """Plan §5.5 — a page still over the spec ceiling after every trim is
+    saved honestly (length_status=over_length) AND surfaced, never shipped as
+    a clean page. One notification per page. Best-effort."""
+    if not verdict or not verdict.get("over_ceiling"):
+        return
+    try:
+        from services import notifications  # lazy
+
+        notifications.emit(
+            client_id,
+            kind="content_over_length",
+            title="Local SEO page saved over its length ceiling",
+            summary=(
+                f"'{keyword}' landed at ~{verdict.get('total_words')} words against a spec band of "
+                f"{verdict.get('min_words')}–{verdict.get('max_words')} (ceiling {verdict.get('ceiling_words')}) "
+                f"after the trim passes. Over-band sections: "
+                f"{', '.join(verdict.get('over_sections') or []) or 'none — the overage is spread across sections'}. "
+                f"Review the page spec or reoptimize the page before publishing."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "page_id": page_id, "length_verdict": {
+                k: v for k, v in verdict.items() if k != "sections"}},
+            dedupe_key=f"content_over_length:{page_id or keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never blocks generation
+        logger.warning("local_seo.over_length_notify_failed", extra={"error": str(exc)})
+
+
+def _notify_structure_drift(client_id: str, keyword: str, page_id: Optional[str], verdict: Optional[dict]) -> None:
+    """Plan §5.4 Phase 4 — a page still structurally off its spec after the
+    fix passes (a required section missing, caps breached, block/FAQ shape
+    wrong, or a section failing its intent / not positive) is saved honestly
+    (structure_status=drift) AND surfaced. One notification per page.
+    Best-effort."""
+    if not verdict or verdict.get("status") != "drift":
+        return
+    try:
+        from services import notifications  # lazy
+
+        blocking = [i for i in verdict.get("issues") or [] if not i.get("advisory")]
+        lines = "; ".join(str(i.get("detail") or i.get("code")) for i in blocking[:6])
+        notifications.emit(
+            client_id,
+            kind="content_structure_drift",
+            title="Local SEO page saved off its structure spec",
+            summary=(
+                f"'{keyword}' still has {len(blocking)} structure issue(s) after the fix passes: {lines}"
+                f"{' …' if len(blocking) > 6 else ''}. Review the page spec or reoptimize the page before publishing."
+            ),
+            severity="warning",
+            payload={"keyword": keyword, "page_id": page_id,
+                     "issues": blocking, "issue_codes": verdict.get("issue_codes") or []},
+            dedupe_key=f"content_structure_drift:{page_id or keyword.strip().lower()}",
+        )
+    except Exception as exc:  # noqa: BLE001 — never blocks generation
+        logger.warning("local_seo.structure_drift_notify_failed", extra={"error": str(exc)})
+
+
+def attach_length_verdict(result: dict, spec: Optional[dict]) -> dict:
+    """Measure the generated page against its spec and record the verdicts on
+    the result: `length_verdict` (full) + `structure_verdict` (deterministic
+    checks re-measured here, merged with nlp's per-section intent + sentiment
+    audit when it returned one), plus the flat fields `_persist_page` writes
+    to the page row. Pure apart from the HTML parse; a missing spec leaves
+    the result untouched."""
+    if not spec:
+        return result
+    try:
+        measure = page_spec.measure_page(result.get("content_html") or "", spec)
+        verdict = page_spec.length_verdict(measure, spec)
+    except Exception as exc:  # noqa: BLE001 — measurement must never break the run
+        logger.warning("local_seo.length_verdict_failed", extra={"error": str(exc)})
+        return result
+    result["length_verdict"] = {**verdict, "sections": measure.get("sections") or []}
+    result["page_spec_id"] = spec.get("id")
+    result["spec_version"] = spec.get("version")
+    result["target_words"] = verdict.get("target_words")
+    result["actual_words"] = verdict.get("total_words")
+    result["length_status"] = verdict.get("status")
+    try:
+        nlp_verdict = result.get("structure_verdict") if isinstance(result.get("structure_verdict"), dict) else {}
+        audit = nlp_verdict.get("audit") if isinstance(nlp_verdict.get("audit"), dict) else None
+        structure = page_spec.structure_verdict(measure, spec, audit)
+        structure["audit"] = audit or {}
+        result["structure_verdict"] = structure
+        result["structure_status"] = structure.get("status")
+        result["structure_issues"] = structure.get("issues") or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("local_seo.structure_verdict_failed", extra={"error": str(exc)})
+    return result
+
+
 async def generate_page(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     user_id: str, force_refresh: bool = False,
@@ -521,6 +773,7 @@ async def generate_page(
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     internal_links: Optional[list[dict]] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Generate a local SEO page for a client and persist it.
 
@@ -544,6 +797,9 @@ async def generate_page(
         client, keyword, location, location_code, include_decision_map=include_decision_map,
         entity_provider=entity_provider,
     )
+    # Media gallery (Trust & Proof block) — a separate table, loaded here since
+    # the mapper above is pure over the client row. Best-effort.
+    payload["assets"] = _client_assets(client_id)
     # The client's brand guide, distilled into enforceable rules (cached per
     # guide revision). Steers generation and drives the deterministic post-write
     # check; an empty card means the client has no guide and nothing changes.
@@ -561,11 +817,49 @@ async def generate_page(
         keyword, location, location_code, force_refresh, user_id, required=False,
         entity_provider=entity_provider,
     )
-    if serp is not None:
+    if serp is None and settings.local_seo_analysis_retry_delay_seconds > 0:
+        # One retry: the failure seen in practice is a seconds-long nlp restart
+        # window (a redeploy), not a lasting provider outage.
+        logger.warning(
+            "local_seo.analysis_retry",
+            extra={"client_id": client_id, "keyword": keyword,
+                   "delay_s": settings.local_seo_analysis_retry_delay_seconds},
+        )
+        await asyncio.sleep(settings.local_seo_analysis_retry_delay_seconds)
+        serp = await _get_or_compute_analysis(
+            keyword, location, location_code, force_refresh, user_id, required=False,
+            entity_provider=entity_provider,
+        )
+    analysis_ok = serp is not None
+    if analysis_ok:
         payload["serp_analysis"] = serp
     else:
         payload["run_analysis"] = False  # analysis unavailable → degrade, no nlp re-scrape
     serp_target = (serp or {}).get("serp_word_target")
+    if not serp_target:
+        # No measured SERP length (analysis failed, or too few competitor pages
+        # to average): the page must still be budgeted + graded on length, else
+        # the writer falls back to the template's per-section counts and ships
+        # 2–3× the market's length. Use the market's standing target.
+        serp_target = _resolve_fallback_length_target(location_code, location)
+        payload["length_target"] = serp_target
+        logger.warning(
+            "local_seo.length_target_fallback",
+            extra={"client_id": client_id, "keyword": keyword, "target": serp_target,
+                   "analysis_ok": analysis_ok},
+        )
+        if not analysis_ok:
+            _notify_analysis_degraded(client_id, keyword, location, serp_target)
+
+    # The kept page spec (length band + per-section bands + caps) for this
+    # keyword × location — built from the same SERP analysis + the client's
+    # reference layout, or the active edited version. Rides to nlp on the
+    # payload (consumed in Phase 2); its target also drives the reference
+    # scaling below so prompt and spec agree on the page size.
+    spec = _resolve_page_spec(client, keyword, location, location_code, serp, serp_target)
+    if spec:
+        payload["page_spec"] = spec
+        serp_target = (spec.get("total") or {}).get("target") or serp_target
 
     # Page template: per-page value wins; otherwise the client's saved default.
     template_url = (page_template_url or "").strip() or client.get("local_seo_page_template_url")
@@ -601,9 +895,24 @@ async def generate_page(
     if internal_links:
         payload["internal_links"] = internal_links
     result = await _stream_nlp("/generate-page", payload, timeout=_GENERATE_PAGE_TIMEOUT, on_progress=on_progress)
-    result = await _apply_structure_gate(result, payload, reference_analysis)
+    if spec is None:
+        # The legacy reference-structure gate (whole-page regeneration scored
+        # against the raw stored reference) is retired for spec-driven pages:
+        # the spec already folded the reference in, and nlp enforces structure
+        # section-by-section against it (plan §5.4 Phase 4). Two gates on two
+        # different structures would fight.
+        result = await _apply_structure_gate(result, payload, reference_analysis)
     coverage = _guarantee_internal_links(result, internal_links)
-    page = _persist_page(client_id, keyword, location, True, "generate", result, user_id, notes=notes)
+    result = attach_length_verdict(result, spec)
+    # Record whether competitor analysis actually informed this page (it used
+    # to be hard-coded True, so a degraded page was indistinguishable on read).
+    page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes, job_id=job_id)
+    if result.get("length_verdict") is not None:
+        page["length_verdict"] = result["length_verdict"]  # not a column — rides the response
+        _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
+    if result.get("structure_verdict") is not None:
+        page["structure_verdict"] = result["structure_verdict"]
+        _notify_structure_drift(client_id, keyword, page.get("id"), result["structure_verdict"])
     if coverage is not None:
         page["link_coverage"] = coverage
     return page
@@ -664,6 +973,34 @@ async def enqueue_generate(
     return res.data[0]["id"]
 
 
+def _page_for_job(job_id: Optional[str]) -> Optional[dict]:
+    """The live page a job already persisted (`local_seo_pages.generated_by_job_id`),
+    or None. The job handlers call this FIRST so a retried attempt — after the
+    completion write raised a transport error, or after the stale-job reaper
+    requeued a row whose page had already landed — resumes with the existing page
+    instead of regenerating a duplicate. Best-effort: a read failure returns None
+    and the attempt simply generates."""
+    if not job_id:
+        return None
+    try:
+        rows = (
+            get_supabase()
+            .table("local_seo_pages")
+            .select("id, composite_score, keyword")
+            .eq("generated_by_job_id", job_id)
+            .is_("deleted_at", "null")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort guard
+        logger.warning("local_seo.page_for_job_failed", extra={"job_id": job_id, "error": str(exc)[:200]})
+        return None
+    return rows[0] if rows else None
+
+
 async def run_generate_job(job: dict) -> None:
     """async_jobs handler for job_type='local_seo_generate'. Runs generate_page
     (which persists the page) and stores the new page id in the job result."""
@@ -671,18 +1008,23 @@ async def run_generate_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        page = await generate_page(
-            client_id=payload["client_id"],
-            keyword=payload["keyword"],
-            location=payload["location"],
-            location_code=payload.get("location_code"),
-            user_id=payload["user_id"],
-            force_refresh=bool(payload.get("force_refresh")),
-            page_template_url=payload.get("page_template_url"),
-            entity_provider=payload.get("entity_provider"),
-            on_progress=_job_progress_writer(job_id),
-            internal_links=payload.get("internal_links") or None,
-        )
+        page = _page_for_job(job_id)
+        if page:
+            logger.info("local_seo.generate_job_resumed_existing_page", extra={"job_id": job_id, "page_id": page["id"]})
+        else:
+            page = await generate_page(
+                client_id=payload["client_id"],
+                keyword=payload["keyword"],
+                location=payload["location"],
+                location_code=payload.get("location_code"),
+                user_id=payload["user_id"],
+                force_refresh=bool(payload.get("force_refresh")),
+                page_template_url=payload.get("page_template_url"),
+                entity_provider=payload.get("entity_provider"),
+                on_progress=_job_progress_writer(job_id),
+                internal_links=payload.get("internal_links") or None,
+                job_id=job_id,
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -697,12 +1039,56 @@ async def run_generate_job(job: dict) -> None:
                 record_link_coverage(payload["matrix_cell_id"], page["link_coverage"])
             except Exception as exc:  # noqa: BLE001
                 logger.warning("local_seo.matrix_link_coverage_failed", extra={"job_id": job_id, "error": str(exc)})
+        # Drip release: generate THEN publish just-in-time (plan §5.2). The page
+        # is already persisted + the job complete, so a publish failure costs
+        # only the publish — it lands on the cell as publish_failed / blocked.
+        if payload.get("publish_after"):
+            await _publish_after_generate(page["id"], payload, job_id)
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.generate_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Transient nlp failures (5xx / transport — a container restart, an
+        # exhausted Anthropic retry budget) re-queue with backoff while attempts
+        # remain; a 4xx fails terminally. Lazy import: job_worker imports this module.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
+
+
+async def _publish_after_generate(page_id: str, payload: dict, job_id: str) -> None:
+    """The drip release's auto-publish: publish the just-generated page to the
+    matrix's destination and record the outcome on the cell. Best-effort — never
+    raises into the job (the page + job are already complete)."""
+    from services import local_seo_matrix as core
+    from services.local_seo_matrix_store import record_publish_outcome
+
+    cell_id = payload.get("matrix_cell_id")
+    destination = payload.get("publish_destination") or "google_docs"
+    status = payload.get("publish_status") or "draft"
+    # "App only" matrix: the page is already in Saved Pages, nothing is pushed
+    # externally — the drip is just a paced generate, so the cell stays `done`.
+    if not core.publishes_externally(destination):
+        logger.info(
+            "local_seo.matrix_publish_after_app_only",
+            extra={"job_id": job_id, "page_id": page_id, "cell_id": cell_id},
+        )
+        return
+    try:
+        result = await publish_page(page_id, payload.get("user_id") or "", destination=destination, status=status)
+        outcome = core.publish_outcome_from_result(result or {})
+    except HTTPException as exc:
+        outcome = core.publish_outcome_from_error(str(exc.detail))
+    except Exception as exc:  # noqa: BLE001
+        outcome = core.publish_outcome_from_error(str(exc))
+    logger.info(
+        "local_seo.matrix_publish_after",
+        extra={"job_id": job_id, "page_id": page_id, "cell_id": cell_id, "outcome": outcome[0]},
+    )
+    if cell_id:
+        try:
+            record_publish_outcome(cell_id, page_id, *outcome)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("local_seo.matrix_publish_record_failed", extra={"job_id": job_id, "error": str(exc)})
 
 
 def get_generate_job(job_id: str, client_id: str) -> dict:
@@ -711,7 +1097,7 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
     supabase = get_supabase()
     res = (
         supabase.table("async_jobs")
-        .select("status, result, error, entity_id")
+        .select("status, result, error, entity_id, progress_message")
         .eq("id", job_id)
         .limit(1)
         .execute()
@@ -720,7 +1106,14 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
         raise HTTPException(status_code=404, detail="generate_job_not_found")
     row = res.data[0]
     result = row.get("result") or {}
-    return {"status": row["status"], "page_id": result.get("page_id"), "error": row.get("error")}
+    # `retrying`: the handler hit a transient nlp failure and the row is queued
+    # for another attempt (see job_worker.plan_job_retry) — the UI shows the
+    # note instead of a silent spinner through the backoff.
+    retrying = row["status"] == "pending" and (row.get("error") or "").startswith("transient")
+    return {
+        "status": row["status"], "page_id": result.get("page_id"), "error": row.get("error"),
+        "retrying": retrying, "progress_message": row.get("progress_message") if retrying else None,
+    }
 
 
 # ── bulk background generation / reoptimization (per-item async jobs) ─────────
@@ -765,6 +1158,7 @@ async def enqueue_generate_bulk(
                 "job_type": "local_seo_generate",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(len(rows)),
+                "priority": job_priority.BACKGROUND,
                 "payload": {
                     "client_id": client_id,
                     "keyword": kw.strip(),
@@ -804,6 +1198,7 @@ async def enqueue_reoptimize_bulk(
                 "job_type": "local_seo_reoptimize_url",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(len(rows)),
+                "priority": job_priority.BACKGROUND,
                 "payload": {
                     "client_id": client_id,
                     "page_url": page_url,
@@ -834,18 +1229,29 @@ async def run_reoptimize_url_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        result = await reoptimize_url(
-            client_id=payload["client_id"],
-            page_url=payload["page_url"],
-            keyword=payload["keyword"],
-            location=payload["location"],
-            location_code=payload.get("location_code"),
-            user_id=payload["user_id"],
-            score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
-            publish_to_doc=bool(payload.get("publish_to_doc")),
-            entity_provider=payload.get("entity_provider"),
-            on_progress=_job_progress_writer(job_id),
-        )
+        resumed = _page_for_job(job_id)
+        if resumed:
+            # A prior attempt already rewrote + persisted the page; don't rewrite
+            # (and pay) again. The full score deltas rode the lost attempt.
+            logger.info("local_seo.reoptimize_job_resumed_existing_page", extra={"job_id": job_id, "page_id": resumed["id"]})
+            result = {
+                "status": "reoptimized", "page_url": payload["page_url"], "keyword": payload["keyword"],
+                "new_score": resumed.get("composite_score"), "page": {"id": resumed["id"]}, "resumed": True,
+            }
+        else:
+            result = await reoptimize_url(
+                client_id=payload["client_id"],
+                page_url=payload["page_url"],
+                keyword=payload["keyword"],
+                location=payload["location"],
+                location_code=payload.get("location_code"),
+                user_id=payload["user_id"],
+                score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
+                publish_to_doc=bool(payload.get("publish_to_doc")),
+                entity_provider=payload.get("entity_provider"),
+                on_progress=_job_progress_writer(job_id),
+                job_id=job_id,
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -853,9 +1259,12 @@ async def run_reoptimize_url_job(job: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.reoptimize_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Transient nlp failures (5xx / transport — a container restart, an
+        # exhausted Anthropic retry budget) re-queue with backoff while attempts
+        # remain; a 4xx fails terminally. Lazy import: job_worker imports this module.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 def get_jobs_status(client_id: str, job_ids: list[str]) -> list[dict]:
@@ -928,19 +1337,24 @@ async def run_reoptimize_page_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        page = await reoptimize_page(
-            client_id=payload["client_id"],
-            keyword=payload["keyword"],
-            location=payload["location"],
-            existing_page_html=payload.get("existing_page_html"),
-            existing_page_url=payload.get("existing_page_url"),
-            deficiencies=payload.get("deficiencies") or [],
-            serp_analysis=payload.get("serp_analysis"),
-            user_id=payload["user_id"],
-            entity_provider=payload.get("entity_provider"),
-            on_progress=_job_progress_writer(job_id),
-            internal_links=payload.get("internal_links") or None,
-        )
+        page = _page_for_job(job_id)
+        if page:
+            logger.info("local_seo.reoptimize_page_job_resumed_existing_page", extra={"job_id": job_id, "page_id": page["id"]})
+        else:
+            page = await reoptimize_page(
+                client_id=payload["client_id"],
+                keyword=payload["keyword"],
+                location=payload["location"],
+                existing_page_html=payload.get("existing_page_html"),
+                existing_page_url=payload.get("existing_page_url"),
+                deficiencies=payload.get("deficiencies") or [],
+                serp_analysis=payload.get("serp_analysis"),
+                user_id=payload["user_id"],
+                entity_provider=payload.get("entity_provider"),
+                on_progress=_job_progress_writer(job_id),
+                internal_links=payload.get("internal_links") or None,
+                job_id=job_id,
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": {"page_id": page["id"]}, "completed_at": "now()"}
         ).eq("id", job_id).execute()
@@ -948,9 +1362,12 @@ async def run_reoptimize_page_job(job: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — record the failure for the poller
         detail = getattr(exc, "detail", None) or str(exc)
         logger.warning("local_seo.reoptimize_page_job_failed", extra={"job_id": job_id, "error": str(detail)})
-        supabase.table("async_jobs").update(
-            {"status": "failed", "error": str(detail)[:500], "completed_at": "now()"}
-        ).eq("id", job_id).execute()
+        # Transient nlp failures (5xx / transport — a container restart, an
+        # exhausted Anthropic retry budget) re-queue with backoff while attempts
+        # remain; a 4xx fails terminally. Lazy import: job_worker imports this module.
+        from services.job_worker import settle_job_failure
+
+        settle_job_failure(job_id, exc, job)
 
 
 async def analyze(
@@ -1033,6 +1450,16 @@ async def score_page(
         )
     from services import voice_card_service
 
+    # The kept page spec (same one generation used): its target drives the
+    # length_fit engine, so a band lifted above the SERP by the client's
+    # reference floors — or edited by the owner — is scored as the band it is.
+    spec: Optional[dict] = None
+    try:
+        spec = _resolve_page_spec(client, keyword, location, location_code, serp_analysis,
+                                  _resolve_fallback_length_target(location_code, location))
+    except Exception as exc:  # noqa: BLE001 — a spec is an enhancement here, never a gate
+        logger.warning("local_seo.score_spec_unavailable", extra={"client_id": client_id, "error": str(exc)})
+
     result = await _post_nlp("/score-page", {
         "keyword": keyword,
         "location": location,
@@ -1047,6 +1474,7 @@ async def score_page(
         # Without these the rubric measured SEO only: icp_alignment inferred an
         # audience from the keyword and nothing scored brand voice at all.
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
+        "page_spec": spec,
     }, user_id=user_id)
     # A standalone score has no page row — log it against page_url (may be None
     # when scoring raw HTML) so the verdict is still kept in the run history.
@@ -1083,6 +1511,7 @@ async def reoptimize_page(
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     internal_links: Optional[list[dict]] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Reoptimize an existing page to lift its score, re-score the result, and
     persist it as a `mode='reoptimize'` row. `internal_links` (matrix sibling
@@ -1100,6 +1529,18 @@ async def reoptimize_page(
     # from them with every improvement to its score.
     voice_card = await voice_card_service.get_voice_card(client, user_id=user_id)
 
+    # The kept page spec for this keyword × location (same one generation used,
+    # or the owner's edit): nlp trims per section against it and the row
+    # records target vs actual. Location resolved best-effort so the spec key
+    # matches generation's (which keys on the DataForSEO code).
+    spec: Optional[dict] = None
+    try:
+        _loc, _code = await locations_service.resolve_location(client, location, None)
+        _fallback = _resolve_fallback_length_target(_code, _loc)
+        spec = _resolve_page_spec(client, keyword, _loc, _code, serp_analysis, _fallback)
+    except Exception as exc:  # noqa: BLE001 — a spec is an enhancement here, never a gate
+        logger.warning("local_seo.reoptimize_spec_unavailable", extra={"client_id": client_id, "error": str(exc)})
+
     result = await _stream_nlp("/reoptimize-page", {
         "keyword": keyword,
         "location": location,
@@ -1116,8 +1557,10 @@ async def reoptimize_page(
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
         "internal_links": internal_links or None,
+        "page_spec": spec,
     }, on_progress=on_progress)
     link_coverage = _guarantee_internal_links(result, internal_links)
+    result = attach_length_verdict(result, spec)
 
     # Newer nlp builds surface the score the reoptimize loop already computed.
     # Only re-score when it's absent (older nlp) so the persisted page still
@@ -1134,6 +1577,7 @@ async def reoptimize_page(
                 "serp_analysis": serp_analysis,
                 "entity_provider": entity_provider,
                 "voice_card": voice_card,
+                "page_spec": spec,
             })
             result["composite_score"] = score.get("composite_score")
             result["composite_status"] = score.get("composite_status")
@@ -1146,7 +1590,13 @@ async def reoptimize_page(
             # (Catches HTTPException from the proxy AND any decode/unexpected error.)
             logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
-    page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id)
+    page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id, job_id=job_id)
+    if result.get("length_verdict") is not None:
+        page["length_verdict"] = result["length_verdict"]
+        _notify_over_length(client_id, keyword, page.get("id"), result["length_verdict"])
+    if result.get("structure_verdict") is not None:
+        page["structure_verdict"] = result["structure_verdict"]
+        _notify_structure_drift(client_id, keyword, page.get("id"), result["structure_verdict"])
     if link_coverage is not None:
         page["link_coverage"] = link_coverage
     return page
@@ -1169,6 +1619,7 @@ async def reoptimize_url(
     publish_to_doc: bool = False,
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
+    job_id: Optional[str] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. Strong pages (>= threshold) are skipped with a note rather
@@ -1272,6 +1723,7 @@ async def reoptimize_url(
         user_id=user_id,
         entity_provider=entity_provider,
         on_progress=on_progress,
+        job_id=job_id,
     )
 
     out: dict = {
@@ -1451,7 +1903,8 @@ async def run_local_seo_action_job(job: dict) -> None:
 _LIST_COLUMNS = (
     "id, client_id, keyword, location, page_title, composite_score, "
     "composite_status, voice_score, mode, created_at, deleted_at, "
-    "published_doc_url, published_url, published_at"
+    "published_doc_url, published_url, published_at, "
+    "target_words, actual_words, length_status, structure_status"
 )
 
 

@@ -27,6 +27,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import job_priority
 from services import local_seo_matrix as core
 from services import local_seo_silo, locations_service, target_cities
 from services.local_seo_service import _bulk_scheduled_at
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 _MATRIX_COLS = (
     "id, client_id, name, location, location_code, services, locations, url_pattern, "
     "base_url, page_template_url, entity_provider, publish_destination, publish_status, "
+    "link_to_service_hub, service_hub_pattern, link_to_home, "
     "release_enabled, release_mode, release_weekday, release_day_of_month, "
     "release_per_count, release_status, release_next_run_at, release_last_run_at, "
     "created_by, created_at, updated_at"
@@ -198,6 +200,35 @@ def _validate_pattern(pattern: Optional[str]) -> str:
     return p
 
 
+def _resolve_hub_pattern(pattern: Optional[str], *, require: bool) -> str:
+    """Normalize the service-hub pattern to a valid value. When `require` (the
+    hub link is on) an invalid pattern is a 400; when off it is silently replaced
+    with the default — so a matrix with the hub link disabled never rejects over
+    a pattern it won't use, and turning the link on later can never surface a
+    stored invalid pattern (the stored value is always valid)."""
+    p = (pattern or "").strip() or core.DEFAULT_SERVICE_HUB_PATTERN
+    errors = core.validate_hub_pattern(p)
+    if errors:
+        if require:
+            raise HTTPException(status_code=400, detail=errors[0])
+        return core.DEFAULT_SERVICE_HUB_PATTERN
+    return p
+
+
+def _client_home_anchor(client_id: str) -> str:
+    """The homepage link's anchor: the client's business name, else "Home".
+    Best-effort with a targeted read — a failed or unexpected lookup never blocks
+    enqueueing (and keeps the pure planner deterministic under mocks)."""
+    try:
+        rows = get_supabase().table("clients").select("name").eq("id", client_id).limit(1).execute().data or []
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if isinstance(row, dict):
+            return (row.get("name") or "").strip() or "Home"
+    except Exception:  # noqa: BLE001
+        pass
+    return "Home"
+
+
 def _default_base_url(client: dict) -> Optional[str]:
     site = (client.get("gbp") or {}).get("website") or client.get("website_url") or ""
     return site.strip().rstrip("/") or None
@@ -230,6 +261,11 @@ async def create_matrix(client_id: str, body: dict, user_id: str) -> dict:
         "entity_provider": body.get("entity_provider") or None,
         "publish_destination": body.get("publish_destination") or "google_docs",
         "publish_status": body.get("publish_status") or "draft",
+        "link_to_service_hub": bool(body.get("link_to_service_hub", True)),
+        "service_hub_pattern": _resolve_hub_pattern(
+            body.get("service_hub_pattern"), require=bool(body.get("link_to_service_hub", True))
+        ),
+        "link_to_home": bool(body.get("link_to_home", True)),
         "created_by": user_id,
     }
     matrix = sb.table("local_seo_matrices").insert(row).execute().data[0]
@@ -266,6 +302,18 @@ async def update_matrix(matrix_id: str, client_id: str, body: dict) -> dict:
             patch[key] = (val.strip().rstrip("/") if key == "base_url" else val.strip()) if isinstance(val, str) else val
             if key in ("base_url", "page_template_url", "entity_provider") and not patch[key]:
                 patch[key] = None
+    for key in ("link_to_service_hub", "link_to_home"):
+        if body.get(key) is not None:
+            patch[key] = bool(body[key])
+    if body.get("service_hub_pattern") is not None:
+        # Require a valid pattern only when the hub link is (or is being turned)
+        # on — the effective state, since the toggle can change in the same PUT.
+        hub_on = (
+            bool(body["link_to_service_hub"])
+            if body.get("link_to_service_hub") is not None
+            else bool(matrix.get("link_to_service_hub", True))
+        )
+        patch["service_hub_pattern"] = _resolve_hub_pattern(body["service_hub_pattern"], require=hub_on)
 
     pattern = matrix["url_pattern"]
     if body.get("url_pattern") is not None:
@@ -426,35 +474,61 @@ def start_generate(
     if not selected:
         return {"job_ids": [], "cell_ids": [], "estimate": est}
 
+    job_ids = enqueue_cells(matrix, selected, cells, user_id, force_refresh=force_refresh)
+    return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected], "estimate": est}
+
+
+def enqueue_cells(
+    matrix: dict, selected: list[dict], all_cells: list[dict], user_id: str, *,
+    publish_after: bool = False, force_refresh: bool = False,
+) -> list[str]:
+    """Enqueue one `local_seo_generate` job per cell in `selected` (staggered like
+    every bulk flow) and flip the cells to `queued`. Shared by the immediate run
+    and the drip release; `publish_after` makes the job publish the page to the
+    matrix's destination once generated (plan §5.2). Returns the job ids."""
+    matrix_id, client_id = matrix["id"], matrix["client_id"]
     rows = []
     base_url = matrix.get("base_url") or ""
+    home_anchor = _client_home_anchor(client_id)  # brand name for the homepage link
     for i, cell in enumerate(selected):
         location, code = _location_for_cell(matrix, cell)
-        # Sibling links are planned against the WHOLE grid (plan §4.1), so a cell
-        # generated before its siblings still links to their planned URLs.
-        links = core.sibling_links(
-            cell, cells, base_url,
+        # Links are planned against the WHOLE grid (plan §4.1), so a cell
+        # generated before its siblings still links to their planned URLs. Each
+        # cell also links UP to its top-level service page and the site root
+        # when the matrix opts in (default on).
+        links = core.plan_cell_links(
+            cell, all_cells, base_url,
             location_cap=settings.local_seo_matrix_sibling_location_cap,
             max_links=settings.local_seo_matrix_max_links,
+            service_hub=matrix.get("link_to_service_hub", True),
+            service_hub_pattern=matrix.get("service_hub_pattern") or core.DEFAULT_SERVICE_HUB_PATTERN,
+            home=matrix.get("link_to_home", True),
+            home_anchor=home_anchor,
         )
+        payload = {
+            "client_id": client_id,
+            "keyword": cell["keyword"],
+            "location": location,
+            "location_code": code,
+            "user_id": user_id,
+            "page_template_url": matrix.get("page_template_url") or None,
+            "force_refresh": bool(force_refresh),
+            "entity_provider": matrix.get("entity_provider") or None,
+            "matrix_id": matrix_id,
+            "matrix_cell_id": cell["id"],
+            "internal_links": links,
+        }
+        if publish_after:
+            payload["publish_after"] = True
+            payload["publish_destination"] = matrix.get("publish_destination") or "google_docs"
+            payload["publish_status"] = matrix.get("publish_status") or "draft"
         rows.append(
             {
                 "job_type": "local_seo_generate",
                 "entity_id": client_id,
                 "scheduled_at": _bulk_scheduled_at(i),
-                "payload": {
-                    "client_id": client_id,
-                    "keyword": cell["keyword"],
-                    "location": location,
-                    "location_code": code,
-                    "user_id": user_id,
-                    "page_template_url": matrix.get("page_template_url") or None,
-                    "force_refresh": bool(force_refresh),
-                    "entity_provider": matrix.get("entity_provider") or None,
-                    "matrix_id": matrix_id,
-                    "matrix_cell_id": cell["id"],
-                    "internal_links": links,
-                },
+                "priority": job_priority.BACKGROUND,
+                "payload": payload,
             }
         )
     inserted = get_supabase().table("async_jobs").insert(rows).execute().data or []
@@ -464,9 +538,129 @@ def start_generate(
         job_ids.append(job["id"])
     logger.info(
         "local_seo_matrix.generate_enqueued",
-        extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids)},
+        extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids), "publish_after": publish_after},
     )
-    return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected], "estimate": est}
+    return job_ids
+
+
+PUBLISH_JOB_TYPE = "local_seo_matrix_publish"
+
+
+def _publish_scheduled_at(index: int) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    spacing = settings.local_seo_matrix_publish_spacing_seconds
+    return (datetime.now(timezone.utc) + timedelta(seconds=index * spacing)).isoformat()
+
+
+def start_publish(
+    matrix_id: str, client_id: str, user_id: str, *,
+    destination: Optional[str] = None, status: Optional[str] = None,
+    force_voice: bool = False, cell_ids: Optional[list[str]] = None,
+) -> dict:
+    """"Publish all done cells" (plan §5.3): one `local_seo_matrix_publish` job
+    per selected cell, staggered a few seconds apart (publishing is seconds, not
+    minutes), each publishing the cell's page to `destination` (default: the
+    matrix's) and recording the outcome on the cell. `force_voice` is the same
+    explicit brand-guide override the per-page Publish button offers — meant for
+    a single `publish_blocked` cell the user has seen the words for, so it is
+    only honoured together with explicit `cell_ids`."""
+    matrix = _matrix_row(matrix_id, client_id)
+    reconcile(matrix_id)
+    cells = _cells(matrix_id)
+    selected = core.select_publishable(cells, cell_ids)
+    if not selected:
+        return {"job_ids": [], "cell_ids": []}
+    dest = destination or matrix.get("publish_destination") or "google_docs"
+    # "App only": pages live in Saved Pages, there is nothing to publish. The
+    # frontend hides the publish bar for such a matrix; this is the backstop.
+    if not core.publishes_externally(dest):
+        return {"job_ids": [], "cell_ids": []}
+    pub_status = status or matrix.get("publish_status") or "draft"
+    force = bool(force_voice and cell_ids)
+    rows = [
+        {
+            "job_type": PUBLISH_JOB_TYPE,
+            "entity_id": client_id,
+            "scheduled_at": _publish_scheduled_at(i),
+            "priority": job_priority.BACKGROUND,
+            "payload": {
+                "client_id": client_id,
+                "matrix_id": matrix_id,
+                "matrix_cell_id": cell["id"],
+                "page_id": cell["page_id"],
+                "user_id": user_id,
+                "destination": dest,
+                "status": pub_status,
+                "force_voice": force,
+            },
+        }
+        for i, cell in enumerate(selected)
+    ]
+    inserted = get_supabase().table("async_jobs").insert(rows).execute().data or []
+    job_ids: list[str] = []
+    for cell, job in zip(selected, inserted):
+        _apply_patches([(cell["id"], {"status": "publishing", "job_id": job["id"], "error": None})])
+        job_ids.append(job["id"])
+    logger.info(
+        "local_seo_matrix.publish_enqueued",
+        extra={"matrix_id": matrix_id, "client_id": client_id, "cells": len(job_ids), "destination": dest},
+    )
+    return {"job_ids": job_ids, "cell_ids": [c["id"] for c in selected]}
+
+
+async def run_publish_job(job: dict) -> None:
+    """async_jobs handler for job_type='local_seo_matrix_publish': publish one
+    cell's page and record the outcome on the cell AND in the job result (so the
+    read-side reconcile can re-apply it if the cell write was lost). The job
+    itself completes whatever the publish outcome — a blocked / failed publish is
+    a recorded outcome, not a job failure."""
+    from services import local_seo_service
+
+    payload = job.get("payload") or {}
+    job_id = job["id"]
+    sb = get_supabase()
+    cell_id = payload.get("matrix_cell_id")
+    page_id = payload.get("page_id")
+    try:
+        result = await local_seo_service.publish_page(
+            page_id, payload.get("user_id") or "",
+            destination=payload.get("destination") or "google_docs",
+            status=payload.get("status") or "draft",
+            force_voice=bool(payload.get("force_voice")),
+        )
+        outcome = core.publish_outcome_from_result(result or {})
+    except HTTPException as exc:
+        outcome = core.publish_outcome_from_error(str(exc.detail))
+    except Exception as exc:  # noqa: BLE001
+        outcome = core.publish_outcome_from_error(str(exc))
+    status, url, error = outcome
+    try:
+        if cell_id:
+            record_publish_outcome(cell_id, page_id, status, url, error)
+    except Exception as exc:  # noqa: BLE001 — the job result still carries it
+        logger.warning("local_seo_matrix.publish_record_failed", extra={"job_id": job_id, "error": str(exc)})
+    sb.table("async_jobs").update(
+        {
+            "status": "complete",
+            "result": {"status": status, "url": url, "error": error, "page_id": page_id},
+            "completed_at": "now()",
+        }
+    ).eq("id", job_id).execute()
+    logger.info(
+        "local_seo_matrix.publish_job_complete",
+        extra={"job_id": job_id, "cell_id": cell_id, "outcome": status},
+    )
+
+
+def record_publish_outcome(cell_id: str, page_id: Optional[str], status: str, url: Optional[str], error: Optional[str]) -> None:
+    """Record the drip's auto-publish result on the cell: `published` (+url) /
+    `publish_failed` / `publish_blocked`. Carries the page id too, so the write
+    is complete whether or not the read-side reconcile has run yet."""
+    patch: dict = {"status": status, "url": url, "error": error, "updated_at": "now()"}
+    if page_id:
+        patch["page_id"] = page_id
+    get_supabase().table("local_seo_matrix_cells").update(patch).eq("id", cell_id).execute()
 
 
 def record_link_coverage(cell_id: str, coverage: dict) -> None:
