@@ -17,6 +17,7 @@ from services.icp_service import run_icp_scan_job
 from services.dataforseo_rank import run_dataforseo_rank_job
 from services.gbp_metrics_ingest import run_gbp_metrics_ingest_job
 from services import gbp_posts_service
+from services.social import publish as social_publish
 from services.ga4_ingest import run_ga4_ingest_job
 from services.gsc_ingest import run_gsc_ingest_job, run_gsc_page_ingest_job
 from services.gsc_research import run_gsc_research_job
@@ -867,6 +868,8 @@ async def _process_job(job: dict) -> None:
         await gbp_reviews_ingest.run_gbp_reviews_job(job)
     elif job_type == "gbp_post_publish":
         await gbp_posts_service.run_publish_job(job)
+    elif job_type == "social_publish":
+        await social_publish.run_publish_job(job)
     elif job_type == "gbp_post_generate":
         await gbp_posts_service.run_generate_job(job)
     elif job_type == "gbp_posts_sync":
