@@ -2671,6 +2671,25 @@ locations-list match, or a numeric code) WITHOUT a migration. **Owner-run spike 
 run one demand fetch on a real market, confirm the token resolves to sane city-level volume; if the
 name is too ambiguous, build the richer resolver. Until then the valuation degrades to no dollar line.
 
+**UPDATE 2026-09-05 — spike run, MEASURED (owner-authorized first live fetch).** After the #1023 merge
+deployed and `OUTREACH_COMMAND` was flipped to `tick`, one manual `demand_fetch_request`
+(`25f835e9-…`) was placed against the `emergency plumber` / `Los Angeles, CA, USA` snapshot
+(`30455295-…`). The tick drained it 06:10:14→06:10:15Z and it **FAILED**, terminally, with the
+DataForSEO task-level error `status_code=40501 message="Invalid Field: 'location_name'."`. The
+plumbing worked end-to-end and every invariant held: `resolve_location_token` produced + cached
+`submarket.location_token = "Los Angeles, CA, USA"`, `parse_search_volume` RAISED on the task error
+rather than collapsing it to "no demand", the order is `failed` (terminal, not machine-retried), and
+**no `keyword_demand` row was written** (so the valuation reads `not_fetched`, no fabricated zero).
+**Root cause:** the naive `location_name` STRING is the wrong request shape for
+`keywords_data/google_ads/search_volume/live`. The suite's proven `keyword_market.fetch_market` sends a
+NUMERIC `location_code` (resolved via `dataforseo_rank.location_code_for`), not a `location_name` — the
+demand-fetch worker diverged from that shape, and DataForSEO rejects an unrecognised `location_name`
+with 40501. **Fix (the richer resolver this issue anticipated, not yet built):** resolve a real
+DataForSEO location for the submarket — either a numeric `location_code` (a locations-list match) or the
+`location_coordinate` "lat,lng" the submarket centre already carries — and send THAT. The
+`location_token` column is TEXT precisely so a stringified code/coordinate needs no migration. Until that
+lands, the fetch will keep failing terminally (safely — no bad data) and the dollar line stays hidden.
+
 ### I-123 · Census downscale needs a per-submarket block-group fill that doesn't exist yet
 The valuation localizes metro search volume to the 5-mile footprint by Census population share
 (`outreach._demand_population_ratio` → `census_demand.blockgroups_in_bbox`). That READ needs no egress
