@@ -29,8 +29,8 @@ A QA verdict stacks two layers:
    and cites the section in its finding.
 
 Each task carries **✅ Must-haves (blocking)** — any fail ⇒ verdict `fail`, bounce to
-In Progress with the failed item as a rework subtask — plus advisory notes where useful.
-Blocking checks are kept small and **objectively checkable**.
+**For Revision** with the failed item as a `Rework:` subtask — plus advisory notes where
+useful. Blocking checks are kept small and **objectively checkable**.
 
 ---
 

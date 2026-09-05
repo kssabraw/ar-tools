@@ -277,8 +277,13 @@ def auto_tick_subtasks(task_id: str, stage: Optional[int], *, actor_id: Optional
 # best-effort. Later stages have their own drivers: In QA → Sent to Client is
 # the QA agent's job; Client Approved stays human until the inbox agent
 # (future build); publish/deliverable events already complete tasks.
+#
+# "For Revision" IS auto-movable (unlike the blocked/in_review exceptions): a QA
+# fail or a client-requested revision parks the task there with rework subtasks,
+# and ticking the last of them should re-enter In QA — the self-closing rework
+# loop. It advances only via Rule B (all work items done → in_qa), never Rule A.
 # ---------------------------------------------------------------------------
-_AUTO_ADVANCE_FROM = {"not_started", "in_progress"}  # the only auto-movable statuses
+_AUTO_ADVANCE_FROM = {"not_started", "in_progress", "for_revision"}  # auto-movable statuses
 
 
 def is_work_item(name: Optional[str]) -> bool:

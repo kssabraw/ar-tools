@@ -722,6 +722,11 @@ def test_parent_advance_target_rules():
     markers = [{"name": "Blog Post QA'd", "completed": True}]
     assert f("not_started", False, markers) == "in_progress"
     assert f("in_progress", False, markers) is None
+    # For Revision self-closing loop: ticking the last rework/work item re-enters
+    # In QA (Rule B), but Rule A never fires from For Revision (a partial tick
+    # keeps it parked for the reviser).
+    assert f("for_revision", False, work_done) == "in_qa"
+    assert f("for_revision", False, some) is None
     # Never backward / never from exceptions / never when completed.
     assert f("sent_to_client", False, work_done) is None
     assert f("blocked", False, work_done) is None

@@ -1933,7 +1933,15 @@ class Settings(BaseSettings):
     # feed; the human sends + drags — moving to sent_to_client ourselves would
     # claim a send that hasn't happened). Set to 'sent_to_client' to auto-advance.
     qa_pass_status: str = ""
-    qa_fail_status: str = "in_progress"          # bounce target on a failed review
+    # A complete QA failure (verdict == fail) bounces the task to the dedicated
+    # "For Revision" lane — the same status a client-requested revision uses — so
+    # a failed deliverable lands in one visible, tracked place (revision_count
+    # bumps on entry) with the "Rework:" subtasks below naming exactly what to
+    # revise. Set to "in_progress" for the pre-2026-09 behaviour (silent bounce
+    # into the working column). The rework subtasks are work items, so ticking
+    # them all re-enters In QA (self-closing loop) — For Revision is in
+    # _AUTO_ADVANCE_FROM for that reason.
+    qa_fail_status: str = "for_revision"         # bounce target on a failed review
     qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks
     qa_notify_on_pass: bool = False              # silent clean passes
     qa_citation_sample: int = 3                  # QA_Checklists §Citations sample size

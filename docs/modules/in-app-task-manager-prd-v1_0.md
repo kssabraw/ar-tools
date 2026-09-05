@@ -697,14 +697,31 @@ signal exists. Shipped, in order:
 - Publish/deliverable events already complete content tasks (the
   `content_run` producer, enabled 2026-07-12).
 
-Guards everywhere: never backward, never from the exception statuses
-(Blocked / In Review), never on completed tasks, activity-logged, best-effort.
-Manual drags still work and still cascade auto-ticks.
+Guards everywhere: never backward, never from the **Blocked / In Review**
+exception statuses, never on completed tasks, activity-logged, best-effort.
+Manual drags still work and still cascade auto-ticks. **`for_revision` is the
+one exception status that DOES auto-advance** — Rule B only (all work items
+done → In QA), never Rule A — so the QA/client rework loop closes itself from
+that lane (`task_service._AUTO_ADVANCE_FROM` = {not_started, in_progress,
+for_revision}).
 
-**Remaining human stages:** In QA → Sent to Client (the **QA agent** — next
-build: check registry over the nlp 8-engine scorer / structure eval /
-citation checks + an LLM review; comment-only first, then advance-on-pass)
-and Sent to Client → Client Approved (below).
+**For Revision (the rework lane, 2026-09-05).** A dedicated board status for
+work that must be redone, from either of two triggers: a **complete QA
+failure** (the QA agent bounces the task here — `qa_fail_status` repointed
+`in_progress`→`for_revision` — with one `Rework:` subtask per failed check)
+or a **client-requested revision** (a human parks it here; the future Inbox
+Agent below does it automatically). Entering the lane bumps `tasks.revision_count`
+(migration `20260905190000`; used by the admin overdue/revision reports).
+Convention (not app-enforced): a For Revision task carries precise details on
+*what* to revise and *why* (QA writes these as `Rework:` items; a human writes
+them for a client revision) plus a revision **due date**. Seeded by migration
+`20260905193000_for_revision_status.sql` (category `in_progress`, non-initial,
+non-done, at the end of the row with Blocked / In Review).
+
+**Remaining human stages:** In QA → Sent to Client (the **QA agent**, now
+built + live: check registry over the nlp 8-engine scorer / structure eval /
+citation checks + an LLM review; a complete fail bounces to For Revision) and
+Sent to Client → Client Approved (below).
 
 ### 20.2 FUTURE BUILD — Inbox Agent (client-approval automation; deferred)
 **Status: deferred by owner ruling 2026-07-12 — do NOT build until the owner
@@ -722,10 +739,11 @@ external event: the client's reply. An inbox-watching agent closes it:
   revisions requested / question.
 - **Confidence ladder:** explicit approval → auto-advance to Client Approved
   (reply text attached as a task comment); **revisions requested → park in
-  In Review with the feedback routed onto the task** and the assignee
-  notified; ambiguous → nothing moves, staged into PACE's daily chase plan
-  for a human reply-*yes* confirm. A false "client approved" is the costly
-  mistake — only unambiguous language auto-advances.
+  For Revision with the feedback routed onto the task** (the client's notes
+  become the "what to revise", and the agent sets a revision due date) and
+  the assignee notified; ambiguous → nothing moves, staged into PACE's daily
+  chase plan for a human reply-*yes* confirm. A false "client approved" is the
+  costly mistake — only unambiguous language auto-advances.
 - **Further consumers (same watcher, owner-requested):** route revision
   feedback onto the task automatically; hand client *questions* to SerMaStr
   to draft replies; sentiment dips → PACE escalation.
