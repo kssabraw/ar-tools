@@ -55,6 +55,88 @@ guardrails.
 | Competitor video analysis | **TwelveLabs** (Pegasus/Marengo) | Ingest by public URL; cap minutes/run. |
 | Media download | **cobalt.tools** (self-hosted) | **P5 only** — owned/licensed assets. Not provisioned in v1. |
 
+## Confirmed PostPeer facts (live build, 2026-09-05)
+
+Distilled from a separate live PostPeer onboarding build (Kyle's `Sabraw Marketing`
+Express app — NOT in this repo) that verified these against `postpeer.dev/docs` **and the
+live dashboard**. Treat as project memory; they sharpen / correct the vendor-confirm doc.
+Anything marked *(inference)* was reasoned, not quoted.
+
+**Account status — already provisioned, don't re-ask.** Kyle already has a PostPeer account
+with a **live API key**; the dashboard showed one "Default" group holding 3 LinkedIn + 1
+Facebook integration. So the P0 prerequisite is only **putting the existing key on PLATFORM
+as `POSTPEER_API_KEY`**, not a new signup.
+
+**A reference implementation already exists.** The Sabraw Marketing repo has a working
+PostPeer wrapper (`postpeer.js`: `checkAuth`/`createProfile`/`getProfile`/`listAllProfiles`/
+`listIntegrations`/`getConnectUrl`), a client-onboarding server (`server.js` — an `/admin`
+create-client page + a public `/connect/:profileId` link per client), and a **`mock-postpeer.js`
+fake API** (profiles, integrations, a stand-in OAuth consent page) that let the whole flow be
+clicked through locally with no real key. Mirror the connect-link pattern; consider the same
+**mock-PostPeer approach for our adapter tests** (no live key in CI).
+
+**Profile == "Social group" (naming mismatch that cost real time).** The API object `profile`
+(`profileId`) is exactly what the **dashboard UI calls a "Social group."** Same object; the
+dashboard never uses the word "profile." Our design already maps one profile ↔ one suite
+client — keep that, and use "Social group" when writing any team/ELI5 guide.
+
+**A profile is org-only, NOT a security boundary (load-bearing).** There is **one API key for
+the whole account**; there is no per-client key and **no per-profile access control** — anyone
+with the key can see/touch every client's connected accounts *(confirmed reading; docs
+describe profiles only as grouping/filtering)*. Consequence for us: **client isolation is
+OURS to enforce** (route every call through the client's stored `profile_id`; never expose one
+client's `adapter_account_id`s to another). Treat the key as a full-account credential.
+
+**Connect + integration endpoints (fills gaps in vendor-confirm §6):**
+- `GET /connect/{platform}?profileId=&redirectUri=&appId=` → `{ url }` (the OAuth URL to
+  redirect the authorizer to). `redirectUri` (send them back to our client page) and `appId`
+  (BYOK, below) are real params, not just `profileId`. Platforms: twitter, youtube, tiktok,
+  facebook, instagram, pinterest, linkedin, threads (**bluesky is different** — no OAuth).
+- `GET /connect/integrations?profileId=&platform=&limit=&offset=` — **paginate** with
+  `offset`/`limit` until `total`; each integration's `id` is the `accountId` used when posting
+  (this is our stored `adapter_account_id`).
+- Standard `POST/GET/PATCH/DELETE /profiles` CRUD (list pages `page`/`limit`, max 100).
+
+**Connection health — the concrete field for our state machine.** The integration object
+carries **`tokenStatus.reconnectRequired`** — that is the exact signal the failure-handling
+spec's `needs_reauth` state should read (health-check sweep + inline pre-publish check).
+Facebook tokens are "non-expiring under normal use"; reconnect is needed only on revoke,
+password change, a **Facebook security checkpoint (error code 190/459 — the user must clear it
+on facebook.com first; reconnecting alone won't fix it)**, or manual removal.
+
+**Two ways a client gets connected** (there is no third — someone controlling the account must
+approve once): (1) **client self-serves** via a connect link we send; (2) **agency authorizes
+directly** when it already administers the account (common for Facebook Pages). Meta constraint:
+whoever approves can only grant the **Pages they personally administer**.
+
+**BYOK ("bring your own OAuth app") — optional, not a launch blocker.** By default clients see
+"PostPeer wants permission…" on the consent screen (shared PostPeer app). `POST /apps/`
+(platform, name, clientId, clientSecret) registers your own dev app; pass the returned `app.id`
+as `appId` on the connect call so the consent screen shows **the agency's branding** and you get
+**your own platform rate-limit quota** instead of PostPeer's pooled one. Callback to register
+with each platform: `https://api.postpeer.dev/v1/connect/{platform}/callback`. Tradeoff: each
+platform's own app-review takes real time — **don't block launch on it.**
+
+**Pricing (reconcile before trusting the cost model).** The Authentication doc states **1 credit
+per publish/schedule call** as the *general* rule (X is the documented 5/50 exception we already
+have; failed posts don't deduct), a **free tier of 20 credits/month** (not "20 on signup"), paid
+plans **from $19/mo for "thousands" of credits**, plus non-expiring PAYG packs. This differs from
+the cost model's "$6–8.50/1k, 20 free on signup" framing — **flag for owner reconciliation**;
+don't silently rewrite the budget scenarios off the vague "$19/mo for thousands."
+
+**Cross-post (P5 relevance):** one video can go to TikTok + YouTube Shorts + Instagram Reels in a
+single `POST /posts` by listing all three in `platforms[]`.
+
+**Platforms beyond our v1 five (noted for later expansion):** LinkedIn (personal + Company Pages,
+3,000 chars, mentions org-only), TikTok (`draft:true` sends to the creator's inbox for approval;
+call `GET /tiktok/creator-info?accountId=` before posting — per-creator limits vary), Bluesky
+(**no OAuth** — the client makes an app password at bsky.app and submits it once via
+`POST /connect/bluesky/auth`; needs a form, not a redirect button).
+
+**Known gap:** none of the above was tested against the **real** PostPeer API end-to-end (the
+reference build only exercised its mock). The P0 smoke test — one real profile + one real
+low-stakes connect + confirm `tokenStatus` behaves as documented — is still the go/no-go.
+
 ## Rails to reuse (do NOT reinvent)
 
 - **Jobs:** widen the `async_jobs` CHECK (copy the **full live list** — it's wider than any repo
