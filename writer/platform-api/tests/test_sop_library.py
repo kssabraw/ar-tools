@@ -309,9 +309,20 @@ def test_docs_that_dont_fit_are_named_not_silently_dropped():
     assert "read_sop" in text
 
 
-def test_a_generous_budget_leaves_nothing_deferred_on_a_growth_turn():
+def _deferred_docs(text: str) -> set[str]:
+    """The doc names in the 'SOP DOCS NOT INLINED' pointer block, if any."""
+    marker = "### SOP DOCS NOT INLINED"
+    if marker not in text:
+        return set()
+    tail = text[text.index(marker):]
+    return {line[2:].strip() for line in tail.splitlines() if line.startswith("- ")}
+
+
+def test_a_generous_budget_leaves_no_tactic_doc_deferred_on_a_growth_turn():
     text = sop_library.select_sops_text(_GROWTH, budget_chars=60_000)
-    assert "SOP DOCS NOT INLINED" not in text
+    # The fundamentals primer is the intentional bonus-if-room doc — it may defer
+    # (it's always read_sop-able); no TACTIC doc may.
+    assert _deferred_docs(text) <= {sop_library._FUNDAMENTALS_DOC}
 
 
 # ---------------------------------------------------------------------------
@@ -348,4 +359,45 @@ def test_nothing_defers_on_the_heaviest_realistic_turn():
         budget_chars=settings.slack_assistant_sop_budget_chars,
         lead_domains={"offpage", "content"},
     )
-    assert "SOP DOCS NOT INLINED" not in text, "a doc deferred on a normal turn"
+    # No TACTIC doc may defer on a normal turn (the original invariant); the
+    # fundamentals primer may (it rides in last and is always read_sop-able).
+    assert _deferred_docs(text) <= {sop_library._FUNDAMENTALS_DOC}, "a tactic doc deferred"
+
+
+# ---------------------------------------------------------------------------
+# SEO Fundamentals primer — signal-selected, rides in LAST, read_sop-able
+# ---------------------------------------------------------------------------
+def test_fundamentals_primer_is_not_always_loaded():
+    # Signal-selected, not always-on: it must NOT be in the always list, and an
+    # empty/no-signal turn must not pull it.
+    assert sop_library._FUNDAMENTALS_DOC not in sop_library._ALWAYS
+    assert sop_library._FUNDAMENTALS_DOC not in sop_library.relevant_docs(set())
+
+
+def test_fundamentals_primer_rides_in_on_theory_turns_and_is_last():
+    for dom in ("content", "ai_visibility", "organic_drop", "maps_growth", "offpage"):
+        docs = sop_library.relevant_docs({dom})
+        assert sop_library._FUNDAMENTALS_DOC in docs, dom
+        assert docs[-1] == sop_library._FUNDAMENTALS_DOC, f"{dom}: not last -> {docs}"
+
+
+def test_fundamentals_primer_absent_on_non_theory_domains():
+    for dom in ("budget", "leadoff", "qa"):
+        assert sop_library._FUNDAMENTALS_DOC not in sop_library.relevant_docs({dom}), dom
+
+
+def test_fundamentals_primer_never_precedes_a_tactic_doc():
+    docs = sop_library.relevant_docs({"organic_drop", "content", "ai_visibility"})
+    fi = docs.index(sop_library._FUNDAMENTALS_DOC)
+    for tactic in ("Rank_Drop_Mitigation_SOP_Organic.md", "On_Page_Criteria_and_Coverage.md",
+                   "Site_Architecture_and_Internal_Linking_SOP.md", "AIO_AEO_SOP.md"):
+        assert docs.index(tactic) < fi, f"{tactic} should precede the primer"
+
+
+def test_fundamentals_primer_concepts_are_read_sop_able():
+    # The undefined-jargon concepts the primer exists to define are fetchable by
+    # heading via the drill-down tool.
+    for concept in ("Striking distance", "Topical authority", "Search intent"):
+        out = sop_library.read_sop("SEO_Fundamentals", concept)
+        assert "No section matching" not in out, concept
+        assert len(out) > 200, concept

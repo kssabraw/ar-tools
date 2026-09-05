@@ -72,12 +72,29 @@ _RELEVANCE: dict[str, list[str]] = {
     # checklists + the shared on-page verdict definition its narratives cite.
     "qa": ["QA_Checklists.md", "On_Page_Criteria_and_Coverage.md"],
 }
+
+# The SEO fundamentals primer is the "why" layer beneath the tactic SOPs — it
+# DEFINES the theory terms the playbooks drop without defining (entity strength,
+# topical authority, search intent, striking distance, E-E-A-T, the local
+# triad…). It's signal-selected, not always-loaded: a strategy/theory-shaped
+# turn pulls it, but it rides in LAST (appended in relevant_docs, after every
+# tactic doc) so it never starves the playbook that directly answers the signal.
+# When the block is full it defers to a read_sop pointer like any large doc — and
+# every one of its concept sections is individually read_sop-able by heading.
+_FUNDAMENTALS_DOC = "SEO_Fundamentals.md"
+_FUNDAMENTALS_DOMAINS = {
+    "organic_drop", "maps", "maps_growth", "ai_visibility", "content", "offpage",
+}
 # Per-doc character caps: only the three genuinely large SOPs need one — every
 # other doc in the corpus is under 13k and is meant to arrive WHOLE.
 _DOC_CAP_CHARS = {
     "Site_Architecture_and_Internal_Linking_SOP.md": 10_000,   # 65k raw
     "Link_Building_SOP.md": 12_000,                            # 36k raw
     "How_To_Rank_In_Google_Maps_SOP.md": 12_000,               # 24k raw
+    # 40k raw. Front-loaded so a capped inline still delivers the Quick glossary
+    # (all the one-line definitions) + the Part 1 mental model; the per-concept
+    # deep dives are read_sop-able by heading.
+    "SEO_Fundamentals.md": 14_000,
 }
 _DEFAULT_DOC_CAP = 14_000
 
@@ -204,6 +221,12 @@ def relevant_docs(
             for doc in _RELEVANCE[domain]:
                 if doc not in ordered:
                     ordered.append(doc)
+    # The fundamentals primer rides in LAST on any theory-relevant turn — after
+    # every tactic doc, so it only takes budget the playbooks didn't need (else
+    # it defers to a read_sop pointer). Appended here (not in _RELEVANCE) so its
+    # position is guaranteed last regardless of which domains are active.
+    if active_domains & _FUNDAMENTALS_DOMAINS and _FUNDAMENTALS_DOC not in ordered:
+        ordered.append(_FUNDAMENTALS_DOC)
     return ordered
 
 
