@@ -2654,3 +2654,46 @@ scope for a best-effort site fetch. Same residual applies to `scan_tech`'s homep
 `fetch_page`, `follow_redirects=True`). **Left as-is** — the prospect sites are agency-chosen targets,
 not arbitrary attacker input; revisit with an egress allowlist / resolving guard if the fetch surface
 ever widens to untrusted submissions.
+
+### I-122 · Demand-fetch location resolution is a spike — no lat/lng → location_code resolver exists
+The missed-opportunity valuation (docs/missed-opportunity-valuation-prd-v0_1.md, Phase A) needs a
+DataForSEO google_ads location for the search-volume call, and the PRD §4 assumed
+`dataforseo_rank.location_code_for` could resolve one from a lat/lng. It CANNOT — it reads a stored
+per-client code or falls back to a country-level code, and takes no coordinates; there is no lat/lng →
+city/metro `location_code` resolver anywhere in the codebase, and the outreach `market`/`submarket`
+rows carry no region/country column. So `demand_fetch.resolve_location_token` builds a best-effort
+`location_name` string from the submarket/market name and REFUSES (records a failed order, no
+fabricated/national code) when it can't. **Whether a bare name resolves to city-granular volume — vs.
+picking the wrong "Springfield" — is UNMEASURED**; the first live run logs the resolved token + the raw
+response (measure-don't-infer). The schema stores the resolved token as TEXT (`submarket.location_token`,
+`keyword_demand.location_token`) precisely so the resolver can be upgraded (reverse-geocode + a
+locations-list match, or a numeric code) WITHOUT a migration. **Owner-run spike (PRD §12 spike 1):**
+run one demand fetch on a real market, confirm the token resolves to sane city-level volume; if the
+name is too ambiguous, build the richer resolver. Until then the valuation degrades to no dollar line.
+
+### I-123 · Census downscale needs a per-submarket block-group fill that doesn't exist yet
+The valuation localizes metro search volume to the 5-mile footprint by Census population share
+(`outreach._demand_population_ratio` → `census_demand.blockgroups_in_bbox`). That READ needs no egress
+and no API key, but it reads the `census_block_demand` cache, which today is filled ONLY per LeadOff
+`city_id` (`census_demand.enqueue_placement`/`run_placement_job`, census.gov egress). An outreach
+submarket is not a LeadOff city, so for most outreach markets the cache has NO block groups → the ratio
+is None → the valuation shows no dollar line (graceful, unknown ≡ absent). The PRD §4 understated this
+as "reuse the machinery"; it is net-new **fill-triggering** work: a job (or a hook) that runs the ACS +
+TIGERweb fill for a submarket's counties (reuse `census_demand.discover_counties` + the existing fill
+path), owner-run on the worker (egress is blocked in the build sandbox). Also note the metro-population
+figure is a wide-bbox approximation (`outreach_valuation_metro_radius_multiple`), since no
+metro-population primitive exists — square-vs-square, stated in the PRD's unvalidated section. **Until a
+fill covering outreach submarkets runs, the dollar line stays hidden even with demand data present.**
+
+### I-124 · The valuation dollar figure is deliberately kept OUT of the LLM call-hook path
+`outreach_call_hook.guard_output` rejects the ENTIRE LLM hook rewrite if any hook/talking-point text
+contains a currency symbol / `revenue` / `/mo` / `monthly` / `Nk` — its premise is that the model has
+no money data, so any money number is a fabrication. Routing the valuation through the justification's
+`talking_points` would therefore collapse the LLM phrasing to the deterministic fallback for every
+valued prospect (and the regex can't tell a real valuation number from a hallucinated one). Resolved by
+design, not by relaxing the guard: the valuation is carried as its OWN deterministic field on the
+justification (`justification["valuation"]`, rendered once by `outreach_valuation.spoken_line`), never a
+talking_point, so it is never fed to the LLM and the fabrication guard is untouched. This is the PRD §9.1
+"scoped exception" — the opener stays number-free; the dollar figure rides beside it as a computed field.
+**When you add a NEW surface for the valuation, render it deterministically from `justification["valuation"]`
+— do NOT route a money number through `outreach_call_hook`.**

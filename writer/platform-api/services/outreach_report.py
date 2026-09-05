@@ -677,6 +677,11 @@ def build_report(
         },
         "heatmap_available": heatmap_available,
         "justification": justification,
+        # The missed-opportunity dollar valuation (docs/missed-opportunity-valuation-prd-v0_1.md),
+        # surfaced top-level for the internal brief. Carried on the justification (computed once at
+        # read time, deterministic, never LLM-phrased), so it is None when the feature is off or an
+        # input is missing. Phase A is internal-only — this is NOT rendered into the client PDF.
+        "valuation": justification.get("valuation"),
         # The client-facing face is a draft until an approval is on record. `approval` is the latest
         # report_approval row (or None), so the UI flips from "draft" to "approved" after the first
         # explicit human approval and can show who/when.

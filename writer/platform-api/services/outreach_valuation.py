@@ -26,6 +26,7 @@ module whose governing invariant is *never fabricate a number*):
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -185,6 +186,74 @@ def nice_round(value: float, step: int) -> int:
     if step <= 0:
         return max(0, int(round(value)))
     return max(0, int(round(value / step)) * step)
+
+
+def parse_ctr_curve(raw: str) -> dict[str, float]:
+    """A CTR curve config string → {position: share}. Pure, guarded — a malformed/empty string
+    yields {} (→ pack_capture_rate 0 → no dollar figure, never a fabricated one)."""
+    try:
+        data = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, float] = {}
+    for k, v in data.items():
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[str(k)] = float(v)
+    return out
+
+
+def parse_category_table(raw: str) -> dict[str, dict[str, float]]:
+    """A per-category assumptions config string → {vertical: {close_rate_low, ...}}. Pure, guarded —
+    a malformed/empty string yields {} (→ every vertical uses the global fallback)."""
+    try:
+        data = json.loads(raw or "{}")
+    except (ValueError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def in_pack_count_from_vector(vector: list[int], pack_size: int = DEFAULT_PACK_SIZE) -> int:
+    """How many grid points rank the prospect within the pack (byte 1..pack_size). Pure. A dead point
+    (255) and a measured-absent point (0) are both NOT in the pack, so they never count here."""
+    return sum(1 for b in (vector or []) if 1 <= int(b) <= pack_size)
+
+
+def _money(n: int) -> str:
+    return f"${n:,}"
+
+
+def spoken_line(
+    v: "Valuation", *, keyword: str | None = None, submarket: str | None = None
+) -> str | None:
+    """The deterministic sentence a caller reads (and the internal brief shows) for an AVAILABLE
+    valuation, or None. Leads with the missed-revenue band (the punchy number, PRD Q2/Q4), then the
+    ad-cost-equivalent anchor as the defensible floor, then the 'how we estimated this' line. Never
+    LLM-phrased — a computed range doesn't need sharpening, and keeping it out of the LLM path keeps
+    the call-hook fabrication guard intact."""
+    if not v.available:
+        return None
+    what = f"“{keyword}” " if keyword else ""
+    where = f" across {submarket}" if submarket else ""
+    lo, hi = v.missed_revenue_low_monthly, v.missed_revenue_high_monthly
+    if lo is not None and hi is not None and hi > 0:
+        band = f"{_money(lo)}–{_money(hi)}/mo" if lo != hi else f"{_money(hi)}/mo"
+        lead = (
+            f"An estimated {band} of {what}work is going to competitors while this business is "
+            f"missing from the map pack{where}"
+        )
+    elif v.ad_cost_equivalent_monthly is not None:
+        lead = (
+            f"The {what}map-pack demand this business is missing{where} is worth about "
+            f"{_money(v.ad_cost_equivalent_monthly)}/mo"
+        )
+    else:
+        return None
+    anchor = ""
+    if v.ad_cost_equivalent_monthly is not None:
+        anchor = f" — about {_money(v.ad_cost_equivalent_monthly)}/mo to replace that traffic with Google Ads"
+    return f"{lead}{anchor}. {v.how_estimated}"
 
 
 def build_how_estimated(

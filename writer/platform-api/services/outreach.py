@@ -23,7 +23,7 @@ seen everything. Never add an unbounded read to this file.
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from services.outreach_db import get_outreach_client
 
@@ -1978,6 +1978,128 @@ def _paid_signal_for(
     )
 
 
+def _demand_population_ratio(center_lat: Any, center_lng: Any, settings: Any) -> float | None:
+    """The Census population downscale: (population within the footprint) ÷ (population within a
+    wider "metro" box), so metro search volume can be scaled to the measured 5-mile footprint.
+
+    Best-effort — reads the `census_block_demand` cache only (no census.gov egress; that fill is a
+    separate owner-run job, outreach ISSUES). Returns None on any miss (uncached area → empty rows →
+    None), which the valuation reads as `no_local_scaling` → no dollar line. Both boxes are squares,
+    so the ratio is a square-vs-square approximation of the circle-vs-circle share (both scaled the
+    same way — see the PRD's unvalidated note)."""
+    try:
+        lat = float(center_lat)
+        lng = float(center_lng)
+    except (TypeError, ValueError):
+        return None
+    try:
+        from services import census_demand as cd
+
+        foot_r = float(settings.outreach_valuation_footprint_radius_miles)
+        metro_r = foot_r * float(settings.outreach_valuation_metro_radius_multiple)
+        foot = cd.blockgroups_in_bbox(*cd.bbox_for(lat, lng, foot_r))
+        metro = cd.blockgroups_in_bbox(*cd.bbox_for(lat, lng, metro_r))
+        foot_pop = sum(int(r.get("population") or 0) for r in foot)
+        metro_pop = sum(int(r.get("population") or 0) for r in metro)
+        if foot_pop <= 0 or metro_pop <= 0:
+            return None
+        return min(1.0, foot_pop / metro_pop)
+    except Exception as exc:  # noqa: BLE001 — best-effort; an unreachable/empty cache = no downscale
+        logger.warning("outreach_valuation_census_unavailable", extra={"error": str(exc)[:200]})
+        return None
+
+
+def _valuation_for(
+    client: Any,
+    settings: Any,
+    *,
+    prospect: dict[str, Any],
+    submarket_id: str | None,
+    submarket_name: str,
+    keyword: str,
+    coverage: Optional[dict[str, Any]],
+    live_points: Any,
+    vector: Optional[list[int]],
+) -> Optional[dict[str, Any]]:
+    """Compute the missed-opportunity valuation for one prospect at report-assembly time, or None.
+
+    Reads the cached demand (keyword_demand, keyed on the normalised keyword + the submarket's
+    resolved location_token) and the Census downscale, derives the in-pack point count from the
+    coverage rank_vector, and hands everything to the pure `outreach_valuation.compute_valuation`.
+    Returns a ready-to-embed dict (the Valuation fields + a deterministic `line`), or None when the
+    feature is off. Best-effort: any failure returns None (the report shows no dollar line), never
+    raises — a valuation must never break a report. Gated on `outreach_valuation_enabled`."""
+    if not getattr(settings, "outreach_valuation_enabled", False):
+        return None
+    try:
+        from dataclasses import asdict
+
+        from services import outreach_valuation as ov
+
+        pack_size = int(settings.outreach_valuation_pack_size)
+        in_pack = ov.in_pack_count_from_vector(vector or [], pack_size)
+        live = int(live_points) if live_points is not None else 0
+
+        # Resolve the submarket's location token + centre (for the Census downscale).
+        token = ""
+        center_lat = center_lng = None
+        if submarket_id:
+            sub = (
+                client.table("submarket").select("location_token, center_lat, center_lng")
+                .eq("id", submarket_id).limit(1).execute().data or []
+            )
+            if sub:
+                token = str(sub[0].get("location_token") or "").strip()
+                center_lat, center_lng = sub[0].get("center_lat"), sub[0].get("center_lng")
+
+        # The cached demand for this (keyword, location). No token or no row → not fetched yet.
+        search_volume = cpc = None
+        demand_fetched = False
+        if token:
+            kw_key = ov.normalize_keyword(keyword)
+            demand = (
+                client.table("keyword_demand").select("search_volume, cpc")
+                .eq("keyword", kw_key).eq("location_token", token).limit(1).execute().data or []
+            )
+            if demand:
+                demand_fetched = True
+                search_volume = demand[0].get("search_volume")
+                cpc = demand[0].get("cpc")
+
+        population_ratio = _demand_population_ratio(center_lat, center_lng, settings)
+
+        assumptions = ov.resolve_assumptions(
+            prospect.get("category"),
+            ov.parse_category_table(settings.outreach_valuation_category_assumptions_json),
+            {
+                "close_rate_low": settings.outreach_valuation_global_close_low,
+                "close_rate_high": settings.outreach_valuation_global_close_high,
+                "job_value_low": settings.outreach_valuation_global_job_value_low,
+                "job_value_high": settings.outreach_valuation_global_job_value_high,
+            },
+        )
+        pack_capture_rate = ov.pack_capture_rate_from_curve(
+            ov.parse_ctr_curve(settings.outreach_valuation_pack_ctr_curve_json), pack_size
+        )
+
+        valuation = ov.compute_valuation(
+            search_volume=search_volume,
+            cpc=float(cpc) if cpc is not None else None,
+            population_ratio=population_ratio,
+            live_points=live,
+            in_pack_points=in_pack,
+            assumptions=assumptions,
+            pack_capture_rate=pack_capture_rate,
+            demand_fetched=demand_fetched,
+        )
+        out = asdict(valuation)
+        out["line"] = ov.spoken_line(valuation, keyword=keyword, submarket=submarket_name)
+        return out
+    except Exception as exc:  # noqa: BLE001 — best-effort; a valuation must never break a report
+        logger.warning("outreach_valuation_unavailable", extra={"error": str(exc)[:200]})
+        return None
+
+
 def prospect_justification(
     prospect_id: str, snapshot_id: str | None = None, _cache: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -2118,6 +2240,11 @@ def prospect_justification(
         pack_size=pack_size,
         paid=paid_signal,
         losing_deficit_pct=settings.outreach_paying_losing_deficit_pct,
+        valuation=_valuation_for(
+            client, settings, prospect=prospect, submarket_id=submarket_id,
+            submarket_name=submarket_name, keyword=keyword, coverage=coverage,
+            live_points=live_points, vector=vector,
+        ),
     )
     # Loss-framed LLM phrasing on top of the deterministic hook — cached per (prospect, snapshot),
     # best-effort, guarded against fabricated numbers. Falls back to the deterministic hook on any

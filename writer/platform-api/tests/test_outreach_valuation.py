@@ -203,3 +203,58 @@ def test_not_missing_when_in_pack_everywhere():
         assumptions=_ASSUME, pack_capture_rate=0.17,
     )
     assert v.available is False and v.reason == "not_missing"
+
+
+# --- config parsers ---------------------------------------------------------------------------
+
+
+def test_parse_ctr_curve():
+    assert ov.parse_ctr_curve('{"1": 0.19, "2": 0.1}') == {"1": 0.19, "2": 0.1}
+    assert ov.parse_ctr_curve("not json") == {}
+    assert ov.parse_ctr_curve("") == {}
+    assert ov.parse_ctr_curve('[1,2]') == {}          # non-dict
+    assert ov.parse_ctr_curve('{"1": "x"}') == {}     # non-numeric dropped
+
+
+def test_parse_category_table():
+    table = ov.parse_category_table('{"plumber": {"close_rate_low": 0.2}}')
+    assert table["plumber"]["close_rate_low"] == 0.2
+    assert ov.parse_category_table("garbage") == {}
+    assert ov.parse_category_table("") == {}
+
+
+# --- in_pack_count_from_vector ----------------------------------------------------------------
+
+
+def test_in_pack_count_from_vector():
+    # 1..3 in pack; 0 = measured-absent; 4 = below pack; 255 = dead — only 1,2,3 count.
+    assert ov.in_pack_count_from_vector([1, 2, 3, 4, 0, 255], pack_size=3) == 3
+    assert ov.in_pack_count_from_vector([1, 1, 2], pack_size=3) == 3
+    assert ov.in_pack_count_from_vector([], pack_size=3) == 0
+    assert ov.in_pack_count_from_vector([1, 2, 3, 4], pack_size=1) == 1  # only rank 1
+
+
+# --- spoken_line ------------------------------------------------------------------------------
+
+
+def test_spoken_line_leads_with_band_then_anchor():
+    v = ov.compute_valuation(
+        search_volume=1000, cpc=4.0, population_ratio=0.5,
+        live_points=81, in_pack_points=0,
+        assumptions=_ASSUME, pack_capture_rate=0.17,
+    )
+    line = ov.spoken_line(v, keyword="plumber", submarket="Los Angeles")
+    assert line is not None
+    assert "$3,400" in line and "$17,000" in line           # the missed-revenue band leads
+    assert "$340/mo to replace that traffic with Google Ads" in line  # the ad-cost anchor
+    assert "plumber" in line and "Los Angeles" in line
+    assert "Estimated from" in line                         # the how-we-estimated line
+
+
+def test_spoken_line_none_when_unavailable():
+    v = ov.compute_valuation(
+        search_volume=None, cpc=None, population_ratio=0.5,
+        live_points=81, in_pack_points=0,
+        assumptions=_ASSUME, pack_capture_rate=0.17,
+    )
+    assert ov.spoken_line(v) is None

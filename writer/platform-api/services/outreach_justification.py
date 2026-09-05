@@ -261,6 +261,7 @@ def build_justification(
     pack_size: int,
     paid: Optional[dict[str, Any]] = None,
     losing_deficit_pct: float = 50.0,
+    valuation: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Assemble the whole justification for one prospect. Pure — every input is already resolved.
 
@@ -516,6 +517,13 @@ def build_justification(
         "hook_element": hook_element,
         "available_elements": available_elements,
         "talking_points": points,
+        # The missed-opportunity dollar estimate (docs/missed-opportunity-valuation-prd-v0_1.md), or
+        # None when it wasn't computed / isn't available. Carried as its OWN deterministic field, NOT
+        # a talking_point: the LLM call-hook phrasing pass rewrites talking_points and its guard
+        # rejects any money number (outreach_call_hook.guard_output), so a computed dollar range rides
+        # here — rendered once, never LLM-sharpened, the guard untouched. The `valuation` dict already
+        # carries its rendered `line` (built by the I/O layer via outreach_valuation.spoken_line).
+        "valuation": valuation,
         "caveats": _caveats(snapshot, competitors),
         "provenance": {
             "snapshot_id": snapshot.get("id"),

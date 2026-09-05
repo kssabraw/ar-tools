@@ -2352,3 +2352,41 @@ at zero client-facing risk, pressure-tested on real calls first; Phase B = the a
 PDF box + input freeze. *Revisit:* the deferred items (population-weighted grid, category-basket
 demand, review-velocity cross-check, per-vertical CTR curve) become worthwhile once Phase A's numbers
 are sanity-checked against real markets.
+
+### Phase A — BUILT (2026-09-05, PR #1023)
+
+Phase A is implemented (schema + worker demand fetch + platform surfacing + config, all unit-tested;
+full outreach suite green, platform outreach tests green). Build-time design calls, and two build-time
+findings that contradicted the PRD (logged as ISSUES I-122/I-123, so the PRD's optimism doesn't
+mislead the next reader):
+
+**The resolved DataForSEO location is stored as TEXT, not an int location_code** (`submarket.location_token`,
+`keyword_demand.location_token`). The PRD §4 assumed `dataforseo_rank.location_code_for` resolves a code
+from a lat/lng — it does not (stored/country-level only, no coordinates), and no lat/lng→code resolver
+exists. So the producer builds a best-effort `location_name` string and refuses cleanly when it can't;
+the text column lets the resolver be upgraded (reverse-geocode + locations match, or a numeric code)
+without a migration — the cheapest-to-reverse choice while resolution is a spike (I-122).
+*Revisit:* after the owner-run demand-fetch spike measures whether a bare name resolves to city-granular
+volume.
+
+**The dollar figure is carried as a separate deterministic field, never an LLM-rewritten talking point**
+(I-124). `outreach_call_hook.guard_output` rejects the whole LLM hook rewrite on any money number, so a
+valuation talking_point would collapse the phrasing to the deterministic fallback for every valued
+prospect — and the guard can't tell a real valuation from a hallucinated one. Resolved by design (not by
+relaxing the guard): `justification["valuation"]` is rendered once by `outreach_valuation.spoken_line`
+and never fed to the LLM. This is the PRD §9.1 scoped exception — the opener stays number-free, the
+figure rides beside it. A computed range shouldn't be LLM-"sharpened" anyway.
+
+**The Census downscale reads the cache only and degrades to no-line when empty** (I-123). The read needs
+no egress/key, but the `census_block_demand` cache is filled per LeadOff city_id, not per outreach
+submarket — so for most outreach markets it's empty and the ratio is None → no dollar line. The
+per-submarket fill trigger is net-new owner work (I-123). Metro population is a wide-bbox approximation
+(`outreach_valuation_metro_radius_multiple`) since no metro-pop primitive exists.
+
+**Gated OFF until the spike** (`outreach_valuation_enabled` default False on platform-api;
+`demand_auto_enabled` default True on the worker so keyword_demand starts filling on the next scans).
+Flipping `outreach_valuation_enabled` on — after the demand-fetch spike (I-122) confirms sane volume and
+a Census fill (I-123) exists for the market — is the Phase A activation step. Until then the whole
+feature is inert: the worker caches demand, the report path shows no dollar line.
+*Revisit:* Phase B (the approval-gated client PDF box + input freeze) after Phase A's numbers are
+sanity-checked on real calls.

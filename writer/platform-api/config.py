@@ -2455,6 +2455,46 @@ class Settings(BaseSettings):
     # one nobody can find when a pitch reads wrong (the same complaint as land_mask_null_scans).
     outreach_paying_losing_deficit_pct: float = 50.0
 
+    # --- Missed-opportunity valuation (docs/missed-opportunity-valuation-prd-v0_1.md) -----------
+    # The estimated missed-opportunity DOLLAR figure surfaced in the caller's "why call" view + the
+    # internal brief (Phase A: internal-only, computed-on-read, no client PDF). Degrades to NO dollar
+    # line whenever any input is missing — no keyword_demand row, no Census downscale, in the pack
+    # everywhere — never a fabricated zero (unknown ≡ absent). The number is a RANGE that shows its
+    # work; it is rendered deterministically and never routed through the LLM call-hook (whose guard
+    # rejects money numbers), so the fabrication guard is untouched.
+    #
+    # OFF until the owner-run demand-fetch spike confirms keyword_demand populates for real markets
+    # (PRD §12); flipping it on is the Phase A activation step. While off, the report path skips the
+    # valuation reads entirely.
+    outreach_valuation_enabled: bool = False
+    # The Google local pack shows 3; "missed" = a measured grid point outside the top this-many.
+    outreach_valuation_pack_size: int = 3
+    # Footprint the metro demand is scaled DOWN to by Census population share — the grid radius, so
+    # demand and the grid-measured gap share one geography (the unit-match the metro-scope rejection
+    # was about).
+    outreach_valuation_footprint_radius_miles: float = 5.0
+    # No metro-population primitive exists, so "metro" population is summed over a box this many times
+    # the footprint radius (a wide-bbox approximation — see outreach ISSUES). The downscale ratio is
+    # footprint population ÷ this wider-box population.
+    outreach_valuation_metro_radius_multiple: float = 8.0
+    # Google local-PACK CTR curve (position → share of ALL searchers who click it) — the published
+    # prior for "what a business IN the pack captures". A single in-pack listing's capture is the mean
+    # over the pack width. UNVALIDATED seed values — replace with a cited 3-pack study (PRD §12 spike
+    # 2 / §13). JSON so it is tunable without a redeploy (the OUTREACH_SCORECARD_COEFFICIENTS_JSON
+    # precedent, in the worker; introduced fresh here).
+    outreach_valuation_pack_ctr_curve_json: str = '{"1": 0.19, "2": 0.10, "3": 0.07}'
+    # Per-vertical close-rate + job-value bands — the two SOFT assumptions that drive the missed-
+    # revenue low→high band — keyed on the prospect's category (containment match). UNVALIDATED
+    # elicited priors; empty = every vertical uses the global fallback below. Shape per key:
+    # {"close_rate_low","close_rate_high","job_value_low","job_value_high"}.
+    outreach_valuation_category_assumptions_json: str = "{}"
+    # Conservative global fallback for a vertical not in the table (unknown / off-category) — the
+    # honest default, since we don't know an unclassifiable business's economics.
+    outreach_valuation_global_close_low: float = 0.10
+    outreach_valuation_global_close_high: float = 0.25
+    outreach_valuation_global_job_value_low: float = 200.0
+    outreach_valuation_global_job_value_high: float = 800.0
+
     # --- Emit (Phase 3 — the optional outbound-queue webhook; outreach PRD §C) ------------------
     # Emit posts an AUDIT-READY QUEUE (not generated assets) as plain JSON to whatever URL is set
     # here — any HTTP receiver (Zapier, Make, a custom endpoint, ...). The PRD named n8n / Encharge
