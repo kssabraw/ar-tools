@@ -145,15 +145,22 @@ deliverable link, no keyword on the task, missing creds, an unreadable sheet —
 | Verdict | Board effect | Notification |
 |---|---|---|
 | **pass** | Stays in In QA by default (`qa_pass_status` empty). Set `qa_pass_status="sent_to_client"` to auto-advance. Verdict on the activity feed. | Silent unless `qa_notify_on_pass` |
-| **fail** | Bounced to `qa_fail_status` (In Progress) + one **`Rework: <failed check>`** subtask per failed check (`qa_fail_creates_subtasks`). | Warning |
+| **fail** | A *complete QA failure*: bounced to `qa_fail_status` (**For Revision** — the dedicated lane a client-requested revision also uses; entry bumps the task's `revision_count`) + one **`Rework: <failed check>`** subtask per failed check (`qa_fail_creates_subtasks`). | Warning |
 | **needs_human** | Stays put — a person decides. | Warning |
 | **skipped** | Stays put; recorded. | None |
 
+**Why For Revision:** a complete QA failure and a client-requested revision are the same thing
+to the board — a finished deliverable that has to be redone — so both land in one **For
+Revision** lane where they're easy to see and count. The `Rework:` subtasks QA writes are the
+*precise what-and-why to revise*; a task parked here for a client revision needs the same
+(human-written notes + a revision due date — a documented convention, not app-enforced).
+
 **The self-closing rework loop:** the `Rework:` subtasks are real work items, so when the VA
-ticks them all off, the board's auto-advance moves the task **back to In QA**, which re-runs
-QA automatically. Fix → re-review → pass, with no human dispatch in between. (The prefix is
-`Rework:` and not `QA fix:` on purpose — "qa" would trip the task board's process-marker
-classifier and break the loop.)
+ticks them all off, the board's auto-advance moves the task **from For Revision back to In QA**,
+which re-runs QA automatically (`for_revision` is in `task_service._AUTO_ADVANCE_FROM`, Rule B
+only). Fix → re-review → pass, with no human dispatch in between. (The prefix is `Rework:` and
+not `QA fix:` on purpose — "qa" would trip the task board's process-marker classifier and break
+the loop.)
 
 ---
 
@@ -240,7 +247,7 @@ Passing reviews are nearly free.
 | `qa_enabled` | `False` | Master gate for the **automatic** In-QA trigger. The Run QA button works regardless. |
 | `qa_trigger_status` | `in_qa` | The status whose entry enqueues a review. |
 | `qa_pass_status` | `""` | Where a passing task goes. Empty = stay in In QA. Set e.g. `sent_to_client` to auto-advance. |
-| `qa_fail_status` | `in_progress` | Bounce target on a failed review. |
+| `qa_fail_status` | `for_revision` | Bounce target on a complete QA failure (the "For Revision" lane; entry bumps `tasks.revision_count`). Set `"in_progress"` for the pre-2026-09 silent-bounce behaviour. |
 | `qa_fail_creates_subtasks` | `True` | Create `Rework:` subtasks from failed checks. |
 | `qa_notify_on_pass` | `False` | Notify on clean passes (off = silent). |
 | `qa_citation_sample` | `3` | Citations sampled per review. |

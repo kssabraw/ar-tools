@@ -32,11 +32,11 @@ Every client has a **task board**. Each month, the board fills itself with that 
 
 ### 3.1 The status pipeline
 
-A task moves left-to-right through six workflow statuses, plus two exception statuses that sit off to the side:
+A task moves left-to-right through six workflow statuses, plus three exception statuses that sit off to the side:
 
 ```
 Not Started → In Progress → In QA → Sent to Client → Client Approved → Completed
-                                                                    (exceptions:  Blocked · In Review)
+                                          (exceptions:  Blocked · In Review · For Revision)
 ```
 
 | Status | Means | Category |
@@ -48,9 +48,14 @@ Not Started → In Progress → In QA → Sent to Client → Client Approved →
 | **Client Approved** | The client said yes | in_progress |
 | **Completed** | Shipped / published / logged — done | done |
 | **Blocked** *(exception)* | Can't be started yet — waiting on something external | blocked |
-| **In Review** *(exception)* | The client rejected it; it needs redoing | in_progress |
+| **In Review** *(exception)* | An **internal** review before the work goes to the client (a teammate/lead is checking it) | in_progress |
+| **For Revision** *(exception)* | Needs rework — it **completely failed QA** or **the client rejected it and asked for changes** | in_progress |
 
-**Why Blocked and In Review are "exceptions," not steps:** they're not part of the normal flow — they're detours. A human deliberately puts a task into one of them, and **the automation never moves a task into or out of an exception status**. If a task is Blocked or In Review, it stays there until a person moves it. (This is intentional: the system should never "un-block" something or decide a client's rework is done.)
+**Why Blocked and In Review are "exceptions," not steps:** they're not part of the normal flow — they're detours. A human deliberately puts a task into one of them, and **the automation never moves a task into or out of them**. If a task is Blocked or In Review, it stays there until a person moves it. (This is intentional: the system should never "un-block" something or decide an internal review is done.)
+
+**For Revision is an exception too, but it flows back on its own.** It's where *every* "redo this" lands — both a complete QA failure (the QA agent drops the task here and writes one **"Rework:"** subtask per problem) and a client-requested revision (you add the rework subtasks). Because those "Rework:" items are real work items, **ticking the last of them re-enters In QA automatically** — the rework loop closes itself. Two rules for a task in For Revision, whichever way it got there:
+- **Precise details on what to revise and why** — QA fills these in as "Rework:" items automatically; for a client revision, *you* write them (name the section/claim/missing element and the reason — never just "fix it").
+- **A due date for the revision** — set the task's Due date to when the fix is expected. Revisions have their own clock; the Overdue and revision reports read this date. Each entry into For Revision also bumps a per-task revision counter, so a deliverable that keeps coming back is easy to spot.
 
 ### 3.2 What the pipeline replaced
 
@@ -85,11 +90,11 @@ Auto-tick **never un-ticks**. Dragging a card backward leaves all boxes as they 
 The reverse of auto-tick: the events the system already sees push the card forward, so you rarely drag at all.
 
 - **Start-on-touch:** the first time anyone touches a *Not Started* task — ticks a checklist item, leaves a comment, or attaches a file — it moves to **In Progress** automatically.
-- **Work-done → In QA:** when you tick the **last real work item** on the checklist, the card advances to **In QA** on its own.
+- **Work-done → In QA:** when you tick the **last real work item** on the checklist, the card advances to **In QA** on its own. This also fires from **For Revision** — tick the last "Rework:" item and the card goes back to In QA for a re-check (the rework loop closes itself).
 
-**"Real work item" vs "process marker":** the system knows the difference. A *work item* is the actual deliverable — a page name ("Terracotta Tile Roof Restoration Melbourne"), a coordinate set, a blog topic. A *process marker* is a status-like step ("QA'd", "Sent for approval"). **Only real work items steer the card.** So you tick your way through the actual pages/items, and when the last one is done, the card slides to In QA — the process markers get ticked automatically by auto-tick, not by you.
+**"Real work item" vs "process marker":** the system knows the difference. A *work item* is the actual deliverable — a page name ("Terracotta Tile Roof Restoration Melbourne"), a coordinate set, a blog topic — or a QA **"Rework:"** fix. A *process marker* is a status-like step ("QA'd", "Sent for approval"). **Only real work items steer the card.** So you tick your way through the actual pages/items, and when the last one is done, the card slides to In QA — the process markers get ticked automatically by auto-tick, not by you.
 
-Guardrails: auto-advance only ever moves a card *forward*, only from Not Started or In Progress, never from an exception status, never on a completed task. A manual drag always works too and does the same cascade.
+Guardrails: auto-advance only ever moves a card *forward*, only from Not Started, In Progress, or For Revision, never from the Blocked/In Review exceptions, never on a completed task. Start-on-touch fires only from Not Started; the work-done → In QA rule is what carries a For Revision task back. A manual drag always works too and does the same cascade.
 
 ### 4.3 Auto-producers — tasks that create and close themselves
 
@@ -181,7 +186,7 @@ Every Monday, each client's workspace gets a **Weekly Pulse** — a short, ready
 
 ### 8.1 "I started a task but it didn't move to In Progress"
 - **Is it a subtask?** Auto-advance only applies to top-level tasks, not checklist items.
-- **Is it already past Not Started, or in Blocked/In Review?** Auto-advance only fires from *Not Started*, and never from an exception status.
+- **Is it already past Not Started, or in an exception status (Blocked / In Review / For Revision)?** Start-on-touch → In Progress only fires from *Not Started*. (For Revision does auto-advance, but only *forward to In QA* once its last "Rework:" item is ticked — never to In Progress.)
 - **Did you actually touch it?** The trigger is a checklist tick, a comment, or an attachment. Just opening the task doesn't count.
 - **Always-works fallback:** drag the card to In Progress manually.
 
@@ -204,7 +209,7 @@ That's **auto-tick** reacting to a forward status move — expected. If *too man
 This shouldn't happen — monthly generation is idempotent and templates can't hold duplicate names. If you see dupes, they're almost certainly one **producer** task plus one **template** task for the same work (e.g., a manual "GBP Blast" and an auto one) — that's two different sources, not a bug. Trash whichever you don't want.
 
 ### 8.6 "A task is stuck in Blocked (or In Review) forever"
-**By design, the system will never move it out** — a human parked it there. When the blocker clears (or the client's rework is done), **a person must drag it back** into the workflow. PACE will keep flagging long-stuck Blocked tasks in its chase plan so they don't get forgotten.
+**By design, the system will never move it out** — a human parked it there. When the blocker clears (or the internal review is done), **a person must drag it back** into the workflow. PACE will keep flagging long-stuck Blocked tasks in its chase plan so they don't get forgotten. (**For Revision** is different — it moves itself back to In QA once the last "Rework:" item is ticked, so a task only sits there while its rework is genuinely unfinished.)
 
 ### 8.7 "PACE didn't post anything today"
 - **"All clear" is normal** — if there's nothing to chase, PACE posts nothing. A quiet board is a good sign.
@@ -261,8 +266,8 @@ This shouldn't happen — monthly generation is idempotent and templates can't h
 
 ## 10. What's coming next
 
-- **QA agent** — will watch the *In QA* column, run automated quality checks (the 8-engine page scorer, structure eval, citation checks, content-quality gates) plus an AI review, post its findings as a task comment, and — once trusted — advance passing work to *Sent to Client* and bounce failures back to *In Progress* with notes. This automates the first of the two remaining manual drags.
-- **Inbox Agent** *(deferred — needs mailbox access)* — will read client replies, detect approvals, and advance *Sent to Client → Client Approved* automatically; route revision requests into *In Review* with the client's feedback attached; and hand client questions to SerMaStr to draft replies. This automates the last manual drag. It's fully spec'd in the PRD §20 and gated on granting the system read access to the reply inbox.
+- **QA agent** *(built + live)* — watches the *In QA* column, runs automated quality checks (the 8-engine page scorer, structure eval, citation checks, content-quality gates) plus an AI review, records its findings, and bounces a **complete failure to *For Revision*** with one **"Rework:"** subtask per problem (checking them all off re-queues the task for QA on its own). A clean pass stays in In QA for a human to send on. See the [PACE & QA User Guide](pace-qa-user-guide.md).
+- **Inbox Agent** *(deferred — needs mailbox access)* — will read client replies, detect approvals, and advance *Sent to Client → Client Approved* automatically; route **client revision requests into *For Revision*** with the client's feedback attached; and hand client questions to SerMaStr to draft replies. This automates the last manual drag. It's fully spec'd in the PRD §20 and gated on granting the system read access to the reply inbox.
 
 When both land, the pipeline is event-driven end to end and there are **no routine manual drags left** — the team does the work, and the board runs itself.
 

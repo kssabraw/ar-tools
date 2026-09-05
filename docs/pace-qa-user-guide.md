@@ -332,7 +332,7 @@ checklist:
 | Verdict | What it means | What happens to the task |
 |---|---|---|
 | ✅ **Passed** | Every blocking check cleared. | Stays in In QA — someone still moves it on to Sent to Client by hand (unless your team has configured pass to auto-advance). |
-| ❌ **Failed** | At least one blocking check came back false. | Bounces to **In Progress**, and QA adds a **"Rework: …"** checklist item for each failed check, naming exactly what to fix. |
+| ❌ **Failed** | At least one blocking check came back false — a *complete* QA failure. | Bounces to **For Revision** (the same lane a client-requested revision uses; entry bumps the task's revision count), and QA adds a **"Rework: …"** checklist item for each failed check, naming exactly what to fix. |
 | ⚠️ **Needs a human** | A blocking check couldn't be verified at all — a blocked page, a missing link, an unknown keyword. | Stays exactly where it was. QA never guesses; a person has to look. |
 | ⏭️ **Not QA-checked** | This deliverable type is out of QA's scope entirely (see below). | Stays where it was; nothing else happens. |
 
@@ -345,9 +345,17 @@ automatic fail. QA would rather ask a person than wrongly bounce good work.
 
 A failed review's "Rework: …" items are real checklist items, not just
 notes — which means checking them all off **automatically moves the task
-back to In QA**, exactly like finishing the checklist normally does, and QA
-re-reviews it on its own. Fix → check the box → re-review → pass, with
-nobody having to remember to re-run anything.
+from For Revision back to In QA**, exactly like finishing the checklist
+normally does, and QA re-reviews it on its own. Fix → check the box →
+re-review → pass, with nobody having to remember to re-run anything.
+
+**Why For Revision, not In Progress:** a complete QA failure and a
+client-requested revision are the same thing from the board's point of view
+— a finished deliverable that has to be redone — so both land in the one
+**For Revision** lane where they're easy to see and count. The "Rework:"
+items QA writes are the *precise what-and-why* to fix; for a client revision
+a human writes the equivalent notes and sets a revision **due date**. (See
+the task-manager guides for the For Revision conventions.)
 
 A real fail from this account, on a blog post:
 

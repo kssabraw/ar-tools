@@ -304,3 +304,38 @@ capture path); categories + attributes editing; scheduled periodic drift detecti
 Report "profile updates" line + strategy-digest `gbp_profile` provider; keyword-research/
 page-inventory grounding for the services draft (Phase 2.5).
 
+
+---
+
+## Task board — dedicated "For Revision" status + QA routes complete fails to it
+
+**Status: DECIDED** (owner, 2026-09-05).
+
+**Context.** Admin analytics work added overdue-task + revision tracking (PR #1030).
+Revision counting keyed on a `revision_status_key` — but the board had only "In Review"
+(historically "client rejected → redo"), and the owner wanted a first-class, unambiguous
+lane for rework so the reports (and the team) can see every deliverable being redone.
+
+**Decisions.**
+- **Add a dedicated `for_revision` board status** ("For Revision", category `in_progress`,
+  non-initial/non-done, at the end of the row with Blocked / In Review). Migration
+  `20260905193000_for_revision_status.sql`. `config.revision_status_key = "for_revision"`;
+  each entry bumps `tasks.revision_count` (migration `20260905190000`).
+- **It is used for BOTH triggers:** a **complete QA failure** OR a **client-requested
+  revision**. Both are "a finished deliverable that must be redone", so one tracked lane.
+- **Auto-route complete QA fails to For Revision.** `qa_fail_status` default repointed
+  `in_progress` → `for_revision`. The `Rework:` subtasks QA writes stay (they ARE the
+  precise what/why to revise). `for_revision` added to `task_service._AUTO_ADVANCE_FROM`
+  (Rule B only) so the self-closing rework loop still fires from the new lane — ticking the
+  last `Rework:` item re-enters In QA. ("Complete fail" = verdict == `fail`; `needs_human`
+  is inconclusive and never routes here.)
+- **Repurpose "In Review" as an INTERNAL review lane** (a teammate/lead checks the work
+  before it goes to the client). The client-rejected-rework meaning moves to For Revision.
+- **Precise revision details + a due date are a DOCUMENTED CONVENTION, not app-enforced.**
+  A For Revision task should carry what to revise and why (QA fills this in as `Rework:`
+  items; a human writes it for a client revision) and a revision due date (the Overdue and
+  revision reports read the task's due date). No new validation gate.
+- **Docs updated:** the task-manager user guide + manual, the PACE & QA user guide, the
+  in-app-task-manager PRD, the QA agent manual + plan, and `CLAUDE.md`.
+- **Future Inbox Agent (deferred):** when built, a client "revisions requested" reply routes
+  into For Revision (not In Review) with the feedback + a due date.

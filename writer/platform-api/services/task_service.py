@@ -277,8 +277,13 @@ def auto_tick_subtasks(task_id: str, stage: Optional[int], *, actor_id: Optional
 # best-effort. Later stages have their own drivers: In QA → Sent to Client is
 # the QA agent's job; Client Approved stays human until the inbox agent
 # (future build); publish/deliverable events already complete tasks.
+#
+# "For Revision" IS auto-movable (unlike the blocked/in_review exceptions): a QA
+# fail or a client-requested revision parks the task there with rework subtasks,
+# and ticking the last of them should re-enter In QA — the self-closing rework
+# loop. It advances only via Rule B (all work items done → in_qa), never Rule A.
 # ---------------------------------------------------------------------------
-_AUTO_ADVANCE_FROM = {"not_started", "in_progress"}  # the only auto-movable statuses
+_AUTO_ADVANCE_FROM = {"not_started", "in_progress", "for_revision"}  # auto-movable statuses
 
 
 def is_work_item(name: Optional[str]) -> bool:
@@ -653,6 +658,18 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
 
     payload = dict(changes)
     payload["updated_at"] = _now()
+    # Revision tracking: each transition INTO the "for revision" status (client
+    # rejected → rework) bumps a per-task counter, so a task revised repeatedly
+    # flags a deliverable that keeps missing client expectations. Only a real
+    # transition counts (not a re-save while already in that status).
+    from config import settings
+    revision_key = settings.revision_status_key
+    if (
+        revision_key
+        and changes.get("status_key") == revision_key
+        and before.get("status_key") != revision_key
+    ):
+        payload["revision_count"] = int(before.get("revision_count") or 0) + 1
     updated = supabase.table("tasks").update(payload).eq("id", task_id).execute().data[0]
     for entry in diff_activity(before, changes):
         record_activity(task_id, entry["kind"], actor_id=actor_id, detail=entry["detail"])

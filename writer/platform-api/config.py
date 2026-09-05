@@ -1933,7 +1933,15 @@ class Settings(BaseSettings):
     # feed; the human sends + drags — moving to sent_to_client ourselves would
     # claim a send that hasn't happened). Set to 'sent_to_client' to auto-advance.
     qa_pass_status: str = ""
-    qa_fail_status: str = "in_progress"          # bounce target on a failed review
+    # A complete QA failure (verdict == fail) bounces the task to the dedicated
+    # "For Revision" lane — the same status a client-requested revision uses — so
+    # a failed deliverable lands in one visible, tracked place (revision_count
+    # bumps on entry) with the "Rework:" subtasks below naming exactly what to
+    # revise. Set to "in_progress" for the pre-2026-09 behaviour (silent bounce
+    # into the working column). The rework subtasks are work items, so ticking
+    # them all re-enters In QA (self-closing loop) — For Revision is in
+    # _AUTO_ADVANCE_FROM for that reason.
+    qa_fail_status: str = "for_revision"         # bounce target on a failed review
     qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks
     qa_notify_on_pass: bool = False              # silent clean passes
     qa_citation_sample: int = 3                  # QA_Checklists §Citations sample size
@@ -2251,6 +2259,18 @@ class Settings(BaseSettings):
     pulse_weekday: int = 0                # Monday: last week closed, this week ahead
     pulse_itemize_categories: List[str] = ["content", "gbp_authority"]
     pulse_retention_days: int = 14        # owner ruling: deleted after 2 weeks
+    # Admin Activity Report → Overdue tasks: which task statuses count as
+    # "external" (waiting on the client, not the team) when splitting overdue
+    # tasks by cause. Everything else is "internal". Sent-to-Client (awaiting
+    # client approval) and Blocked (owner ruling: treat blocks as client-side)
+    # are external; tune to taste.
+    overdue_external_status_keys: List[str] = ["sent_to_client", "blocked"]
+    # Which status means a task was "marked for revision" (client rejected →
+    # rework). A transition INTO this status bumps tasks.revision_count, so
+    # repeat revisions flag deliverables that keep missing client expectations.
+    # This is the dedicated "For Revision" board status (added 20260905193000),
+    # distinct from "In Review".
+    revision_status_key: str = "for_revision"
     # Narrative mode (owner request): a short LLM pass turns the deterministic,
     # category-filtered facts into a warm client email — what we did AND WHY,
     # what's next and why, closing with a questions invitation. Grounded: the

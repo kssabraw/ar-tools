@@ -118,26 +118,41 @@ Left to right, this is the order columns appear in on the Board (Step 3):
 Not Started → In Progress → In QA → Sent to Client → Client Approved → Completed
 ```
 
-Two more statuses sit at the very end of the row rather than in the flow —
-a task can drop into either one **from anywhere** when something stalls or
-gets bounced, and comes back out the same way:
+Three more statuses sit at the very end of the row rather than in the flow —
+a task can drop into any of them **from anywhere** when something stalls or
+gets bounced:
 
 - **Blocked** — waiting on something outside your control (a client
   approval, another team's input).
-- **In Review** — sent back, usually by the client, for changes.
+- **In Review** — an *internal* review before the work goes to the client:
+  a teammate or lead is checking it. (This lane used to mean "client sent it
+  back"; that job now belongs to **For Revision**.)
+- **For Revision** — the deliverable needs rework, for one of two reasons:
+  **it completely failed QA**, or **the client rejected it and asked for
+  changes**. This is the one place both kinds of "redo this" live, so it's
+  easy to see everything that's being reworked and to count how often a
+  deliverable comes back. **A task in For Revision must carry precise
+  details on what to revise and why, and a due date for the revision** —
+  see "Working a For Revision task" below.
 
-**Why these two are separate from the main row, not just two more columns:**
-everything else in the pipeline moves in a predictable order — the system
-can tell "In QA" is a step forward from "In Progress." Blocked and In
-Review aren't steps in that order at all; they're a *pause*, and pausing
-can happen from wherever the task already was. Folding them into the main
-row would force a fake position on them ("is Blocked before or after In
-QA?") that doesn't mean anything. **What to do:** use them for exactly what
-they say — something outside your control, or a client's changes request —
-not as a general "not sure what to do with this" bucket. And move a task
-*out* of one by hand once the blocker clears or the changes are done; the
-checklist auto-advance described below deliberately never touches these
-two, so nothing will do it for you.
+**Why Blocked and In Review are separate from the main row, not just two
+more columns:** everything else in the pipeline moves in a predictable order
+— the system can tell "In QA" is a step forward from "In Progress." Blocked
+and In Review aren't steps in that order at all; they're a *pause*, and
+pausing can happen from wherever the task already was. **What to do:** use
+them for exactly what they say — something outside your control, or an
+internal check — not as a general "not sure what to do with this" bucket.
+Move a task *out* of one by hand once the blocker clears or the review is
+done; the checklist auto-advance described below deliberately never touches
+these two, so nothing will do it for you.
+
+**For Revision behaves a little differently from those two.** When the QA
+agent fails a task it drops it here automatically and adds one **"Rework:
+…"** subtask per problem it found — that checklist *is* the precise
+what-to-revise list. Because those are real work items, ticking the last
+of them sends the task **straight back to In QA** for a re-check (the
+rework loop closes itself, no hand-off needed). A client-requested revision
+works the same way once you add the rework subtasks yourself.
 
 You set a task's status by dragging its card between columns, or by hand in
 the task drawer's **Status** dropdown — both are covered in Step 3 and 5.
@@ -343,10 +358,12 @@ it's supposed to work, not a sign you're missing a field.
 > **Heads up — some status changes happen on their own.** Touching a
 > checklist item (checking it, commenting, attaching a file) on a task
 > that's "Not Started" moves it to "In Progress" automatically. Checking off
-> the **last** item on the checklist moves the task to "In QA" automatically.
-> This is intentional — it keeps the board honest without you having to
-> remember to drag the card yourself. It never happens in reverse, and it
-> never touches "Blocked" or "In Review."
+> the **last** item on the checklist moves the task to "In QA" automatically
+> — and this includes a task in **"For Revision"**: tick the last "Rework:"
+> item and it goes back to In QA for a re-check. This is intentional — it
+> keeps the board honest without you having to remember to drag the card
+> yourself. It never happens in reverse, and it never touches "Blocked" or
+> "In Review."
 
 ### Attachments
 
@@ -383,8 +400,37 @@ asking around.
   early. A QA panel further down the drawer shows a readiness check, the
   rubric being used, and — once it's run — a pass/fail verdict with a
   plain-language breakdown of what was checked. A **fail** bounces the task
-  back to "In Progress" with new checklist items telling you exactly what to
-  fix; checking all of them off re-queues it for QA automatically.
+  to **"For Revision"** with new "Rework:" checklist items telling you
+  exactly what to fix; checking all of them off re-queues it for QA
+  automatically.
+
+---
+
+## Working a "For Revision" task
+
+A task lands in **For Revision** for one of two reasons: **it completely
+failed QA**, or **the client rejected the deliverable and asked for
+changes.** Either way the rule is the same — *anyone* looking at the card
+should be able to tell what needs fixing without asking.
+
+**Every For Revision task must carry, before rework starts:**
+
+1. **Precisely what to revise and why** — one checklist item per fix
+   ("Rework: …"), or, if a client sent freeform notes, a comment quoting
+   exactly what they want changed and the reason. QA fills the "what/why"
+   in for you automatically (one "Rework:" item per failed check); for a
+   client revision *you* write them. "Fix it" is not enough — name the
+   section, the claim, the missing element.
+2. **A due date for the revision** — set the task's **Due date** to when the
+   fix is expected, not the original deadline. Revisions have their own
+   clock, and the Overdue and revision reports read this date.
+
+**Then work it like any other task:** tick each rework item as you fix it.
+Checking off the last one sends the task **back to In QA** on its own (for a
+QA fail) or you drag it onward (for a client revision) once the client-facing
+changes are done. Each trip into For Revision is counted per task, so a
+deliverable that keeps coming back is easy to spot — that's the signal a
+piece of work (or a brief) isn't meeting expectations.
 
 ---
 
@@ -500,9 +546,9 @@ Checking that last box automatically moves the task to **In QA** and kicks
 off an automatic quality check — no action needed from you. If it comes back
 clean, the task sits in In QA until someone sends it on to the client (or,
 depending on the workflow, moves it further along by hand). If the check
-finds something wrong, the task bounces back to **In Progress** with a new
-checklist item spelling out exactly what to fix — you fix it, check it off,
-and it re-queues for QA on its own.
+finds something wrong, the task bounces to **For Revision** with new
+"Rework:" checklist items spelling out exactly what to fix — you fix them,
+check them off, and it re-queues for QA on its own.
 
 That's the whole loop: open from My Tasks, work the checklist, let status
 take care of itself, done.

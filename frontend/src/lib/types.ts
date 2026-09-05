@@ -2468,3 +2468,58 @@ export interface CostReport {
   by_member: CostMemberRow[]
   daily: CostDay[]
 }
+
+// Admin Activity Report → Overdue tasks (routers/deliverables_analytics.py
+// GET /admin/overdue-tasks → services/overdue_tasks.py). A live snapshot.
+export interface OverdueBucketRow {
+  bucket: string
+  internal: number
+  external: number
+  total: number
+}
+export interface OverdueCauseRow {
+  cause: 'internal' | 'external'
+  label: string
+  count: number
+}
+export interface OverdueClientRow {
+  client_id: string | null
+  client_name: string
+  count: number
+}
+export interface OverdueMemberRow {
+  member: string
+  count: number
+}
+export interface OverdueReport {
+  total: number
+  internal: number
+  external: number
+  as_of: string
+  client_id: string | null
+  external_status_keys: string[]
+  by_bucket: OverdueBucketRow[]
+  by_cause: OverdueCauseRow[]
+  by_client: OverdueClientRow[]
+  by_member: OverdueMemberRow[]
+}
+
+// Admin Activity Report → Revisions (GET /admin/revisions →
+// services/revision_tracking.py). How often deliverables get sent back for
+// revision (client rejected → rework).
+export interface RevisionBucketRow { bucket: string; count: number }
+export interface RevisionClientRow { client_id: string | null; client_name: string; revisions: number }
+export interface RevisionMemberRow { member: string; revisions: number }
+export interface MostRevisedTask { task_id: string; name: string; client_name: string; revision_count: number }
+export interface RevisionReport {
+  total_requests: number
+  tasks_revised: number
+  repeat_revised: number
+  in_revision_now: number
+  client_id: string | null
+  revision_status_key: string
+  by_bucket: RevisionBucketRow[]
+  by_client: RevisionClientRow[]
+  by_member: RevisionMemberRow[]
+  most_revised: MostRevisedTask[]
+}

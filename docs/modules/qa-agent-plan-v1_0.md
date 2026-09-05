@@ -26,9 +26,14 @@ default False except the on-demand Run QA button — see the build notes below).
 >    the reshaped workflow makes In Review a client-rejected-rework *exception*
 >    status, and auto-moving to Sent to Client would claim a send that hasn't
 >    happened. Config can advance passes (`qa_pass_status="sent_to_client"`).
-> 3. **Fail bounces to In Progress with "QA fix: …" rework subtasks** — and since
->    those subtasks ARE work items, ticking them all auto-advances the task back
->    to In QA, which re-runs QA: the rework loop closes itself.
+> 3. **Fail bounces to "For Revision" with "Rework: …" rework subtasks**
+>    (`qa_fail_status` default repointed `in_progress`→`for_revision` 2026-09-05
+>    — the dedicated rework lane a client-requested revision also uses; entry
+>    bumps `tasks.revision_count`; the prefix is `Rework:` not `QA fix:` so the
+>    marker classifier keeps them as work items). Since those subtasks ARE work
+>    items, ticking them all auto-advances the task back to In QA, which re-runs
+>    QA: the rework loop closes itself (`for_revision` is in
+>    `task_service._AUTO_ADVANCE_FROM`, Rule B only).
 > 4. **Structural design-fit is needs_human, not auto-fail**, below
 >    `qa_structural_threshold` — page-type attribution to a stored reference is
 >    heuristic, and a wrong-reference comparison must not bounce good work.
@@ -396,10 +401,12 @@ is `generic`. **The LLM never sets the verdict** — it only phrases it.
 - **Pass** → advance the task out of For QA. Default target `qa_pass_status='in_review'`
   (a lead still eyeballs before the client sees it); a client can raise trust later by
   pointing it at `sent_to_client`. Records a `status_changed` activity (actor = QA system).
-- **Fail** → **bounce** back to `qa_fail_status` (default `in_progress`) **and** attach the
-  ranked rework findings as a comment + (optionally) checklist subtasks
-  (`qa_fail_creates_subtasks`, default on) so the fix is concrete, not "try again." The
-  task stays owned by its assignee.
+- **Fail** (a complete QA failure) → **bounce** to `qa_fail_status` (default
+  `for_revision` since 2026-09-05 — the dedicated "For Revision" lane a client-requested
+  revision also uses, so both kinds of "redo this" land in one tracked place; entry bumps
+  `tasks.revision_count`) **and** attach the ranked rework findings as a comment +
+  (optionally) `Rework:` checklist subtasks (`qa_fail_creates_subtasks`, default on) so the
+  fix is concrete, not "try again." The task stays owned by its assignee.
 - **needs_human** → leave the task in For QA, post the finding, and let a lead decide —
   QA declines to auto-move what it couldn't judge.
 

@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart3, RefreshCw, Download, X } from 'lucide-react'
 import { api } from '../lib/api'
-import type { ActivityReport, ActivityReportDay } from '../lib/types'
+import type { ActivityReport, ActivityReportDay, OverdueReport, OverdueBucketRow, RevisionReport } from '../lib/types'
 
 interface ClientListItem { id: string; name: string }
 
@@ -114,6 +114,19 @@ export function ActivityReport() {
   const cmp = !!data?.compare
   const drilled = !!clientId
   const drilledName = clientName[clientId] || data?.by_client?.[0]?.client_name || 'Client'
+
+  // Overdue tasks — a live "as of today" snapshot (independent of the date range
+  // / comparison), scoped to the drilled client when one is selected.
+  const { data: overdue } = useQuery<OverdueReport>({
+    queryKey: ['overdue-tasks', clientId],
+    queryFn: () => api.get<OverdueReport>(`/admin/overdue-tasks${qs({ client_id: clientId })}`),
+  })
+
+  // Revisions — deliverables sent back for rework (client rejected). Live snapshot.
+  const { data: revisions } = useQuery<RevisionReport>({
+    queryKey: ['revisions', clientId],
+    queryFn: () => api.get<RevisionReport>(`/admin/revisions${qs({ client_id: clientId })}`),
+  })
 
   const byGroup = useMemo(() => {
     const groups: Record<string, { label: string; count: number; delta: number }[]> = {}
@@ -282,6 +295,160 @@ export function ActivityReport() {
           </div>
         </>
       )}
+
+      {/* Overdue tasks — live snapshot (as of today), respects the client drill-down */}
+      {overdue && (
+        <div style={{ marginTop: 28 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
+            <h2 style={{ margin: 0, fontSize: 18 }}>Overdue tasks</h2>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>open, past due · as of {overdue.as_of}</span>
+          </div>
+          <p style={{ marginTop: 2, marginBottom: 12, color: '#64748b', fontSize: 12.5 }}>
+            Split by how far past due, and by cause — internal (the team owns the next step) vs
+            external (waiting on the client: {overdue.external_status_keys.join(', ') || 'none'}).
+          </p>
+
+          {overdue.total === 0 ? (
+            <Panel title="Overdue"><div style={{ color: '#16a34a', fontSize: 13 }}>Nothing overdue 🎉</div></Panel>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+                <Stat label="Total overdue" value={overdue.total} big />
+                <Stat label="Internal (team)" value={overdue.internal} />
+                <Stat label="External (waiting on client)" value={overdue.external} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+                <Panel title="By age (internal vs external)">
+                  <div style={{ display: 'flex', gap: 12, marginBottom: 8, fontSize: 11, color: '#64748b' }}>
+                    <span><span style={legendDot('#6366f1')} /> Internal</span>
+                    <span><span style={legendDot('#d97706')} /> External</span>
+                  </div>
+                  {overdue.by_bucket.map((b) => (
+                    <StackedBar key={b.bucket} row={b} max={Math.max(1, ...overdue.by_bucket.map((x) => x.total))} />
+                  ))}
+                </Panel>
+
+                {!drilled && (
+                  <Panel title="By client">
+                    {overdue.by_client.length === 0 ? <Empty /> : (
+                      overdue.by_client.map((r) => (
+                        <Bar key={r.client_id ?? 'none'} label={r.client_name} count={r.count}
+                          max={Math.max(1, ...overdue.by_client.map((x) => x.count))} color="#dc2626"
+                          onClick={r.client_id ? () => setClientId(r.client_id as string) : undefined} />
+                      ))
+                    )}
+                  </Panel>
+                )}
+
+                <Panel title="By assignee">
+                  {overdue.by_member.length === 0 ? <Empty /> : (
+                    overdue.by_member.map((r) => (
+                      <Bar key={r.member} label={r.member} count={r.count}
+                        max={Math.max(1, ...overdue.by_member.map((x) => x.count))} color="#dc2626"
+                        muted={r.member === 'Unassigned'} />
+                    ))
+                  )}
+                </Panel>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Revisions — deliverables sent back for rework (client rejected). Snapshot. */}
+      {revisions && (
+        <div style={{ marginTop: 28 }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginBottom: 2 }}>
+            <h2 style={{ margin: 0, fontSize: 18 }}>Revisions</h2>
+            <span style={{ fontSize: 12, color: '#94a3b8' }}>deliverables sent back for rework (client rejected)</span>
+          </div>
+          <p style={{ marginTop: 2, marginBottom: 12, color: '#64748b', fontSize: 12.5 }}>
+            How often work gets bounced back for revision — a task revised repeatedly flags a
+            deliverable that keeps missing client expectations.
+          </p>
+
+          {revisions.total_requests === 0 ? (
+            <Panel title="Revisions">
+              <div style={{ color: '#64748b', fontSize: 13 }}>
+                No revisions recorded yet — this starts counting once a task is moved to the
+                “For Revision” status on the board.
+              </div>
+            </Panel>
+          ) : (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginBottom: 14 }}>
+                <Stat label="Revision requests" value={revisions.total_requests} big />
+                <Stat label="Deliverables revised" value={revisions.tasks_revised} />
+                <Stat label="Repeat (2×+)" value={revisions.repeat_revised} />
+                <Stat label="In revision now" value={revisions.in_revision_now} />
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 16 }}>
+                <Panel title="By times revised">
+                  {revisions.by_bucket.map((b) => (
+                    <Bar key={b.bucket} label={b.bucket} count={b.count}
+                      max={Math.max(1, ...revisions.by_bucket.map((x) => x.count))} color="#d97706" />
+                  ))}
+                </Panel>
+
+                {!drilled && (
+                  <Panel title="By client">
+                    {revisions.by_client.length === 0 ? <Empty /> : (
+                      revisions.by_client.map((r) => (
+                        <Bar key={r.client_id ?? 'none'} label={r.client_name} count={r.revisions}
+                          max={Math.max(1, ...revisions.by_client.map((x) => x.revisions))} color="#d97706"
+                          onClick={r.client_id ? () => setClientId(r.client_id as string) : undefined} />
+                      ))
+                    )}
+                  </Panel>
+                )}
+
+                <Panel title="By assignee">
+                  {revisions.by_member.length === 0 ? <Empty /> : (
+                    revisions.by_member.map((r) => (
+                      <Bar key={r.member} label={r.member} count={r.revisions}
+                        max={Math.max(1, ...revisions.by_member.map((x) => x.revisions))} color="#d97706"
+                        muted={r.member === 'Unassigned'} />
+                    ))
+                  )}
+                </Panel>
+              </div>
+
+              {revisions.most_revised.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <Panel title="Most-revised deliverables">
+                    {revisions.most_revised.map((t) => (
+                      <div key={t.task_id} style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0', fontSize: 12.5 }}>
+                        <span style={{ flex: 1, color: '#334155', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={t.name}>{t.name}</span>
+                        <span style={{ width: 160, flexShrink: 0, color: '#94a3b8', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.client_name}</span>
+                        <span style={{ width: 44, flexShrink: 0, textAlign: 'right', fontWeight: 700, color: t.revision_count >= 2 ? '#dc2626' : '#0f172a' }}>{t.revision_count}×</span>
+                      </div>
+                    ))}
+                  </Panel>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Horizontal stacked bar for one overdue age bucket: internal + external segments.
+function StackedBar({ row, max }: { row: OverdueBucketRow; max: number }) {
+  const iPct = Math.round((row.internal / max) * 100)
+  const ePct = Math.round((row.external / max) * 100)
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '5px 0' }}>
+      <div style={{ width: 90, flexShrink: 0, fontSize: 12.5, color: '#334155' }}>{row.bucket}</div>
+      <div style={{ flex: 1, background: '#f1f5f9', borderRadius: 4, height: 16, display: 'flex', overflow: 'hidden' }}>
+        <div style={{ width: `${iPct}%`, background: '#6366f1', height: '100%' }} title={`Internal: ${row.internal}`} />
+        <div style={{ width: `${ePct}%`, background: '#d97706', height: '100%' }} title={`External: ${row.external}`} />
+      </div>
+      <div style={{ width: 78, flexShrink: 0, textAlign: 'right', fontSize: 12, color: '#334155' }}>
+        <span style={{ fontWeight: 700, color: '#0f172a' }}>{row.total}</span>
+        {row.external > 0 && <span style={{ color: '#d97706' }}> · {row.external} ext</span>}
+      </div>
     </div>
   )
 }
@@ -385,3 +552,4 @@ const rangeBtn = (active: boolean): CSSProperties => ({
 })
 const dateInput: CSSProperties = { padding: '5px 8px', borderRadius: 6, border: '1px solid #cbd5e1', fontSize: 13 }
 const groupHead: CSSProperties = { fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '2px 0 4px' }
+const legendDot = (color: string): CSSProperties => ({ display: 'inline-block', width: 8, height: 8, borderRadius: 2, background: color, marginRight: 4 })
