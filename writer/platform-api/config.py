@@ -2251,6 +2251,12 @@ class Settings(BaseSettings):
     pulse_weekday: int = 0                # Monday: last week closed, this week ahead
     pulse_itemize_categories: List[str] = ["content", "gbp_authority"]
     pulse_retention_days: int = 14        # owner ruling: deleted after 2 weeks
+    # Admin Activity Report → Overdue tasks: which task statuses count as
+    # "external" (waiting on the client, not the team) when splitting overdue
+    # tasks by cause. Everything else is "internal". Default is just
+    # Sent-to-Client (the ball is in the client's court); add e.g. "blocked" if
+    # your blocks are usually client-side.
+    overdue_external_status_keys: List[str] = ["sent_to_client"]
     # Narrative mode (owner request): a short LLM pass turns the deterministic,
     # category-filtered facts into a warm client email — what we did AND WHY,
     # what's next and why, closing with a questions invitation. Grounded: the

@@ -13,7 +13,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from middleware.auth import require_admin
-from services import deliverables_analytics
+from services import deliverables_analytics, overdue_tasks
 
 router = APIRouter(prefix="/admin", tags=["admin-activity"])
 logger = logging.getLogger(__name__)
@@ -37,4 +37,18 @@ async def get_activity_report(
         )
     except Exception as exc:  # pragma: no cover - defensive
         logger.error("activity_report_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
+@router.get("/overdue-tasks")
+async def get_overdue_tasks(
+    client_id: str | None = Query(default=None, description="Optional: scope to one client."),
+    auth: dict = Depends(require_admin),
+) -> dict:
+    """Current open, past-due tasks broken down by age (1–2d/3–4d/5–6d/7+d) and
+    by cause (internal vs external — waiting on the client). A live snapshot."""
+    try:
+        return overdue_tasks.build_overdue_report(client_id=client_id)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.error("overdue_tasks_failed", extra={"error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
