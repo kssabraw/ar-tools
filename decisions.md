@@ -387,8 +387,11 @@ CHECK (applied live) · frontend `QaPanel` badges + `QaReview.verdict` union · 
 Additive + backward-compatible: existing rows still satisfy the constraint; no data
 migration.
 
-**OPEN follow-up (flagged to owner):** `visual_render` (a high-confidence broken
-render — raw unstyled HTML / dead stylesheet) is currently `revisions`, not `fail`,
-because it wasn't in the nominated critical set. Arguably belongs in `fail` (a broken
-render needs a human, not a checklist tick). Left out to honor "keep the set as is";
-owner to decide whether to add it.
+**~~OPEN~~ RESOLVED follow-up (owner, 2026-09-08):** `visual_render` (a high-confidence
+broken render — raw unstyled HTML / dead stylesheet) was **added to the critical set** —
+a broken render needs a human to find out WHY it broke, not a VA ticking a rework item, so
+it escalates (`fail`) rather than self-looping (`revisions`). `CRITICAL_CHECK_KEYS` is now
+`client_name`, `nap`, `link_back`, `map_embed`, `keyword_in_url`, `visual_render`. The
+high-confidence gate is unchanged (the qa_visual judge only bounces on high confidence; low
+confidence / capture failure stays fail-open `needs_human`), so only a *confirmed* broken
+render escalates.

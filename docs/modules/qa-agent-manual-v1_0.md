@@ -129,10 +129,11 @@ The verdict is **pure code** (`qa_signals.build_verdict`), never the LLM's. Verd
 *nature* of the failure, not the count:
 
 1. A **critical** blocking check failed (`qa_signals.CRITICAL_CHECK_KEYS`: `client_name`,
-   `nap`, `link_back`, `map_embed`, `keyword_in_url`) **OR** ≥ `qa_fail_count_threshold`
-   (default **4**) blocking checks failed → **`fail`**. The deliverable is wrong / does harm /
-   omitted its whole purpose (wrong client name, inconsistent NAP, no link-back, no map embed,
-   keyword missing from the URL) — or is mostly broken. **Escalates to a human.**
+   `nap`, `link_back`, `map_embed`, `keyword_in_url`, `visual_render`) **OR** ≥
+   `qa_fail_count_threshold` (default **4**) blocking checks failed → **`fail`**. The
+   deliverable is wrong / does harm / omitted its whole purpose (wrong client name, inconsistent
+   NAP, no link-back, no map embed, keyword missing from the URL, a broken visual render) — or
+   is mostly broken. **Escalates to a human.**
 2. Else any **blocking** check failed → **`revisions`**. Fixable, on-target work missing a
    piece (no CTA, no emoji, keyword not in the H1, a duplicate heading). **VA reworks, the bot
    re-checks.** (This is the pre-2026-09-08 `fail` behaviour.)

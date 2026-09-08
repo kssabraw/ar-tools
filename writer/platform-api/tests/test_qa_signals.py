@@ -702,7 +702,7 @@ def test_build_verdict_noncritical_blocking_failure_is_revisions():
 
 def test_build_verdict_critical_check_failure_is_fail():
     # A single CRITICAL failure escalates even though it's only one check.
-    for key in ("client_name", "nap", "link_back", "map_embed", "keyword_in_url"):
+    for key in ("client_name", "nap", "link_back", "map_embed", "keyword_in_url", "visual_render"):
         checks = [sig._check(key, key.replace("_", " ").title(), False),
                   sig._check("meta_title", "Meta title present", True)]
         v = sig.build_verdict(checks)

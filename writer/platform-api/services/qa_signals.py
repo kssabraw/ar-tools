@@ -50,11 +50,15 @@ SKIPPED = "skipped"
 # discipline as ``blocking``): a wrong/missing business NAME (it's for the wrong
 # client), a NAP mismatch (an inconsistent citation actively hurts local SEO),
 # no LINK-BACK on a link-building deliverable (its one job), no MAP EMBED on a
-# map-embed task, and the target keyword MISSING FROM THE URL (fixing a slug is
-# a near-republish, not a tweak). Keyed by check ``key`` (see the check
-# builders); a key not in this set is a "standard" blocking check → revisions.
+# map-embed task, the target keyword MISSING FROM THE URL (fixing a slug is a
+# near-republish, not a tweak), and a high-confidence broken VISUAL RENDER (raw
+# unstyled HTML / a dead stylesheet — the page isn't shippable and needs a human
+# to find out WHY it broke, not a VA ticking a checklist item). Keyed by check
+# ``key`` (see the check builders); a key not in this set is a "standard"
+# blocking check → revisions.
 CRITICAL_CHECK_KEYS: frozenset[str] = frozenset({
     "client_name", "nap", "link_back", "map_embed", "keyword_in_url",
+    "visual_render",
 })
 
 # Count safety net: even when no single failed check is CRITICAL, a deliverable

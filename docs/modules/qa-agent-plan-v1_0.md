@@ -40,7 +40,7 @@ default False except the on-demand Run QA button — see the build notes below).
 > 3b. **Graduated verdicts (owner ruling 2026-09-08).** The verdict is no longer
 >    binary. A blocking failure splits by SEVERITY: a **critical** check
 >    (`qa_signals.CRITICAL_CHECK_KEYS`: `client_name`/`nap`/`link_back`/`map_embed`/
->    `keyword_in_url`) OR ≥ `qa_fail_count_threshold` (4) blocking fails →
+>    `keyword_in_url`/`visual_render`) OR ≥ `qa_fail_count_threshold` (4) blocking fails →
 >    **`fail`** (escalate to a human; NO `Rework:` subtasks — skips the self-re-QA
 >    loop, `qa_fail_escalation_status`); any other blocking failure → **`revisions`**
 >    (item 3's behaviour: Rework subtasks + self-loop). A clean deliverable that only
