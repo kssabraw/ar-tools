@@ -382,6 +382,31 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'The copywriting model didn’t return a draft — usually a temporary provider hiccup.',
     steps: ['Try “Draft with AI” again in a moment.', 'If it keeps failing, write the copy manually or tell an admin.'],
   },
+  social_image_generation_failed: {
+    title: 'The AI couldn’t generate the image',
+    meaning: 'The image model didn’t return an image — usually a temporary provider hiccup or a prompt it declined.',
+    steps: ['Try again, or reword the description.', 'If it keeps failing, upload an image instead or tell an admin.'],
+  },
+  social_image_budget_exceeded: {
+    title: 'This client’s social budget is used up',
+    meaning: 'Generating an image would exceed the client’s monthly social spend ceiling, so it was blocked before spending.',
+    steps: ['Upload an image instead, wait for next month, or ask an admin to raise the client’s social monthly ceiling.'],
+  },
+  social_image_not_configured: {
+    title: 'AI image generation isn’t set up',
+    meaning: 'The image provider key (GEMINI_API_KEY) isn’t configured on this environment.',
+    steps: ['Ask an admin to set GEMINI_API_KEY on the PLATFORM service.', 'Meanwhile, upload an image instead.'],
+  },
+  social_image_description_required: {
+    title: 'Describe the image first',
+    meaning: 'The image generator needs a description of what to draw.',
+    steps: ['Type what the image should show, then generate again.'],
+  },
+  social_bad_aspect_ratio: {
+    title: 'Unsupported image shape',
+    meaning: 'The requested aspect ratio isn’t one the image model supports.',
+    steps: ['Leave the shape on the platform default, or pick a supported ratio (e.g. 1:1, 4:5, 9:16, 16:9, 2:3).'],
+  },
   social_source_empty: {
     title: 'Add something to draft from',
     meaning: 'The topic / notes box was empty, so there’s nothing to write about.',

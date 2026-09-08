@@ -17,6 +17,8 @@ from models.social import (
     SocialAccountResponse,
     SocialDraftCopyRequest,
     SocialDraftCopyResponse,
+    SocialGenerateImageRequest,
+    SocialGenerateImageResponse,
     SocialMediaUploadResponse,
     SocialPostCreateRequest,
     SocialPostResponse,
@@ -25,6 +27,7 @@ from models.social import (
 )
 from services.freeze import assert_not_frozen
 from services.social import creator as social_creator
+from services.social import image as social_image
 from services.social import publish as social_publish
 
 logger = logging.getLogger(__name__)
@@ -65,6 +68,18 @@ async def draft_social_copy(
     return await social_creator.generate_copy(
         str(client_id), body, user_id=auth.get("user_id")
     )
+
+
+@router.post("/clients/{client_id}/social/generate-image", response_model=SocialGenerateImageResponse)
+async def generate_social_image(
+    client_id: UUID, body: SocialGenerateImageRequest, auth: dict = Depends(require_staff)
+):
+    """Generate one on-brand, per-platform social image (Nano Banana Pro) and store
+    it; returns a media URL to drop into a post's image_urls. Freeze-gated + budget-
+    metered (it's a paid external call)."""
+    social_publish._assert_enabled()
+    assert_not_frozen(str(client_id))
+    return await social_image.generate_image(str(client_id), body, user_id=auth.get("user_id"))
 
 
 @router.post("/clients/{client_id}/social/media", response_model=SocialMediaUploadResponse)

@@ -54,6 +54,21 @@ class SocialDraftCopyResponse(BaseModel):
     notes: list[str] = Field(default_factory=list)
 
 
+class SocialGenerateImageRequest(BaseModel):
+    """Generate one on-brand social image for a platform via Nano Banana Pro."""
+    platform: str
+    format: str = "feed"
+    description: str                       # what the image should show
+    aspect_ratio: Optional[str] = None     # override the per-platform default
+
+
+class SocialGenerateImageResponse(BaseModel):
+    url: str
+    type: str
+    aspect_ratio: str
+    cost_usd: float
+
+
 class SocialMediaUploadResponse(BaseModel):
     url: str
     type: str

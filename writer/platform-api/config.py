@@ -100,6 +100,14 @@ class Settings(BaseSettings):
     social_copy_max_tokens: int = 900
     social_copy_max_correction_passes: int = 1   # forbidden-term rewrites
     social_copy_source_max_chars: int = 8000     # source content fed to the prompt
+    # AI image generation — nano-banana Pro (Gemini 3 Pro Image), reuses
+    # GEMINI_API_KEY. The Pro model passes generationConfig.imageConfig.aspectRatio
+    # for per-platform ratios (the 2.5-Flash nano_banana_model is 1:1-only).
+    # Overridable when Google rotates the preview id. Paid external call — reserved
+    # against the fail-closed social budget before spending.
+    nano_banana_pro_model: str = "gemini-3-pro-image-preview"   # NANO_BANANA_PRO_MODEL
+    social_image_size: str = "2K"                # imageConfig.imageSize (1K/2K/4K)
+    social_image_cost_usd: float = 0.134         # est. USD per generated image (budget)
     # Social media store (ADR-0004): Cloudflare R2 (S3 API, zero egress) when
     # all five are set, else the Supabase fallback (images only). Reuses the
     # suite's existing Cloudflare account.

@@ -279,6 +279,81 @@ function AiDraftPanel({
   )
 }
 
+// ── AI image generation panel ─────────────────────────────────────────────────
+// Mirrors services/social/image.resolve_aspect_ratio (Gemini-supported ratios).
+function resolveAspectRatio(platform: string, format: string): string {
+  const p = (platform || '').toLowerCase()
+  const f = (format || 'feed').toLowerCase()
+  if (f === 'reel' || f === 'story') return '9:16'
+  if (p === 'pinterest') return '2:3'
+  if (p === 'instagram') return '4:5'
+  if (p === 'twitter' || p === 'x' || p === 'youtube') return '16:9'
+  return '1:1'
+}
+
+function AiImagePanel({
+  clientId, platform, format, disabled, disabledReason, onImage,
+}: {
+  clientId: string; platform: string; format: string
+  disabled: boolean; disabledReason?: string
+  onImage: (url: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [desc, setDesc] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [cost, setCost] = useState<number | null>(null)
+  const ar = resolveAspectRatio(platform, format)
+
+  const genMut = useMutation({
+    mutationFn: async () => {
+      setError(null)
+      return api.post<{ url: string; aspect_ratio: string; cost_usd: number }>(
+        `/clients/${clientId}/social/generate-image`,
+        { platform, format, description: desc.trim() },
+      )
+    },
+    onSuccess: (r) => { onImage(r.url); setCost(r.cost_usd); setDesc('') },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_image_generation_failed'),
+  })
+
+  const canGen = !disabled && desc.trim().length > 0 && !genMut.isPending
+
+  return (
+    <div style={{ marginTop: 10, border: '1px solid #e9d5ff', background: '#faf5ff', borderRadius: 10 }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: 'none', border: 'none', cursor: 'pointer', color: '#7c3aed', fontSize: 13, fontWeight: 700 }}>
+        <Sparkles size={15} /> Generate an image with AI
+        <span style={{ marginLeft: 'auto' }}>{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 12px 12px' }}>
+          {disabled && disabledReason && (
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#a16207' }}>{disabledReason}</p>
+          )}
+          <textarea style={{ ...input, minHeight: 60, resize: 'vertical', marginBottom: 8 }}
+            value={desc} onChange={(e) => setDesc(e.target.value)}
+            placeholder="Describe the image — e.g. a friendly plumber fixing a kitchen sink, bright and clean" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button disabled={!canGen} onClick={() => genMut.mutate()}
+              style={{ ...btn(canGen ? '#7c3aed' : '#ddd6fe'), cursor: canGen ? 'pointer' : 'not-allowed' }}>
+              {genMut.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+              {genMut.isPending ? 'Generating…' : 'Generate image'}
+            </button>
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              Shape: <strong>{ar}</strong> (matched to {specFor(platform).label} {format})
+            </span>
+          </div>
+          <p style={{ margin: '8px 0 0', fontSize: 11, color: '#94a3b8' }}>
+            One on-brand image via Nano Banana Pro. Uses the client’s monthly social budget
+            {cost != null ? ` (last: ~$${cost.toFixed(2)})` : ''}.
+          </p>
+          {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 export function SocialCompose() {
   const { id } = useParams<{ id: string }>()
@@ -538,6 +613,20 @@ export function SocialCompose() {
               Up to {MAX_UPLOAD_MB} MB per file. Images: JPG/PNG/WebP/GIF. Video: MP4/MOV (one per post).
             </p>
             {uploadError && <div style={{ marginTop: 8 }}><ErrorDetails message={uploadError} /></div>}
+            <AiImagePanel
+              clientId={clientId}
+              platform={platform}
+              format={format}
+              disabled={!selected || (spec.maxImages != null && images.length >= spec.maxImages)}
+              disabledReason={
+                !selected
+                  ? 'Select a connected account first — the image is sized for that platform.'
+                  : (spec.maxImages != null && images.length >= spec.maxImages)
+                    ? `${specFor(platform).label} allows at most ${spec.maxImages} image${spec.maxImages === 1 ? '' : 's'} — remove one to generate another.`
+                    : undefined
+              }
+              onImage={(url) => setImages((prev) => [...prev, url])}
+            />
           </div>
 
           {/* format */}
