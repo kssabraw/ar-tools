@@ -53,8 +53,24 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   cost line). Image stored to R2 via `media_store.media_key(ext,"generated")`. **Owner ruling: Pro-only**
   — the mixed 2.5-Flash-for-square path is deferred. Config: `nano_banana_pro_model` /
   `social_image_size` (`2K`) / `social_image_cost_usd`. 10 pure-helper unit tests
-  (`tests/test_social_image.py`). Still unbuilt in P2: the multi-platform **Angle fan-out** and
-  **Draft persistence**.
+  (`tests/test_social_image.py`).
+- **Angle fan-out + Draft persistence (the full Creator loop) — NEW.** `services/social/creator.py::propose_angles`
+  (`POST …/social/angles`) proposes 3–5 distinct angles from a Source (grounded in source + voice/ICP).
+  `services/social/fanout.py` + `POST …/social/fan-out` fans ONE chosen angle across the selected platforms
+  as a background **`social_fanout`** job (migration `20260908130000_social_fanout_job.sql`, applied live;
+  freeze-gated + `job_worker` dispatch): it loads the source + voice card ONCE, then generates one **Draft
+  per platform** (copy via the shared `creator.draft_platform_copy`, opt-in per-platform image via the Pro
+  renderer, each image budget-reserved), persisted under a shared `angle_set_id` in `social_drafts` with
+  status `ready`/`needs_image`/`generation_failed`, and emits a `social_fanout_ready` notification. Draft
+  review: `GET …/social/drafts` (+`?angle_set_id`), `PATCH /social/drafts/{id}` (edit copy/media, recomputes
+  needs_image↔ready), `DELETE` (archive), `POST /social/drafts/{id}/publish` (approve → the existing publish
+  lifecycle: validate → create Post → freeze-gated publish job; marks the Draft published). Frontend: the
+  social page is now **tabbed Compose / Create with AI / Drafts** (`SocialCompose.tsx`) — source picker →
+  Suggest angles (or write your own) → platform multi-select + image toggle → fan out → poll → land on the
+  Drafts tab to edit + publish each. `creator.load_source` was refactored to kwargs and the copy LLM +
+  voice-enforcement extracted to `draft_platform_copy` so single-copy and fan-out share ONE path. Config:
+  `social_angles_count` (4) / `_max_tokens`. 7 pure-helper tests (`tests/test_social_fanout.py`). **P2 Creator
+  is now functionally complete.**
 
 **Provisioned + live on PLATFORM:** `SOCIAL_ENABLED=true`; R2 (`R2_ACCOUNT_ID` / `_ACCESS_KEY_ID` /
 `_SECRET_ACCESS_KEY` / `R2_BUCKET=smm-media` / `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`,
@@ -166,6 +182,10 @@ posts; feed image aspect ratio 4:5–1.91:1.
      panel renders a per-platform image via nano-banana Pro (`gemini-3-pro-image-preview`). Owner ruling:
      Pro-only for now; the mixed 2.5-Flash-for-square cost-saver is a future option. NOTE the model id is
      a preview and `nano_banana_pro_model` is env-overridable if Google rotates it.
+   - ~~**Angle fan-out + Draft persistence**~~ — ✅ **BUILT**: the "Create with AI" + "Drafts" tabs — one
+     source → one angle → per-platform Drafts → review/edit/publish. **P2 Creator is complete.** Next up
+     the repurpose engine: **P1 competitor research** (Apify + TwelveLabs; also grounds angle proposals in
+     competitor signals — needs `APIFY_API_TOKEN` + `TWELVELABS_API_KEY`), then **P4 autonomy**, **P5 video**.
    - **YouTube poster** — waiting on PostPeer's `/docs/platforms/youtube` (title/description/tags/
      thumbnail/Shorts fields) before mapping.
    - **Big-video direct-to-R2 (presign)** — the `POST .../social/media/presign` endpoint exists; the UI

@@ -65,6 +65,8 @@ FREEZE_GATED_JOB_TYPES = {
     "gbp_post_publish",
     # Social publish pushes a post OUT to the client's real account (output).
     "social_publish",
+    # Social fan-out generates Drafts and can generate paid images (content output).
+    "social_fanout",
     # GBP Profile Editor: applying a description/services/hours edit writes a
     # persistent, customer-facing profile field (output). The self-continuing
     # reconciler that chases Google's pending verdict is gated too, so a client

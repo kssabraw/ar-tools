@@ -870,6 +870,10 @@ async def _process_job(job: dict) -> None:
         await gbp_posts_service.run_publish_job(job)
     elif job_type == "social_publish":
         await social_publish.run_publish_job(job)
+    elif job_type == "social_fanout":
+        from services.social import fanout as social_fanout
+
+        await social_fanout.run_fanout_job(job)
     elif job_type == "gbp_post_generate":
         await gbp_posts_service.run_generate_job(job)
     elif job_type == "gbp_posts_sync":

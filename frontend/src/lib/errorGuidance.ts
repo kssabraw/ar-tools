@@ -382,6 +382,41 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'The copywriting model didn’t return a draft — usually a temporary provider hiccup.',
     steps: ['Try “Draft with AI” again in a moment.', 'If it keeps failing, write the copy manually or tell an admin.'],
   },
+  social_angles_failed: {
+    title: 'Couldn’t suggest angles',
+    meaning: 'The strategist model didn’t return angles — usually a temporary provider hiccup.',
+    steps: ['Try “Suggest angles” again, or write your own angle and fan out.'],
+  },
+  social_fanout_failed: {
+    title: 'Couldn’t start the fan-out',
+    meaning: 'The request to generate drafts across platforms failed to start.',
+    steps: ['Check you picked an angle and at least one platform, then try again.'],
+  },
+  social_angle_required: {
+    title: 'Pick or write an angle first',
+    meaning: 'Fanning out needs an angle to base every draft on.',
+    steps: ['Select a suggested angle or type your own, then fan out.'],
+  },
+  social_no_target_platforms: {
+    title: 'Pick at least one platform',
+    meaning: 'None of the selected platforms match a connected account for this client.',
+    steps: ['Tick one or more platforms the client has connected, then fan out.'],
+  },
+  social_draft_not_found: {
+    title: 'Draft not found',
+    meaning: 'That draft no longer exists (it may have been deleted).',
+    steps: ['Refresh the Drafts list.'],
+  },
+  social_draft_already_published: {
+    title: 'Already published',
+    meaning: 'This draft has already been published to an account.',
+    steps: ['Check Recent posts on the Compose tab, or create a new draft.'],
+  },
+  social_account_required: {
+    title: 'Pick an account to publish to',
+    meaning: 'Publishing a draft needs one connected account of that platform.',
+    steps: ['Select an account, then publish. If none is listed, connect one in PostPeer.'],
+  },
   social_image_generation_failed: {
     title: 'The AI couldn’t generate the image',
     meaning: 'The image model didn’t return an image — usually a temporary provider hiccup or a prompt it declined.',

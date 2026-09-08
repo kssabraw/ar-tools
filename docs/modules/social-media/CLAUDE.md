@@ -8,10 +8,11 @@
 > publish path + the R2 media store (PR #1027) and the frontend compose screen with image/video upload
 > (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all five `R2_*` vars,
 > `GEMINI_API_KEY`, and now **`POSTPEER_API_KEY` are set** — nothing left to provision. What exists today
-> is a **manual composer → publish/schedule** flow (platform-general, Facebook-first), now with **AI copy
-> drafting AND AI image generation** in the composer (the P2 Creator's copy + image halves — see below;
-> images are **nano-banana Pro, Pro-only for now** per owner ruling). Still unbuilt toward the full
-> repurpose engine: **P1 competitor research, and the multi-platform Angle fan-out / Draft persistence**.
+> is a **manual composer → publish/schedule** flow (platform-general, Facebook-first) PLUS the full
+> **P2 Creator** — AI copy drafting, AI image generation (**nano-banana Pro, Pro-only** per owner ruling),
+> and **Angle fan-out** (one source → one angle → per-platform Drafts, reviewed/edited/published from a
+> Drafts tab). Still unbuilt toward the full repurpose engine: **P1 competitor research** (Apify/TwelveLabs,
+> which would also ground angle proposals in competitor signals), **P4 autonomy**, and **P5 video/YouTube**.
 > The one open confidence step is a live test post. See `HANDOFF.md` (this folder) for the live state and
 > next actions — start there.
 
@@ -185,7 +186,7 @@ Creator exists.
   (GBP-Posts template) → status reconcile; media upload + presign; **R2 media store** (ADR-0004).
 - **Frontend compose screen + image/video upload — ✅ BUILT** (#1032): `SocialCompose.tsx`.
 - **P1 Competitor research** — ⬜ not built (Apify Signals + TwelveLabs analyze-in-place).
-- **P2 Creator core** — 🟡 **copy + image halves BUILT**:
+- **P2 Creator core** — ✅ **BUILT** (copy + image + angle fan-out + draft review/publish):
   - **AI copy drafting**: `services/social/creator.py` + `POST /clients/{id}/social/draft-copy` generate
     platform-native copy from a Source (topic / URL / blog run / saved Local SEO page) + optional
     angle/tone, voice-card-enforced (reuses GBP Posts' `render_voice_card_block` / `voice_forbidden_hits`
@@ -203,9 +204,18 @@ Creator exists.
     the dominant cost line). Stored to R2 via `media_store` (`media_key(ext,"generated")`). Config:
     `nano_banana_pro_model` / `social_image_size` (`2K`) / `social_image_cost_usd`. The **mixed
     2.5-Flash-for-square path is deferred** (owner chose Pro-only for now).
-  - Both **stateless for v1** (nothing persisted — the real draft/post is created at publish).
-    Still ⬜: the multi-platform **Angle fan-out** and **Draft persistence** (the
-    `angle_set_id`/`social_drafts` pipeline).
+  - **Angle fan-out + Draft persistence (the full Creator loop)** — BUILT. `services/social/creator.py::propose_angles`
+    (`POST …/social/angles` — 3–5 distinct editorial angles, grounded in source + voice/ICP) →
+    `services/social/fanout.py` + `POST …/social/fan-out` fans ONE chosen angle across the selected
+    platforms as a background **`social_fanout`** job (migration `20260908130000`, freeze-gated), loading
+    the source + voice card ONCE and generating one **Draft per platform** (copy via the shared
+    `creator.draft_platform_copy`, opt-in per-platform image via the Pro renderer), persisted under a
+    shared `angle_set_id` in `social_drafts` with status `ready`/`needs_image`/`generation_failed`. Draft
+    review is `GET …/social/drafts`, `PATCH /social/drafts/{id}` (edit copy/media), `DELETE` (archive),
+    and `POST /social/drafts/{id}/publish` (approve → the existing publish lifecycle, freeze-gated). The
+    composer page is now tabbed **Compose / Create with AI / Drafts**. Config: `social_angles_count` (4) /
+    `_max_tokens`. **The P2 Creator is functionally complete** (copy + image + angle fan-out + draft
+    review/publish); competitor-signal grounding of angles rides P1.
 - **P3 Manager + publish** — the publish lifecycle is built; Calendar / Cadence / a richer approval
   queue are ⬜ not built (the compose screen has schedule-for-later + a recent-posts list, not a calendar).
 - **P4 Agents, autonomy, analytics** — ⬜ not built.

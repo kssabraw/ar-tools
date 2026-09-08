@@ -100,6 +100,8 @@ class Settings(BaseSettings):
     social_copy_max_tokens: int = 900
     social_copy_max_correction_passes: int = 1   # forbidden-term rewrites
     social_copy_source_max_chars: int = 8000     # source content fed to the prompt
+    social_angles_count: int = 4                 # distinct angles proposed per Source (3–5)
+    social_angles_max_tokens: int = 1400
     # AI image generation — nano-banana Pro (Gemini 3 Pro Image), reuses
     # GEMINI_API_KEY. The Pro model passes generationConfig.imageConfig.aspectRatio
     # for per-platform ratios (the 2.5-Flash nano_banana_model is 1:1-only).
