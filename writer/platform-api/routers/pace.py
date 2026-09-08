@@ -378,15 +378,17 @@ async def get_pace_action_log(
     outcome: Optional[str] = None,
     origin: Optional[str] = None,
     reverted: Optional[bool] = None,
+    source: Optional[str] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
     auth: dict = Depends(require_auth),
 ) -> dict:
-    """A filtered page of PACE's action log — what it changed on client campaigns
-    and how humans dispositioned each one. Admin-gated (the log is sensitive: it
-    names actors, clients, and before/after state)."""
+    """A filtered page of PACE's action log — what it did to client campaigns
+    (human-approved AND autonomous) and how humans dispositioned each one.
+    ``source`` = "system" (autonomous) | "human" filters PACE-vs-human. Admin-gated
+    (the log is sensitive: it names actors, clients, and before/after state)."""
     if not settings.pace_enabled:
         raise HTTPException(status_code=503, detail="pace_not_enabled")
     if auth.get("role") != "admin":
@@ -396,7 +398,8 @@ async def get_pace_action_log(
     return await run_in_threadpool(
         pace_audit.list_log, client_id=client_id, actor_profile_id=actor,
         action=action, decision=decision, outcome=outcome, origin=origin,
-        reverted=reverted, since=since, until=until, limit=limit, offset=offset,
+        reverted=reverted, source=source, since=since, until=until,
+        limit=limit, offset=offset,
     )
 
 
@@ -405,6 +408,7 @@ async def get_pace_action_log_stats(
     client_id: Optional[str] = None,
     actor: Optional[str] = None,
     action: Optional[str] = None,
+    source: Optional[str] = None,
     since: Optional[str] = None,
     until: Optional[str] = None,
     auth: dict = Depends(require_auth),
@@ -419,7 +423,7 @@ async def get_pace_action_log_stats(
 
     return await run_in_threadpool(
         pace_audit.stats_window, client_id=client_id, actor_profile_id=actor,
-        action=action, since=since, until=until,
+        action=action, source=source, since=since, until=until,
     )
 
 

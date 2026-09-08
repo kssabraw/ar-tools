@@ -47,6 +47,20 @@ LOGGED_ACTIONS: frozenset[str] = frozenset({
 # The pseudo-action for a human's decision on an intervention as a whole.
 INTERVENTION_DISPOSITION = "intervention_disposition"
 
+# Actions PACE takes ON ITS OWN — no human in the loop. Logged too, so the ledger
+# shows PACE's autonomous activity, not just what a human assigns/approves:
+# auto-placements, public escalations, and the digests/briefs/reports/chase-plans
+# it emits on a schedule. Recorded via record_autonomous with origin="scheduled" /
+# decision="auto" / actor_source="system", so the log can filter human-vs-PACE.
+AUTONOMOUS_ACTIONS: frozenset[str] = frozenset({
+    "auto_place_task",    # pm_assign.place_task — assigned a task to the best-fit member
+    "chase_plan_posted",  # pace_proposals — emitted the daily Chase Plan
+    "episode_escalated",  # pace_episodes — raised a public stuck-work escalation
+    "daily_digest",       # pace_digest — emitted the daily portfolio digest
+    "morning_brief",      # pace_briefs — pushed the morning briefs
+    "delivery_report",    # pace_report — emitted the weekly delivery report
+})
+
 # Key task fields snapshotted before/after a change — enough to see exactly what
 # moved without pulling the whole row or duplicating task_activity.
 TASK_SNAPSHOT_FIELDS: tuple[str, ...] = (
@@ -59,8 +73,10 @@ TASK_SNAPSHOT_FIELDS: tuple[str, ...] = (
 # Pure helpers (unit-tested)
 # ---------------------------------------------------------------------------
 def is_logged(action: Optional[str]) -> bool:
-    """Whether ``action`` affects a client campaign (→ gets a log row)."""
-    return action in LOGGED_ACTIONS or action == INTERVENTION_DISPOSITION
+    """Whether ``action`` gets a log row — a campaign-affecting human action, an
+    intervention disposition, or an autonomous PACE action."""
+    return (action in LOGGED_ACTIONS or action in AUTONOMOUS_ACTIONS
+            or action == INTERVENTION_DISPOSITION)
 
 
 def task_snapshot(task: Optional[dict]) -> Optional[dict]:
@@ -309,6 +325,28 @@ def record_decision(*, action: str, origin: str, decision: str, outcome: str,
            intervention_id=intervention_id, requester_profile_id=requester, args=args or {})
 
 
+def record_autonomous(*, action: str, outcome: str = "executed",
+                      client_id: Optional[str] = None, client_name: Optional[str] = None,
+                      target_type: Optional[str] = None, target_id: Optional[str] = None,
+                      target_name: Optional[str] = None, reason: Optional[str] = None,
+                      before: Optional[dict] = None, after: Optional[dict] = None,
+                      result: Optional[str] = None, error: Optional[str] = None,
+                      args: Optional[dict] = None, extra: Optional[dict] = None) -> None:
+    """Record an action PACE took ON ITS OWN — a scheduled emission or an
+    auto-placement, no human in the loop. Tagged origin="scheduled" /
+    decision="auto" / actor_source="system" (context=None), so the log's Source
+    filter separates human-vs-PACE. Best-effort; only AUTONOMOUS_ACTIONS keys
+    produce a row. These rows are deliberately EXCLUDED from the learning windows
+    (proposal penalty + weekly digest) — an autonomous action carries no human
+    approve/deny signal — so the training corpus stays a record of human
+    decisions."""
+    record(action=action, origin="scheduled", decision="auto", outcome=outcome,
+           context=None, client_id=client_id, client_name=client_name,
+           target_type=target_type, target_id=target_id, target_name=target_name,
+           reason=reason, before=before, after=after, result=result, error=error,
+           args=args or {}, extra=extra)
+
+
 # ---------------------------------------------------------------------------
 # Self-read (learning) — recent history for the pace_history tool + context
 # ---------------------------------------------------------------------------
@@ -379,11 +417,16 @@ _LOG_COLUMNS = (
 
 def _apply_log_filters(q, *, client_id=None, actor_profile_id=None, action=None,
                        decision=None, outcome=None, origin=None, since=None, until=None,
-                       reverted=None):
+                       reverted=None, source=None):
     if reverted is True:
         q = q.not_.is_("reverted_at", "null")
     elif reverted is False:
         q = q.is_("reverted_at", "null")
+    # Human-vs-PACE: autonomous rows carry actor_source="system".
+    if source == "system":
+        q = q.eq("actor_source", "system")
+    elif source == "human":
+        q = q.neq("actor_source", "system")
     if client_id:
         q = q.eq("client_id", client_id)
     if actor_profile_id:
@@ -405,7 +448,7 @@ def _apply_log_filters(q, *, client_id=None, actor_profile_id=None, action=None,
 
 def list_log(*, client_id=None, actor_profile_id=None, action=None, decision=None,
              outcome=None, origin=None, since=None, until=None, reverted=None,
-             limit: int = 100, offset: int = 0) -> dict:
+             source=None, limit: int = 100, offset: int = 0) -> dict:
     """A filtered page of the action log for the admin read API, with client +
     actor names joined. Returns {rows, total, limit, offset}. Best-effort."""
     limit = max(1, min(int(limit or 100), 500))
@@ -415,7 +458,8 @@ def list_log(*, client_id=None, actor_profile_id=None, action=None, decision=Non
              .order("created_at", desc=True).range(offset, offset + limit - 1))
         q = _apply_log_filters(q, client_id=client_id, actor_profile_id=actor_profile_id,
                                action=action, decision=decision, outcome=outcome,
-                               origin=origin, since=since, until=until, reverted=reverted)
+                               origin=origin, since=since, until=until, reverted=reverted,
+                               source=source)
         resp = q.execute()
         rows = resp.data or []
         total = resp.count if resp.count is not None else len(rows)
@@ -426,7 +470,7 @@ def list_log(*, client_id=None, actor_profile_id=None, action=None, decision=Non
 
 
 def stats_window(*, client_id=None, actor_profile_id=None, action=None,
-                 since=None, until=None, limit: int = 1000) -> dict:
+                 since=None, until=None, source=None, limit: int = 1000) -> dict:
     """Decision-rate rollup over a filtered window (a wider read than the
     self-history default) for the log view's summary strip. Best-effort."""
     cap = min(int(limit or 1000), 5000)
@@ -435,7 +479,7 @@ def stats_window(*, client_id=None, actor_profile_id=None, action=None,
              .select("action, decision, outcome, actor_profile_id, reverted_at")
              .order("created_at", desc=True).limit(cap))
         q = _apply_log_filters(q, client_id=client_id, actor_profile_id=actor_profile_id,
-                               action=action, since=since, until=until)
+                               action=action, since=since, until=until, source=source)
         rows = _attach_actor_names(q.execute().data or [])
     except Exception as exc:
         logger.warning("pace_audit_stats_failed", extra={"error": str(exc)})
@@ -598,6 +642,7 @@ def _learning_signals_window() -> dict:
     try:
         rows = (get_supabase().table("pace_action_log")
                 .select("action, client_id, decision, outcome, reverted_at")
+                .neq("decision", "auto")  # human decisions only — autonomous rows carry no approve/deny signal
                 .gte("created_at", since).limit(5000).execute()).data or []
     except Exception:
         rows = []
@@ -655,6 +700,7 @@ def maybe_emit_weekly_learning(today: Optional[Any] = None) -> dict:
     try:
         rows = (get_supabase().table("pace_action_log")
                 .select("action, client_id, decision, outcome, reverted_at")
+                .neq("decision", "auto")  # human track record — exclude autonomous rows
                 .gte("created_at", since).limit(5000).execute()).data or []
         body = build_learning_digest(rows)
         if not body:

@@ -4,11 +4,12 @@ import { useQuery } from '@tanstack/react-query'
 import { ScrollText, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react'
 import { api } from '../lib/api'
 
-// PACE Action Log — admin-only view of the audit + learning ledger. Every PACE
-// action that affected a client campaign + every human decision (approve /
-// approve-with-modifications / deny / defer / cancel), so you can debug "what
-// happened and why" and read PACE's approve/deny/modify track record. Mirrors
-// services/pace_audit.py (list_log / stats_window).
+// PACE Action Log — admin-only view of the audit + learning ledger. Everything
+// PACE does: campaign-affecting actions + human decisions (approve /
+// approve-with-modifications / deny / defer / cancel), AND its autonomous work
+// (auto-placements, escalations, digests/briefs/reports/chase-plans it emits on
+// its own, tagged system/auto). The Source filter separates human-vs-PACE.
+// Mirrors services/pace_audit.py (list_log / stats_window).
 
 interface LogRow {
   id: string
@@ -63,12 +64,20 @@ interface ClientListItem {
 }
 
 const ACTIONS = [
+  // Human-approved / campaign-affecting
   'reassign_task', 'assign_task', 'set_task_due', 'set_task_status', 'unblock_task',
   'triage_task', 'rename_task', 'generate_client_month', 'nudge_assignee',
   'run_qa_review', 'intervention_disposition',
+  // Autonomous — PACE acting on its own (tagged system/auto)
+  'auto_place_task', 'chase_plan_posted', 'episode_escalated',
+  'daily_digest', 'morning_brief', 'delivery_report',
 ]
 const DECISIONS = ['approved', 'approved_with_modifications', 'denied', 'deferred', 'cancelled', 'auto']
-const OUTCOMES = ['executed', 'failed', 'skipped', 'denied', 'deferred', 'cancelled']
+const OUTCOMES = ['executed', 'held', 'failed', 'skipped', 'denied', 'deferred', 'cancelled']
+const SOURCES = [
+  { value: 'system', label: 'PACE (autonomous)' },
+  { value: 'human', label: 'Human' },
+]
 
 const DECISION_COLOR: Record<string, string> = {
   approved: '#16a34a',
@@ -80,6 +89,7 @@ const DECISION_COLOR: Record<string, string> = {
 }
 const OUTCOME_COLOR: Record<string, string> = {
   executed: '#16a34a',
+  held: '#d97706',
   failed: '#dc2626',
   skipped: '#64748b',
   denied: '#dc2626',
@@ -122,6 +132,7 @@ export function PaceLog() {
   const [action, setAction] = useState('')
   const [decision, setDecision] = useState('')
   const [outcome, setOutcome] = useState('')
+  const [source, setSource] = useState('')
   const [reverted, setReverted] = useState('')
   const [offset, setOffset] = useState(0)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -133,14 +144,14 @@ export function PaceLog() {
     staleTime: 5 * 60_000,
   })
 
-  const filterQs = qs({ client_id: clientId, action, decision, outcome, reverted, limit, offset })
+  const filterQs = qs({ client_id: clientId, action, decision, outcome, source, reverted, limit, offset })
   const { data, isLoading, isFetching, refetch } = useQuery<LogPage>({
-    queryKey: ['pace-log', clientId, action, decision, outcome, reverted, offset],
+    queryKey: ['pace-log', clientId, action, decision, outcome, source, reverted, offset],
     queryFn: () => api.get<LogPage>(`/pace/action-log${filterQs}`),
   })
   const { data: stats } = useQuery<StatsResp>({
-    queryKey: ['pace-log-stats', clientId, action],
-    queryFn: () => api.get<StatsResp>(`/pace/action-log/stats${qs({ client_id: clientId, action })}`),
+    queryKey: ['pace-log-stats', clientId, action, source],
+    queryFn: () => api.get<StatsResp>(`/pace/action-log/stats${qs({ client_id: clientId, action, source })}`),
   })
 
   const rows = data?.rows ?? []
@@ -170,8 +181,9 @@ export function PaceLog() {
         </button>
       </div>
       <p style={{ marginTop: 0, color: '#64748b', fontSize: 13 }}>
-        Every PACE action that touched a client campaign, plus how a human dispositioned it.
-        For debugging "what happened and why" — and the record PACE reads to learn from.
+        Everything PACE does — the tasks it changes, plus the placements, escalations,
+        digests, briefs, reports and chase plans it emits on its own — and how humans
+        dispositioned each. Use <strong>Source</strong> to separate PACE-autonomous from human.
       </p>
 
       {/* Summary strip */}
@@ -179,6 +191,7 @@ export function PaceLog() {
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, margin: '14px 0' }}>
           <Stat label="Total" value={ov.total} />
           <Stat label="Executed" value={ov.executed} color="#16a34a" />
+          <Stat label="Auto (PACE)" value={ov.auto} color="#7c3aed" />
           <Stat label="Approved" value={ov.approved} color="#16a34a" />
           <Stat label="w/ mods" value={ov.approved_with_modifications} color="#0891b2" />
           <Stat label="Denied / cancelled" value={ov.denied + ov.cancelled} color="#dc2626" />
@@ -205,6 +218,10 @@ export function PaceLog() {
         <select value={outcome} onChange={(e) => { setOutcome(e.target.value); resetOffset() }} style={selectStyle}>
           <option value="">Any outcome</option>
           {OUTCOMES.map((o) => <option key={o} value={o}>{o}</option>)}
+        </select>
+        <select value={source} onChange={(e) => { setSource(e.target.value); resetOffset() }} style={selectStyle}>
+          <option value="">Human &amp; PACE</option>
+          {SOURCES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
         <select value={reverted} onChange={(e) => { setReverted(e.target.value); resetOffset() }} style={selectStyle}>
           <option value="">Reverted &amp; standing</option>

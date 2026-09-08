@@ -26,6 +26,13 @@ def _ctx(pid="p1", role="staff", source="web"):
 def test_is_logged():
     assert pace_audit.is_logged("reassign_task")
     assert pace_audit.is_logged("intervention_disposition")
+    # Autonomous PACE actions ARE logged.
+    assert pace_audit.is_logged("auto_place_task")
+    assert pace_audit.is_logged("chase_plan_posted")
+    assert pace_audit.is_logged("episode_escalated")
+    assert pace_audit.is_logged("daily_digest")
+    assert pace_audit.is_logged("morning_brief")
+    assert pace_audit.is_logged("delivery_report")
     # Reads are NOT logged.
     assert not pace_audit.is_logged("generate_pace_report")
     assert not pace_audit.is_logged("write_client_pulse")
@@ -143,6 +150,33 @@ def test_record_skips_when_disabled(monkeypatch):
     monkeypatch.setattr(pace_audit.settings, "pace_audit_enabled", False)
     monkeypatch.setattr(pace_audit, "get_supabase", lambda: _FakeSupabase(sink))
     pace_audit.record(action="reassign_task", origin="conversational", outcome="executed")
+    assert sink == []
+
+
+def test_record_autonomous_writes_system_row(monkeypatch):
+    """An autonomous action is tagged origin=scheduled / decision=auto /
+    actor_source=system (no human actor)."""
+    sink: list = []
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_enabled", True)
+    monkeypatch.setattr(pace_audit, "get_supabase", lambda: _FakeSupabase(sink))
+    pace_audit.record_autonomous(
+        action="daily_digest", client_id=None,
+        reason="Posted daily digest — 3 items need a human")
+    assert len(sink) == 1
+    row = sink[0]
+    assert row["action"] == "daily_digest"
+    assert row["origin"] == "scheduled" and row["decision"] == "auto"
+    assert row["outcome"] == "executed"
+    assert row["actor_source"] == "system" and row["actor_profile_id"] is None
+
+
+def test_record_autonomous_skips_unknown_action(monkeypatch):
+    """record_autonomous is still gated by is_logged — a non-registered key
+    produces no row (a typo can't silently write junk)."""
+    sink: list = []
+    monkeypatch.setattr(pace_audit.settings, "pace_audit_enabled", True)
+    monkeypatch.setattr(pace_audit, "get_supabase", lambda: _FakeSupabase(sink))
+    pace_audit.record_autonomous(action="not_a_real_action")
     assert sink == []
 
 
@@ -340,6 +374,74 @@ def test_intervention_disposition_decision_mapping(monkeypatch):
     # A failed defer (bad date) records nothing.
     pace_interventions._log_disposition(row, _ctx(), "deferred", None, {"ok": False, "status": "proposed"})
     assert len(calls) == 4
+
+
+# ---------------------------------------------------------------------------
+# Source filter (human-vs-PACE) + autonomous seam wiring
+# ---------------------------------------------------------------------------
+class _QRec:
+    """Records the filter-builder calls _apply_log_filters makes."""
+    def __init__(self):
+        self.calls: list = []
+
+    def eq(self, col, val):
+        self.calls.append(("eq", col, val))
+        return self
+
+    def neq(self, col, val):
+        self.calls.append(("neq", col, val))
+        return self
+
+    def is_(self, *a):
+        return self
+
+    def gte(self, *a):
+        return self
+
+    def lte(self, *a):
+        return self
+
+    @property
+    def not_(self):
+        return self
+
+
+def test_source_filter_maps_to_actor_source():
+    q = _QRec()
+    pace_audit._apply_log_filters(q, source="system")
+    assert ("eq", "actor_source", "system") in q.calls
+
+    q2 = _QRec()
+    pace_audit._apply_log_filters(q2, source="human")
+    assert ("neq", "actor_source", "system") in q2.calls
+
+    # No source → actor_source is never filtered.
+    q3 = _QRec()
+    pace_audit._apply_log_filters(q3, source=None)
+    assert all(c[1] != "actor_source" for c in q3.calls)
+
+
+def test_pm_assign_logs_placement_and_hold(monkeypatch):
+    """place_task's audit seam records a placed row (executed, assignee set in
+    `after`) and a held row (held, unchanged), both autonomous + task-targeted."""
+    from services import pm_assign
+
+    captured: list = []
+    monkeypatch.setattr(pace_audit, "record_autonomous", lambda **kw: captured.append(kw))
+    task = {"id": "t1", "client_id": "c1", "name": "GBP audit", "assignee_id": None}
+
+    pm_assign._log_placement(task, {"gid": "m1", "name": "Ivy", "category": "gbp"})
+    kw = captured[0]
+    assert kw["action"] == "auto_place_task" and kw["outcome"] == "executed"
+    assert kw["target_type"] == "task" and kw["target_id"] == "t1" and kw["client_id"] == "c1"
+    assert kw["after"]["assignee_id"] == "m1" and kw["after"]["assignee_name"] == "Ivy"
+    assert kw["before"]["assignee_id"] is None
+
+    captured.clear()
+    pm_assign._log_placement(task, {"gid": None, "held": True, "reason": "team_at_capacity"})
+    kw = captured[0]
+    assert kw["outcome"] == "held" and "capacity" in kw["reason"]
+    assert kw["after"] == kw["before"]  # unchanged — nothing was assigned
 
 
 # ---------------------------------------------------------------------------
