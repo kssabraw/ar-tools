@@ -201,12 +201,12 @@ def brief_text() -> str:
 _QA_TOOLS = [
     {
         "name": "qa_url",
-        "description": "QA a live page by URL — runs the real deterministic checks and returns a verdict. Read-only; nothing on the board changes.",
+        "description": "QA a live page OR a Google Doc by URL — runs the real deterministic checks and returns a verdict. A Google Doc link (shared 'anyone with the link can view') is read via its HTML export and graded as a blog article. Read-only; nothing on the board changes.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "The page URL to QA."},
-                "page_kind": {"type": "string", "description": "What kind of page: 'page' (website/landing/service/location), 'guest post', 'niche edit', 'press release', 'citation', or 'map embed'. Defaults to a website page."},
+                "url": {"type": "string", "description": "The page or Google Doc URL to QA."},
+                "page_kind": {"type": "string", "description": "What kind of page: 'page' (website/landing/service/location), 'blog post', 'guest post', 'niche edit', 'press release', 'citation', or 'map embed'. Defaults to a website page. (A Google Doc link is always graded as a blog article regardless of this.)"},
                 "keyword": {"type": "string", "description": "The target keyword the page should rank for, if the teammate mentioned one (enables the keyword-placement checks). Omit if not given — don't invent one."},
             },
             "required": ["url"],
@@ -238,6 +238,10 @@ _QA_SYSTEM = (
     "URL, the page kind, and — IF they mentioned it — the target keyword. It runs "
     "the real checks (meta, keyword placement, business name, links, images, "
     "rendered screenshot) and returns a verdict. Read-only; nothing changes.\n"
+    "• QA a Google Doc draft. A Google Doc link works too — it's read via the doc's "
+    "export and graded as a blog article (Key Takeaways, CTA, headings, citations). "
+    "It must be shared \"anyone with the link can view\"; if it comes back empty, "
+    "that sharing setting is the usual cause — tell them to flip it and retry.\n"
     "• QA a board task's deliverable. When they name a task (\"QA the Inner West "
     "page\"), call `run_qa_review` — the system confirms before running. Don't ask "
     "permission first; the confirm step IS the permission.\n"
@@ -577,19 +581,29 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
             reply = format_review(review, url)
             if client_row and not client:
                 reply = f"_QA'd for **{client_row.get('name')}** (matched from the web address)._\n\n" + reply
+            # A Google Doc is graded as a blog article regardless of page_kind,
+            # so the follow-ups key off the rubric actually run, not the guessed
+            # one — a doc gets a blog keyword offer, never the website-page
+            # "which client?" note (blog checks don't use NAP/internal links).
+            actual_rubric = review.get("rubric") or rubric
             extras: list[str] = []
-            if not client_row:  # only reachable for the website-page rubric now
+            if not client_row and actual_rubric == sig.RUBRIC_PAGE:
                 extras.append(
                     "I couldn't tell which client this page belongs to, so the "
                     "business-name, phone/address, and internal-link checks were skipped. "
                     "**Which client is this for?** Reply with the name and I'll re-run the full check."
                 )
-            if not keyword and rubric == sig.RUBRIC_PAGE:
+            if not keyword and actual_rubric == sig.RUBRIC_PAGE:
                 extras.append(
                     "Want me to also check the keyword? Tell me the phrase this page "
                     "should rank for and I'll re-check it's in the title, address, and heading."
                 )
-            elif not keyword and rubric == sig.RUBRIC_PRESS_RELEASE:
+            elif not keyword and actual_rubric == sig.RUBRIC_BLOG:
+                extras.append(
+                    "Want me to also check the target keyword? Tell me the phrase "
+                    "this article targets and I'll re-check it appears in the body."
+                )
+            elif not keyword and actual_rubric == sig.RUBRIC_PRESS_RELEASE:
                 extras.append(
                     "Want me to also check the keyword? Tell me the phrase this "
                     "release targets and I'll re-check it's in the title and body."

@@ -447,6 +447,7 @@ def has_map_embed(html: str) -> bool:
 # ---------------------------------------------------------------------------
 _SHEET_URL_RE = re.compile(r"docs\.google\.com/spreadsheets/d/([\w\-]+)", re.IGNORECASE)
 _GDOC_URL_RE = re.compile(r"docs\.google\.com/(document|presentation|forms)/", re.IGNORECASE)
+_DOC_URL_RE = re.compile(r"docs\.google\.com/document/d/([\w\-]+)", re.IGNORECASE)
 _URL_HEADERS = ("live url", "citation url", "url", "link", "live link", "placement url")
 
 
@@ -457,6 +458,22 @@ def is_google_doc_url(url: Optional[str]) -> bool:
     being graded as pages. (Sheets are handled separately — they're the
     deliverable-LIST container, expanded via CSV export.) Pure."""
     return bool(_GDOC_URL_RE.search(url or ""))
+
+
+def doc_id_of(url: Optional[str]) -> Optional[str]:
+    """The document id of a Google *Docs* URL (…/document/d/<ID>/…), else None.
+    Scoped to /document/ (Slides/Forms have no blog-gradeable HTML export) so a
+    Doc draft can be read via its export instead of its JS-shell editor URL."""
+    m = _DOC_URL_RE.search(url or "")
+    return m.group(1) if m else None
+
+
+def doc_html_export_url(doc_id: str) -> str:
+    """The public HTML export of a link-shared Google Doc — real server-rendered
+    HTML (the doc name in <title>, heading styles as <h1>-<h6>), unlike the
+    editor URL's JS shell. Mirrors ``sheet_csv_export_url``; works when the doc
+    is shared 'anyone with the link can view'."""
+    return f"https://docs.google.com/document/d/{doc_id}/export?format=html"
 
 
 def sheet_id_of(url: Optional[str]) -> Optional[str]:
@@ -655,6 +672,60 @@ def check_blog_markdown(md: Optional[str], keyword: Optional[str] = None) -> lis
         checks.append(_check("keyword_in_body", "Target keyword present",
                              keyword_present(text, keyword), blocking=False))
     return checks
+
+
+_GOOGLE_REDIRECT_RE = re.compile(r"google\.com/url", re.IGNORECASE)
+
+
+def _unwrap_google_href(href: Optional[str]) -> Optional[str]:
+    """Google Docs HTML export wraps external links as
+    ``https://www.google.com/url?q=<REAL>&sa=…`` — recover the real target so it
+    counts as an external citation, not a google.com self-link. Pure."""
+    if not href:
+        return None
+    if _GOOGLE_REDIRECT_RE.search(href):
+        from urllib.parse import parse_qs, urlparse
+
+        q = parse_qs(urlparse(href).query).get("q")
+        if q:
+            return q[0]
+    return href
+
+
+def html_to_markdownish(html: str) -> str:
+    """Flatten HTML (a Google Doc's export, or a live blog page) into the light
+    Markdown the blog checks read: ``<h1>-<h6>`` → ``#``× level headings,
+    ``<li>`` → ``- `` bullets, ``<p>`` → paragraphs, and ``<a href>`` →
+    ``[text](url)`` (Google redirect unwrapped) so external citations are
+    counted. Lets a Doc draft, a live blog URL, and a pipeline article be graded
+    by the SAME ``check_blog_markdown`` rubric. Pure."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    # Inline every anchor as Markdown BEFORE reading block text, so the link
+    # survives into its paragraph's get_text().
+    for a in soup.find_all("a"):
+        href = _unwrap_google_href(a.get("href"))
+        text = a.get_text(" ", strip=True)
+        a.replace_with(f"[{text}]({href})" if (href and text) else (text or ""))
+    body = soup.body or soup
+    lines: list[str] = []
+    for el in body.find_all(["h1", "h2", "h3", "h4", "h5", "h6", "p", "li"]):
+        text = normalize_ws(el.get_text(" ", strip=True))
+        if not text:
+            continue
+        name = el.name
+        if len(name) == 2 and name[0] == "h" and name[1].isdigit():
+            # Floor at H2: check_blog_markdown's heading regex matches ##–####
+            # only, and its checks compare heading TEXT (level-agnostic), so a
+            # Doc section styled Heading 1 must still land as a countable
+            # heading rather than a lone '#' the rubric can't see.
+            lines.append("#" * min(max(int(name[1]), 2), 4) + " " + text)
+        elif name == "li":
+            lines.append("- " + text)
+        else:
+            lines.append(text)
+    return "\n\n".join(lines)
 
 
 def asset_urls_of(html: str, base_url: str, cap: int = 12) -> dict[str, list[str]]:

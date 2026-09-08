@@ -1117,6 +1117,7 @@ RUBRIC_LABELS = _READINESS_LABELS
 _URL_RUBRICS = {
     sig.RUBRIC_PAGE, sig.RUBRIC_CITATIONS, sig.RUBRIC_GUEST_POST,
     sig.RUBRIC_NICHE_EDIT, sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_MAP_EMBEDS,
+    sig.RUBRIC_BLOG,
 }
 
 
@@ -1148,7 +1149,9 @@ def assess_readiness(task_id: str) -> dict:
         out["notes"].append("No checklist matches this task yet. Pick a rubric so QA knows what to check.")
         return out
 
-    if rubric in _URL_RUBRICS:
+    # A blog TASK's deliverable is a linked content run, not a URL (handled in
+    # its own block below) — even though blog is URL-reviewable via the /qa chat.
+    if rubric in _URL_RUBRICS and rubric != sig.RUBRIC_BLOG:
         url, src = _readiness_deliverable(task, rubric)
         if url:
             out["have"].append("page URL")
@@ -1261,6 +1264,10 @@ _URL_RUBRIC_WORDS: list[tuple[str, str]] = [
     ("niche edit", sig.RUBRIC_NICHE_EDIT),
     ("map embed", sig.RUBRIC_MAP_EMBEDS),
     ("citation", sig.RUBRIC_CITATIONS),
+    ("blog post", sig.RUBRIC_BLOG),
+    ("blog article", sig.RUBRIC_BLOG),
+    ("blog", sig.RUBRIC_BLOG),
+    ("article", sig.RUBRIC_BLOG),
     ("landing page", sig.RUBRIC_PAGE),
     ("service page", sig.RUBRIC_PAGE),
     ("location page", sig.RUBRIC_PAGE),
@@ -1268,10 +1275,6 @@ _URL_RUBRIC_WORDS: list[tuple[str, str]] = [
     ("web page", sig.RUBRIC_PAGE),
     ("page", sig.RUBRIC_PAGE),
 ]
-_URL_RUBRICS = {
-    sig.RUBRIC_PAGE, sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT,
-    sig.RUBRIC_PRESS_RELEASE, sig.RUBRIC_CITATIONS, sig.RUBRIC_MAP_EMBEDS,
-}
 
 
 def resolve_url_rubric(text: Optional[str]) -> str:
@@ -1300,19 +1303,58 @@ async def review_url(
     link-back, and assertion checks; without it those read "could not verify"
     (needs_human), never a false pass. ``keyword`` (optional) enables the
     keyword-placement checks on the website-page/press-release rubrics.
-    Unreachable page → needs_human."""
+    Unreachable page → needs_human.
+
+    A Google *Doc* URL is a content draft, not a live page — its editor URL is a
+    JS shell with no readable title/H1, so it's read via the doc's HTML export
+    and graded with the blog rubric (needs 'anyone with the link can view')."""
     rub = rubric if rubric in _URL_RUBRICS else resolve_url_rubric(rubric)
     fields = _client_fields(client)
-    html = await _fetch(url)
-    if html is None:
-        checks = [sig._check("page", "Page reachable", None, note="page unreachable/blocked")]
+
+    # Google Doc → read the HTML export, grade as a blog article. A Slides/Forms
+    # link has no gradeable export, so it routes to a clean needs-human rather
+    # than false-failing on its JS shell.
+    gdoc_id = sig.doc_id_of(url)
+    if gdoc_id:
+        rub = sig.RUBRIC_BLOG
+        fetch_url = sig.doc_html_export_url(gdoc_id)
+    elif sig.is_google_doc_url(url):
+        checks = [sig._check("doc", "Deliverable is gradeable", None,
+                             note="Google Slides/Forms drafts aren't QA-gradeable — link the live page")]
         verdict = sig.build_verdict(checks)
         return _url_review_payload(rub, verdict, checks, [url], None,
-                                   "The page couldn't be fetched (unreachable or bot-blocked) — "
-                                   "a human should open it directly.")
+                                   "This is a Google Slides/Forms link, which QA can't grade — "
+                                   "share the live page or a Google Doc instead.")
+    else:
+        fetch_url = url
+
+    html = await _fetch(fetch_url)
+    if html is None:
+        note = "page unreachable/blocked"
+        msg = ("The page couldn't be fetched (unreachable or bot-blocked) — "
+               "a human should open it directly.")
+        if gdoc_id:
+            note = "Google Doc unreadable — is it shared 'anyone with the link can view'?"
+            msg = ("The Google Doc couldn't be read — make sure it's shared so "
+                   "'anyone with the link can view', then try again.")
+        checks = [sig._check("page", "Page reachable", None, note=note)]
+        verdict = sig.build_verdict(checks)
+        return _url_review_payload(rub, verdict, checks, [url], None, msg)
 
     composite: Optional[float] = None
-    if rub == sig.RUBRIC_PAGE:
+    if rub == sig.RUBRIC_BLOG:
+        md = sig.html_to_markdownish(html)
+        if gdoc_id and not md.strip():
+            # Export returned no readable body — almost always a sign-in/permission
+            # page because link-sharing is off. Say so instead of a false fail.
+            checks = [sig._check("doc", "Google Doc readable", None,
+                                 note="no content read — is it shared 'anyone with the link can view'?")]
+            verdict = sig.build_verdict(checks)
+            return _url_review_payload(rub, verdict, checks, [url], None,
+                                       "The Google Doc came back empty — check that it's shared "
+                                       "'anyone with the link can view', then try again.")
+        checks = sig.check_blog_markdown(md, keyword)
+    elif rub == sig.RUBRIC_PAGE:
         checks, composite = await _website_page_checks(html, url, fields, client, keyword=keyword)
     elif rub in (sig.RUBRIC_GUEST_POST, sig.RUBRIC_NICHE_EDIT):
         checks = sig.check_link_back(html, fields["domain"])
