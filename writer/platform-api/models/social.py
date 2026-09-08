@@ -27,6 +27,123 @@ class SocialPostCreateRequest(BaseModel):
     scheduled_at: Optional[datetime] = None   # future time to publish; omit = now
 
 
+class SocialDraftCopyRequest(BaseModel):
+    """Ask the AI to draft post copy for one platform from a source + angle."""
+    platform: str
+    source_type: str = "topic"           # topic | url | blog_run | local_seo_page
+    source_id: Optional[str] = None      # run_id (blog_run) or page_id (local_seo_page)
+    url: Optional[str] = None            # source_type=url
+    text: Optional[str] = None           # source_type=topic — freeform topic/notes
+    angle: Optional[str] = None          # optional hook/angle hint
+    tone: Optional[str] = None           # optional tone hint
+    format: str = "feed"
+    include_hashtags: bool = True
+
+
+class SocialDraftCopyResponse(BaseModel):
+    copy: str
+    platform: str
+    char_count: int
+    char_limit: Optional[int] = None
+    over_limit: bool = False
+    source_title: Optional[str] = None
+    source_version: Optional[str] = None
+    angle: Optional[str] = None
+    voice_warnings: list[str] = Field(default_factory=list)
+    spec_warnings: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class SocialAnglesRequest(BaseModel):
+    """Propose distinct editorial angles for a Source."""
+    source_type: str = "topic"           # topic | url | blog_run | local_seo_page
+    source_id: Optional[str] = None
+    url: Optional[str] = None
+    text: Optional[str] = None
+
+
+class SocialAngle(BaseModel):
+    title: str
+    hook: str = ""
+    description: str = ""
+
+
+class SocialFanoutRequest(BaseModel):
+    """Fan ONE angle out across platforms into Drafts."""
+    source_type: str = "topic"
+    source_id: Optional[str] = None
+    url: Optional[str] = None
+    text: Optional[str] = None
+    angle: str                            # the hook/idea that drives the copy
+    angle_title: Optional[str] = None     # short label stored on the drafts
+    tone: Optional[str] = None
+    platforms: list[str] = Field(default_factory=list)
+    format: str = "feed"
+    include_image: bool = False
+    include_hashtags: bool = True
+
+
+class SocialDraftResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    angle_set_id: Optional[UUID] = None
+    angle: Optional[str] = None
+    platform: str
+    format: str = "feed"
+    copy: Optional[str] = None
+    image_urls: list[str] = Field(default_factory=list)
+    media: list[dict] = Field(default_factory=list)
+    platform_metadata: Optional[dict] = None
+    voice_verdict: Optional[dict] = None
+    spec_verdict: Optional[dict] = None
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialFanoutResponse(BaseModel):
+    angle_set_id: UUID
+    job_id: UUID
+    drafts: list[SocialDraftResponse] = Field(default_factory=list)
+
+
+class SocialDraftUpdateRequest(BaseModel):
+    copy: Optional[str] = None
+    image_urls: Optional[list[str]] = None
+    platform_metadata: Optional[dict] = None
+
+
+class SocialDraftPublishRequest(BaseModel):
+    account_id: str
+    scheduled_at: Optional[datetime] = None
+
+
+class SocialJobStatusResponse(BaseModel):
+    id: UUID
+    status: str
+    result: Optional[dict] = None
+    error: Optional[str] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialGenerateImageRequest(BaseModel):
+    """Generate one on-brand social image for a platform via Nano Banana Pro."""
+    platform: str
+    format: str = "feed"
+    description: str                       # what the image should show
+    aspect_ratio: Optional[str] = None     # override the per-platform default
+
+
+class SocialGenerateImageResponse(BaseModel):
+    url: str
+    type: str
+    aspect_ratio: str
+    cost_usd: float
+
+
 class SocialMediaUploadResponse(BaseModel):
     url: str
     type: str

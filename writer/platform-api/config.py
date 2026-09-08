@@ -93,6 +93,23 @@ class Settings(BaseSettings):
     social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
     social_max_upload_mb: float = 200.0   # media upload cap (video-sized)
+    # AI copy drafting (Creator P2 first slice): one Sonnet call per platform,
+    # grounded in a source + the client's voice card. Our own Anthropic key — not
+    # a per-client-metered external spend (mirrors the blog/GBP writers).
+    social_copy_model: str = "claude-sonnet-5"   # SOCIAL_COPY_MODEL
+    social_copy_max_tokens: int = 900
+    social_copy_max_correction_passes: int = 1   # forbidden-term rewrites
+    social_copy_source_max_chars: int = 8000     # source content fed to the prompt
+    social_angles_count: int = 4                 # distinct angles proposed per Source (3–5)
+    social_angles_max_tokens: int = 1400
+    # AI image generation — nano-banana Pro (Gemini 3 Pro Image), reuses
+    # GEMINI_API_KEY. The Pro model passes generationConfig.imageConfig.aspectRatio
+    # for per-platform ratios (the 2.5-Flash nano_banana_model is 1:1-only).
+    # Overridable when Google rotates the preview id. Paid external call — reserved
+    # against the fail-closed social budget before spending.
+    nano_banana_pro_model: str = "gemini-3-pro-image-preview"   # NANO_BANANA_PRO_MODEL
+    social_image_size: str = "2K"                # imageConfig.imageSize (1K/2K/4K)
+    social_image_cost_usd: float = 0.134         # est. USD per generated image (budget)
     # Social media store (ADR-0004): Cloudflare R2 (S3 API, zero egress) when
     # all five are set, else the Supabase fallback (images only). Reuses the
     # suite's existing Cloudflare account.

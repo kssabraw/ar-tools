@@ -30,6 +30,47 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   (multipart `POST .../social/media` → R2), feed/reel/story, publish-now or schedule, advanced
   platform-specific JSON, and an auto-polling recent-posts list. Social error codes added to
   `errorGuidance.ts`. `tsc -b` + `vite build` green.
+- **AI copy drafting (P2 Creator, copy half) — NEW.** `services/social/creator.py` (pure prompt
+  builders + async `generate_copy`) + `POST /clients/{id}/social/draft-copy` + a **"Draft with AI"**
+  panel in the composer. Given a target platform (the selected account) and a Source — a **topic**,
+  a **URL** (via `syndication_rewrite.extract_source_content`), a **blog run**
+  (`illustration._load_article`), or a **saved Local SEO page** (`local_seo_pages.content_html`) — plus
+  optional angle/tone, it generates platform-native copy through `report_llm.generate_text`
+  (`social_copy_model` = `claude-sonnet-5`), enforces the client's Voice & Audience Card (reuses
+  `gbp_posts_service.render_voice_card_block` / `voice_forbidden_hits` + one corrective rewrite),
+  clamps to the platform char limit, and returns copy + voice/spec advisories. **Stateless** — the
+  panel prefills the copy box; the human edits → approves → publishes (the real draft/post is created
+  at publish, unchanged). Not metered against the social budget (our own Anthropic key, like the
+  blog/GBP writers). 12 pure-helper unit tests (`tests/test_social_creator.py`).
+- **AI image generation (Pro-only) — NEW.** `services/nano_banana.py::generate_image_pro` (Gemini 3
+  Pro Image, `gemini-3-pro-image-preview`, passes `generationConfig.imageConfig.aspectRatio`) +
+  `services/social/image.py` + `POST /clients/{id}/social/generate-image` + a **"Generate an image
+  with AI"** panel in the composer's Media section. Per-platform aspect ratio via `resolve_aspect_ratio`
+  (reel/story→9:16, Pinterest→2:3, IG→4:5, X/YouTube→16:9, else 1:1 — all Gemini-supported; the seeded
+  specs' `1.91:1` is NOT, so the mapping is deliberate). Prompt built from the client's Social Policy
+  `image_prompt_template` (editable) + brand context. **Freeze-gated** and **fail-closed budget-metered**
+  (paid call: `budget.reserve` before the Gemini call, `social_image_cost_usd`≈$0.134 — the dominant
+  cost line). Image stored to R2 via `media_store.media_key(ext,"generated")`. **Owner ruling: Pro-only**
+  — the mixed 2.5-Flash-for-square path is deferred. Config: `nano_banana_pro_model` /
+  `social_image_size` (`2K`) / `social_image_cost_usd`. 10 pure-helper unit tests
+  (`tests/test_social_image.py`).
+- **Angle fan-out + Draft persistence (the full Creator loop) — NEW.** `services/social/creator.py::propose_angles`
+  (`POST …/social/angles`) proposes 3–5 distinct angles from a Source (grounded in source + voice/ICP).
+  `services/social/fanout.py` + `POST …/social/fan-out` fans ONE chosen angle across the selected platforms
+  as a background **`social_fanout`** job (migration `20260908130000_social_fanout_job.sql`, applied live;
+  freeze-gated + `job_worker` dispatch): it loads the source + voice card ONCE, then generates one **Draft
+  per platform** (copy via the shared `creator.draft_platform_copy`, opt-in per-platform image via the Pro
+  renderer, each image budget-reserved), persisted under a shared `angle_set_id` in `social_drafts` with
+  status `ready`/`needs_image`/`generation_failed`, and emits a `social_fanout_ready` notification. Draft
+  review: `GET …/social/drafts` (+`?angle_set_id`), `PATCH /social/drafts/{id}` (edit copy/media, recomputes
+  needs_image↔ready), `DELETE` (archive), `POST /social/drafts/{id}/publish` (approve → the existing publish
+  lifecycle: validate → create Post → freeze-gated publish job; marks the Draft published). Frontend: the
+  social page is now **tabbed Compose / Create with AI / Drafts** (`SocialCompose.tsx`) — source picker →
+  Suggest angles (or write your own) → platform multi-select + image toggle → fan out → poll → land on the
+  Drafts tab to edit + publish each. `creator.load_source` was refactored to kwargs and the copy LLM +
+  voice-enforcement extracted to `draft_platform_copy` so single-copy and fan-out share ONE path. Config:
+  `social_angles_count` (4) / `_max_tokens`. 7 pure-helper tests (`tests/test_social_fanout.py`). **P2 Creator
+  is now functionally complete.**
 
 **Provisioned + live on PLATFORM:** `SOCIAL_ENABLED=true`; R2 (`R2_ACCOUNT_ID` / `_ACCESS_KEY_ID` /
 `_SECRET_ACCESS_KEY` / `R2_BUCKET=smm-media` / `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`,
@@ -108,13 +149,15 @@ posts; feed image aspect ratio 4:5–1.91:1.
 - **cobalt** — self-hosted; **P5 only**, not needed for v1.
 - Config settings that landed with #1027: `social_posting_provider`, `postpeer_api_key`,
   `postpeer_base_url`, `social_enabled`, `social_monthly_ceiling_default_usd` (75.0), `social_credit_usd`
-  (0.0085), `social_max_upload_mb` (200.0), `r2_*`. Still to add when P1/P2 land: `apify_api_token`,
-  `twelvelabs_api_key`, `nano_banana_pro_model`.
+  (0.0085), `social_max_upload_mb` (200.0), `r2_*`. Added with AI copy/image: `social_copy_*`,
+  `nano_banana_pro_model` (`gemini-3-pro-image-preview`), `social_image_size` (`2K`),
+  `social_image_cost_usd` (0.134) — all have working defaults (no new env needed; image gen reuses the
+  already-set `GEMINI_API_KEY`). Still to add when P1 lands: `apify_api_token`, `twelvelabs_api_key`.
 
 ## Open decisions for the owner (not yet made)
 
-- **Mixed image path** — build the 2.5-Flash-for-square / Pro-for-aspect-ratio renderer in v1 (halves
-  the dominant image cost) or ship Pro-only first?
+- ~~**Mixed image path**~~ — **DECIDED (owner): Pro-only for now.** The 2.5-Flash-for-square /
+  Pro-for-aspect-ratio cost-saver (halves the dominant image cost) is a future option, not built.
 - **v1 Instagram scope** — feed-only, or include single-media Reels/Stories? (Stories: Business account
   only, no caption, no link stickers — a weak fit for repurposed content.)
 - **IG carousel Draft type in v1?** — PostPeer supports it (≤10 items). Each slide is another
@@ -133,10 +176,16 @@ posts; feed image aspect ratio 4:5–1.91:1.
 3. **Owner scope decisions still open** (unchanged from below) — mixed image path, IG Reels/Stories,
    IG carousel Draft type, default per-client monthly ceiling, autonomy rollout.
 4. **Remaining build, roughly in order:**
-   - **AI copy drafting** — buildable now (Anthropic key exists); the smallest next win (draft the post
-     copy from a source/angle). AI **images** additionally need the nano-banana Pro renderer
-     (`GEMINI_API_KEY` is set; still need the Gemini 3 Pro Image model id + a renderer that passes
-     `aspectRatio` — `nano_banana.py` is 1:1-only).
+   - ~~**AI copy drafting**~~ — ✅ **BUILT**: the composer's "Draft with AI" panel drafts platform-native
+     copy from a topic / URL / blog run / saved page.
+   - ~~**AI image generation**~~ — ✅ **BUILT (Pro-only)**: the composer's "Generate an image with AI"
+     panel renders a per-platform image via nano-banana Pro (`gemini-3-pro-image-preview`). Owner ruling:
+     Pro-only for now; the mixed 2.5-Flash-for-square cost-saver is a future option. NOTE the model id is
+     a preview and `nano_banana_pro_model` is env-overridable if Google rotates it.
+   - ~~**Angle fan-out + Draft persistence**~~ — ✅ **BUILT**: the "Create with AI" + "Drafts" tabs — one
+     source → one angle → per-platform Drafts → review/edit/publish. **P2 Creator is complete.** Next up
+     the repurpose engine: **P1 competitor research** (Apify + TwelveLabs; also grounds angle proposals in
+     competitor signals — needs `APIFY_API_TOKEN` + `TWELVELABS_API_KEY`), then **P4 autonomy**, **P5 video**.
    - **YouTube poster** — waiting on PostPeer's `/docs/platforms/youtube` (title/description/tags/
      thumbnail/Shorts fields) before mapping.
    - **Big-video direct-to-R2 (presign)** — the `POST .../social/media/presign` endpoint exists; the UI

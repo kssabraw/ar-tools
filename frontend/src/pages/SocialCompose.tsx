@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Share2, Image as ImageIcon, Video, X, Loader2, Send,
-  Clock, ExternalLink, RefreshCw, ChevronDown, ChevronRight,
+  Clock, ExternalLink, RefreshCw, ChevronDown, ChevronRight, Sparkles,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { ErrorDetails } from '../components/ErrorDetails'
@@ -105,6 +105,622 @@ function validateFile(file: File, expect: 'image' | 'video'): string | null {
   return null
 }
 
+// ── AI copy drafting panel ────────────────────────────────────────────────────
+type SourceType = 'topic' | 'url' | 'blog_run' | 'local_seo_page'
+interface RunListItem { id: string; keyword: string; title?: string | null }
+interface PageListItem { id: string; keyword: string; location: string; page_title?: string | null }
+interface DraftResult {
+  copy: string
+  voice_warnings: string[]
+  spec_warnings: string[]
+  notes: string[]
+  source_title?: string | null
+  over_limit: boolean
+  char_count: number
+  char_limit?: number | null
+}
+
+const SOURCE_LABELS: Record<SourceType, string> = {
+  topic: 'Topic / notes', url: 'A web page (URL)', blog_run: 'A blog post', local_seo_page: 'A saved page',
+}
+const NOTE_TEXT: Record<string, string> = {
+  no_source_content: 'The source had no readable content — the draft is based on the topic and brand voice only.',
+  voice_uncorrected: 'A word from the client’s “never use” list is still present — review before publishing.',
+}
+
+function AiDraftPanel({
+  clientId, platform, disabled, format, onDraft,
+}: {
+  clientId: string; platform: string; disabled: boolean; format: string
+  onDraft: (copy: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [sourceType, setSourceType] = useState<SourceType>('topic')
+  const [topic, setTopic] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [sourceId, setSourceId] = useState('')
+  const [angle, setAngle] = useState('')
+  const [tone, setTone] = useState('')
+  const [result, setResult] = useState<DraftResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const runsQ = useQuery<{ data: RunListItem[] }>({
+    queryKey: ['social-source-runs', clientId],
+    queryFn: () => api.get<{ data: RunListItem[] }>(`/runs?client_id=${clientId}&content_type=blog_post&status=complete&page_size=50`),
+    enabled: open && sourceType === 'blog_run',
+  })
+  const pagesQ = useQuery<PageListItem[]>({
+    queryKey: ['social-source-pages', clientId],
+    queryFn: () => api.get<PageListItem[]>(`/clients/${clientId}/local-seo/pages`),
+    enabled: open && sourceType === 'local_seo_page',
+  })
+
+  const sourceReady =
+    (sourceType === 'topic' && topic.trim().length > 0) ||
+    (sourceType === 'url' && /^https?:\/\/\S+/.test(sourceUrl.trim())) ||
+    ((sourceType === 'blog_run' || sourceType === 'local_seo_page') && Boolean(sourceId))
+
+  const draftMut = useMutation({
+    mutationFn: async () => {
+      setError(null)
+      return api.post<DraftResult>(`/clients/${clientId}/social/draft-copy`, {
+        platform,
+        source_type: sourceType,
+        source_id: sourceType === 'blog_run' || sourceType === 'local_seo_page' ? sourceId : undefined,
+        url: sourceType === 'url' ? sourceUrl.trim() : undefined,
+        text: sourceType === 'topic' ? topic.trim() : undefined,
+        angle: angle.trim() || undefined,
+        tone: tone.trim() || undefined,
+        format,
+        include_hashtags: true,
+      })
+    },
+    onSuccess: (r) => { setResult(r); onDraft(r.copy) },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_copy_generation_failed'),
+  })
+
+  const canDraft = !disabled && sourceReady && !draftMut.isPending
+
+  return (
+    <div style={{ marginBottom: 14, border: '1px solid #e9d5ff', background: '#faf5ff', borderRadius: 10 }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: 'none', border: 'none', cursor: 'pointer', color: '#7c3aed', fontSize: 13, fontWeight: 700 }}>
+        <Sparkles size={15} /> Draft with AI
+        <span style={{ marginLeft: 'auto' }}>{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 12px 12px' }}>
+          {disabled && (
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#a16207' }}>
+              Select a connected account first — the draft is written for that platform.
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ flex: '1 1 200px' }}>
+              <label style={label}>Draft from</label>
+              <select style={input} value={sourceType}
+                onChange={(e) => { setSourceType(e.target.value as SourceType); setSourceId(''); setResult(null) }}>
+                {(Object.keys(SOURCE_LABELS) as SourceType[]).map((k) => (
+                  <option key={k} value={k}>{SOURCE_LABELS[k]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {sourceType === 'topic' && (
+            <textarea style={{ ...input, minHeight: 60, resize: 'vertical', marginBottom: 10 }}
+              value={topic} onChange={(e) => setTopic(e.target.value)}
+              placeholder="What's the post about? A few notes, an announcement, a promotion angle…" />
+          )}
+          {sourceType === 'url' && (
+            <input style={{ ...input, marginBottom: 10 }} value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
+              placeholder="https://example.com/blog/post-to-repurpose" />
+          )}
+          {sourceType === 'blog_run' && (
+            <select style={{ ...input, marginBottom: 10 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              <option value="">{runsQ.isLoading ? 'Loading blog posts…' : 'Choose a completed blog post…'}</option>
+              {(runsQ.data?.data ?? []).map((r) => (
+                <option key={r.id} value={r.id}>{r.title || r.keyword}</option>
+              ))}
+            </select>
+          )}
+          {sourceType === 'local_seo_page' && (
+            <select style={{ ...input, marginBottom: 10 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              <option value="">{pagesQ.isLoading ? 'Loading pages…' : 'Choose a saved page…'}</option>
+              {(pagesQ.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>{p.page_title || `${p.keyword} — ${p.location}`}</option>
+              ))}
+            </select>
+          )}
+          {((sourceType === 'blog_run' && !runsQ.isLoading && (runsQ.data?.data ?? []).length === 0) ||
+            (sourceType === 'local_seo_page' && !pagesQ.isLoading && (pagesQ.data ?? []).length === 0)) && (
+            <p style={{ margin: '-4px 0 10px', fontSize: 12, color: '#94a3b8' }}>
+              No {sourceType === 'blog_run' ? 'completed blog posts' : 'saved pages'} for this client yet.
+            </p>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ flex: '1 1 180px' }}>
+              <label style={label}>Angle / hook <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
+              <input style={input} value={angle} onChange={(e) => setAngle(e.target.value)}
+                placeholder="e.g. lead with the biggest benefit" />
+            </div>
+            <div style={{ flex: '1 1 140px' }}>
+              <label style={label}>Tone <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
+              <input style={input} value={tone} onChange={(e) => setTone(e.target.value)}
+                placeholder="e.g. upbeat, expert" />
+            </div>
+          </div>
+
+          <button disabled={!canDraft} onClick={() => draftMut.mutate()}
+            style={{ ...btn(canDraft ? '#7c3aed' : '#ddd6fe'), cursor: canDraft ? 'pointer' : 'not-allowed' }}>
+            {draftMut.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+            {draftMut.isPending ? 'Drafting…' : result ? 'Redraft' : 'Draft with AI'}
+          </button>
+          {result && !draftMut.isPending && (
+            <span style={{ marginLeft: 10, fontSize: 12, color: '#059669', fontWeight: 600 }}>
+              Draft added to the copy box below — edit it before publishing.
+            </span>
+          )}
+
+          {(result?.notes?.length || result?.voice_warnings?.length) ? (
+            <ul style={{ margin: '10px 0 0', padding: '8px 10px 8px 26px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, color: '#92400e', fontSize: 12 }}>
+              {(result?.notes ?? []).map((n) => <li key={n}>{NOTE_TEXT[n] ?? n}</li>)}
+              {(result?.voice_warnings ?? []).map((w) => (
+                <li key={w}>Still contains a discouraged term ({w.replace('forbidden_term:', '')}).</li>
+              ))}
+            </ul>
+          ) : null}
+          {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── AI image generation panel ─────────────────────────────────────────────────
+// Mirrors services/social/image.resolve_aspect_ratio (Gemini-supported ratios).
+function resolveAspectRatio(platform: string, format: string): string {
+  const p = (platform || '').toLowerCase()
+  const f = (format || 'feed').toLowerCase()
+  if (f === 'reel' || f === 'story') return '9:16'
+  if (p === 'pinterest') return '2:3'
+  if (p === 'instagram') return '4:5'
+  if (p === 'twitter' || p === 'x' || p === 'youtube') return '16:9'
+  return '1:1'
+}
+
+function AiImagePanel({
+  clientId, platform, format, disabled, disabledReason, onImage,
+}: {
+  clientId: string; platform: string; format: string
+  disabled: boolean; disabledReason?: string
+  onImage: (url: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [desc, setDesc] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [cost, setCost] = useState<number | null>(null)
+  const ar = resolveAspectRatio(platform, format)
+
+  const genMut = useMutation({
+    mutationFn: async () => {
+      setError(null)
+      return api.post<{ url: string; aspect_ratio: string; cost_usd: number }>(
+        `/clients/${clientId}/social/generate-image`,
+        { platform, format, description: desc.trim() },
+      )
+    },
+    onSuccess: (r) => { onImage(r.url); setCost(r.cost_usd); setDesc('') },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_image_generation_failed'),
+  })
+
+  const canGen = !disabled && desc.trim().length > 0 && !genMut.isPending
+
+  return (
+    <div style={{ marginTop: 10, border: '1px solid #e9d5ff', background: '#faf5ff', borderRadius: 10 }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: 'none', border: 'none', cursor: 'pointer', color: '#7c3aed', fontSize: 13, fontWeight: 700 }}>
+        <Sparkles size={15} /> Generate an image with AI
+        <span style={{ marginLeft: 'auto' }}>{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 12px 12px' }}>
+          {disabled && disabledReason && (
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#a16207' }}>{disabledReason}</p>
+          )}
+          <textarea style={{ ...input, minHeight: 60, resize: 'vertical', marginBottom: 8 }}
+            value={desc} onChange={(e) => setDesc(e.target.value)}
+            placeholder="Describe the image — e.g. a friendly plumber fixing a kitchen sink, bright and clean" />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <button disabled={!canGen} onClick={() => genMut.mutate()}
+              style={{ ...btn(canGen ? '#7c3aed' : '#ddd6fe'), cursor: canGen ? 'pointer' : 'not-allowed' }}>
+              {genMut.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+              {genMut.isPending ? 'Generating…' : 'Generate image'}
+            </button>
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              Shape: <strong>{ar}</strong> (matched to {specFor(platform).label} {format})
+            </span>
+          </div>
+          <p style={{ margin: '8px 0 0', fontSize: 11, color: '#94a3b8' }}>
+            One on-brand image via Nano Banana Pro. Uses the client’s monthly social budget
+            {cost != null ? ` (last: ~$${cost.toFixed(2)})` : ''}.
+          </p>
+          {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Angle fan-out (Create with AI) + Drafts ───────────────────────────────────
+interface Angle { title: string; hook: string; description: string }
+type DraftStatus = 'generating' | 'ready' | 'needs_image' | 'generation_failed' | 'published' | 'archived'
+interface Draft {
+  id: string
+  angle_set_id: string | null
+  angle: string | null
+  platform: string
+  format: string
+  copy: string | null
+  image_urls: string[]
+  media: { type: string; url: string }[]
+  voice_verdict: { warnings?: string[] } | null
+  spec_verdict: { warnings?: string[] } | null
+  status: DraftStatus
+}
+
+const DRAFT_STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
+  generating: { bg: '#fffbeb', fg: '#b45309', label: 'Generating…' },
+  ready: { bg: '#ecfdf5', fg: '#047857', label: 'Ready' },
+  needs_image: { bg: '#fff7ed', fg: '#c2410c', label: 'Needs image' },
+  generation_failed: { bg: '#fef2f2', fg: '#b91c1c', label: 'Failed' },
+  published: { bg: '#eff6ff', fg: '#1d4ed8', label: 'Published' },
+}
+function DraftBadge({ status }: { status: string }) {
+  const s = DRAFT_STATUS_STYLE[status] ?? { bg: '#f1f5f9', fg: '#475569', label: status }
+  return <span style={{ background: s.bg, color: s.fg, fontSize: 11, fontWeight: 700, padding: '3px 8px', borderRadius: 999 }}>{s.label}</span>
+}
+
+// The source-picker sub-form (topic / URL / blog / page), shared shape with AiDraftPanel.
+function useSourceState(clientId: string, open: boolean) {
+  const [sourceType, setSourceType] = useState<SourceType>('topic')
+  const [topic, setTopic] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [sourceId, setSourceId] = useState('')
+  const runsQ = useQuery<{ data: RunListItem[] }>({
+    queryKey: ['social-source-runs', clientId],
+    queryFn: () => api.get<{ data: RunListItem[] }>(`/runs?client_id=${clientId}&content_type=blog_post&status=complete&page_size=50`),
+    enabled: open && sourceType === 'blog_run',
+  })
+  const pagesQ = useQuery<PageListItem[]>({
+    queryKey: ['social-source-pages', clientId],
+    queryFn: () => api.get<PageListItem[]>(`/clients/${clientId}/local-seo/pages`),
+    enabled: open && sourceType === 'local_seo_page',
+  })
+  const ready =
+    (sourceType === 'topic' && topic.trim().length > 0) ||
+    (sourceType === 'url' && /^https?:\/\/\S+/.test(sourceUrl.trim())) ||
+    ((sourceType === 'blog_run' || sourceType === 'local_seo_page') && Boolean(sourceId))
+  const payload = () => ({
+    source_type: sourceType,
+    source_id: sourceType === 'blog_run' || sourceType === 'local_seo_page' ? sourceId : undefined,
+    url: sourceType === 'url' ? sourceUrl.trim() : undefined,
+    text: sourceType === 'topic' ? topic.trim() : undefined,
+  })
+  const ui = (
+    <div>
+      <label style={label}>Repurpose from</label>
+      <select style={{ ...input, marginBottom: 8 }} value={sourceType}
+        onChange={(e) => { setSourceType(e.target.value as SourceType); setSourceId('') }}>
+        {(Object.keys(SOURCE_LABELS) as SourceType[]).map((k) => <option key={k} value={k}>{SOURCE_LABELS[k]}</option>)}
+      </select>
+      {sourceType === 'topic' && (
+        <textarea style={{ ...input, minHeight: 56, resize: 'vertical' }} value={topic}
+          onChange={(e) => setTopic(e.target.value)} placeholder="A topic, announcement, or a few notes…" />
+      )}
+      {sourceType === 'url' && (
+        <input style={input} value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)}
+          placeholder="https://example.com/blog/post" />
+      )}
+      {sourceType === 'blog_run' && (
+        <select style={input} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+          <option value="">{runsQ.isLoading ? 'Loading…' : 'Choose a completed blog post…'}</option>
+          {(runsQ.data?.data ?? []).map((r) => <option key={r.id} value={r.id}>{r.title || r.keyword}</option>)}
+        </select>
+      )}
+      {sourceType === 'local_seo_page' && (
+        <select style={input} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+          <option value="">{pagesQ.isLoading ? 'Loading…' : 'Choose a saved page…'}</option>
+          {(pagesQ.data ?? []).map((p) => <option key={p.id} value={p.id}>{p.page_title || `${p.keyword} — ${p.location}`}</option>)}
+        </select>
+      )}
+    </div>
+  )
+  return { ready, payload, ui }
+}
+
+function CreateTab({ clientId, accounts, onFannedOut }: {
+  clientId: string; accounts: SocialAccount[]; onFannedOut: (angleSetId: string) => void
+}) {
+  const src = useSourceState(clientId, true)
+  const [angles, setAngles] = useState<Angle[]>([])
+  const [chosen, setChosen] = useState<number | null>(null)
+  const [customAngle, setCustomAngle] = useState('')
+  const [platforms, setPlatforms] = useState<string[]>([])
+  const [format, setFormat] = useState('feed')
+  const [tone, setTone] = useState('')
+  const [includeImage, setIncludeImage] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [angleSetId, setAngleSetId] = useState<string | null>(null)
+
+  // Distinct platforms the client can actually publish to.
+  const availablePlatforms = useMemo(
+    () => Array.from(new Set(accounts.map((a) => a.platform.toLowerCase()))), [accounts])
+
+  const anglesMut = useMutation({
+    mutationFn: async () => { setError(null); return api.post<Angle[]>(`/clients/${clientId}/social/angles`, src.payload()) },
+    onSuccess: (a) => { setAngles(a); setChosen(a.length ? 0 : null) },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_angles_failed'),
+  })
+
+  const activeAngle = customAngle.trim()
+    ? { title: 'Custom angle', hook: customAngle.trim() }
+    : chosen != null ? angles[chosen] : null
+
+  const fanMut = useMutation({
+    mutationFn: async () => {
+      setError(null)
+      return api.post<{ angle_set_id: string; job_id: string }>(`/clients/${clientId}/social/fan-out`, {
+        ...src.payload(),
+        angle: activeAngle?.hook || activeAngle?.title,
+        angle_title: activeAngle?.title,
+        tone: tone.trim() || undefined,
+        platforms, format, include_image: includeImage, include_hashtags: true,
+      })
+    },
+    onSuccess: (r) => { setJobId(r.job_id); setAngleSetId(r.angle_set_id) },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_fanout_failed'),
+  })
+
+  // Poll the fan-out job; on success hand the angle set to the Drafts tab, on
+  // failure surface the reason here (don't switch tabs to an empty/failed set).
+  useQuery({
+    queryKey: ['social-fanout-job', clientId, jobId],
+    queryFn: async () => {
+      const j = await api.get<{ status: string; error?: string | null }>(`/clients/${clientId}/social/fan-out/${jobId}`)
+      if (j.status === 'complete') {
+        setJobId(null)
+        if (angleSetId) onFannedOut(angleSetId)
+      } else if (j.status === 'failed') {
+        setJobId(null)
+        setError(j.error === 'client_frozen' ? 'client_frozen' : (j.error || 'social_fanout_failed'))
+      }
+      return j
+    },
+    enabled: Boolean(jobId),
+    refetchInterval: 3000,
+  })
+
+  const canFanOut = src.ready && Boolean(activeAngle) && platforms.length > 0 && !fanMut.isPending && !jobId
+
+  return (
+    <div style={card}>
+      <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>Create with AI</h3>
+      <p style={{ margin: '0 0 14px', fontSize: 13, color: '#64748b' }}>
+        Turn one source into platform-native drafts. Pick a source, choose an angle, select platforms.
+      </p>
+
+      <div style={{ marginBottom: 14 }}>{src.ui}</div>
+
+      {/* angles */}
+      <div style={{ marginBottom: 14 }}>
+        <button disabled={!src.ready || anglesMut.isPending} onClick={() => anglesMut.mutate()}
+          style={{ ...btn(src.ready && !anglesMut.isPending ? '#7c3aed' : '#ddd6fe'), cursor: src.ready && !anglesMut.isPending ? 'pointer' : 'not-allowed' }}>
+          {anglesMut.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+          {anglesMut.isPending ? 'Thinking…' : angles.length ? 'Suggest angles again' : 'Suggest angles'}
+        </button>
+        {angles.length > 0 && (
+          <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+            {angles.map((a, i) => (
+              <label key={i} style={{ display: 'flex', gap: 10, padding: 10, border: `1px solid ${chosen === i && !customAngle ? '#7c3aed' : '#e2e8f0'}`, borderRadius: 8, cursor: 'pointer', background: chosen === i && !customAngle ? '#faf5ff' : '#fff' }}>
+                <input type="radio" checked={chosen === i && !customAngle} onChange={() => { setChosen(i); setCustomAngle('') }} style={{ marginTop: 3 }} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>{a.title}</div>
+                  {a.hook && <div style={{ fontSize: 12, color: '#475569', marginTop: 2 }}>{a.hook}</div>}
+                  {a.description && <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 2 }}>{a.description}</div>}
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+        <div style={{ marginTop: 10 }}>
+          <label style={label}>…or write your own angle</label>
+          <input style={input} value={customAngle} onChange={(e) => setCustomAngle(e.target.value)}
+            placeholder="e.g. bust the myth that a new roof always means a full replacement" />
+        </div>
+      </div>
+
+      {/* platforms + options */}
+      <div style={{ marginBottom: 14 }}>
+        <label style={label}>Platforms</label>
+        {availablePlatforms.length === 0 ? (
+          <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>No connected accounts to fan out to.</p>
+        ) : (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {availablePlatforms.map((p) => (
+              <label key={p} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '6px 10px', border: `1px solid ${platforms.includes(p) ? '#7c3aed' : '#e2e8f0'}`, borderRadius: 8, cursor: 'pointer' }}>
+                <input type="checkbox" checked={platforms.includes(p)}
+                  onChange={(e) => setPlatforms((prev) => e.target.checked ? [...prev, p] : prev.filter((x) => x !== p))} />
+                {specFor(p).label}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14, alignItems: 'flex-end' }}>
+        <div>
+          <label style={label}>Format</label>
+          <select style={{ ...input, width: 160 }} value={format} onChange={(e) => setFormat(e.target.value)}>
+            <option value="feed">Feed post</option>
+            <option value="reel">Reel</option>
+            <option value="story">Story</option>
+          </select>
+        </div>
+        <div>
+          <label style={label}>Tone (optional)</label>
+          <input style={{ ...input, width: 180 }} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="upbeat, expert" />
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', paddingBottom: 9 }}>
+          <input type="checkbox" checked={includeImage} onChange={(e) => setIncludeImage(e.target.checked)} />
+          Also generate an image for each
+        </label>
+      </div>
+      {includeImage && (
+        <p style={{ margin: '-6px 0 12px', fontSize: 11, color: '#94a3b8' }}>
+          Each image uses the client’s monthly social budget (~$0.13 each, per platform).
+        </p>
+      )}
+
+      <button disabled={!canFanOut} onClick={() => fanMut.mutate()}
+        style={{ ...btn(canFanOut ? '#4f46e5' : '#c7d2fe'), cursor: canFanOut ? 'pointer' : 'not-allowed' }}>
+        {fanMut.isPending || jobId ? <Loader2 size={15} className="spin" /> : <Sparkles size={15} />}
+        {jobId ? 'Generating drafts…' : fanMut.isPending ? 'Starting…' : `Fan out to ${platforms.length || 0} platform${platforms.length === 1 ? '' : 's'}`}
+      </button>
+      {jobId && <p style={{ margin: '8px 0 0', fontSize: 12, color: '#64748b' }}>Drafts are being generated — you’ll land on the Drafts tab when they’re ready. You can leave this page.</p>}
+      {error && <div style={{ marginTop: 12 }}><ErrorDetails message={error} /></div>}
+    </div>
+  )
+}
+
+function DraftRow({ draft, accounts, onChanged }: {
+  draft: Draft; accounts: SocialAccount[]; onChanged: () => void
+}) {
+  const [copy, setCopy] = useState(draft.copy ?? '')
+  const [dirty, setDirty] = useState(false)
+  const [acct, setAcct] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const platAccounts = accounts.filter((a) => a.platform.toLowerCase() === draft.platform.toLowerCase())
+  React.useEffect(() => { if (!acct && platAccounts.length) setAcct(platAccounts[0].account_id) }, [platAccounts, acct])
+  const voiceWarn = draft.voice_verdict?.warnings ?? []
+  const image = draft.image_urls?.[0] || draft.media?.find((m) => m.type === 'image')?.url
+
+  const saveMut = useMutation({
+    mutationFn: () => api.patch<Draft>(`/social/drafts/${draft.id}`, { copy }),
+    onSuccess: () => { setDirty(false); onChanged() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'save_failed'),
+  })
+  const delMut = useMutation({
+    mutationFn: () => api.delete(`/social/drafts/${draft.id}`),
+    onSuccess: onChanged,
+  })
+  const pubMut = useMutation({
+    mutationFn: async () => { setError(null); return api.post(`/social/drafts/${draft.id}/publish`, { account_id: acct }) },
+    onSuccess: onChanged,
+    onError: (e) => setError(e instanceof Error ? e.message : 'publish_failed'),
+  })
+
+  const spec = specFor(draft.platform)
+  const publishable = draft.status === 'ready' && Boolean(acct)
+
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, display: 'flex', gap: 14 }}>
+      {image && <img src={image} alt="" style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid #e2e8f0', flexShrink: 0 }} />}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ fontSize: 13, fontWeight: 700 }}>{spec.label}</span>
+          <DraftBadge status={draft.status} />
+          {draft.angle && <span style={{ fontSize: 11, color: '#94a3b8' }}>· {draft.angle}</span>}
+        </div>
+        {draft.status === 'generating' ? (
+          <div style={{ fontSize: 13, color: '#64748b', display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 size={13} className="spin" /> Generating…</div>
+        ) : draft.status === 'generation_failed' ? (
+          <div style={{ fontSize: 13, color: '#b91c1c' }}>Generation failed — delete and try again.</div>
+        ) : (
+          <>
+            <textarea style={{ ...input, minHeight: 74, resize: 'vertical' }} value={copy}
+              onChange={(e) => { setCopy(e.target.value); setDirty(true) }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2 }}>
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>{voiceWarn.length ? `⚠ ${voiceWarn.map((w) => w.replace('forbidden_term:', '')).join(', ')}` : ''}</span>
+              <span style={{ fontSize: 11, color: copy.length > spec.charLimit ? '#b91c1c' : '#94a3b8' }}>{copy.length} / {spec.charLimit}</span>
+            </div>
+            {draft.status === 'needs_image' && (
+              <p style={{ margin: '4px 0 0', fontSize: 12, color: '#c2410c' }}>{spec.label} needs an image before it can publish — add one on the Compose tab, or delete this draft.</p>
+            )}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+              {dirty && (
+                <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}>
+                  {saveMut.isPending ? <Loader2 size={13} className="spin" /> : null} Save edit
+                </button>
+              )}
+              {draft.status !== 'published' && (
+                <>
+                  {platAccounts.length > 1 && (
+                    <select style={{ ...input, width: 'auto', padding: '6px 8px' }} value={acct} onChange={(e) => setAcct(e.target.value)}>
+                      {platAccounts.map((a) => <option key={a.account_id} value={a.account_id}>{a.handle || a.account_id}</option>)}
+                    </select>
+                  )}
+                  <button onClick={() => pubMut.mutate()} disabled={!publishable || pubMut.isPending || dirty}
+                    title={dirty ? 'Save your edit first' : platAccounts.length === 0 ? 'No connected account for this platform' : ''}
+                    style={{ ...btn(publishable && !dirty ? '#4f46e5' : '#c7d2fe'), padding: '6px 12px', cursor: publishable && !dirty ? 'pointer' : 'not-allowed' }}>
+                    {pubMut.isPending ? <Loader2 size={13} className="spin" /> : <Send size={13} />} Publish now
+                  </button>
+                </>
+              )}
+              <button onClick={() => delMut.mutate()} disabled={delMut.isPending} style={{ ...btn('#fff', '#b91c1c'), padding: '6px 10px' }}>
+                <X size={13} /> Delete
+              </button>
+              {pubMut.isSuccess && <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>Submitted — publishing…</span>}
+            </div>
+            {error && <div style={{ marginTop: 8 }}><ErrorDetails message={error} /></div>}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function DraftsTab({ clientId, accounts, angleSetId }: {
+  clientId: string; accounts: SocialAccount[]; angleSetId: string | null
+}) {
+  // Poll every 3s while any draft is still generating — but bound it so a stuck/
+  // crashed worker (drafts stranded at 'generating') doesn't poll forever.
+  const pollStartRef = React.useRef<number | null>(null)
+  const draftsQ = useQuery<Draft[]>({
+    queryKey: ['social-drafts', clientId, angleSetId],
+    queryFn: () => api.get<Draft[]>(`/clients/${clientId}/social/drafts${angleSetId ? `?angle_set_id=${angleSetId}` : ''}`),
+    refetchInterval: (q) => {
+      const generating = ((q.state.data as Draft[] | undefined) ?? []).some((d) => d.status === 'generating')
+      if (!generating) { pollStartRef.current = null; return false }
+      if (pollStartRef.current == null) pollStartRef.current = Date.now()
+      return Date.now() - pollStartRef.current > 10 * 60 * 1000 ? false : 3000  // give up after 10 min
+    },
+  })
+  const drafts = draftsQ.data ?? []
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 15 }}>Drafts{angleSetId ? ' (latest fan-out)' : ''}</h3>
+          {angleSetId && <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>Showing the set you just created. Edit, then publish each.</p>}
+        </div>
+        <button onClick={() => void draftsQ.refetch()} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}><RefreshCw size={13} /> Refresh</button>
+      </div>
+      {draftsQ.isLoading ? (
+        <div style={{ color: '#64748b', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>
+      ) : drafts.length === 0 ? (
+        <p style={{ margin: 0, fontSize: 13, color: '#94a3b8' }}>No drafts yet. Use “Create with AI” to fan an angle out into drafts.</p>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          {drafts.map((d) => <DraftRow key={d.id} draft={d} accounts={accounts} onChanged={() => void draftsQ.refetch()} />)}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 export function SocialCompose() {
   const { id } = useParams<{ id: string }>()
@@ -135,6 +751,8 @@ export function SocialCompose() {
   })
 
   const accounts = accountsQ.data ?? []
+  const [tab, setTab] = useState<'compose' | 'create' | 'drafts'>('compose')
+  const [activeAngleSet, setActiveAngleSet] = useState<string | null>(null)
   const [accountId, setAccountId] = useState<string>('')
   const selected = accounts.find((a) => a.account_id === accountId) ?? accounts[0]
   const platform = selected?.platform ?? ''
@@ -258,16 +876,26 @@ export function SocialCompose() {
         </div>
       </div>
 
-      {/* Accounts state */}
-      {accountsQ.isLoading && (
+      {/* Tabs */}
+      <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
+        {([['compose', 'Compose'], ['create', 'Create with AI'], ['drafts', 'Drafts']] as const).map(([key, lbl]) => (
+          <button key={key} onClick={() => setTab(key)}
+            style={{ padding: '8px 14px', background: 'none', border: 'none', borderBottom: `2px solid ${tab === key ? '#4f46e5' : 'transparent'}`, color: tab === key ? '#4f46e5' : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: -1 }}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {/* Accounts state (compose + create tabs need connected accounts) */}
+      {tab !== 'drafts' && accountsQ.isLoading && (
         <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 8, color: '#64748b' }}>
           <Loader2 size={16} className="spin" /> Loading connected accounts…
         </div>
       )}
-      {accountsQ.isError && (
+      {tab !== 'drafts' && accountsQ.isError && (
         <ErrorDetails message={accountsQ.error instanceof Error ? accountsQ.error.message : 'accounts_load_failed'} />
       )}
-      {!accountsQ.isLoading && !accountsQ.isError && accounts.length === 0 && (
+      {tab !== 'drafts' && !accountsQ.isLoading && !accountsQ.isError && accounts.length === 0 && (
         <div style={card}>
           <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>No connected accounts</h3>
           <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
@@ -277,8 +905,16 @@ export function SocialCompose() {
         </div>
       )}
 
+      {tab === 'create' && (
+        <CreateTab clientId={clientId} accounts={accounts}
+          onFannedOut={(asid) => { setActiveAngleSet(asid); setTab('drafts') }} />
+      )}
+      {tab === 'drafts' && (
+        <DraftsTab clientId={clientId} accounts={accounts} angleSetId={activeAngleSet} />
+      )}
+
       {/* Compose */}
-      {accounts.length > 0 && (
+      {tab === 'compose' && accounts.length > 0 && (
         <div style={card}>
           {/* account */}
           <div style={{ marginBottom: 14 }}>
@@ -296,6 +932,15 @@ export function SocialCompose() {
               </p>
             )}
           </div>
+
+          {/* AI copy drafting */}
+          <AiDraftPanel
+            clientId={clientId}
+            platform={platform}
+            disabled={!selected}
+            format={format}
+            onDraft={(text) => setCopy(text)}
+          />
 
           {/* copy */}
           <div style={{ marginBottom: 14 }}>
@@ -355,6 +1000,20 @@ export function SocialCompose() {
               Up to {MAX_UPLOAD_MB} MB per file. Images: JPG/PNG/WebP/GIF. Video: MP4/MOV (one per post).
             </p>
             {uploadError && <div style={{ marginTop: 8 }}><ErrorDetails message={uploadError} /></div>}
+            <AiImagePanel
+              clientId={clientId}
+              platform={platform}
+              format={format}
+              disabled={!selected || (spec.maxImages != null && images.length >= spec.maxImages)}
+              disabledReason={
+                !selected
+                  ? 'Select a connected account first — the image is sized for that platform.'
+                  : (spec.maxImages != null && images.length >= spec.maxImages)
+                    ? `${specFor(platform).label} allows at most ${spec.maxImages} image${spec.maxImages === 1 ? '' : 's'} — remove one to generate another.`
+                    : undefined
+              }
+              onImage={(url) => setImages((prev) => [...prev, url])}
+            />
           </div>
 
           {/* format */}
@@ -434,6 +1093,7 @@ export function SocialCompose() {
       )}
 
       {/* Recent posts */}
+      {tab === 'compose' && (
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
           <h3 style={{ margin: 0, fontSize: 15 }}>Recent posts</h3>
@@ -477,6 +1137,7 @@ export function SocialCompose() {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

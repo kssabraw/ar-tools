@@ -65,6 +65,10 @@ FREEZE_GATED_JOB_TYPES = {
     "gbp_post_publish",
     # Social publish pushes a post OUT to the client's real account (output).
     "social_publish",
+    # NB: social_fanout is deliberately NOT here. It enforces freeze INSIDE its
+    # handler (services/social/fanout.run_fanout_job) so a client frozen mid-flight
+    # gets its pre-created 'generating' drafts marked failed rather than orphaned by
+    # the blanket worker gate. The enqueue route still calls assert_not_frozen.
     # GBP Profile Editor: applying a description/services/hours edit writes a
     # persistent, customer-facing profile field (output). The self-continuing
     # reconciler that chases Google's pending verdict is gated too, so a client

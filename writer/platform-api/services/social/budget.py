@@ -115,3 +115,29 @@ def reserve(client_id: str, amount: float, *, cap: float, today: Optional[date] 
     except Exception as exc:  # noqa: BLE001 — a failed reservation must never spend
         logger.warning("social_reserve_failed", extra={"client_id": client_id, "error": str(exc)})
         return False
+
+
+def release(client_id: str, amount: float, *, today: Optional[date] = None) -> None:
+    """Refund a prior reservation when the paid action produced nothing (e.g. an
+    image generation that failed after we reserved its estimate). Lowers this
+    month's ``spent_usd``, floored at 0. Best-effort and fail-SAFE: a failed refund
+    just leaves the estimate charged (erring toward the cap, never over it), so it
+    never raises. A zero/negative amount is a no-op."""
+    if amount <= 0:
+        return
+    from db.supabase_client import get_supabase
+
+    try:
+        sb = get_supabase()
+        month = month_key(today).isoformat()
+        rows = (
+            sb.table("social_usage").select("spent_usd")
+            .eq("client_id", client_id).eq("month", month).limit(1).execute()
+        ).data or []
+        if not rows:
+            return
+        new_spent = max(0.0, float(rows[0]["spent_usd"]) - float(amount))
+        sb.table("social_usage").update({"spent_usd": new_spent}) \
+            .eq("client_id", client_id).eq("month", month).execute()
+    except Exception as exc:  # noqa: BLE001 — a failed refund must never break the caller
+        logger.warning("social_release_failed", extra={"client_id": client_id, "error": str(exc)})

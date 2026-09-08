@@ -15,6 +15,18 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from middleware.auth import require_auth, require_staff
 from models.social import (
     SocialAccountResponse,
+    SocialAngle,
+    SocialAnglesRequest,
+    SocialDraftCopyRequest,
+    SocialDraftCopyResponse,
+    SocialDraftPublishRequest,
+    SocialDraftResponse,
+    SocialDraftUpdateRequest,
+    SocialFanoutRequest,
+    SocialFanoutResponse,
+    SocialGenerateImageRequest,
+    SocialGenerateImageResponse,
+    SocialJobStatusResponse,
     SocialMediaUploadResponse,
     SocialPostCreateRequest,
     SocialPostResponse,
@@ -22,6 +34,9 @@ from models.social import (
     SocialPresignResponse,
 )
 from services.freeze import assert_not_frozen
+from services.social import creator as social_creator
+from services.social import fanout as social_fanout
+from services.social import image as social_image
 from services.social import publish as social_publish
 
 logger = logging.getLogger(__name__)
@@ -49,6 +64,101 @@ async def create_social_post(
         platform_specific=body.platform_specific, fmt=body.format,
         scheduled_at=body.scheduled_at,
     )
+
+
+@router.post("/clients/{client_id}/social/draft-copy", response_model=SocialDraftCopyResponse)
+async def draft_social_copy(
+    client_id: UUID, body: SocialDraftCopyRequest, auth: dict = Depends(require_staff)
+):
+    """AI-draft platform-native post copy from a source (topic / URL / blog run /
+    saved page) for the composer to review and edit. Stateless — nothing is
+    published or persisted; the human still approves and publishes."""
+    social_publish._assert_enabled()
+    return await social_creator.generate_copy(
+        str(client_id), body, user_id=auth.get("user_id")
+    )
+
+
+@router.post("/clients/{client_id}/social/angles", response_model=list[SocialAngle])
+async def propose_social_angles(
+    client_id: UUID, body: SocialAnglesRequest, auth: dict = Depends(require_staff)
+):
+    """Propose distinct editorial angles for a Source (the Creator's Angle step)."""
+    social_publish._assert_enabled()
+    return await social_creator.propose_angles(str(client_id), body, user_id=auth.get("user_id"))
+
+
+@router.post("/clients/{client_id}/social/fan-out", response_model=SocialFanoutResponse)
+async def fan_out_social(
+    client_id: UUID, body: SocialFanoutRequest, auth: dict = Depends(require_staff)
+):
+    """Fan one angle out across the selected platforms into reviewable Drafts
+    (background job). Freeze-gated (it can generate paid images)."""
+    social_publish._assert_enabled()
+    assert_not_frozen(str(client_id))
+    return social_fanout.enqueue_fanout(str(client_id), body, user_id=auth.get("user_id"))
+
+
+@router.get("/clients/{client_id}/social/fan-out/{job_id}", response_model=SocialJobStatusResponse)
+async def get_fanout_status(client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)):
+    social_publish._assert_enabled()
+    return social_fanout.get_fanout_job(str(job_id))
+
+
+@router.get("/clients/{client_id}/social/drafts", response_model=list[SocialDraftResponse])
+async def list_social_drafts(
+    client_id: UUID, angle_set_id: UUID | None = None, auth: dict = Depends(require_auth)
+):
+    social_publish._assert_enabled()
+    return social_fanout.list_drafts(
+        str(client_id), angle_set_id=str(angle_set_id) if angle_set_id else None
+    )
+
+
+@router.get("/social/drafts/{draft_id}", response_model=SocialDraftResponse)
+async def get_social_draft(draft_id: UUID, auth: dict = Depends(require_auth)):
+    social_publish._assert_enabled()
+    return social_fanout.get_draft(str(draft_id))
+
+
+@router.patch("/social/drafts/{draft_id}", response_model=SocialDraftResponse)
+async def update_social_draft(
+    draft_id: UUID, body: SocialDraftUpdateRequest, auth: dict = Depends(require_staff)
+):
+    social_publish._assert_enabled()
+    return social_fanout.update_draft(
+        str(draft_id), copy=body.copy, image_urls=body.image_urls,
+        platform_metadata=body.platform_metadata,
+    )
+
+
+@router.delete("/social/drafts/{draft_id}")
+async def delete_social_draft(draft_id: UUID, auth: dict = Depends(require_staff)):
+    social_publish._assert_enabled()
+    return social_fanout.delete_draft(str(draft_id))
+
+
+@router.post("/social/drafts/{draft_id}/publish", response_model=SocialPostResponse)
+async def publish_social_draft(
+    draft_id: UUID, body: SocialDraftPublishRequest, auth: dict = Depends(require_staff)
+):
+    """Approve & publish a Draft to one connected account (freeze-gated)."""
+    social_publish._assert_enabled()
+    draft = social_fanout.get_draft(str(draft_id))
+    assert_not_frozen(str(draft["client_id"]))
+    return social_fanout.publish_existing_draft(str(draft_id), body.account_id, body.scheduled_at)
+
+
+@router.post("/clients/{client_id}/social/generate-image", response_model=SocialGenerateImageResponse)
+async def generate_social_image(
+    client_id: UUID, body: SocialGenerateImageRequest, auth: dict = Depends(require_staff)
+):
+    """Generate one on-brand, per-platform social image (Nano Banana Pro) and store
+    it; returns a media URL to drop into a post's image_urls. Freeze-gated + budget-
+    metered (it's a paid external call)."""
+    social_publish._assert_enabled()
+    assert_not_frozen(str(client_id))
+    return await social_image.generate_image(str(client_id), body, user_id=auth.get("user_id"))
 
 
 @router.post("/clients/{client_id}/social/media", response_model=SocialMediaUploadResponse)
