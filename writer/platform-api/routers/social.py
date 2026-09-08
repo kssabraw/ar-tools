@@ -15,6 +15,8 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from middleware.auth import require_auth, require_staff
 from models.social import (
     SocialAccountResponse,
+    SocialDraftCopyRequest,
+    SocialDraftCopyResponse,
     SocialMediaUploadResponse,
     SocialPostCreateRequest,
     SocialPostResponse,
@@ -22,6 +24,7 @@ from models.social import (
     SocialPresignResponse,
 )
 from services.freeze import assert_not_frozen
+from services.social import creator as social_creator
 from services.social import publish as social_publish
 
 logger = logging.getLogger(__name__)
@@ -48,6 +51,19 @@ async def create_social_post(
         copy=body.copy, image_urls=body.image_urls, video_urls=body.video_urls,
         platform_specific=body.platform_specific, fmt=body.format,
         scheduled_at=body.scheduled_at,
+    )
+
+
+@router.post("/clients/{client_id}/social/draft-copy", response_model=SocialDraftCopyResponse)
+async def draft_social_copy(
+    client_id: UUID, body: SocialDraftCopyRequest, auth: dict = Depends(require_staff)
+):
+    """AI-draft platform-native post copy from a source (topic / URL / blog run /
+    saved page) for the composer to review and edit. Stateless — nothing is
+    published or persisted; the human still approves and publishes."""
+    social_publish._assert_enabled()
+    return await social_creator.generate_copy(
+        str(client_id), body, user_id=auth.get("user_id")
     )
 
 

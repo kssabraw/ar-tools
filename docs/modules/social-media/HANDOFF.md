@@ -30,6 +30,19 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   (multipart `POST .../social/media` → R2), feed/reel/story, publish-now or schedule, advanced
   platform-specific JSON, and an auto-polling recent-posts list. Social error codes added to
   `errorGuidance.ts`. `tsc -b` + `vite build` green.
+- **AI copy drafting (P2 Creator, copy half) — NEW.** `services/social/creator.py` (pure prompt
+  builders + async `generate_copy`) + `POST /clients/{id}/social/draft-copy` + a **"Draft with AI"**
+  panel in the composer. Given a target platform (the selected account) and a Source — a **topic**,
+  a **URL** (via `syndication_rewrite.extract_source_content`), a **blog run**
+  (`illustration._load_article`), or a **saved Local SEO page** (`local_seo_pages.content_html`) — plus
+  optional angle/tone, it generates platform-native copy through `report_llm.generate_text`
+  (`social_copy_model` = `claude-sonnet-5`), enforces the client's Voice & Audience Card (reuses
+  `gbp_posts_service.render_voice_card_block` / `voice_forbidden_hits` + one corrective rewrite),
+  clamps to the platform char limit, and returns copy + voice/spec advisories. **Stateless** — the
+  panel prefills the copy box; the human edits → approves → publishes (the real draft/post is created
+  at publish, unchanged). Not metered against the social budget (our own Anthropic key, like the
+  blog/GBP writers). 12 pure-helper unit tests (`tests/test_social_creator.py`). Still unbuilt in P2:
+  AI **image** generation (nano-banana Pro), the multi-platform **Angle fan-out**, **Draft persistence**.
 
 **Provisioned + live on PLATFORM:** `SOCIAL_ENABLED=true`; R2 (`R2_ACCOUNT_ID` / `_ACCESS_KEY_ID` /
 `_SECRET_ACCESS_KEY` / `R2_BUCKET=smm-media` / `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`,
@@ -133,10 +146,10 @@ posts; feed image aspect ratio 4:5–1.91:1.
 3. **Owner scope decisions still open** (unchanged from below) — mixed image path, IG Reels/Stories,
    IG carousel Draft type, default per-client monthly ceiling, autonomy rollout.
 4. **Remaining build, roughly in order:**
-   - **AI copy drafting** — buildable now (Anthropic key exists); the smallest next win (draft the post
-     copy from a source/angle). AI **images** additionally need the nano-banana Pro renderer
-     (`GEMINI_API_KEY` is set; still need the Gemini 3 Pro Image model id + a renderer that passes
-     `aspectRatio` — `nano_banana.py` is 1:1-only).
+   - ~~**AI copy drafting**~~ — ✅ **BUILT** (see the state section): the composer's "Draft with AI"
+     panel drafts platform-native copy from a topic / URL / blog run / saved page. AI **images** are
+     still unbuilt — they need the nano-banana Pro renderer (`GEMINI_API_KEY` is set; still need the
+     Gemini 3 Pro Image model id + a renderer that passes `aspectRatio` — `nano_banana.py` is 1:1-only).
    - **YouTube poster** — waiting on PostPeer's `/docs/platforms/youtube` (title/description/tags/
      thumbnail/Shorts fields) before mapping.
    - **Big-video direct-to-R2 (presign)** — the `POST .../social/media/presign` endpoint exists; the UI

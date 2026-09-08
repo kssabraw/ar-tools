@@ -3,7 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Share2, Image as ImageIcon, Video, X, Loader2, Send,
-  Clock, ExternalLink, RefreshCw, ChevronDown, ChevronRight,
+  Clock, ExternalLink, RefreshCw, ChevronDown, ChevronRight, Sparkles,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { ErrorDetails } from '../components/ErrorDetails'
@@ -103,6 +103,180 @@ function validateFile(file: File, expect: 'image' | 'video'): string | null {
     return `File is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the ${MAX_UPLOAD_MB} MB limit.`
   }
   return null
+}
+
+// ── AI copy drafting panel ────────────────────────────────────────────────────
+type SourceType = 'topic' | 'url' | 'blog_run' | 'local_seo_page'
+interface RunListItem { id: string; keyword: string; title?: string | null }
+interface PageListItem { id: string; keyword: string; location: string; page_title?: string | null }
+interface DraftResult {
+  copy: string
+  voice_warnings: string[]
+  spec_warnings: string[]
+  notes: string[]
+  source_title?: string | null
+  over_limit: boolean
+  char_count: number
+  char_limit?: number | null
+}
+
+const SOURCE_LABELS: Record<SourceType, string> = {
+  topic: 'Topic / notes', url: 'A web page (URL)', blog_run: 'A blog post', local_seo_page: 'A saved page',
+}
+const NOTE_TEXT: Record<string, string> = {
+  no_source_content: 'The source had no readable content — the draft is based on the topic and brand voice only.',
+  voice_uncorrected: 'A word from the client’s “never use” list is still present — review before publishing.',
+}
+
+function AiDraftPanel({
+  clientId, platform, disabled, format, onDraft,
+}: {
+  clientId: string; platform: string; disabled: boolean; format: string
+  onDraft: (copy: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [sourceType, setSourceType] = useState<SourceType>('topic')
+  const [topic, setTopic] = useState('')
+  const [sourceUrl, setSourceUrl] = useState('')
+  const [sourceId, setSourceId] = useState('')
+  const [angle, setAngle] = useState('')
+  const [tone, setTone] = useState('')
+  const [result, setResult] = useState<DraftResult | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const runsQ = useQuery<{ data: RunListItem[] }>({
+    queryKey: ['social-source-runs', clientId],
+    queryFn: () => api.get<{ data: RunListItem[] }>(`/runs?client_id=${clientId}&content_type=blog_post&status=complete&page_size=50`),
+    enabled: open && sourceType === 'blog_run',
+  })
+  const pagesQ = useQuery<PageListItem[]>({
+    queryKey: ['social-source-pages', clientId],
+    queryFn: () => api.get<PageListItem[]>(`/clients/${clientId}/local-seo/pages`),
+    enabled: open && sourceType === 'local_seo_page',
+  })
+
+  const sourceReady =
+    (sourceType === 'topic' && topic.trim().length > 0) ||
+    (sourceType === 'url' && /^https?:\/\/\S+/.test(sourceUrl.trim())) ||
+    ((sourceType === 'blog_run' || sourceType === 'local_seo_page') && Boolean(sourceId))
+
+  const draftMut = useMutation({
+    mutationFn: async () => {
+      setError(null)
+      return api.post<DraftResult>(`/clients/${clientId}/social/draft-copy`, {
+        platform,
+        source_type: sourceType,
+        source_id: sourceType === 'blog_run' || sourceType === 'local_seo_page' ? sourceId : undefined,
+        url: sourceType === 'url' ? sourceUrl.trim() : undefined,
+        text: sourceType === 'topic' ? topic.trim() : undefined,
+        angle: angle.trim() || undefined,
+        tone: tone.trim() || undefined,
+        format,
+        include_hashtags: true,
+      })
+    },
+    onSuccess: (r) => { setResult(r); onDraft(r.copy) },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_copy_generation_failed'),
+  })
+
+  const canDraft = !disabled && sourceReady && !draftMut.isPending
+
+  return (
+    <div style={{ marginBottom: 14, border: '1px solid #e9d5ff', background: '#faf5ff', borderRadius: 10 }}>
+      <button onClick={() => setOpen((o) => !o)}
+        style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', background: 'none', border: 'none', cursor: 'pointer', color: '#7c3aed', fontSize: 13, fontWeight: 700 }}>
+        <Sparkles size={15} /> Draft with AI
+        <span style={{ marginLeft: 'auto' }}>{open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</span>
+      </button>
+      {open && (
+        <div style={{ padding: '0 12px 12px' }}>
+          {disabled && (
+            <p style={{ margin: '0 0 10px', fontSize: 12, color: '#a16207' }}>
+              Select a connected account first — the draft is written for that platform.
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ flex: '1 1 200px' }}>
+              <label style={label}>Draft from</label>
+              <select style={input} value={sourceType}
+                onChange={(e) => { setSourceType(e.target.value as SourceType); setSourceId(''); setResult(null) }}>
+                {(Object.keys(SOURCE_LABELS) as SourceType[]).map((k) => (
+                  <option key={k} value={k}>{SOURCE_LABELS[k]}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {sourceType === 'topic' && (
+            <textarea style={{ ...input, minHeight: 60, resize: 'vertical', marginBottom: 10 }}
+              value={topic} onChange={(e) => setTopic(e.target.value)}
+              placeholder="What's the post about? A few notes, an announcement, a promotion angle…" />
+          )}
+          {sourceType === 'url' && (
+            <input style={{ ...input, marginBottom: 10 }} value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
+              placeholder="https://example.com/blog/post-to-repurpose" />
+          )}
+          {sourceType === 'blog_run' && (
+            <select style={{ ...input, marginBottom: 10 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              <option value="">{runsQ.isLoading ? 'Loading blog posts…' : 'Choose a completed blog post…'}</option>
+              {(runsQ.data?.data ?? []).map((r) => (
+                <option key={r.id} value={r.id}>{r.title || r.keyword}</option>
+              ))}
+            </select>
+          )}
+          {sourceType === 'local_seo_page' && (
+            <select style={{ ...input, marginBottom: 10 }} value={sourceId} onChange={(e) => setSourceId(e.target.value)}>
+              <option value="">{pagesQ.isLoading ? 'Loading pages…' : 'Choose a saved page…'}</option>
+              {(pagesQ.data ?? []).map((p) => (
+                <option key={p.id} value={p.id}>{p.page_title || `${p.keyword} — ${p.location}`}</option>
+              ))}
+            </select>
+          )}
+          {((sourceType === 'blog_run' && !runsQ.isLoading && (runsQ.data?.data ?? []).length === 0) ||
+            (sourceType === 'local_seo_page' && !pagesQ.isLoading && (pagesQ.data ?? []).length === 0)) && (
+            <p style={{ margin: '-4px 0 10px', fontSize: 12, color: '#94a3b8' }}>
+              No {sourceType === 'blog_run' ? 'completed blog posts' : 'saved pages'} for this client yet.
+            </p>
+          )}
+
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ flex: '1 1 180px' }}>
+              <label style={label}>Angle / hook <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
+              <input style={input} value={angle} onChange={(e) => setAngle(e.target.value)}
+                placeholder="e.g. lead with the biggest benefit" />
+            </div>
+            <div style={{ flex: '1 1 140px' }}>
+              <label style={label}>Tone <span style={{ color: '#94a3b8', fontWeight: 400 }}>(optional)</span></label>
+              <input style={input} value={tone} onChange={(e) => setTone(e.target.value)}
+                placeholder="e.g. upbeat, expert" />
+            </div>
+          </div>
+
+          <button disabled={!canDraft} onClick={() => draftMut.mutate()}
+            style={{ ...btn(canDraft ? '#7c3aed' : '#ddd6fe'), cursor: canDraft ? 'pointer' : 'not-allowed' }}>
+            {draftMut.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+            {draftMut.isPending ? 'Drafting…' : result ? 'Redraft' : 'Draft with AI'}
+          </button>
+          {result && !draftMut.isPending && (
+            <span style={{ marginLeft: 10, fontSize: 12, color: '#059669', fontWeight: 600 }}>
+              Draft added to the copy box below — edit it before publishing.
+            </span>
+          )}
+
+          {(result?.notes?.length || result?.voice_warnings?.length) ? (
+            <ul style={{ margin: '10px 0 0', padding: '8px 10px 8px 26px', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, color: '#92400e', fontSize: 12 }}>
+              {(result?.notes ?? []).map((n) => <li key={n}>{NOTE_TEXT[n] ?? n}</li>)}
+              {(result?.voice_warnings ?? []).map((w) => (
+                <li key={w}>Still contains a discouraged term ({w.replace('forbidden_term:', '')}).</li>
+              ))}
+            </ul>
+          ) : null}
+          {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ── page ─────────────────────────────────────────────────────────────────────
@@ -296,6 +470,15 @@ export function SocialCompose() {
               </p>
             )}
           </div>
+
+          {/* AI copy drafting */}
+          <AiDraftPanel
+            clientId={clientId}
+            platform={platform}
+            disabled={!selected}
+            format={format}
+            onDraft={(text) => setCopy(text)}
+          />
 
           {/* copy */}
           <div style={{ marginBottom: 14 }}>

@@ -8,10 +8,11 @@
 > publish path + the R2 media store (PR #1027) and the frontend compose screen with image/video upload
 > (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all five `R2_*` vars,
 > `GEMINI_API_KEY`, and now **`POSTPEER_API_KEY` are set** — nothing left to provision. What exists today
-> is a **manual composer → publish/schedule** flow (platform-general, Facebook-first), NOT yet the
-> repurpose engine: **P1 competitor research and the P2 AI Creator generation are unbuilt** (AI copy
-> drafting is the smallest next win). The one open confidence step is a live test post. See `HANDOFF.md`
-> (this folder) for the live state and next actions — start there.
+> is a **manual composer → publish/schedule** flow (platform-general, Facebook-first), now with **AI copy
+> drafting** in the composer (the first slice of the P2 Creator — see below). Still unbuilt toward the full
+> repurpose engine: **P1 competitor research, AI IMAGE generation (the nano-banana Pro renderer), and the
+> multi-platform Angle fan-out / Draft persistence**. The one open confidence step is a live test post.
+> See `HANDOFF.md` (this folder) for the live state and next actions — start there.
 
 ## What this module is
 
@@ -183,9 +184,15 @@ Creator exists.
   (GBP-Posts template) → status reconcile; media upload + presign; **R2 media store** (ADR-0004).
 - **Frontend compose screen + image/video upload — ✅ BUILT** (#1032): `SocialCompose.tsx`.
 - **P1 Competitor research** — ⬜ not built (Apify Signals + TwelveLabs analyze-in-place).
-- **P2 Creator core** — ⬜ not built (Source → Angles → per-platform Draft fan-out incl. the
-  nano-banana Pro renderer, voice-enforced, Platform-Spec validated). **AI copy drafting is the
-  smallest next win and is buildable now.**
+- **P2 Creator core** — 🟡 **copy half BUILT** (AI copy drafting): `services/social/creator.py` +
+  `POST /clients/{id}/social/draft-copy` generate platform-native copy from a Source (topic / URL /
+  blog run / saved Local SEO page) + optional angle/tone, voice-card-enforced (reuses GBP Posts'
+  `render_voice_card_block` / `voice_forbidden_hits` + a corrective rewrite), and the composer's
+  **"Draft with AI"** panel prefills the copy box. **Stateless for v1** (nothing persisted — the real
+  draft/post is created at publish). Still ⬜: AI **image** generation (the nano-banana Pro renderer),
+  the multi-platform **Angle fan-out**, and **Draft persistence** (the `angle_set_id`/`social_drafts`
+  pipeline). Config: `social_copy_model` (`claude-sonnet-5`) / `_max_tokens` / `_max_correction_passes`
+  / `_source_max_chars`.
 - **P3 Manager + publish** — the publish lifecycle is built; Calendar / Cadence / a richer approval
   queue are ⬜ not built (the compose screen has schedule-for-later + a recent-posts list, not a calendar).
 - **P4 Agents, autonomy, analytics** — ⬜ not built.

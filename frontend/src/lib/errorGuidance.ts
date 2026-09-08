@@ -377,6 +377,41 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Trim the copy, adjust the media to fit the platform, then publish again.',
     ],
   },
+  social_copy_generation_failed: {
+    title: 'The AI couldn’t draft the copy',
+    meaning: 'The copywriting model didn’t return a draft — usually a temporary provider hiccup.',
+    steps: ['Try “Draft with AI” again in a moment.', 'If it keeps failing, write the copy manually or tell an admin.'],
+  },
+  social_source_empty: {
+    title: 'Add something to draft from',
+    meaning: 'The topic / notes box was empty, so there’s nothing to write about.',
+    steps: ['Type a topic or a few notes, then draft again.'],
+  },
+  social_source_url_required: {
+    title: 'Paste a page URL',
+    meaning: 'You chose to draft from a web page but didn’t provide a URL.',
+    steps: ['Paste the full https:// URL of the page to repurpose, then draft again.'],
+  },
+  social_source_id_required: {
+    title: 'Pick a source',
+    meaning: 'You chose to draft from a blog post or saved page but didn’t select one.',
+    steps: ['Choose an item from the dropdown, then draft again.'],
+  },
+  social_source_not_found: {
+    title: 'That source couldn’t be found',
+    meaning: 'The selected blog post or saved page doesn’t exist for this client (it may have been deleted).',
+    steps: ['Pick a different source, or refresh the page and try again.'],
+  },
+  social_source_fetch_failed: {
+    title: 'Couldn’t read that page',
+    meaning: 'The URL couldn’t be fetched or had no readable article content.',
+    steps: ['Check the URL opens in a browser.', 'Try a different source, or draft from a topic instead.'],
+  },
+  social_source_fetch_error: {
+    title: 'Couldn’t reach that page',
+    meaning: 'Fetching the URL failed (the site was unreachable or blocked the request).',
+    steps: ['Try again in a moment, or draft from a topic / blog post instead.'],
+  },
   scheduled_in_past: {
     title: 'The scheduled time is in the past',
     meaning: 'A scheduled post needs a time in the future.',
