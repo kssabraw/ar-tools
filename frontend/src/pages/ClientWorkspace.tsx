@@ -5,7 +5,7 @@ import type { Client } from '../lib/types'
 import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
-  ClipboardList, BookOpen, Share2, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
+  ClipboardList, BookOpen, Share2, Send, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -198,6 +198,13 @@ export function ClientWorkspace() {
               </Link>
             ) : undefined
           }
+        />
+        <ActionCard
+          icon={<Send size={22} />}
+          label="Social Media"
+          description="Compose and publish (or schedule) posts to the client's connected social accounts — text, images, carousels, and video."
+          to={id ? `/clients/${id}/social` : undefined}
+          cta="Compose"
         />
         {client?.wheelhouse_cpt_enabled && (
           <ActionCard
