@@ -35,11 +35,13 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
 `_SECRET_ACCESS_KEY` / `R2_BUCKET=smm-media` / `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`,
 custom domain **Active** in Cloudflare); `GEMINI_API_KEY` is set (was dormant).
 
-**⚠️ THE ONE REMAINING BLOCKER — `POSTPEER_API_KEY` is NOT set on PLATFORM (verified 2026-09-08).**
+**✅ `POSTPEER_API_KEY` is now set on PLATFORM (2026-09-08) — the module is fully wired end to end.**
 Every live route (`GET .../social/accounts`, publish) calls PostPeer through the adapter, which reads
-`settings.postpeer_api_key`. Until the agency's existing key is copied onto PLATFORM as
-`POSTPEER_API_KEY`, the compose screen loads but shows no accounts and nothing can publish. This is the
-last step to a functioning module. (Env var only — never commit the key.)
+`settings.postpeer_api_key`; that key was the last blocker and is now provisioned (env var only, never
+committed). Nothing is left to provision. The remaining confidence step is a **live test post** through
+the compose screen on a low-stakes account (the connected accounts are real clients') — it exercises the
+whole chain (PostPeer account listing → compose → R2 media upload → publish) and doubles as the live R2
+write/read proof.
 
 - Original design docs merged earlier (was PR #952). Six design docs + ADR-0001..0003 are on `main`;
   **ADR-0004 (Cloudflare R2 media store)** was added with #1027. Cost model v1.1 + vendor-confirm v1.1.
@@ -94,9 +96,8 @@ posts; feed image aspect ratio 4:5–1.91:1.
 
 ## Provisioning status (PLATFORM Railway service, verified 2026-09-08)
 
-- **`POSTPEER_API_KEY`** — ❌ **NOT set** — the last blocker (see the state section). Copy the agency's
-  existing key onto PLATFORM. Env var only; never commit it. `SOCIAL_POSTING_PROVIDER`/`POSTPEER_BASE_URL`
-  have working defaults.
+- **`POSTPEER_API_KEY`** — ✅ **set** (2026-09-08). `SOCIAL_POSTING_PROVIDER`/`POSTPEER_BASE_URL` have
+  working defaults.
 - **`SOCIAL_ENABLED=true`** — ✅ set (routes answer).
 - **R2** (`R2_ACCOUNT_ID` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` / `R2_BUCKET=smm-media` /
   `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`) — ✅ all set; bucket + custom domain live in
@@ -123,11 +124,12 @@ posts; feed image aspect ratio 4:5–1.91:1.
 
 ## Next actions, in order
 
-1. **Set `POSTPEER_API_KEY` on PLATFORM** — the one step between here and a working module. Then either
-   run `r2_check.py` or just do a **test post** through the compose screen (proves the whole chain +
-   R2 in one go — use an agency-owned/low-stakes account, since the connected accounts are real clients').
+1. **Live test post** through the compose screen on a low-stakes/agency-owned account — the module is
+   fully wired (all env set), so this is the confidence step, not a build step. It proves the whole chain
+   (PostPeer account listing → compose → R2 media upload → publish) and doubles as the live R2 proof, so
+   running `r2_check.py` in isolation is now optional.
 2. ~~Answer the four PostPeer questions~~ / ~~P0 foundations~~ / ~~publish path~~ / ~~R2~~ /
-   ~~frontend compose~~ — **all done** (see the state section).
+   ~~frontend compose~~ / ~~POSTPEER_API_KEY~~ / ~~SOCIAL_ENABLED~~ — **all done** (see the state section).
 3. **Owner scope decisions still open** (unchanged from below) — mixed image path, IG Reels/Stories,
    IG carousel Draft type, default per-client monthly ceiling, autonomy rollout.
 4. **Remaining build, roughly in order:**
@@ -173,9 +175,10 @@ posts; feed image aspect ratio 4:5–1.91:1.
   against the R2 **S3 endpoint** (`{account}.r2.cloudflarestorage.com`), not the custom domain, so a
   browser direct-upload needs an **R2 CORS policy** on the bucket — that's why the compose UI uses the
   server-upload endpoint for now.
-- **`POSTPEER_API_KEY` was never on PLATFORM** — the 2026-09-05 smoke test ran from the owner's own
-  machine, so a green smoke test did **not** mean the deployed service could reach PostPeer. Verify with
-  `list-variables`, don't assume. It's still unset as of 2026-09-08 (the module's last blocker).
+- **The 2026-09-05 smoke test ran from the owner's own machine** — a green smoke test did **not** mean
+  the deployed service could reach PostPeer, and indeed `POSTPEER_API_KEY` was missing from PLATFORM
+  until 2026-09-08. Lesson: verify env presence with `list-variables`, never assume from a smoke test.
+  (It is now set — see the state section.)
 - **`SocialCompose` upload path:** images go through the multipart `POST .../social/media` (server-side,
   image-decode-verified via PIL); video too (up to the 200 MB `social_max_upload_mb` cap). Client-side
   spec hints in the page are **advisory** — the seeded `social_platform_specs` (backend) are the source
