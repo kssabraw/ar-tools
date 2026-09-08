@@ -94,21 +94,36 @@ def parse_integrations_page(body: dict) -> tuple[list[Integration], Optional[int
     return [parse_integration(i) for i in items], (int(total) if total is not None else None)
 
 
+def normalize_media(media: Optional[list[dict]]) -> list[dict]:
+    """Coerce media into PostPeer ``mediaItems`` shape ``{"type","url"}``. Accepts
+    already-typed dicts or bare URL strings (treated as images). Drops empties."""
+    out: list[dict] = []
+    for m in media or []:
+        if isinstance(m, str):
+            if m:
+                out.append({"type": "image", "url": m})
+        elif isinstance(m, dict) and m.get("url"):
+            out.append({"type": (m.get("type") or "image"), "url": m["url"]})
+    return out
+
+
 def build_post_payload(
     platform: str,
     account_id: str,
     content: str,
-    media_urls: Optional[list[str]] = None,
+    media: Optional[list[dict]] = None,
     platform_specific: Optional[dict] = None,
     publish_now: bool = True,
 ) -> dict:
-    """Body for ``POST /posts`` targeting exactly ONE platform/account."""
+    """Body for ``POST /posts`` targeting exactly ONE platform/account. ``media``
+    is a list of typed items ``{"type": "image"|"video", "url": ...}``."""
     entry: dict = {"platform": platform, "accountId": account_id}
     if platform_specific:
         entry["platformSpecificData"] = platform_specific
     payload: dict = {"content": content, "platforms": [entry]}
-    if media_urls:
-        payload["mediaItems"] = [{"type": "image", "url": u} for u in media_urls]
+    items = normalize_media(media)
+    if items:
+        payload["mediaItems"] = items
     if publish_now:
         payload["publishNow"] = True
     return payload
@@ -252,12 +267,12 @@ class PostPeerAdapter(SocialPostingAdapter):
         account_id: str,
         platform: str,
         content: str,
-        media_urls: Optional[list[str]] = None,
+        media: Optional[list[dict]] = None,
         platform_specific: Optional[dict] = None,
         publish_now: bool = True,
     ) -> PostResult:
         payload = build_post_payload(
-            platform, account_id, content, media_urls, platform_specific, publish_now
+            platform, account_id, content, media, platform_specific, publish_now
         )
         with httpx.Client(timeout=_TIMEOUT) as client:
             resp = client.post(f"{self._base}/posts", headers=self._headers(), json=payload)

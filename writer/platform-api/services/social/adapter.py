@@ -108,11 +108,14 @@ class SocialPostingAdapter(abc.ABC):
         account_id: str,
         platform: str,
         content: str,
-        media_urls: Optional[list[str]] = None,
+        media: Optional[list[dict]] = None,
         platform_specific: Optional[dict] = None,
         publish_now: bool = True,
     ) -> PostResult:
-        """Publish ONE piece of content to ONE connected account. The module's
+        """Publish ONE piece of content to ONE connected account. ``media`` is a
+        list of typed items ``{"type": "image"|"video", "url": ...}`` (images for a
+        single/carousel photo post, one video for a Facebook video / Instagram
+        Reel). The module's
         data model is one Post per platform, so this sends exactly one platform
         per provider call to keep per-platform status independent. Publishing is
         always driven from OUR scheduler with ``publish_now`` — we never hand the

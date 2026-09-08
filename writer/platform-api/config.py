@@ -91,6 +91,16 @@ class Settings(BaseSettings):
     postpeer_base_url: str = "https://api.postpeer.dev/v1"
     social_enabled: bool = False                # SOCIAL_ENABLED — module master gate
     social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
+    social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
+    social_max_upload_mb: float = 200.0   # media upload cap (video-sized)
+    # Social media store (ADR-0004): Cloudflare R2 (S3 API, zero egress) when
+    # all five are set, else the Supabase fallback (images only). Reuses the
+    # suite's existing Cloudflare account.
+    r2_account_id: str = ""              # R2_ACCOUNT_ID
+    r2_access_key_id: str = ""           # R2_ACCESS_KEY_ID
+    r2_secret_access_key: str = ""       # R2_SECRET_ACCESS_KEY
+    r2_bucket: str = ""                  # R2_BUCKET
+    r2_public_base_url: str = ""         # R2_PUBLIC_BASE_URL (custom domain or r2.dev)
     # ── Content illustration (hero + inline body images/charts) ──────────────
     # Master switch for the auto path (after a run completes). Per-client opt-in
     # is clients.illustrate_content (default off); on-demand illustration ignores

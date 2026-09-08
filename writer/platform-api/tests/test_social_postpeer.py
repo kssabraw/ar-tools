@@ -61,7 +61,7 @@ def test_parse_integrations_page():
 
 
 def test_build_post_payload_one_platform():
-    p = build_post_payload("facebook", "acc1", "hi", media_urls=["https://img/1.jpg"])
+    p = build_post_payload("facebook", "acc1", "hi", media=[{"type": "image", "url": "https://img/1.jpg"}])
     assert p["content"] == "hi"
     assert p["platforms"] == [{"platform": "facebook", "accountId": "acc1"}]
     assert p["mediaItems"] == [{"type": "image", "url": "https://img/1.jpg"}]
@@ -70,6 +70,19 @@ def test_build_post_payload_one_platform():
     p2 = build_post_payload("instagram", "a", "x", platform_specific={"contentType": "story"})
     assert p2["platforms"][0]["platformSpecificData"] == {"contentType": "story"}
     assert "mediaItems" not in p2
+
+
+def test_build_post_payload_video():
+    p = build_post_payload("facebook", "a", "watch", media=[{"type": "video", "url": "https://v/1.mp4"}])
+    assert p["mediaItems"] == [{"type": "video", "url": "https://v/1.mp4"}]
+
+
+def test_normalize_media():
+    from services.social.postpeer_adapter import normalize_media
+    assert normalize_media(None) == []
+    assert normalize_media(["https://a.jpg"]) == [{"type": "image", "url": "https://a.jpg"}]
+    assert normalize_media([{"url": "https://a.jpg"}]) == [{"type": "image", "url": "https://a.jpg"}]
+    assert normalize_media([{"type": "video", "url": "https://a.mp4"}, {"url": ""}]) == [{"type": "video", "url": "https://a.mp4"}]
 
 
 def test_parse_post_response_success_and_failure():

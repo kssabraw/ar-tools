@@ -602,6 +602,7 @@ async def gsc_scheduler() -> None:
         enqueue_due_gbp_scheduled_posts,
     )
     from services.gbp_profile_service import enqueue_due_gbp_profile_syncs
+    from services.social.publish import enqueue_due_social_posts
     from services.gbp_monitor import enqueue_due_gbp_profile_monitor
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
@@ -987,6 +988,8 @@ async def gsc_scheduler() -> None:
             # they fire near their local time. No-op until the module is enabled.
             _safe("gbp_post_schedules", enqueue_due_gbp_post_schedules)
             _safe("gbp_scheduled_posts", enqueue_due_gbp_scheduled_posts)
+            # Social Media — one-off scheduled publishes (per-post scheduled_at).
+            _safe("social_scheduled_posts", enqueue_due_social_posts)
             # GBP Profile Editor — the pending-review reconciler. Backoff lives on
             # the edit row (next_sync_at); the worker claims by scheduled_at with
             # no <=now gate, so a per-cycle sweep is what honours the ladder (the

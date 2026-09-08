@@ -38,6 +38,7 @@ from routers.freeze import router as freeze_router
 from routers.goals import router as goals_router
 from routers.gbp_metrics import router as gbp_metrics_router
 from routers.gbp_posts import router as gbp_posts_router
+from routers.social import router as social_router
 from routers.gbp_profile import router as gbp_profile_router
 from routers.gbp_oauth import router as gbp_oauth_router
 from routers.ga4 import router as ga4_router
@@ -326,6 +327,7 @@ app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(citations_router)
 app.include_router(clients_router)
+app.include_router(social_router)
 app.include_router(competitors_router)
 app.include_router(content_schedule_router)
 app.include_router(dashboard_router)

@@ -45,3 +45,6 @@ pillow==10.4.0    # Maps geo-grid: composite the numbered rank pins onto Google'
 # before upload; there is no unencrypted path. Used only by
 # services/website_provision.py, and imported lazily there.
 PyNaCl==1.5.0
+# S3 client for the Cloudflare R2 social media store (ADR-0004); R2 speaks the
+# S3 API. Used only by services/social/media_store.py (imported lazily there).
+boto3==1.35.99
