@@ -31,7 +31,11 @@ KNOWN_PRODUCER_SOURCES = frozenset({
     "content_run", "scan_health", "task_plan", "strategy_proposal", "director_seam",
 })
 
-_KNOWN_QA_VERDICTS = frozenset({"pass", "fail", "needs_human", "skipped"})
+# Graduated verdicts (2026-09-08) added 'advisory' + 'revisions' — kept in sync
+# with qa_signals so a normal verdict never trips the unwatched-source warning.
+_KNOWN_QA_VERDICTS = frozenset({
+    "pass", "advisory", "revisions", "fail", "needs_human", "skipped",
+})
 
 
 def _target_key(target: Optional[dict]) -> Optional[str]:
