@@ -320,9 +320,13 @@ def _handle(message, *, page_kind, scope_client=None, url_client=None, sticky_cl
     def fake_resolve_scope(_msg, _sticky):
         return ("client" if scope_client else "global"), (scope_client or {}), {}
 
-    async def fake_review_url(*_a, **_k):
+    async def fake_review_url(*a, **k):
         called["review"] = True
-        return {"verdict": sig.NEEDS_HUMAN, "rubric": sig.RUBRIC_GUEST_POST,
+        # Echo the rubric maybe_handle_web resolved + passed in (positional
+        # url, client, rubric, keyword) so the payload's rubric is faithful —
+        # the follow-up nudges key off the rubric the review actually ran.
+        rubric_arg = (a[2] if len(a) > 2 else k.get("rubric")) or sig.RUBRIC_GUEST_POST
+        return {"verdict": sig.NEEDS_HUMAN, "rubric": rubric_arg,
                 "composite": None, "checks": [], "issues": [], "urls": [], "narrative": ""}
 
     actor = ActionContext(profile_id="p1", role="admin")

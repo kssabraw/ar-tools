@@ -267,6 +267,72 @@ def test_blog_markdown_long_paragraph_is_advisory_not_blocking():
 
 
 # ---------------------------------------------------------------------------
+# Google Doc reading (HTML export → blog rubric)
+# ---------------------------------------------------------------------------
+def test_doc_id_of_extracts_only_document_urls():
+    assert sig.doc_id_of("https://docs.google.com/document/d/ABC-123_x/edit") == "ABC-123_x"
+    assert sig.doc_id_of("https://docs.google.com/document/d/ABC-123_x/edit?usp=sharing") == "ABC-123_x"
+    # A Sheet / Slides / non-Google URL is not a doc.
+    assert sig.doc_id_of("https://docs.google.com/spreadsheets/d/ABC/edit") is None
+    assert sig.doc_id_of("https://docs.google.com/presentation/d/ABC/edit") is None
+    assert sig.doc_id_of("https://example.com/blog/post") is None
+
+
+def test_doc_html_export_url_shape():
+    assert sig.doc_html_export_url("ABC-123") == (
+        "https://docs.google.com/document/d/ABC-123/export?format=html"
+    )
+
+
+def test_unwrap_google_href_recovers_real_target():
+    wrapped = "https://www.google.com/url?q=https://example.org/study&sa=D&source=editors"
+    assert sig._unwrap_google_href(wrapped) == "https://example.org/study"
+    # A plain link is passed through untouched; None stays None.
+    assert sig._unwrap_google_href("https://example.org/x") == "https://example.org/x"
+    assert sig._unwrap_google_href(None) is None
+
+
+# A Google Doc HTML export whose SECTIONS are styled Heading 1 (<h1>) — the
+# case that would false-fail if headings weren't floored to H2 for the blog
+# rubric's ##–#### heading regex.
+_DOC_EXPORT_H1_SECTIONS = """<html><head><title>My Roof Repair Guide</title>
+<style>.c1{color:#000}</style></head><body class="doc">
+<h1 class="c1"><span>My Roof Repair Guide</span></h1>
+<p class="c2"><span>Intro paragraph answering the question directly.</span></p>
+<h1 class="c1"><span>Key Takeaways</span></h1>
+<ul><li class="c5"><span>point one</span></li></ul>
+<h1 class="c1"><span>How it works</span></h1>
+<p class="c2"><span>Some body copy with an </span>\
+<a class="c6" href="https://www.google.com/url?q=https://example.org/study&amp;sa=D">external source</a>\
+<span>.</span></p>
+<h1 class="c1"><span>Get started</span></h1>
+<p class="c2"><span>Contact us today for a free consultation.</span></p>
+</body></html>"""
+
+
+def test_html_to_markdownish_floors_headings_and_unwraps_links():
+    md = sig.html_to_markdownish(_DOC_EXPORT_H1_SECTIONS)
+    # Heading 1 sections become ## (never a lone # the blog regex can't see).
+    assert "## Key Takeaways" in md
+    assert "# My Roof Repair Guide" in md and "### " not in md
+    # The Google-redirect link is unwrapped to a countable external citation.
+    assert "[external source](https://example.org/study)" in md
+    # List item survives as a bullet.
+    assert "- point one" in md
+
+
+def test_doc_export_html_passes_blog_rubric_end_to_end():
+    md = sig.html_to_markdownish(_DOC_EXPORT_H1_SECTIONS)
+    v = sig.build_verdict(sig.check_blog_markdown(md, "roof repair"))
+    assert v["verdict"] == sig.PASS
+
+
+def test_html_to_markdownish_empty_on_js_shell():
+    shell = '<html><head><script>window.x=1</script></head><body><div id="app"></div></body></html>'
+    assert sig.html_to_markdownish(shell).strip() == ""
+
+
+# ---------------------------------------------------------------------------
 # Website page checks
 # ---------------------------------------------------------------------------
 def test_website_page_checks():
