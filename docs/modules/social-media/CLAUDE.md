@@ -4,13 +4,14 @@
 > This does NOT replace the root `/CLAUDE.md` (the suite authority) — read that first for
 > suite architecture, then this for the module. **Read this before building the social module.**
 >
-> **Build status (2026-09-08):** **P0 foundations + the backend publish path + the R2 media store
-> (PR #1027) and the frontend compose screen with image/video upload (PR #1032) are BUILT, MERGED to
-> `main`, and gated on `SOCIAL_ENABLED=true` (set on PLATFORM).** What exists today is a **manual
-> composer → publish/schedule** flow (platform-general, Facebook-first), NOT yet the repurpose engine:
-> **P1 competitor research and the P2 AI Creator generation are unbuilt.** The one thing between here and
-> a functioning module is **`POSTPEER_API_KEY` on PLATFORM (still unset)**. See `HANDOFF.md` (this
-> folder) for the live state, provisioning status, and next actions — start there.
+> **Build status (2026-09-08):** **The module is fully wired and live.** P0 foundations + the backend
+> publish path + the R2 media store (PR #1027) and the frontend compose screen with image/video upload
+> (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all five `R2_*` vars,
+> `GEMINI_API_KEY`, and now **`POSTPEER_API_KEY` are set** — nothing left to provision. What exists today
+> is a **manual composer → publish/schedule** flow (platform-general, Facebook-first), NOT yet the
+> repurpose engine: **P1 competitor research and the P2 AI Creator generation are unbuilt** (AI copy
+> drafting is the smallest next win). The one open confidence step is a live test post. See `HANDOFF.md`
+> (this folder) for the live state and next actions — start there.
 
 ## What this module is
 
