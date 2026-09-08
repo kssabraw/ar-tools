@@ -485,14 +485,18 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
     onError: (e) => setError(e instanceof Error ? e.message : 'social_fanout_failed'),
   })
 
-  // Poll the fan-out job; when done, hand the angle set to the Drafts tab.
+  // Poll the fan-out job; on success hand the angle set to the Drafts tab, on
+  // failure surface the reason here (don't switch tabs to an empty/failed set).
   useQuery({
     queryKey: ['social-fanout-job', clientId, jobId],
     queryFn: async () => {
-      const j = await api.get<{ status: string }>(`/clients/${clientId}/social/fan-out/${jobId}`)
-      if ((j.status === 'complete' || j.status === 'failed') && angleSetId) {
+      const j = await api.get<{ status: string; error?: string | null }>(`/clients/${clientId}/social/fan-out/${jobId}`)
+      if (j.status === 'complete') {
         setJobId(null)
-        onFannedOut(angleSetId)
+        if (angleSetId) onFannedOut(angleSetId)
+      } else if (j.status === 'failed') {
+        setJobId(null)
+        setError(j.error === 'client_frozen' ? 'client_frozen' : (j.error || 'social_fanout_failed'))
       }
       return j
     },
@@ -681,10 +685,18 @@ function DraftRow({ draft, accounts, onChanged }: {
 function DraftsTab({ clientId, accounts, angleSetId }: {
   clientId: string; accounts: SocialAccount[]; angleSetId: string | null
 }) {
+  // Poll every 3s while any draft is still generating — but bound it so a stuck/
+  // crashed worker (drafts stranded at 'generating') doesn't poll forever.
+  const pollStartRef = React.useRef<number | null>(null)
   const draftsQ = useQuery<Draft[]>({
     queryKey: ['social-drafts', clientId, angleSetId],
     queryFn: () => api.get<Draft[]>(`/clients/${clientId}/social/drafts${angleSetId ? `?angle_set_id=${angleSetId}` : ''}`),
-    refetchInterval: (q) => ((q.state.data as Draft[] | undefined) ?? []).some((d) => d.status === 'generating') ? 3000 : false,
+    refetchInterval: (q) => {
+      const generating = ((q.state.data as Draft[] | undefined) ?? []).some((d) => d.status === 'generating')
+      if (!generating) { pollStartRef.current = null; return false }
+      if (pollStartRef.current == null) pollStartRef.current = Date.now()
+      return Date.now() - pollStartRef.current > 10 * 60 * 1000 ? false : 3000  // give up after 10 min
+    },
   })
   const drafts = draftsQ.data ?? []
   return (

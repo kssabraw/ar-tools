@@ -34,3 +34,10 @@ def test_resolve_ceiling_falls_back_to_default():
 def test_resolve_ceiling_explicit_default():
     assert budget.resolve_ceiling(None, default=200.0) == 200.0
     assert budget.resolve_ceiling({"monthly_ceiling_usd": -5}, default=200.0) == 200.0  # negative => default
+
+
+def test_release_noop_for_nonpositive_amount_never_touches_db():
+    # A zero/negative refund returns before any DB access — safe to call with no
+    # Supabase configured (would raise if it tried to read).
+    assert budget.release("client-x", 0) is None
+    assert budget.release("client-x", -1.5) is None

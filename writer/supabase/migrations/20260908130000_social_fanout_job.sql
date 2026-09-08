@@ -2,8 +2,9 @@
 -- Drift-proof + idempotent (mirrors 20260905130000_social_publish_job): reads the
 -- live CHECK definition and appends 'social_fanout' to its ARRAY, so it can't
 -- clobber the (repo-wider-than-any-file) current set. The handler lives in
--- services/social/fanout.py; the type is freeze-gated (services/freeze.py
--- FREEZE_GATED_JOB_TYPES) because fan-out can generate paid images (content output).
+-- services/social/fanout.py; freeze is enforced INSIDE that handler (not the blanket
+-- worker FREEZE_GATED_JOB_TYPES gate) so a client frozen mid-flight gets its
+-- pre-created 'generating' drafts cleaned up rather than orphaned.
 do $$
 declare
   cur text;

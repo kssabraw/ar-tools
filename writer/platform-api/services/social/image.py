@@ -36,6 +36,10 @@ GEMINI_ASPECT_RATIOS = frozenset(
 # mime → storage extension (media_store.IMAGE_TYPES keys), default png.
 _MIME_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp"}
 
+# Sentinel so a caller can pass an explicit policy_template of None ("no template")
+# distinct from "not supplied, please load it".
+_UNSET = object()
+
 
 # ── pure helpers (no network / DB — unit-tested) ─────────────────────────────
 
@@ -127,11 +131,23 @@ def _policy_template(client_id: str) -> Optional[str]:
         return None
 
 
-async def generate_image(client_id: str, req, user_id: Optional[str] = None) -> dict:
+async def generate_image(
+    client_id: str,
+    req,
+    user_id: Optional[str] = None,
+    *,
+    client: Optional[dict] = None,
+    policy_template=_UNSET,
+) -> dict:
     """Generate one platform-native social image and store it. Reserves the
     estimated cost against the client's monthly social budget FIRST (fail-closed),
     then calls Nano Banana Pro and uploads the result to the media store. Returns
-    {"url", "type", "aspect_ratio", "cost_usd"}. Stateless."""
+    {"url", "type", "aspect_ratio", "cost_usd"}. Stateless.
+
+    ``client`` / ``policy_template`` let a caller (the fan-out) pass values it has
+    already loaded so we don't re-read them per image; when omitted they're loaded.
+    On any generation/store failure the reservation is **refunded** — a failed image
+    never charges the client."""
     _assert_enabled()
     from services import nano_banana
     from services.social import budget
@@ -153,8 +169,9 @@ async def generate_image(client_id: str, req, user_id: Optional[str] = None) -> 
     if not nano_banana.is_configured():
         raise HTTPException(status_code=503, detail="social_image_not_configured")
 
-    client = _client_row(client_id)
-    prompt = build_image_prompt(description, client, _policy_template(client_id))
+    client = client if client is not None else _client_row(client_id)
+    tmpl = policy_template if policy_template is not _UNSET else _policy_template(client_id)
+    prompt = build_image_prompt(description, client, tmpl)
 
     # Reserve the estimated cost before spending it (fail-closed backstop).
     est = float(settings.social_image_cost_usd)
@@ -162,17 +179,25 @@ async def generate_image(client_id: str, req, user_id: Optional[str] = None) -> 
     if not budget.reserve(client_id, est, cap=cap):
         raise HTTPException(status_code=402, detail="social_image_budget_exceeded")
 
-    out = await nano_banana.generate_image_pro(
-        prompt, aspect_ratio=ar, image_size=settings.social_image_size
-    )
-    if not out:
-        # The reservation stands (the estimate was spent attempting generation);
-        # the composer surfaces a retry. Over-charge on a rare failure is ~$0.13.
-        raise HTTPException(status_code=502, detail="social_image_generation_failed")
+    # From here the reservation is live; refund it on ANY failure so a failed image
+    # never charges the client (the cap stays hard — we only ever reserved-then-refund).
+    try:
+        out = await nano_banana.generate_image_pro(
+            prompt, aspect_ratio=ar, image_size=settings.social_image_size
+        )
+        if not out:
+            raise HTTPException(status_code=502, detail="social_image_generation_failed")
+        data, mime = out
+        ext = ext_for_mime(mime)
+        content_type = mime if (mime or "").startswith("image/") else "image/png"
+        url = get_media_store().put_bytes(media_key(ext, "generated"), data, content_type)
+    except HTTPException:
+        budget.release(client_id, est)
+        raise
+    except Exception as exc:  # noqa: BLE001 — a store/transport failure → clean 502, not a bare 500
+        budget.release(client_id, est)
+        logger.warning("social.image_store_failed", extra={"error": str(exc)[:200]})
+        raise HTTPException(status_code=502, detail="social_image_generation_failed") from exc
 
-    data, mime = out
-    ext = ext_for_mime(mime)
-    content_type = mime if (mime or "").startswith("image/") else "image/png"
-    url = get_media_store().put_bytes(media_key(ext, "generated"), data, content_type)
     logger.info("social.image_generated", extra={"client_id": client_id, "aspect_ratio": ar})
     return {"url": url, "type": "image", "aspect_ratio": ar, "cost_usd": round(est, 4)}

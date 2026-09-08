@@ -131,19 +131,29 @@ def enqueue_fanout(client_id: str, req, user_id: Optional[str] = None) -> dict:
     ]
     drafts = (_sb().table("social_drafts").insert(rows).execute()).data or []
 
-    job = (
-        _sb().table("async_jobs").insert({
-            "job_type": "social_fanout", "entity_id": client_id,
-            "payload": {
-                "client_id": client_id, "angle_set_id": angle_set_id, "angle": angle,
-                "angle_title": angle_title, "tone": getattr(req, "tone", None), "format": fmt,
-                "include_image": bool(getattr(req, "include_image", False)),
-                "include_hashtags": bool(getattr(req, "include_hashtags", True)),
-                "source_type": req.source_type, "source_id": req.source_id, "url": req.url,
-                "text": req.text, "user_id": user_id,
-            },
-        }).execute()
-    ).data[0]
+    try:
+        job = (
+            _sb().table("async_jobs").insert({
+                "job_type": "social_fanout", "entity_id": client_id,
+                "payload": {
+                    "client_id": client_id, "angle_set_id": angle_set_id, "angle": angle,
+                    "angle_title": angle_title, "tone": getattr(req, "tone", None), "format": fmt,
+                    "include_image": bool(getattr(req, "include_image", False)),
+                    "include_hashtags": bool(getattr(req, "include_hashtags", True)),
+                    "source_type": req.source_type, "source_id": req.source_id, "url": req.url,
+                    "text": req.text, "user_id": user_id,
+                },
+            }).execute()
+        ).data[0]
+    except Exception:
+        # The job that would fill these drafts didn't enqueue — don't leave orphan
+        # 'generating' rows spinning forever. Best-effort cleanup, then re-raise.
+        try:
+            _sb().table("social_drafts").update({"status": "archived", "updated_at": "now()"}) \
+                .eq("angle_set_id", angle_set_id).execute()
+        except Exception:  # noqa: BLE001 — cleanup is best-effort
+            logger.warning("social.fanout_orphan_cleanup_failed", extra={"angle_set_id": angle_set_id})
+        raise
     return {"angle_set_id": angle_set_id, "job_id": job["id"], "drafts": drafts}
 
 
@@ -156,15 +166,20 @@ def _platform_spec(platform: str):
 
 
 async def _maybe_generate_image(
-    client_id: str, platform: str, fmt: str, description: str, user_id: Optional[str]
+    client_id: str, platform: str, fmt: str, description: str, user_id: Optional[str],
+    *, client: dict, policy_template: Optional[str],
 ) -> Optional[str]:
     """Best-effort per-platform image for a fan-out draft. Returns a URL or None —
-    a budget/gen failure is swallowed (the draft ships copy-only / needs_image)."""
+    a budget/gen failure is swallowed (the draft ships copy-only / needs_image).
+    ``client``/``policy_template`` are the once-loaded values, passed so the image
+    service doesn't re-read them per platform."""
     from services.social import image as social_image
 
     req = SimpleNamespace(platform=platform, format=fmt, description=description, aspect_ratio=None)
     try:
-        out = await social_image.generate_image(client_id, req, user_id=user_id)
+        out = await social_image.generate_image(
+            client_id, req, user_id=user_id, client=client, policy_template=policy_template
+        )
         return out.get("url")
     except HTTPException as exc:
         logger.info("social.fanout_image_skipped",
@@ -181,6 +196,7 @@ async def run_fanout_job(job: dict) -> None:
     and marks it ready / needs_image / generation_failed. Best-effort per draft: one
     draft's failure never aborts the set. Settles its own job row."""
     from services import notifications
+    from services.freeze import is_frozen
 
     payload = job.get("payload") or {}
     client_id = payload.get("client_id")
@@ -191,6 +207,20 @@ async def run_fanout_job(job: dict) -> None:
         sb.table("async_jobs").update(
             {"status": status, "completed_at": "now()", **fields}
         ).eq("id", job["id"]).execute()
+
+    def _fail_pending(reason: str) -> None:
+        """Mark every still-'generating' draft in the set failed so they don't spin
+        forever, then settle the job failed."""
+        sb.table("social_drafts").update({"status": "generation_failed", "updated_at": "now()"}) \
+            .eq("angle_set_id", angle_set_id).eq("status", "generating").execute()
+        _settle("failed", error=reason[:500])
+
+    # Freeze is enforced here (not the blanket worker gate) so a client frozen
+    # between enqueue and execution gets its pending drafts cleaned up instead of
+    # orphaned, and no paid copy/image is generated. The enqueue route also gates.
+    if client_id and is_frozen(client_id):
+        _fail_pending("client_frozen")
+        return
 
     try:
         source_title, source_text, _ref = await creator.load_source(
@@ -204,9 +234,7 @@ async def run_fanout_job(job: dict) -> None:
         )
     except HTTPException as exc:
         # Whole-set failure (bad/unreachable source): mark every pending draft failed.
-        sb.table("social_drafts").update({"status": "generation_failed", "updated_at": "now()"}) \
-            .eq("angle_set_id", angle_set_id).eq("status", "generating").execute()
-        _settle("failed", error=str(exc.detail)[:500])
+        _fail_pending(str(exc.detail))
         return
 
     angle = payload.get("angle")
@@ -216,6 +244,12 @@ async def run_fanout_job(job: dict) -> None:
     include_image = bool(payload.get("include_image"))
     include_hashtags = bool(payload.get("include_hashtags", True))
     user_id = payload.get("user_id")
+    # Load the client's image-prompt template ONCE (reused for every platform's image).
+    policy_template = None
+    if include_image:
+        from services.social import image as social_image
+
+        policy_template = social_image._policy_template(client_id)
 
     pending = (
         sb.table("social_drafts").select("id, platform, format")
@@ -248,6 +282,7 @@ async def run_fanout_job(job: dict) -> None:
             image_url = await _maybe_generate_image(
                 client_id, platform, d_fmt,
                 image_description_for_angle(angle, angle_title, source_title), user_id,
+                client=client, policy_template=policy_template,
             )
         media = [{"type": "image", "url": image_url}] if image_url else []
         requires_image = bool((spec or {}).get("requires_image"))
