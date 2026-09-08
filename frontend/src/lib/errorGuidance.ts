@@ -361,6 +361,61 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'local_seo_matrix_enabled is false on the platform service.',
     steps: ['Ask an admin to enable it on the PLATFORM service and redeploy.'],
   },
+  social_not_enabled: {
+    title: 'The Social Media module is off',
+    meaning: 'The social publishing module is disabled on this environment.',
+    steps: ['Ask an admin to set SOCIAL_ENABLED=true on the PLATFORM service and redeploy.'],
+  },
+  social_spec_violation: {
+    title: 'The post doesn’t meet the platform’s rules',
+    meaning:
+      'The post failed a platform check before publishing — usually an empty ' +
+      'post, copy over the character limit, too many images, more than one ' +
+      'video, or a platform that requires an image.',
+    steps: [
+      'Read the detail after the code (e.g. over_char_limit, too_many_images, media_required, empty_post).',
+      'Trim the copy, adjust the media to fit the platform, then publish again.',
+    ],
+  },
+  scheduled_in_past: {
+    title: 'The scheduled time is in the past',
+    meaning: 'A scheduled post needs a time in the future.',
+    steps: ['Pick a future date and time, then schedule again.'],
+  },
+  unsupported_media_type: {
+    title: 'Unsupported file type',
+    meaning: 'That file isn’t a supported image or video.',
+    steps: ['Use JPG, PNG, WebP or GIF for images, or MP4 / MOV for video.'],
+  },
+  file_too_large: {
+    title: 'File is too large',
+    meaning: 'The upload is over the per-file size limit (200 MB).',
+    steps: ['Compress or trim the file under 200 MB and upload again.'],
+  },
+  invalid_image: {
+    title: 'That image couldn’t be read',
+    meaning: 'The file looked like an image but couldn’t be decoded — it may be corrupt.',
+    steps: ['Re-export the image and upload it again.'],
+  },
+  empty_file: {
+    title: 'The file was empty',
+    meaning: 'The uploaded file had no content.',
+    steps: ['Pick the file again and re-upload.'],
+  },
+  budget_exceeded: {
+    title: 'This client’s social budget is used up',
+    meaning:
+      'Publishing this post would exceed the client’s monthly social spend ' +
+      'ceiling, so it was blocked before spending.',
+    steps: [
+      'Wait for the next month, or ask an admin to raise the client’s social monthly ceiling.',
+    ],
+  },
+  platform_specific_invalid_json: {
+    title: 'The advanced options aren’t valid JSON',
+    meaning: 'The platform-specific options box must contain valid JSON (or be empty).',
+    steps: ['Fix the JSON (or clear the box), then publish again.'],
+  },
   client_frozen: {
     title: 'This client is frozen',
     meaning:
