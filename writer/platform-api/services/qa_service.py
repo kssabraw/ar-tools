@@ -11,18 +11,28 @@ Trigger: entry into the ``in_qa`` status (``on_task_status_change``, wired in
 when its last work item is ticked, so QA runs automatically as work
 completes) + on-demand via ``POST /tasks/{id}/qa``.
 
-Outcomes (QA_Checklists.md is the grounding standard):
-- ``fail``        → bounce to ``qa_fail_status`` (default "For Revision", the
-                    dedicated lane a client-requested revision also uses, so a
-                    complete QA failure and a client rejection land in the same
-                    tracked place; entry bumps the task's revision_count) + a
-                    "Rework: …" subtask per failed check naming exactly what to
-                    revise. The "Rework:" prefix is deliberate — "QA fix:" would
-                    trip task_service's marker classifier (the "qa" token) and
-                    make these NOT work items. As "Rework:" they ARE work items,
-                    so ticking them ALL auto-advances the task back to In QA
-                    (For Revision is in _AUTO_ADVANCE_FROM) — the rework loop
-                    re-QAs itself with no human dispatch.
+Outcomes (QA_Checklists.md is the grounding standard). Graduated verdicts
+(owner ruling 2026-09-08) split a blocking failure by SEVERITY, not count:
+- ``revisions``   → a fixable, non-critical blocking failure. Bounce to
+                    ``qa_fail_status`` (default "For Revision", the dedicated
+                    lane a client-requested revision also uses; entry bumps
+                    revision_count) + a "Rework: …" subtask per failed check.
+                    The "Rework:" prefix is deliberate — "QA fix:" would trip
+                    task_service's marker classifier (the "qa" token) and make
+                    these NOT work items. As "Rework:" they ARE work items, so
+                    ticking them ALL re-enters In QA (For Revision is in
+                    _AUTO_ADVANCE_FROM) — the rework loop re-QAs itself.
+- ``fail``        → a CRITICAL blocking failure (qa_signals.CRITICAL_CHECK_KEYS)
+                    OR ≥ qa_fail_count_threshold blocking fails — the deliverable
+                    is wrong/broken. Escalates: a critical-severity notification
+                    to a human and a move to ``qa_fail_escalation_status`` (the
+                    revisions lane by default), but deliberately NO Rework
+                    subtasks — it SKIPS the self-re-QA auto-loop so a human
+                    decides, rather than the bot churning on a broken deliverable.
+- ``advisory``    → clean on every blocking check, only non-blocking
+                    recommendations tripped. Ships exactly like ``pass``
+                    (advances when ``qa_pass_status`` is set); recommendations
+                    logged on the review, not a hold.
 - ``pass``        → stay in In QA by default (``qa_pass_status`` can advance);
                     verdict recorded on the activity feed (+ optional notify).
 - ``needs_human`` → stay put + a warning notification; QA never guesses.
@@ -691,7 +701,7 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
         narrative = "QA needs a human — no checklist covers this task type (QA_Checklists Group C)."
     else:
         checks, urls, composite = await _run_rubric(rubric, task, fields, client)
-        verdict = sig.build_verdict(checks)
+        verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
         narrative = sig.narrative_of(rubric, verdict, urls)
         # Phase 3: SOP-grounded phrasing for fail/needs_human — cites the
         # QA_Checklists / On-Page-Criteria standard so the rework guidance
@@ -703,7 +713,7 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
         if (
             settings.qa_narrative_enabled
             and checks
-            and verdict["verdict"] in (sig.FAIL, sig.NEEDS_HUMAN)
+            and verdict["verdict"] in (sig.FAIL, sig.REVISIONS, sig.NEEDS_HUMAN)
             and not sig.gathering_only(checks)
         ):
             llm_text = await _synthesize_narrative(task.get("name") or "", rubric, verdict, checks)
@@ -1031,10 +1041,13 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
         logger.warning("qa_activity_failed", extra={"task_id": task_id, "error": str(exc)})
 
     try:
-        if v == sig.FAIL:
+        if v == sig.REVISIONS:
+            # Minor, fixable failures: the pre-2026-09-08 fail behaviour —
+            # "Rework:" subtasks (new_rework_names), deduped vs still-open ones
+            # so repeated fails don't stack duplicates (hardening #1). As work
+            # items they gate auto-advance, so ticking them ALL re-enters In QA
+            # (the self-re-QA loop; For Revision is in _AUTO_ADVANCE_FROM).
             if settings.qa_fail_creates_subtasks and verdict.get("failed"):
-                # "Rework:" subtasks (new_rework_names), deduped vs still-open
-                # ones so repeated fails don't stack duplicates (hardening #1).
                 open_names = [
                     s.get("name") or ""
                     for s in (
@@ -1048,15 +1061,25 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
                     task_service.create_subtasks(task, names)
             if settings.qa_fail_status:
                 task_service.update_task(task_id, {"status_key": settings.qa_fail_status})
-        elif v == sig.PASS and settings.qa_pass_status:
+        elif v == sig.FAIL:
+            # A critical (or mostly-broken) failure escalates to a human and
+            # SKIPS the self-re-QA auto-loop: deliberately NO Rework subtasks
+            # (which would let the board re-QA itself with no human dispatch).
+            # The failed checks + the critical reasons ride the activity feed +
+            # the critical-severity notification below; a human decides.
+            escalation_status = settings.qa_fail_escalation_status or settings.qa_fail_status
+            if escalation_status:
+                task_service.update_task(task_id, {"status_key": escalation_status})
+        elif v in (sig.PASS, sig.ADVISORY) and settings.qa_pass_status:
+            # Advisory is shippable — it advances exactly like pass (the
+            # recommendations are logged on the review, not a hold).
             task_service.update_task(task_id, {"status_key": settings.qa_pass_status})
     except Exception as exc:
         logger.warning("qa_outcome_move_failed", extra={"task_id": task_id, "error": str(exc)})
 
     notify = (
-        v == sig.FAIL
-        or v == sig.NEEDS_HUMAN
-        or (v == sig.PASS and settings.qa_notify_on_pass)
+        v in (sig.FAIL, sig.REVISIONS, sig.NEEDS_HUMAN)
+        or (v in (sig.PASS, sig.ADVISORY) and settings.qa_notify_on_pass)
     )
     if not notify:
         return
@@ -1068,8 +1091,10 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             if task.get("client_id") else "/my-tasks"
         )
         titles = {
-            sig.FAIL: f"QA failed: '{task.get('name')}'",
+            sig.FAIL: f"QA failed — needs a human: '{task.get('name')}'",
+            sig.REVISIONS: f"QA — minor revisions needed: '{task.get('name')}'",
             sig.NEEDS_HUMAN: f"QA needs a human: '{task.get('name')}'",
+            sig.ADVISORY: f"QA passed with recommendations: '{task.get('name')}'",
             sig.PASS: f"QA passed: '{task.get('name')}'",
         }
         # One notification per task+verdict+day (hardening #2): a task failing
@@ -1083,7 +1108,12 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             kind="qa_result",
             title=titles[v],
             summary=review.get("narrative"),
-            severity="warning" if v in (sig.FAIL, sig.NEEDS_HUMAN) else "info",
+            # A critical fail escalates louder than a routine revisions bounce.
+            severity=(
+                "critical" if v == sig.FAIL
+                else "warning" if v in (sig.REVISIONS, sig.NEEDS_HUMAN)
+                else "info"
+            ),
             payload={"link": link, "task_id": task_id, "review_id": review["id"]},
             dedupe_key=f"qa:{task_id}:{v}:{day}",
         )
@@ -1321,7 +1351,7 @@ async def review_url(
     elif sig.is_google_doc_url(url):
         checks = [sig._check("doc", "Deliverable is gradeable", None,
                              note="Google Slides/Forms drafts aren't QA-gradeable — link the live page")]
-        verdict = sig.build_verdict(checks)
+        verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
         return _url_review_payload(rub, verdict, checks, [url], None,
                                    "This is a Google Slides/Forms link, which QA can't grade — "
                                    "share the live page or a Google Doc instead.")
@@ -1338,7 +1368,7 @@ async def review_url(
             msg = ("The Google Doc couldn't be read — make sure it's shared so "
                    "'anyone with the link can view', then try again.")
         checks = [sig._check("page", "Page reachable", None, note=note)]
-        verdict = sig.build_verdict(checks)
+        verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
         return _url_review_payload(rub, verdict, checks, [url], None, msg)
 
     composite: Optional[float] = None
@@ -1349,7 +1379,7 @@ async def review_url(
             # page because link-sharing is off. Say so instead of a false fail.
             checks = [sig._check("doc", "Google Doc readable", None,
                                  note="no content read — is it shared 'anyone with the link can view'?")]
-            verdict = sig.build_verdict(checks)
+            verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
             return _url_review_payload(rub, verdict, checks, [url], None,
                                        "The Google Doc came back empty — check that it's shared "
                                        "'anyone with the link can view', then try again.")
@@ -1379,7 +1409,7 @@ async def review_url(
     else:  # defensive — resolve_url_rubric only yields URL rubrics
         checks, composite = await _website_page_checks(html, url, fields, client)
 
-    verdict = sig.build_verdict(checks)
+    verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
     narrative = sig.narrative_of(rub, verdict, [url])
     return _url_review_payload(rub, verdict, checks, [url], composite, narrative)
 

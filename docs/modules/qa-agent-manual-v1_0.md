@@ -124,15 +124,33 @@ unless noted:
 
 ## 3. How a review is decided (the verdict fold)
 
-The verdict is **pure code** (`qa_signals.build_verdict`), never the LLM's:
+The verdict is **pure code** (`qa_signals.build_verdict`), never the LLM's. Verdicts are
+**graduated by severity** (owner ruling 2026-09-08) — a blocking failure is split by the
+*nature* of the failure, not the count:
 
-1. Any **blocking** check failed (`ok == False`) → **`fail`**.
-2. Else any **blocking** check couldn't be verified (`ok == None`) → **`needs_human`**
+1. A **critical** blocking check failed (`qa_signals.CRITICAL_CHECK_KEYS`: `client_name`,
+   `nap`, `link_back`, `map_embed`, `keyword_in_url`) **OR** ≥ `qa_fail_count_threshold`
+   (default **4**) blocking checks failed → **`fail`**. The deliverable is wrong / does harm /
+   omitted its whole purpose (wrong client name, inconsistent NAP, no link-back, no map embed,
+   keyword missing from the URL) — or is mostly broken. **Escalates to a human.**
+2. Else any **blocking** check failed → **`revisions`**. Fixable, on-target work missing a
+   piece (no CTA, no emoji, keyword not in the H1, a duplicate heading). **VA reworks, the bot
+   re-checks.** (This is the pre-2026-09-08 `fail` behaviour.)
+3. Else any **blocking** check couldn't be verified (`ok == None`) → **`needs_human`**
    (fail-open — QA never guesses).
-3. Else → **`pass`**.
+4. Else any **advisory** (non-blocking) check failed → **`advisory`**. Clean on everything that
+   blocks; only recommendations tripped. **Shippable** — logged, not held.
+5. Else → **`pass`**.
 
-Advisory checks never change the verdict; failed advisories ride along as notes. Skip/handoff
-rubrics short-circuit to `skipped`; generic rubrics to `needs_human`.
+The critical set is the primary signal; the **count net** (`qa_fail_count_threshold`, `0`
+disables) only catches a mostly-broken deliverable no single critical check would — in practice
+only the website-page rubric has enough blocking checks to reach it on standard checks alone.
+Severity is static + code-defined — the LLM never sets it, the same discipline as `blocking`.
+Skip/handoff rubrics short-circuit to `skipped`; generic rubrics to `needs_human`.
+
+Best → worst: **pass · advisory · needs_human · revisions · fail.** `advisory` and `revisions`
+were added by the graduated-verdicts ruling; `pass`/`fail`/`needs_human`/`skipped` are unchanged
+values.
 
 **Fail-open is the core safety rule:** anything QA can't verify — a blocked page, a missing
 deliverable link, no keyword on the task, missing creds, an unreadable sheet — becomes
@@ -145,18 +163,28 @@ deliverable link, no keyword on the task, missing creds, an unreadable sheet —
 | Verdict | Board effect | Notification |
 |---|---|---|
 | **pass** | Stays in In QA by default (`qa_pass_status` empty). Set `qa_pass_status="sent_to_client"` to auto-advance. Verdict on the activity feed. | Silent unless `qa_notify_on_pass` |
-| **fail** | A *complete QA failure*: bounced to `qa_fail_status` (**For Revision** — the dedicated lane a client-requested revision also uses; entry bumps the task's `revision_count`) + one **`Rework: <failed check>`** subtask per failed check (`qa_fail_creates_subtasks`). | Warning |
+| **advisory** | **Ships exactly like `pass`** — advances when `qa_pass_status` is set, else stays. The recommendations are logged on the review (and badged), never a hold. | Silent unless `qa_notify_on_pass` |
+| **revisions** | A *fixable* failure: bounced to `qa_fail_status` (**For Revision** — the lane a client-requested revision also uses; entry bumps `revision_count`) + one **`Rework: <failed check>`** subtask per failed check (`qa_fail_creates_subtasks`). Self-re-QA loop applies. | Warning |
+| **fail** | A *critical / mostly-broken* failure: **escalates to a human.** Moves to `qa_fail_escalation_status` (the revisions lane by default) but writes **no `Rework:` subtasks** — it deliberately **skips the self-re-QA auto-loop** so a person decides how to handle it rather than the bot churning on a broken deliverable. | **Critical** |
 | **needs_human** | Stays put — a person decides. | Warning |
 | **skipped** | Stays put; recorded. | None |
 
-**Why For Revision:** a complete QA failure and a client-requested revision are the same thing
+**Why `fail` skips the loop:** a critical failure (wrong client, inconsistent NAP, a missing
+backlink, a broken map embed, a slug that needs changing) isn't something a VA fixes by ticking
+a checklist item — it needs a human to look at *why* it came out that way. So `fail` escalates
+(critical notification) and holds; only `revisions` gets the self-closing rework loop below.
+
+**Why For Revision:** a `revisions` verdict and a client-requested revision are the same thing
 to the board — a finished deliverable that has to be redone — so both land in one **For
 Revision** lane where they're easy to see and count. The `Rework:` subtasks QA writes are the
 *precise what-and-why to revise*; a task parked here for a client revision needs the same
-(human-written notes + a revision due date — a documented convention, not app-enforced).
+(human-written notes + a revision due date — a documented convention, not app-enforced). A
+critical `fail` lands here too by default (`qa_fail_escalation_status` unset) — but *without*
+the `Rework:` subtasks, so it holds for a human instead of auto-looping.
 
-**The self-closing rework loop:** the `Rework:` subtasks are real work items, so when the VA
-ticks them all off, the board's auto-advance moves the task **from For Revision back to In QA**,
+**The self-closing rework loop (revisions only):** the `Rework:` subtasks are real work items,
+so when the VA ticks them all off, the board's auto-advance moves the task **from For Revision
+back to In QA**,
 which re-runs QA automatically (`for_revision` is in `task_service._AUTO_ADVANCE_FROM`, Rule B
 only). Fix → re-review → pass, with no human dispatch in between. (The prefix is `Rework:` and
 not `QA fix:` on purpose — "qa" would trip the task board's process-marker classifier and break
@@ -185,8 +213,9 @@ timeout.
 
 ## 6. Where results show up (surfaces)
 
-- **Task drawer — QA panel.** Latest verdict badge (Passed / Failed / Needs a human / Not
-  QA-checked), the rubric, a score when one exists, the per-check breakdown (✓/✗/? with
+- **Task drawer — QA panel.** Latest verdict badge (Passed / Passed · advisory / Minor
+  revisions / Failed · escalated / Needs a human / Not QA-checked), the rubric, a score when
+  one exists, the per-check breakdown (✓/✗/? with
   blocking-vs-advisory and notes), the examined URLs as clickable links, collapsible review
   history, and the **Run QA** button.
 - **Notifications** (`kind="qa_result"`). Fail and needs-human post a warning to the client's

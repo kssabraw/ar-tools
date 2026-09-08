@@ -133,7 +133,7 @@ def test_review_url_website_page_runs_checks():
     assert review["rubric"] == sig.RUBRIC_PAGE
     labels = {c["key"] for c in review["checks"]}
     assert "meta_title" in labels and "internal_link" in labels
-    assert review["verdict"] in (sig.PASS, sig.NEEDS_HUMAN, sig.FAIL)
+    assert review["verdict"] in (sig.PASS, sig.ADVISORY, sig.REVISIONS, sig.NEEDS_HUMAN, sig.FAIL)
 
 
 def test_confirmed_task_review_returns_detailed_failure_inline():

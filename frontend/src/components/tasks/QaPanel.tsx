@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, HelpCircle, MinusCircle, ShieldCheck, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, HelpCircle, Info, MinusCircle, ShieldCheck, Wrench, XCircle } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { QaCheck, QaReview } from '../../lib/types'
 
@@ -14,7 +14,9 @@ const POLL_MAX_MS = 3 * 60 * 1000
 
 const VERDICT_META: Record<QaReview['verdict'], { label: string; color: string; bg: string; Icon: typeof CheckCircle2 }> = {
   pass: { label: 'Passed', color: '#15803d', bg: '#f0fdf4', Icon: CheckCircle2 },
-  fail: { label: 'Failed', color: '#b91c1c', bg: '#fef2f2', Icon: XCircle },
+  advisory: { label: 'Passed · advisory', color: '#0369a1', bg: '#f0f9ff', Icon: Info },
+  revisions: { label: 'Minor revisions', color: '#c2410c', bg: '#fff7ed', Icon: Wrench },
+  fail: { label: 'Failed · escalated', color: '#b91c1c', bg: '#fef2f2', Icon: XCircle },
   needs_human: { label: 'Needs a human', color: '#b45309', bg: '#fffbeb', Icon: AlertTriangle },
   skipped: { label: 'Not QA-checked', color: '#64748b', bg: '#f8fafc', Icon: MinusCircle },
 }

@@ -37,6 +37,20 @@ default False except the on-demand Run QA button — see the build notes below).
 > 4. **Structural design-fit is needs_human, not auto-fail**, below
 >    `qa_structural_threshold` — page-type attribution to a stored reference is
 >    heuristic, and a wrong-reference comparison must not bounce good work.
+> 3b. **Graduated verdicts (owner ruling 2026-09-08).** The verdict is no longer
+>    binary. A blocking failure splits by SEVERITY: a **critical** check
+>    (`qa_signals.CRITICAL_CHECK_KEYS`: `client_name`/`nap`/`link_back`/`map_embed`/
+>    `keyword_in_url`) OR ≥ `qa_fail_count_threshold` (4) blocking fails →
+>    **`fail`** (escalate to a human; NO `Rework:` subtasks — skips the self-re-QA
+>    loop, `qa_fail_escalation_status`); any other blocking failure → **`revisions`**
+>    (item 3's behaviour: Rework subtasks + self-loop). A clean deliverable that only
+>    tripped a non-blocking recommendation → **`advisory`** (ships like `pass`,
+>    logged + badged). Severity is code-defined (the LLM never sets it); the count
+>    net catches a mostly-broken deliverable no single critical check would. Best →
+>    worst: pass · advisory · needs_human · revisions · fail. Migration
+>    `20260908120000` widens the `qa_reviews.verdict` CHECK; additive + backward-
+>    compatible. Full rationale + the OPEN `visual_render`-tier follow-up: root
+>    `decisions.md` ("QA Agent — graduated verdicts").
 > 5. **Phases 3–4 are now BUILT** (follow-up builds, 2026-07-12): the **drawer UI**
 >    (`components/tasks/QaPanel.tsx` — verdict card, per-check breakdown, history,
 >    Run QA with bounded polling); the **SOP-grounded narrative** — fail/needs_human

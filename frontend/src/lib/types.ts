@@ -2161,7 +2161,7 @@ export interface QaReview {
   task_id: string
   client_id: string | null
   rubric: string
-  verdict: 'pass' | 'fail' | 'needs_human' | 'skipped'
+  verdict: 'pass' | 'advisory' | 'revisions' | 'fail' | 'needs_human' | 'skipped'
   composite: number | null
   checks: QaCheck[]
   issues: string[]

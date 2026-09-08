@@ -102,11 +102,15 @@ def test_verdict_to_ok_mapping():
 
 def test_high_confidence_broken_bounces_in_the_fold():
     """End-to-end through the deterministic verdict fold: a high-confidence
-    visual break is a blocking FAIL; a capture failure is NEEDS_HUMAN."""
+    visual break is a blocking bounce (revisions — visual_render is not in the
+    critical set, so it's fixable, not an escalated fail); a capture failure is
+    NEEDS_HUMAN. Either way it does NOT pass."""
     broken_check = {"key": "visual_render", "label": "Page renders", "ok": False,
                     "blocking": True, "note": "visually broken"}
     fine = sig._check("meta_title", "Meta title present", True)
-    assert sig.build_verdict([fine, broken_check])["verdict"] == sig.FAIL
+    v = sig.build_verdict([fine, broken_check])
+    assert v["verdict"] == sig.REVISIONS
+    assert v["verdict"] not in (sig.PASS, sig.ADVISORY)  # a broken render never ships
     unavailable = {"key": "visual_render", "label": "Page renders", "ok": None,
                    "blocking": True, "note": "screenshot unavailable"}
     assert sig.build_verdict([fine, unavailable])["verdict"] == sig.NEEDS_HUMAN
