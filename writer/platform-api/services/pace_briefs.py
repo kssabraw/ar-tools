@@ -153,4 +153,12 @@ async def run_morning_briefs(today: Optional[date] = None) -> dict:
                     _scope_warning_logged = True
                 break  # scope problem hits everyone — stop, stay silent
             logger.warning("pace_brief_dm_failed", extra={"member": m.get("name"), "error": msg})
+    if sent:  # autonomous audit — one summary row per push (best-effort)
+        from services import pace_audit
+
+        pace_audit.record_autonomous(
+            action="morning_brief", outcome="executed", client_id=None,
+            reason=f"Pushed morning brief to {sent} member{'s' if sent != 1 else ''}"
+                   + (f" ({unreachable} unreachable)" if unreachable else ""),
+        )
     return {"sent": sent, "linked": len(linked), "unreachable": unreachable}

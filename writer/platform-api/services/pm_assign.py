@@ -337,10 +337,42 @@ def place_task(task_id: str, *, actor_id: Optional[str] = None) -> dict:
                 except Exception as exc:
                     logger.warning("agent_bus_blocker_failed",
                                    extra={"task_id": task_id, "error": str(exc)})
+        _log_placement(task, result)  # autonomous audit (best-effort)
         return result
     except Exception as exc:
         logger.warning("pm_assign.place_failed", extra={"task_id": task_id, "error": str(exc)})
         return {"gid": None, "held": True, "reason": "error"}
+
+
+def _log_placement(task: dict, result: dict) -> None:
+    """Record an auto-placement to the PACE action log — PACE assigning a task on
+    its own (or holding it at capacity). Best-effort; never raises into place_task.
+    Only reached for a real placed/held outcome (the early already_assigned /
+    task_not_found returns never log — no action was taken)."""
+    try:
+        from services import pace_audit
+
+        before = pace_audit.task_snapshot(task)
+        placed = bool(result.get("gid") and not result.get("held"))
+        if placed:
+            after = {**(before or {}), "assignee_id": result.get("gid"),
+                     "assignee_name": result.get("name")}
+            reason = f"Auto-assigned to {result.get('name') or 'best-fit member'}"
+            outcome = "executed"
+        else:
+            after = before  # unchanged — held at capacity
+            reason = f"Held — {result.get('reason') or 'no eligible member'}"
+            outcome = "held"
+        pace_audit.record_autonomous(
+            action="auto_place_task", outcome=outcome,
+            client_id=task.get("client_id"), target_type="task",
+            target_id=str(task.get("id")) if task.get("id") else None,
+            target_name=task.get("name"), before=before, after=after,
+            reason=reason, result=result.get("category"),
+            args={"task_id": str(task.get("id"))} if task.get("id") else {},
+        )
+    except Exception as exc:  # audit is never load-bearing
+        logger.warning("pm_assign.audit_failed", extra={"error": str(exc)})
 
 
 # ---------------------------------------------------------------------------

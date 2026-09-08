@@ -216,6 +216,18 @@ def run_episode_sync(today: Optional[date] = None) -> dict:
         sb.table("task_episodes").update({"escalated_at": now_iso}).in_(
             "id", [e["id"] for e in to_escalate]
         ).execute()
+        # Autonomous audit: one row per escalated task (best-effort).
+        from services import pace_audit
+        for e in to_escalate:
+            info = signals[(e["task_id"], e["kind"])]
+            pace_audit.record_autonomous(
+                action="episode_escalated", outcome="executed",
+                client_id=info.get("client_id"),
+                client_name=names.get(info.get("client_id")),
+                target_type="task", target_id=e["task_id"], target_name=info.get("name"),
+                reason=f"Escalated — {e['kind']}, {stuck_days(e, today)} business days "
+                       f"with no movement (assignee: {info.get('assignee_name') or 'unassigned'})",
+            )
 
     return {"synced": True, "opened": opened, "resolved": len(resolved_ids),
             "escalated": len(to_escalate), "open": len(still_open) + opened}

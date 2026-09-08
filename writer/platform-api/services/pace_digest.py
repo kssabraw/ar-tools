@@ -155,6 +155,14 @@ def run_daily_digest(today: Optional[date] = None) -> dict:
                      "slack_channel": settings.pace_slack_channel or None},
             dedupe_key=key,
         )
+        if nid is not None:  # a fresh emission (not a same-day dedupe) → audit it
+            from services import pace_audit
+
+            pace_audit.record_autonomous(
+                action="daily_digest", outcome="executed", client_id=None,
+                reason=f"Posted daily digest — {combined} item{'s' if combined != 1 else ''} need a human",
+                result=key,
+            )
         return {"emitted": nid is not None, "items": len(items), "total": total,
                 "deduped": nid is None}
     except Exception as exc:  # never break the scheduler tick

@@ -193,6 +193,13 @@ def maybe_emit_weekly(today: Optional[date] = None) -> dict:
             payload={"link": "/workload", "slack_channel": settings.pace_slack_channel or None},
             dedupe_key=f"pace_report:{today.isoformat()}:portfolio",
         )
+        from services import pace_audit
+
+        pace_audit.record_autonomous(
+            action="delivery_report", outcome="executed", client_id=None,
+            reason=f"Posted weekly delivery report — {report['completed_count']} completed, "
+                   f"{report.get('overdue', 0)} overdue",
+        )
         return {"emitted": True}
     except Exception as exc:
         logger.warning("pace_report.weekly_failed", extra={"error": str(exc)})

@@ -305,6 +305,16 @@ async def run_daily_chase_plan(today: Optional[date] = None) -> dict:
     if nid is None:  # already posted today (dedupe) or notifications disabled
         return {"posted": False, "reason": "deduped"}
 
+    # Autonomous audit: PACE emitted today's plan on its own (best-effort).
+    from services import pace_audit
+    pace_audit.record_autonomous(
+        action="chase_plan_posted", outcome="executed", client_id=None,
+        reason=f"Posted chase plan — {len(plan['items'])} proposed action"
+               f"{'s' if len(plan['items']) != 1 else ''}, "
+               f"{len(plan.get('auto_results') or [])} auto, {len(plan.get('flags') or [])} flag(s)",
+        result=plan.get("date"),
+    )
+
     # Supersede yesterday's unconfirmed plan (never execute late).
     from services import pace_agent
     if _last_plan_key:
