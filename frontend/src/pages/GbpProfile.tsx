@@ -1261,6 +1261,19 @@ function attrSummary(a: AttributeValue, meta?: AttributeMetaItem): string {
   if (a.value_type === 'REPEATED_ENUM') return (a.set_values || []).map(optLabel).join(', ') || '—'
   return (a.values || []).map((v) => optLabel(String(v))).join(', ') || '—'
 }
+// Group the available attributes under their display group, preserving the
+// backend's (group, name) sort so each header appears once, in order.
+function groupAttributes(rows: AttributeMetaItem[]): { name: string; items: AttributeMetaItem[] }[] {
+  const groups: { name: string; items: AttributeMetaItem[] }[] = []
+  const byName = new Map<string, AttributeMetaItem[]>()
+  for (const m of rows) {
+    const key = m.group_name || 'Other'
+    let bucket = byName.get(key)
+    if (!bucket) { bucket = []; byName.set(key, bucket); groups.push({ name: key, items: bucket }) }
+    bucket.push(m)
+  }
+  return groups
+}
 
 function AttributesCard({ clientId, locationRowId, current, currentError, edit, onChanged }: {
   clientId: string; locationRowId: string; current: AttributeValue[]
@@ -1338,10 +1351,23 @@ function AttributesCard({ clientId, locationRowId, current, currentError, edit, 
             : availQ.isError ? <ErrorDetails message={(availQ.error as Error)?.message} />
             : rows.length === 0 ? <div style={{ fontSize: 12.5, color: '#94a3b8' }}>{query.trim() ? 'No attributes match.' : 'No editable attributes for this listing.'}</div>
             : (
-              <div style={{ maxHeight: 340, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 4, display: 'grid', gap: 2 }}>
-                {rows.map((m) => (
-                  <AttributeRow key={m.attribute_id} meta={m} value={ensure(m)} onChange={(v) => setWork(m.attribute_id, v)} />
-                ))}
+              <div style={{ maxHeight: 340, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 4 }}>
+                {groupAttributes(rows).map((g) => {
+                  const setCount = g.items.filter((m) => attrHasValue(ensure(m))).length
+                  return (
+                    <div key={g.name} style={{ marginBottom: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 8px 4px', position: 'sticky', top: 0, background: '#fff', zIndex: 1 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>{g.name}</span>
+                        {setCount > 0 && <span style={{ fontSize: 11, color: '#0f766e', fontWeight: 600 }}>{setCount} set</span>}
+                      </div>
+                      <div style={{ display: 'grid', gap: 2 }}>
+                        {g.items.map((m) => (
+                          <AttributeRow key={m.attribute_id} meta={m} value={ensure(m)} onChange={(v) => setWork(m.attribute_id, v)} />
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             )}
           <div style={{ fontSize: 12, color: subset.length ? '#0f766e' : '#94a3b8' }}>
@@ -1413,11 +1439,12 @@ function AttributeRow({ meta, value, onChange }: {
         placeholder="https://…" style={{ ...inputStyle, width: 'auto', minWidth: 220, padding: '6px 8px' }} />
     )
   }
+  const isSet = attrHasValue(value)
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', fontSize: 13 }}>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ color: '#0f172a' }}>{meta.display_name}</div>
-        {meta.group_name && <div style={{ fontSize: 11, color: '#94a3b8' }}>{meta.group_name}</div>}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', fontSize: 13, borderRadius: 6, background: isSet ? '#f0fdfa' : 'transparent' }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span title={isSet ? 'Set on the listing' : 'Not set'} style={{ width: 6, height: 6, borderRadius: 999, flex: 'none', background: isSet ? ACCENT : '#e2e8f0' }} />
+        <span style={{ color: '#0f172a' }}>{meta.display_name}</span>
       </div>
       {control}
     </div>
