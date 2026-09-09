@@ -1588,3 +1588,120 @@ def test_sync_attributes_resolves_applied(fake, monkeypatch):
     asyncio.run(svc.run_sync_job(job))
     edit = fake.tables["gbp_profile_edits"][0]
     assert edit["status"] == "applied" and edit["next_sync_at"] is None
+
+
+# ── Pure: AI secondary-categories draft (parse / match / merge+cap) ────────────
+def test_parse_category_names_dedup_and_order():
+    raw = 'prose ["Roofing contractor", "Gutter cleaning service", "roofing contractor"] trail'
+    assert svc.parse_category_names(raw) == ["Roofing contractor", "Gutter cleaning service"]
+
+
+def test_parse_category_names_non_json_is_empty():
+    assert svc.parse_category_names("no json here") == []
+    assert svc.parse_category_names('{"not": "a list"}') == []
+
+
+def test_pick_category_match_prefers_exact_name():
+    matches = [
+        {"id": "categories/gcid:general_contractor", "name": "General contractor"},
+        {"id": "categories/gcid:roofing_contractor", "name": "Roofing contractor"},
+    ]
+    assert svc.pick_category_match("roofing contractor", matches)["id"] == "categories/gcid:roofing_contractor"
+
+
+def test_pick_category_match_falls_back_to_top():
+    matches = [{"id": "categories/gcid:x", "name": "Something close"}]
+    assert svc.pick_category_match("no exact match", matches)["id"] == "categories/gcid:x"
+    assert svc.pick_category_match("anything", []) is None
+
+
+def test_select_secondary_categories_keeps_existing_and_caps():
+    existing = [{"id": "categories/gcid:a", "name": "A"}]
+    resolved = [
+        {"id": "categories/gcid:a", "name": "A"},          # dup of existing → skipped
+        {"id": "categories/gcid:primary", "name": "Prim"},  # the primary → skipped
+        {"id": "categories/gcid:b", "name": "B"},
+        {"id": "categories/gcid:c", "name": "C"},
+    ]
+    out = svc.select_secondary_categories(
+        resolved, existing, "categories/gcid:primary", max_total=2,
+    )
+    # cap = max(2, len(existing)=1) = 2 → A (kept) + first new (B); C drops.
+    assert [c["id"] for c in out] == ["categories/gcid:a", "categories/gcid:b"]
+
+
+def test_select_secondary_categories_never_drops_existing_above_cap():
+    existing = [
+        {"id": "categories/gcid:a", "name": "A"},
+        {"id": "categories/gcid:b", "name": "B"},
+        {"id": "categories/gcid:c", "name": "C"},
+    ]
+    out = svc.select_secondary_categories(
+        [{"id": "categories/gcid:d", "name": "D"}], existing, "categories/gcid:p", max_total=2,
+    )
+    # cap = max(2, 3) = 3 → all existing kept, no room for the new one.
+    assert [c["id"] for c in out] == [
+        "categories/gcid:a", "categories/gcid:b", "categories/gcid:c",
+    ]
+
+
+# ── Integration: run_draft_job categories branch wiring ───────────────────────
+def _stub_voice_card(monkeypatch):
+    import sys, types
+    vcs = types.ModuleType("services.voice_card_service")
+    async def _gvc(*a, **k):
+        return None
+    vcs.get_voice_card = _gvc
+    monkeypatch.setitem(sys.modules, "services.voice_card_service", vcs)
+
+
+def _categories_loc(monkeypatch, primary):
+    monkeypatch.setattr(svc.api, "get_location", lambda *a, **k: {})
+    monkeypatch.setattr(
+        svc.api, "parse_location_fields",
+        lambda loc: {"categories_value": {"primary": primary, "additional": []}},
+    )
+
+
+def test_run_draft_job_categories_inserts_edit(fake, monkeypatch):
+    _stub_voice_card(monkeypatch)
+    _categories_loc(monkeypatch, {"id": "categories/gcid:roofing_contractor", "name": "Roofing contractor"})
+
+    async def _draft(client, current, card):
+        return {"primary": current["primary"], "additional": [{"id": "categories/gcid:gutter", "name": "Gutter cleaning service"}]}
+    monkeypatch.setattr(svc, "_draft_categories", _draft)
+
+    job = {"id": "j1", "payload": {"client_id": "c-1", "location_row_id": "loc-1", "field": "categories", "user_id": "u-1"}}
+    asyncio.run(svc.run_draft_job(job))
+    edits = fake.tables["gbp_profile_edits"]
+    assert len(edits) == 1
+    assert edits[0]["field"] == "categories" and edits[0]["status"] == "draft"
+    assert edits[0]["proposed_value"]["additional"][0]["id"] == "categories/gcid:gutter"
+
+
+def test_run_draft_job_categories_empty_draft_settles_error(fake, monkeypatch):
+    _stub_voice_card(monkeypatch)
+    _categories_loc(monkeypatch, {"id": "categories/gcid:roofing_contractor", "name": "Roofing contractor"})
+
+    async def _draft(client, current, card):
+        return None  # nothing net-new
+    monkeypatch.setattr(svc, "_draft_categories", _draft)
+
+    job = {"id": "j1", "payload": {"client_id": "c-1", "location_row_id": "loc-1", "field": "categories"}}
+    asyncio.run(svc.run_draft_job(job))
+    assert fake.tables["gbp_profile_edits"] == []
+
+
+def test_run_draft_job_categories_no_primary(fake, monkeypatch):
+    _stub_voice_card(monkeypatch)
+    _categories_loc(monkeypatch, None)
+    called = {"n": 0}
+
+    async def _draft(*a, **k):
+        called["n"] += 1
+        return {}
+    monkeypatch.setattr(svc, "_draft_categories", _draft)
+
+    job = {"id": "j1", "payload": {"client_id": "c-1", "location_row_id": "loc-1", "field": "categories"}}
+    asyncio.run(svc.run_draft_job(job))
+    assert fake.tables["gbp_profile_edits"] == [] and called["n"] == 0  # bailed before drafting

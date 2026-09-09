@@ -151,8 +151,9 @@ async def create_edit(
 async def draft_field(
     client_id: UUID, body: ProfileDraftRequest, auth: dict = Depends(require_staff)
 ):
-    """AI-draft a field (description or services) — lands as a draft for review.
-    Hours is manual-only. Never auto-applies."""
+    """AI-draft a field (description, services, or secondary categories) — lands
+    as a draft for review. Hours is manual-only; the categories draft proposes
+    SECONDARY categories only (never the primary). Never auto-applies."""
     job_id = svc.enqueue_draft(str(client_id), str(body.location_row_id), body.field, auth["user_id"])
     return GbpProfileJob(job_id=job_id)
 

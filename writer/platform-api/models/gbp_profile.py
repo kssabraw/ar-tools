@@ -196,10 +196,11 @@ class ProfileEditPatchRequest(BaseModel):
 
 
 class ProfileDraftRequest(BaseModel):
-    """Ask the AI to draft one field (async job). Hours is never AI-drafted."""
+    """Ask the AI to draft one field (async job). Hours is never AI-drafted. The
+    categories draft proposes SECONDARY categories only (never the primary)."""
 
     location_row_id: UUID
-    field: Literal["description", "services"]
+    field: Literal["description", "services", "categories"]
 
 
 class ResolvePlacesRequest(BaseModel):
