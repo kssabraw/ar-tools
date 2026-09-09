@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Building2, Sparkles, Save, X, Trash2, RefreshCw, CheckCircle2,
   Clock, Plus, AlertTriangle, Info, Search, ShieldCheck, ShieldAlert,
-  Globe, Tag, MapPin, CalendarDays, Power,
+  Globe, Tag, MapPin, CalendarDays, Power, LayoutGrid, Star,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -27,6 +27,7 @@ type EditStatus =
 type Field =
   | 'description' | 'hours' | 'services'
   | 'website' | 'labels' | 'special_hours' | 'more_hours' | 'service_area' | 'open_info'
+  | 'categories'
 
 interface GbpLocationRow { id: string; location_id: string; title: string | null; access_status: string }
 interface HoursPeriod { open: string; close: string }
@@ -41,6 +42,8 @@ interface OpenInfoValue { status: string; opening_date?: DateInput | null }
 interface MoreHoursType { hours_type_id: string; display_name: string }
 interface MoreHoursTypeCategory { id: string; name: string; more_hours_types: MoreHoursType[] }
 interface ResolvedPlace { query: string; name: string; place_id: string; matched: boolean }
+interface CategoryRef { id: string; name: string }
+interface CategoriesValue { primary: CategoryRef | null; additional: CategoryRef[] }
 const OPEN_STATUS_LABELS: Record<string, string> = {
   OPEN: 'Open', CLOSED_TEMPORARILY: 'Temporarily closed', CLOSED_PERMANENTLY: 'Permanently closed',
 }
@@ -69,6 +72,7 @@ interface ProfileResponse {
   categories: Category[]; metadata: ProfileMetadata
   website: string; labels: string[]; special_hours: SpecialHoursRow[]
   more_hours: MoreHoursEntry[]; service_area: ServiceAreaValue; open_info: OpenInfoValue | null
+  categories_value: CategoriesValue
   edits: ProfileEdit[]
 }
 interface Job { job_id: string }
@@ -238,6 +242,7 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
         </div>
       )}
       <DescriptionCard clientId={clientId} locationRowId={locationRowId} current={p.description} edit={editFor('description')} onChanged={onChanged} />
+      <CategoriesCard clientId={clientId} locationRowId={locationRowId} current={p.categories_value} edit={editFor('categories')} onChanged={onChanged} />
       <ServicesCard clientId={clientId} locationRowId={locationRowId} current={p.services} categories={p.categories} canModify={p.metadata.can_modify_service_list} edit={editFor('services')} onChanged={onChanged} />
       <HoursCard clientId={clientId} locationRowId={locationRowId} current={p.hours} edit={editFor('hours')} onChanged={onChanged} />
       <SpecialHoursCard clientId={clientId} locationRowId={locationRowId} current={p.special_hours} edit={editFor('special_hours')} onChanged={onChanged} />
@@ -1087,6 +1092,124 @@ function OpenInfoCard({ clientId, locationRowId, current, edit, onChanged }: {
       ) : (
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button onClick={startEdit} style={btn('#fff', '#334155')}><Power size={13} /> Edit status</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Categories (Phase 3b) ─────────────────────────────────────────────────────
+function CategoriesCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: CategoriesValue; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const [primary, setPrimary] = useState<CategoryRef | null>(null)
+  const [additional, setAdditional] = useState<CategoryRef[]>([])
+  const [query, setQuery] = useState('')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'categories', onChanged)
+  const proposed = edit && typeof edit.proposed_value === 'object' && edit.proposed_value ? (edit.proposed_value as CategoriesValue) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+
+  const startEdit = () => {
+    const src = proposed ?? current
+    setPrimary(src?.primary ?? null)
+    setAdditional((src?.additional ?? []).map((c) => ({ ...c })))
+    setQuery(''); setConfirmed(false); setEditing(true)
+  }
+  const searchQ = useQuery<{ categories: CategoryRef[] }>({
+    queryKey: ['gbp-category-search', clientId, query.trim()],
+    queryFn: () => api.get(`/clients/${clientId}/gbp/profile/categories/search?q=${encodeURIComponent(query.trim())}`),
+    enabled: editing && query.trim().length >= 2, retry: false, staleTime: 5 * 60_000,
+  })
+  const primaryChanged = (primary?.id ?? '') !== (current?.primary?.id ?? '')
+  const value: CategoriesValue = { primary, additional }
+
+  const setAsPrimary = (c: CategoryRef) => {
+    setAdditional((a) => a.filter((x) => x.id !== c.id).concat(primary && primary.id !== c.id ? [primary] : []))
+    setPrimary(c); setConfirmed(false)
+  }
+  const addAdditional = (c: CategoryRef) => {
+    if (c.id === primary?.id || additional.some((x) => x.id === c.id)) return
+    setAdditional((a) => [...a, c])
+  }
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { categories_value: value })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'categories', categories_value: value }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+
+  return (
+    <Card title="Categories" subtitle="The listing's primary + additional business categories. Changing the PRIMARY category shifts how the listing ranks — confirm before applying.">
+      {!current?.primary ? <CurrentValue empty>No categories set.</CurrentValue> : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#eef2ff', color: '#3730a3', fontWeight: 600 }}>
+            <Star size={11} /> {current.primary.name}
+          </span>
+          {current.additional.map((c) => <span key={c.id} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#f1f5f9', color: '#334155' }}>{c.name}</span>)}
+        </div>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => (
+        <span>{[proposed?.primary?.name, ...(proposed?.additional ?? []).map((c) => c.name)].filter(Boolean).join(', ')}</span>
+      )} onChanged={onChanged} setErr={setErr} confirmBeforeApply={(proposed?.primary?.id ?? '') !== (current?.primary?.id ?? '') && !confirmed} onNeedConfirm={startEdit} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+
+      {editing ? (
+        <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            {primary ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#eef2ff', color: '#3730a3', fontWeight: 600 }}>
+                <Star size={11} /> {primary.name} (primary)
+              </span>
+            ) : <span style={{ fontSize: 12, color: '#b45309' }}>No primary category picked.</span>}
+            {additional.map((c) => (
+              <span key={c.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 6px 3px 9px', borderRadius: 999, background: '#f1f5f9', color: '#334155' }}>
+                {c.name}
+                <button onClick={() => setAdditional((a) => a.filter((x) => x.id !== c.id))} title="Remove" style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', display: 'flex' }}><X size={12} /></button>
+              </span>
+            ))}
+          </div>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: 10, color: '#94a3b8' }} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search Google's categories… (e.g. roofing)" style={{ ...inputStyle, paddingLeft: 30 }} />
+          </div>
+          {query.trim().length >= 2 && (
+            searchQ.isLoading ? <div style={{ fontSize: 12.5, color: '#64748b' }}>Searching…</div>
+              : searchQ.isError ? <ErrorDetails message={(searchQ.error as Error)?.message} />
+              : (searchQ.data?.categories ?? []).length === 0 ? <div style={{ fontSize: 12.5, color: '#94a3b8' }}>No categories match “{query}”.</div>
+              : (
+                <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 4 }}>
+                  {(searchQ.data?.categories ?? []).map((c) => {
+                    const isPrimary = c.id === primary?.id
+                    const isAdd = additional.some((x) => x.id === c.id)
+                    return (
+                      <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 8px', fontSize: 13 }}>
+                        <span style={{ flex: 1, color: '#0f172a' }}>{c.name}</span>
+                        <button onClick={() => setAsPrimary(c)} disabled={isPrimary} style={{ ...btn('#fff', isPrimary ? '#94a3b8' : '#3730a3'), padding: '3px 8px', fontSize: 12 }}><Star size={11} /> {isPrimary ? 'Primary' : 'Set primary'}</button>
+                        <button onClick={() => addAdditional(c)} disabled={isPrimary || isAdd} style={{ ...btn('#fff', isPrimary || isAdd ? '#94a3b8' : '#334155'), padding: '3px 8px', fontSize: 12 }}><Plus size={11} /> {isAdd ? 'Added' : 'Add'}</button>
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+          )}
+          {primaryChanged && (
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 10px' }}>
+              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} style={{ marginTop: 2 }} />
+              I confirm changing the PRIMARY category to “{primary?.name}” — this changes how the listing ranks.
+            </label>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || !primary || (primaryChanged && !confirmed)} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={startEdit} style={btn('#fff', '#334155')}><LayoutGrid size={13} /> Edit categories</button>
         </div>
       )}
     </Card>

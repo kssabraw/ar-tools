@@ -16,6 +16,8 @@ ProfileField = Literal[
     "description", "hours", "services",
     # Phase 3a — Tier A fields (same locations.patch endpoint).
     "website", "labels", "special_hours", "more_hours", "service_area", "open_info",
+    # Phase 3b — categories (same endpoint; needs a live catalog search + primary confirm).
+    "categories",
 ]
 EditSource = Literal["manual", "ai", "strategist"]
 
@@ -90,6 +92,17 @@ class Category(BaseModel):
     name: str  # display name
 
 
+class CategoriesValue(BaseModel):
+    """The editable categories selection (Phase 3b): one primary + additional."""
+
+    primary: Optional[Category] = None
+    additional: list[Category] = []
+
+
+class CategorySearchResponse(BaseModel):
+    categories: list[Category] = []
+
+
 class ServiceType(BaseModel):
     service_type_id: str
     display_name: str
@@ -125,6 +138,7 @@ class ProfileEditCreateRequest(BaseModel):
     more_hours: Optional[list[MoreHoursEntry]] = None
     service_area: Optional[ServiceAreaValue] = None
     open_info: Optional[OpenInfoValue] = None
+    categories_value: Optional[CategoriesValue] = None
 
 
 class ProfileEditPatchRequest(BaseModel):
@@ -139,6 +153,7 @@ class ProfileEditPatchRequest(BaseModel):
     more_hours: Optional[list[MoreHoursEntry]] = None
     service_area: Optional[ServiceAreaValue] = None
     open_info: Optional[OpenInfoValue] = None
+    categories_value: Optional[CategoriesValue] = None
 
 
 class ProfileDraftRequest(BaseModel):
@@ -200,6 +215,7 @@ class GbpProfileResponse(BaseModel):
     more_hours: list[MoreHoursEntry] = []
     service_area: ServiceAreaValue = Field(default_factory=ServiceAreaValue)
     open_info: Optional[OpenInfoValue] = None
+    categories_value: CategoriesValue = Field(default_factory=CategoriesValue)
     edits: list[GbpProfileEdit] = []
 
 
