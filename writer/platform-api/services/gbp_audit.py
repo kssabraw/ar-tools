@@ -30,9 +30,81 @@ _GENERIC_CATEGORY_WORDS = {
 }
 _WORD_RE = re.compile(r"[a-z0-9]+")
 
+# ── Writing-quality trip-wires (SED Society GBP Description SOP) ──────────────
+# A well-written description names what/where/who and reads naturally; a weak one
+# keyword-stuffs, leans on generic marketing filler, or opens with fluff. These
+# detectors are deliberately HIGH-PRECISION so a strong description is never
+# false-flagged — the fuzzier judgement (differentiators, use cases, natural
+# voice) is left to the LLM rewrite that the SOP grounds.
+
+# A single captured location term repeated at least this many times reads as
+# city-stuffing (the SOP's sharpest rule: establish geography once, don't repeat
+# the city). Natural reinforcement (open + a closing service-area line) is 2–3.
+_STUFFING_REPEAT = 4
+
+# Promotional superlatives the SOP says to drop (kept in step with the editor
+# linter's advisory list — one vocabulary, two surfaces).
+_SUPERLATIVE_RE = re.compile(
+    r"\b(best|#\s*1|number\s+one|top[- ]?rated|highest[- ]?rated|guarantee[ds]?|"
+    r"unbeatable|world[- ]?class|award[- ]?winning|cheapest|lowest\s+price[sd]?)\b",
+    re.IGNORECASE,
+)
+
+# Generic marketing filler the SOP says to replace with specifics — matched as
+# whole phrases so an ordinary sentence never trips one.
+_FILLER_RES = tuple(re.compile(p, re.IGNORECASE) for p in (
+    r"customer satisfaction is our",
+    r"satisfaction is our (?:number one |#\s*1 |top |No\.?\s*1 )?priority",
+    r"we pride ourselves",
+    r"your satisfaction is our (?:success|priority|goal)",
+    r"we go above and beyond",
+    r"treat(?:s|ed|ing)? (?:you|every ?one|every customer|our customers|each customer|all our customers) like family",
+    r"customer satisfaction is (?:our )?(?:top|number one|#\s*1) priority",
+    r"quality (?:work )?and customer satisfaction",
+    r"second to none",
+    r"where quality (?:and|meets)",
+))
+
+# Descriptions that open with marketing fluff instead of establishing the
+# business (the SOP: the first sentence is valuable — use it for what/where/who).
+_GENERIC_OPENING_RE = re.compile(
+    r"^\W*(welcome to|looking for|are you looking|in need of|need (?:a|an|your)|"
+    r"searching for|thank you for)\b",
+    re.IGNORECASE,
+)
+
 
 def _words(text: "str | None") -> set[str]:
     return set(_WORD_RE.findall((text or "").lower()))
+
+
+def find_superlatives(text: "str | None") -> list[str]:
+    """The promotional superlatives present in the text (SOP §15). Pure."""
+    return [m.group(0) for m in _SUPERLATIVE_RE.finditer(text or "")]
+
+
+def find_marketing_filler(text: "str | None") -> list[str]:
+    """The generic-marketing-filler phrases present in the text (SOP §10). Pure."""
+    out: list[str] = []
+    for rx in _FILLER_RES:
+        m = rx.search(text or "")
+        if m:
+            out.append(m.group(0).strip())
+    return out
+
+
+def has_generic_opening(text: "str | None") -> bool:
+    """True when the description LEADS with marketing fluff (SOP §15). Pure."""
+    return bool(_GENERIC_OPENING_RE.match((text or "").strip()))
+
+
+def overused_terms(text: "str | None", terms: "set[str]", threshold: int = _STUFFING_REPEAT) -> list[str]:
+    """Which of ``terms`` (e.g. the listing's location tokens) appear at least
+    ``threshold`` times in the text — the SOP's city-stuffing signal. Pure."""
+    if not terms:
+        return []
+    counts = Counter(_WORD_RE.findall((text or "").lower()))
+    return sorted(t for t in terms if counts.get(t, 0) >= threshold)
 
 
 def _category_keywords(primary: "str | None", extras) -> set[str]:
@@ -128,6 +200,10 @@ def audit(client_gbp: dict, competitor_profiles: list[dict]) -> dict:
     # description already clears the completeness floor. Each issue is best-effort
     # — only asserted when its input exists, so a client with no captured
     # categories or location is never false-flagged.
+    # Beyond thin/missing-keyword/missing-location, the SED Society SOP wants
+    # keyword-stuffing, promotional superlatives, generic marketing filler, and
+    # fluff openings flagged as rewrite triggers. Each is high-precision, so a
+    # naturally-written description clears them all.
     dq_issues: list[str] = []
     if desc:
         desc_words = _words(desc)
@@ -139,6 +215,16 @@ def audit(client_gbp: dict, competitor_profiles: list[dict]) -> dict:
         loc_terms = _location_terms(g)
         if loc_terms and not (loc_terms & desc_words):
             dq_issues.append("missing_location")
+        # City-stuffing — a captured location term repeated (best-effort: only
+        # when location terms are known, so it's never false-flagged).
+        if loc_terms and overused_terms(desc, loc_terms):
+            dq_issues.append("keyword_stuffed")
+        if find_superlatives(desc):
+            dq_issues.append("promotional_superlatives")
+        if find_marketing_filler(desc):
+            dq_issues.append("marketing_filler")
+        if has_generic_opening(desc):
+            dq_issues.append("generic_opening")
     description_quality = {
         "ok": bool(desc) and not dq_issues,
         "length": len(desc),

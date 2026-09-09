@@ -23,6 +23,10 @@
    pattern template this module mirrors.
 6. The **"GBP Profile Editor"** entry in the root `decisions.md` — the twelve
    settled decisions in terse form.
+7. **`docs/modules/gbp-profile-editor/gbp-description-sop-v1_0.md`** — the agency
+   standard for **writing + auditing** GBP descriptions (owner-provided SOP). The
+   description AI-draft prompt, the corrective loop, and the `description_quality`
+   audit all implement it; the doc carries the concern→code map.
 
 ## What this module is (one paragraph)
 

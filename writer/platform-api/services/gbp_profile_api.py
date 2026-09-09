@@ -40,6 +40,8 @@ from typing import Optional
 
 from fastapi import HTTPException
 
+from services import gbp_audit  # pure text-quality detectors (SOP trip-wires)
+
 logger = logging.getLogger(__name__)
 
 # The v1 readMask for every editable field + the context they need (categories to
@@ -122,10 +124,11 @@ def _caps_ratio(text: str) -> float:
 
 
 def lint_description(text: str, max_chars: int = DESCRIPTION_MAX_CHARS) -> list[dict]:
-    """Advisory content-policy warnings for a description — **never a gate**
-    (decision Q9/Q12). Each is ``{code, message}``. Google's `rejected` verdict +
-    the reconciler remain the source of truth; this only reduces failed submits.
-    Pure (unit-tested)."""
+    """Advisory content-policy + writing-quality warnings for a description —
+    **never a gate** (decision Q9/Q12). Each is ``{code, message}``. Google's
+    `rejected` verdict + the reconciler remain the source of truth for policy;
+    this reduces failed submits and surfaces the GBP Description SOP's
+    writing-quality nudges inline. Pure (unit-tested)."""
     value = (text or "").strip()
     out: list[dict] = []
     if len(value) > max_chars:
@@ -142,6 +145,12 @@ def lint_description(text: str, max_chars: int = DESCRIPTION_MAX_CHARS) -> list[
         out.append({"code": "punctuation", "message": "Excessive exclamation marks read as spammy."})
     if len(_EMOJI_RE.findall(value)) >= 3:
         out.append({"code": "emoji", "message": "Lots of emoji can look unprofessional / trip review."})
+    # GBP Description SOP writing-quality advisories (never a gate — quality, not
+    # policy): generic marketing filler and fluff openings the SOP says to drop.
+    if gbp_audit.find_marketing_filler(value):
+        out.append({"code": "filler", "message": "Generic marketing filler — replace with a specific fact about the business."})
+    if gbp_audit.has_generic_opening(value):
+        out.append({"code": "generic_opening", "message": "Opens with fluff — lead with what the business is, where it operates, and who it serves."})
     return out
 
 
