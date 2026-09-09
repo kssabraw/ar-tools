@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 _EDIT_COLUMNS = (
     "id, client_id, location_row_id, field, source, current_value, proposed_value, "
     "status, google_pending, sync_attempts, next_sync_at, error, applied_at, "
-    "created_by, created_at, updated_at"
+    "reverts_edit_id, created_by, created_at, updated_at"
 )
 # Statuses an edit can be applied from (a fresh draft, a re-review, or a retry).
 _APPLIABLE = {"draft", "live_changed", "failed"}
@@ -347,9 +347,17 @@ def _field_value(parsed: dict, field: str) -> object:
 # ───────────────────────────────────────────────────────────────────────────
 # Create / edit / discard a draft
 # ───────────────────────────────────────────────────────────────────────────
-async def create_edit(client_id: str, body: dict, user_id: Optional[str], source: str = "manual") -> dict:
+async def create_edit(
+    client_id: str,
+    body: dict,
+    user_id: Optional[str],
+    source: str = "manual",
+    reverts_edit_id: Optional[str] = None,
+) -> dict:
     """Create a draft edit for one field, snapshotting the live current value as
-    the re-read-and-diff baseline. Validates the proposed value up front."""
+    the re-read-and-diff baseline. Validates the proposed value up front.
+    ``reverts_edit_id`` links a source='revert' draft back to the applied edit
+    whose prior value it restores (the audit trail)."""
     _assert_enabled()
     field = body.get("field")
     location = _location(str(body["location_row_id"]), client_id)
@@ -378,6 +386,8 @@ async def create_edit(client_id: str, body: dict, user_id: Optional[str], source
         "status": "draft",
         "created_by": user_id,
     }
+    if reverts_edit_id:
+        row["reverts_edit_id"] = reverts_edit_id
     res = get_supabase().table("gbp_profile_edits").insert(row).execute()
     return res.data[0]
 
@@ -410,6 +420,38 @@ def discard_edit(edit_id: str) -> None:
     if edit["status"] in ("applying", "pending_review"):
         raise HTTPException(status_code=409, detail=f"edit_in_flight:{edit['status']}")
     get_supabase().table("gbp_profile_edits").delete().eq("id", edit_id).execute()
+
+
+async def revert_edit(client_id: str, edit_id: str, user_id: Optional[str]) -> dict:
+    """Stage a draft that restores the prior value of an APPLIED edit.
+
+    The prior value is already on file: an applied edit's ``current_value`` is the
+    value that was live immediately before its patch (apply re-reads and aborts
+    into ``live_changed`` on any drift, so a landed edit's baseline is exact). A
+    revert reuses ``create_edit`` — it re-snapshots the CURRENT live value as the
+    new draft's baseline and validates the target — then links back via
+    ``reverts_edit_id``. Nothing is applied here: the operator reviews + clicks
+    Apply, running the same re-read-and-diff pipeline (so a revert of an already
+    drifted field correctly aborts into ``live_changed``) — never auto-applied
+    (ADR 0004: a revert is still a persistent, customer-facing write).
+    """
+    _assert_enabled()
+    edit = get_edit(edit_id)
+    if edit.get("client_id") != client_id:
+        raise HTTPException(status_code=404, detail="gbp_profile_edit_not_found")
+    # Only a change that actually landed on the live listing can be reverted.
+    if edit["status"] != "applied":
+        raise HTTPException(status_code=409, detail=f"revert_not_applied:{edit['status']}")
+    field = edit["field"]
+    prior = edit.get("current_value")
+    if prior is None:
+        # Nothing on file to restore (no pre-change baseline was captured).
+        raise HTTPException(status_code=409, detail="revert_no_baseline")
+    key = _FIELD_KEY.get(field)
+    if key is None:
+        raise HTTPException(status_code=400, detail="invalid_field")
+    body = {"field": field, "location_row_id": edit["location_row_id"], key: prior}
+    return await create_edit(client_id, body, user_id, source="revert", reverts_edit_id=edit_id)
 
 
 # ───────────────────────────────────────────────────────────────────────────

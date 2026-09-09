@@ -21,7 +21,7 @@ ProfileField = Literal[
     # Phase 3b — attributes (SEPARATE getAttributes/updateAttributes endpoint pair).
     "attributes",
 ]
-EditSource = Literal["manual", "ai", "strategist"]
+EditSource = Literal["manual", "ai", "strategist", "revert"]
 
 
 # ── shared value shapes (hours / services) ──────────────────────────────────
@@ -231,6 +231,7 @@ class GbpProfileEdit(BaseModel):
     next_sync_at: Optional[str] = None
     error: Optional[str] = None
     applied_at: Optional[str] = None
+    reverts_edit_id: Optional[UUID] = None  # set on a source='revert' edit
     created_by: Optional[UUID] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -360,8 +361,10 @@ class GbpChangeEvent(BaseModel):
     field: Optional[str] = None
     detail: str = ""
     who: Optional[str] = None
-    edit_source: Optional[str] = None  # manual | ai | strategist (team edits)
+    edit_source: Optional[str] = None  # manual | ai | strategist | revert (team edits)
     status: Optional[str] = None
+    edit_id: Optional[UUID] = None       # the edit row (team edits) — the Revert target
+    reverts_edit_id: Optional[UUID] = None  # set when this edit was itself a revert
 
 
 class GbpMonitorStatus(BaseModel):

@@ -182,6 +182,15 @@ async def discard_edit(client_id: UUID, edit_id: UUID, auth: dict = Depends(requ
     return {"ok": True}
 
 
+@router.post("/clients/{client_id}/gbp/profile/edits/{edit_id}/revert", response_model=GbpProfileEdit)
+async def revert_edit(client_id: UUID, edit_id: UUID, auth: dict = Depends(require_staff)):
+    """Stage a draft that restores the prior value of an APPLIED edit (its
+    on-file ``current_value``). Returns the new draft — the operator reviews and
+    clicks Apply; nothing is applied here (ADR 0004). Not freeze-gated (drafting
+    runs during a freeze; the subsequent Apply is the freeze-gated step)."""
+    return await svc.revert_edit(str(client_id), str(edit_id), auth["user_id"])
+
+
 @router.post("/clients/{client_id}/gbp/profile/edits/{edit_id}/refresh", response_model=GbpProfileJob)
 async def refresh_edit(client_id: UUID, edit_id: UUID, auth: dict = Depends(require_staff)):
     """Manually kick the reconciler for a pending_review edit (Refresh status)."""
