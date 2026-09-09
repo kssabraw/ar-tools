@@ -300,9 +300,45 @@ grilling session, folded into the PRD:
 
 **Deferred.** Structured services + AI-assigned categories; a real `service_gap` check in
 `gbp_audit` (needs this module's live `serviceItems` read — building it earlier = a throwaway
-capture path); categories + attributes editing; scheduled periodic drift detection; a Client
-Report "profile updates" line + strategy-digest `gbp_profile` provider; keyword-research/
-page-inventory grounding for the services draft (Phase 2.5).
+capture path); ~~categories + attributes editing~~ (now IN scope — see the 2026-09-09 expansion
+below); scheduled periodic drift detection; a Client Report "profile updates" line +
+strategy-digest `gbp_profile` provider; keyword-research/page-inventory grounding for the services
+draft (Phase 2.5).
+
+### Field-scope expansion (owner, 2026-09-09) — PRD bumped to v1.1
+
+The owner expanded the editable-field surface beyond the original three (description / services /
+hours, all built + merged dark in PR #1011). Recorded in the PRD's **v1.1 amendments block**
+(authoritative on scope) and ADR 0005.
+
+- **In scope now — the full editable set EXCEPT the NAP identity triplet.** Tiered:
+  - **Tier A (same `locations.patch` endpoint):** `websiteUri`, `labels`, `specialHours`,
+    `moreHours`, `serviceArea`, `openInfo` → **Phase 3a**.
+  - **Tier B (category-gated reads):** `categories` (needs a `categories.list`/`batchGet` picker;
+    consumes the existing `gbp_audit` `category_gaps` finding — so the loop's automatic reach
+    grows) and `attributes` (the **separate** `getAttributes`/`updateAttributes` endpoints +
+    category-scoped `attributes.list`) → **Phase 3b**.
+  - **Tier C (media):** photos / logo / cover via the **v4** `accounts.locations.media` API (NOT
+    `locations.patch`; mirror the GBP-Posts v4/httpx + image-upload pattern; own storage, not the
+    `gbp_profile_edits` row; verify the media access grant on PLATFORM) → **Phase 3c**.
+- **OUT — the NAP identity triplet** (`title` / `storefrontAddress` / `phoneNumbers`), deliberately
+  held: editing these via API triggers GBP re-verification / suspension on established listings —
+  the highest-blast-radius field group. **ADR 0005.** If ever revisited, it's a separate hardened
+  flow (unverified block + typed-value re-confirm + likely owner-only), never a fold-in. (Owner
+  picked **media only** from the two higher-stakes groups offered; NAP declined.)
+- **No auto-apply still governs every new field** (ADR 0004, scope-extended). Extra
+  "confirm-the-values" gate now also covers `serviceArea`, `openInfo` (`CLOSED_*`), a
+  **primary-category** change, and a logo/cover media replace. The AI **never drafts** hours, a
+  business closure, or a primary-category downgrade; it may *suggest* additional categories,
+  service-area places, and applicable attributes (human confirms). `serviceArea` prefills from the
+  already-captured `clients.gbp.service_area_places` / `clients.target_cities`.
+- **Data model:** `gbp_profile_edits.field` widens (add `website|labels|special_hours|more_hours|
+  service_area|open_info|categories|attributes`). **A migration IS required** — the live column
+  has `check (field in ('description','hours','services'))` (verified 2026-09-09), so 3a/3b must
+  drop/rebuild that CHECK. `media` is a distinct op, not a `field` value. New `ErrorDetails` codes
+  per PRD §8 + the v1.1 block.
+- **Process:** spec-first (owner choice) — PRD/decisions/ADRs updated before code. Build order
+  3a → 3b → 3c.
 
 
 ---
