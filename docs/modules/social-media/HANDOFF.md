@@ -4,13 +4,16 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
-## Current state (2026-09-08) — P0 + backend publish path + frontend compose are BUILT, MERGED & (nearly) LIVE
+## Current state (2026-09-08) — P0 publish path + the **full P2 Creator** are BUILT, MERGED & LIVE
 
-The module went from design-complete to a **working, end-to-end Social Media manager** on `main`.
+The module is a **working end-to-end Social Media manager PLUS the repurpose-engine Creator** on `main`.
 Build order diverged from the design phasing on purpose: **publish-path-first** (a thin, reliable
 manual compose → publish/schedule spine, Facebook-first but platform-general), then media/video/
-scheduling, then the R2 media store, then the frontend. **Competitor research (P1) and the AI Creator
-generation engine (P2) are NOT built yet** — this is a manual composer today, not the repurpose engine.
+scheduling, then the R2 media store, then the frontend, then the **P2 Creator** (AI copy, AI images,
+Angle fan-out). **The P2 Creator is COMPLETE and merged (PR #1036, squash `aaecd5f`, 2026-09-08).**
+Still unbuilt toward the full vision: **P1 competitor research** (Apify + TwelveLabs — would also ground
+angle proposals in competitor signals), **P4 autonomy**, **P5 video/YouTube**. The one open confidence
+step is a **live test post** (also the live R2 proof).
 
 **Merged to `main`:**
 - **P0 foundations + publish path — PR #1027** (squash `b14f1b3`). Migrations applied live:
@@ -30,7 +33,11 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   (multipart `POST .../social/media` → R2), feed/reel/story, publish-now or schedule, advanced
   platform-specific JSON, and an auto-polling recent-posts list. Social error codes added to
   `errorGuidance.ts`. `tsc -b` + `vite build` green.
-- **AI copy drafting (P2 Creator, copy half) — NEW.** `services/social/creator.py` (pure prompt
+- **P2 Creator (AI copy + AI images + Angle fan-out) — PR #1036** (squash `aaecd5f`, MERGED 2026-09-08;
+  migration `20260908130000_social_fanout_job.sql` applied live). The four sub-parts below shipped together
+  in that PR, plus a hardening pass (freeze cleanup, budget refunds on failed images, no orphan drafts —
+  see "Hardening" below).
+- **AI copy drafting (P2 Creator, copy half).** `services/social/creator.py` (pure prompt
   builders + async `generate_copy`) + `POST /clients/{id}/social/draft-copy` + a **"Draft with AI"**
   panel in the composer. Given a target platform (the selected account) and a Source — a **topic**,
   a **URL** (via `syndication_rewrite.extract_source_content`), a **blog run**
@@ -42,7 +49,7 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   panel prefills the copy box; the human edits → approves → publishes (the real draft/post is created
   at publish, unchanged). Not metered against the social budget (our own Anthropic key, like the
   blog/GBP writers). 12 pure-helper unit tests (`tests/test_social_creator.py`).
-- **AI image generation (Pro-only) — NEW.** `services/nano_banana.py::generate_image_pro` (Gemini 3
+- **AI image generation (Pro-only).** `services/nano_banana.py::generate_image_pro` (Gemini 3
   Pro Image, `gemini-3-pro-image-preview`, passes `generationConfig.imageConfig.aspectRatio`) +
   `services/social/image.py` + `POST /clients/{id}/social/generate-image` + a **"Generate an image
   with AI"** panel in the composer's Media section. Per-platform aspect ratio via `resolve_aspect_ratio`
@@ -54,7 +61,7 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   — the mixed 2.5-Flash-for-square path is deferred. Config: `nano_banana_pro_model` /
   `social_image_size` (`2K`) / `social_image_cost_usd`. 10 pure-helper unit tests
   (`tests/test_social_image.py`).
-- **Angle fan-out + Draft persistence (the full Creator loop) — NEW.** `services/social/creator.py::propose_angles`
+- **Angle fan-out + Draft persistence (the full Creator loop).** `services/social/creator.py::propose_angles`
   (`POST …/social/angles`) proposes 3–5 distinct angles from a Source (grounded in source + voice/ICP).
   `services/social/fanout.py` + `POST …/social/fan-out` fans ONE chosen angle across the selected platforms
   as a background **`social_fanout`** job (migration `20260908130000_social_fanout_job.sql`, applied live;
@@ -70,7 +77,17 @@ generation engine (P2) are NOT built yet** — this is a manual composer today, 
   Drafts tab to edit + publish each. `creator.load_source` was refactored to kwargs and the copy LLM +
   voice-enforcement extracted to `draft_platform_copy` so single-copy and fan-out share ONE path. Config:
   `social_angles_count` (4) / `_max_tokens`. 7 pure-helper tests (`tests/test_social_fanout.py`). **P2 Creator
-  is now functionally complete.**
+  is COMPLETE.**
+- **Hardening (folded into PR #1036 after an adversarial review).** All edge/robustness, no happy-path
+  defects: (1) **freeze mid-flight no longer orphans drafts** — `social_fanout` is deliberately NOT in the
+  worker `FREEZE_GATED_JOB_TYPES`; freeze is enforced INSIDE `run_fanout_job` (a client frozen between
+  enqueue and execution gets its pending `generating` drafts marked `generation_failed`, no paid work; the
+  enqueue route still `assert_not_frozen`s). (2) **Failed images refund the budget** — new `budget.release`
+  (fail-safe) is called on any generation/store failure, and a media-store write error returns a clean
+  `social_image_generation_failed` (502) not a bare 500. (3) `enqueue_fanout` archives its just-created
+  drafts if the `async_jobs` insert fails. (4) Per-image redundant client/policy reads removed (loaded once,
+  threaded in). (5) Frontend: a failed fan-out job is surfaced in the Create tab; the Drafts poll is bounded
+  (10 min) so a stuck/crashed worker can't poll forever. 58 social tests green.
 
 **Provisioned + live on PLATFORM:** `SOCIAL_ENABLED=true`; R2 (`R2_ACCOUNT_ID` / `_ACCESS_KEY_ID` /
 `_SECRET_ACCESS_KEY` / `R2_BUCKET=smm-media` / `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`,
@@ -149,10 +166,11 @@ posts; feed image aspect ratio 4:5–1.91:1.
 - **cobalt** — self-hosted; **P5 only**, not needed for v1.
 - Config settings that landed with #1027: `social_posting_provider`, `postpeer_api_key`,
   `postpeer_base_url`, `social_enabled`, `social_monthly_ceiling_default_usd` (75.0), `social_credit_usd`
-  (0.0085), `social_max_upload_mb` (200.0), `r2_*`. Added with AI copy/image: `social_copy_*`,
+  (0.0085), `social_max_upload_mb` (200.0), `r2_*`. Added with the P2 Creator (#1036): `social_copy_*`,
   `nano_banana_pro_model` (`gemini-3-pro-image-preview`), `social_image_size` (`2K`),
-  `social_image_cost_usd` (0.134) — all have working defaults (no new env needed; image gen reuses the
-  already-set `GEMINI_API_KEY`). Still to add when P1 lands: `apify_api_token`, `twelvelabs_api_key`.
+  `social_image_cost_usd` (0.134), `social_angles_count` (4) / `social_angles_max_tokens` — all have
+  working defaults (no new env needed; copy/angles reuse `ANTHROPIC_API_KEY`, images reuse the already-set
+  `GEMINI_API_KEY`). Still to add when P1 lands: `apify_api_token`, `twelvelabs_api_key`.
 
 ## Open decisions for the owner (not yet made)
 
@@ -167,33 +185,34 @@ posts; feed image aspect ratio 4:5–1.91:1.
 
 ## Next actions, in order
 
-1. **Live test post** through the compose screen on a low-stakes/agency-owned account — the module is
-   fully wired (all env set), so this is the confidence step, not a build step. It proves the whole chain
-   (PostPeer account listing → compose → R2 media upload → publish) and doubles as the live R2 proof, so
-   running `r2_check.py` in isolation is now optional.
-2. ~~Answer the four PostPeer questions~~ / ~~P0 foundations~~ / ~~publish path~~ / ~~R2~~ /
-   ~~frontend compose~~ / ~~POSTPEER_API_KEY~~ / ~~SOCIAL_ENABLED~~ — **all done** (see the state section).
-3. **Owner scope decisions still open** (unchanged from below) — mixed image path, IG Reels/Stories,
-   IG carousel Draft type, default per-client monthly ceiling, autonomy rollout.
-4. **Remaining build, roughly in order:**
-   - ~~**AI copy drafting**~~ — ✅ **BUILT**: the composer's "Draft with AI" panel drafts platform-native
-     copy from a topic / URL / blog run / saved page.
-   - ~~**AI image generation**~~ — ✅ **BUILT (Pro-only)**: the composer's "Generate an image with AI"
-     panel renders a per-platform image via nano-banana Pro (`gemini-3-pro-image-preview`). Owner ruling:
-     Pro-only for now; the mixed 2.5-Flash-for-square cost-saver is a future option. NOTE the model id is
-     a preview and `nano_banana_pro_model` is env-overridable if Google rotates it.
-   - ~~**Angle fan-out + Draft persistence**~~ — ✅ **BUILT**: the "Create with AI" + "Drafts" tabs — one
-     source → one angle → per-platform Drafts → review/edit/publish. **P2 Creator is complete.** Next up
-     the repurpose engine: **P1 competitor research** (Apify + TwelveLabs; also grounds angle proposals in
-     competitor signals — needs `APIFY_API_TOKEN` + `TWELVELABS_API_KEY`), then **P4 autonomy**, **P5 video**.
+1. **Live test post** (STILL PENDING — highest priority; a confidence step, not a build step). Through the
+   compose screen on a **low-stakes/agency-owned account**, prove the whole chain: PostPeer account listing
+   → compose → R2 media upload → publish. Doubles as the live R2 write/read proof (so `r2_check.py` in
+   isolation is optional). Now that the P2 Creator is merged + deployed, this can also exercise **Draft with
+   AI**, **Generate an image with AI**, and **fan-out → Drafts → publish**. The 4 connected accounts are REAL
+   client LinkedIn/Facebook accounts — use a throwaway/agency account, not a client's audience.
+2. **Everything through P2 is done + merged + live** — P0 foundations, publish path, R2, frontend compose,
+   `POSTPEER_API_KEY`/`SOCIAL_ENABLED`, and the **full P2 Creator (PR #1036)** with its hardening pass.
+3. **Owner scope decisions still open** (see "Open decisions" below) — IG Reels/Stories scope, IG carousel
+   Draft type, default per-client monthly ceiling, autonomy rollout. (The **mixed image path** is DECIDED:
+   Pro-only for now.)
+4. **Remaining build, roughly in order** (the repurpose-engine vision beyond P2):
+   - **P1 Competitor research** (Apify Signals + TwelveLabs analyze-in-place) — the next major build.
+     Analyze-in-place per ADR-0002 (public content, never re-hosted media). Extend `client_competitors`
+     via the child `social_competitor_handles` table (already migrated); output → `social_competitor_signals`.
+     **It also grounds Angle proposals in competitor signals** (the `propose_angles` prompt already leaves
+     room for this — the glossary says angles are grounded in "relevant Competitor Signals"). **Needs
+     `APIFY_API_TOKEN` + `TWELVELABS_API_KEY` provisioned on PLATFORM (both currently unset).**
    - **YouTube poster** — waiting on PostPeer's `/docs/platforms/youtube` (title/description/tags/
-     thumbnail/Shorts fields) before mapping.
+     thumbnail/Shorts fields) before mapping. Uploads existing videos, not generation.
    - **Big-video direct-to-R2 (presign)** — the `POST .../social/media/presign` endpoint exists; the UI
      uses server upload today. Wiring the browser PUT needs an **R2 CORS policy** allowing PUT from the
      Netlify origin to the R2 S3 endpoint.
-   - **P1 competitor research** (Apify + TwelveLabs), **P2 AI Creator** (Source → Angle → per-platform
-     Draft fan-out + nano-banana Pro), **P4 autonomy/agents**, **P5 video** — the repurpose-engine
-     vision from the PRD, none built yet.
+   - **P4 autonomy/agents** (a domain executor reusing `autonomy_policy`/`autonomy_budget`/tiers/freeze/
+     DORA veto — the orchestration loop itself is new code), **P5 video production** (Reels/Shorts, cobalt
+     self-host) — later phases from the PRD.
+   - **Mixed image path** (2.5-Flash-for-square / Pro-for-aspect-ratio, halves the dominant image cost) — a
+     deferred cost optimization, owner-decided as "later."
 
 ## Gotchas discovered during design (don't re-learn these)
 
