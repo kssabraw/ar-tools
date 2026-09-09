@@ -684,6 +684,14 @@ class Settings(BaseSettings):
     # client card for website location pages but don't flood the GBP listing.
     gbp_profile_services_max: int = 20
     gbp_profile_matrix_area_cap: int = 5
+    # AI categories draft — propose SECONDARY (additional) categories only; the
+    # primary category is never AI-changed (it shifts ranking and is gated behind
+    # a manual confirm). The proposed additional set is capped here (owner ruling:
+    # max 7). The draft is additive — it never drops an existing secondary the
+    # operator chose, and if the listing already carries this many it proposes
+    # nothing (empty_draft). Kept below Google's own 9-additional limit to leave
+    # the operator room to add their own on review.
+    gbp_profile_secondary_categories_max: int = 7
     # Profile monitor: a daily read of each 'ok' listing that alerts on a
     # suspension / access loss or an out-of-band profile change (Google or an
     # outside source). Alert-only (never auto-freezes/reverts). Ships dark on top

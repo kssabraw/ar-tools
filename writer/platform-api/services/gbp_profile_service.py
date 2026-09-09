@@ -788,10 +788,11 @@ def enqueue_draft(
     client_id: str, location_row_id: str, field: str, user_id: Optional[str],
     source: str = "ai",
 ) -> str:
-    """Enqueue a gbp_profile_draft job (drafts a description or services edit as a
-    status='draft' row for review). Hours is manual-only. Returns the job id."""
+    """Enqueue a gbp_profile_draft job (drafts a description, services, or
+    (secondary) categories edit as a status='draft' row for review). Hours is
+    manual-only. Returns the job id."""
     _assert_enabled()
-    if field not in ("description", "services"):
+    if field not in ("description", "services", "categories"):
         raise HTTPException(status_code=400, detail="field_not_ai_draftable")
     location = _location(location_row_id, client_id)
     res = (
@@ -1015,6 +1016,176 @@ async def _draft_services(
         },
     )
     return picks
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# AI categories draft — propose SECONDARY (additional) categories only. The
+# primary is never AI-changed (it shifts ranking; the manual editor gates a
+# primary change behind an extra confirm). The model proposes category display
+# NAMES grounded in the business; the app resolves each against Google's live
+# category catalog (categories.list) to a real gcid — the model can never invent
+# a category id. The proposal is additive (never drops an operator's secondary)
+# and capped at `gbp_profile_secondary_categories_max` (owner ruling: 7).
+# ───────────────────────────────────────────────────────────────────────────
+_CATEGORIES_SYSTEM = (
+    "You propose SECONDARY (additional) categories for a local business's Google "
+    "Business Profile. The listing already has a PRIMARY category and you NEVER "
+    "change it. Secondary categories tell Google the OTHER real lines of business "
+    "the company offers, broadening the searches it can appear for without diluting "
+    "the primary.\n"
+    "Return ONLY a JSON array of category display-name strings — no prose, no "
+    "markdown — most-relevant first, e.g. [\"Roofing contractor\", \"Gutter "
+    "cleaning service\", \"Siding contractor\"].\n"
+    "Rules:\n"
+    "- Propose ONLY categories that match a REAL line of business grounded in the "
+    "facts provided. NEVER invent a service the business doesn't offer, and NEVER "
+    "pad the list to reach a number — fewer, accurate categories beat a loose "
+    "stretch.\n"
+    "- Use Google's OWN category names as closely as you can (they map to a fixed "
+    "catalog); a name that isn't a real Google category is dropped.\n"
+    "- Do NOT repeat the primary category or any existing secondary categories you "
+    "are given.\n"
+    "- Categories are national — NEVER include a city, suburb, or other location in "
+    "a category name.\n"
+    "- Propose at most {max} categories."
+)
+
+
+def parse_category_names(raw: str) -> list[str]:
+    """Parse the model's JSON array of category display names → a deduped, ordered
+    list of clean strings (case-insensitive dedup, first spelling wins). Tolerates
+    prose/fences. Pure (unit-tested)."""
+    try:
+        data = json.loads(_json_slice(raw))
+    except Exception:  # noqa: BLE001 — a non-JSON reply degrades to empty
+        return []
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        name = item.strip() if isinstance(item, str) else ""
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            out.append(name)
+    return out
+
+
+def pick_category_match(name: str, matches: list[dict]) -> Optional[dict]:
+    """Choose the best catalog match for a proposed category name: an exact
+    case-insensitive display-name match if present, else the top result. None when
+    there are no matches. Pure (unit-tested)."""
+    if not matches:
+        return None
+    target = (name or "").strip().lower()
+    for m in matches:
+        if (m.get("name") or "").strip().lower() == target and m.get("id"):
+            return m
+    top = matches[0]
+    return top if top.get("id") else None
+
+
+def select_secondary_categories(
+    resolved: list[dict], existing_additional: list[dict], primary_id: str, max_total: int,
+) -> list[dict]:
+    """Merge the AI's resolved secondary categories into the listing's existing
+    additional set: keep every existing secondary (never drop the operator's
+    choices), then append newly-resolved ones (excluding the primary + any already
+    present), deduped by id. Capped at ``max(max_total, len(existing))`` — the
+    proposal reaches the cap but never removes an existing category above it.
+    Pure (unit-tested)."""
+    out: list[dict] = []
+    seen: set[str] = {primary_id} if primary_id else set()
+    for cat in existing_additional or []:
+        cid = (cat.get("id") or "").strip() if isinstance(cat, dict) else ""
+        if cid and cid not in seen:
+            seen.add(cid)
+            out.append({"id": cid, "name": cat.get("name") or cid})
+    cap = max(max_total, len(out))
+    for cat in resolved or []:
+        if len(out) >= cap:
+            break
+        cid = (cat.get("id") or "").strip() if isinstance(cat, dict) else ""
+        if cid and cid not in seen:
+            seen.add(cid)
+            out.append({"id": cid, "name": cat.get("name") or cid})
+    return out
+
+
+async def _draft_categories(
+    client: dict, categories_value: dict, card: Optional[dict],
+) -> Optional[dict]:
+    """Draft the listing's categories: keep the live PRIMARY, propose up to
+    ``gbp_profile_secondary_categories_max`` SECONDARY categories grounded in the
+    business, each resolved to a real gcid via Google's category catalog. Returns
+    the full ``{primary, additional}`` value, or None when there is nothing
+    NET-NEW to propose (→ empty_draft)."""
+    from services import anthropic_failover  # lazy
+    from services.gbp_posts_service import build_client_context, render_voice_card_block
+    from services.report_llm import retry_transient
+
+    primary = categories_value.get("primary") or {}
+    primary_id = (primary.get("id") or "").strip()
+    existing_additional = list(categories_value.get("additional") or [])
+    max_total = settings.gbp_profile_secondary_categories_max
+
+    have = ", ".join(
+        [primary.get("name") or primary_id]
+        + [c.get("name") or c.get("id") for c in existing_additional]
+    ) or "(none)"
+    ask = [
+        "Propose the secondary (additional) Google Business Profile categories for "
+        "this business.",
+        f"Primary category (keep — never propose changing it): {primary.get('name') or primary_id or '(unknown)'}.",
+        f"Categories already on the listing (do NOT repeat any of these): {have}.",
+        _services_grounding(client, []),
+    ]
+    user = build_client_context(client) + "\n\n" + "\n".join(ask)
+    voice_block = render_voice_card_block(card)
+    if voice_block:
+        user += "\n\n" + voice_block
+    api_client = anthropic_failover.FailoverAsyncAnthropic(timeout=60)
+    resp = await retry_transient(
+        lambda: api_client.messages.create(
+            model=settings.gbp_profile_draft_model, max_tokens=settings.gbp_profile_draft_max_tokens,
+            system=_CATEGORIES_SYSTEM.format(max=max_total),
+            messages=[{"role": "user", "content": user}],
+        ),
+        max_retries=2, log_tag="gbp_profile_categories_draft",
+    )
+    raw = "\n".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
+    # Over-fetch a small buffer of candidate names so a few unresolvable ones
+    # (a name that isn't a real Google category) still leave room to reach the cap.
+    names = parse_category_names(raw)[: max_total + 3]
+
+    resolved: list[dict] = []
+    for name in names:
+        try:
+            catalog = await asyncio.to_thread(
+                api.search_categories, name,
+                settings.gbp_profile_service_region_code,
+                settings.gbp_profile_service_language_code,
+            )
+        except Exception as exc:  # noqa: BLE001 — one lookup failing never fails the draft
+            logger.info("gbp_profile.category_search_failed", extra={"name": name, "error": str(exc)[:200]})
+            continue
+        match = pick_category_match(name, api.parse_category_search(catalog))
+        if match:
+            resolved.append(match)
+
+    additional = select_secondary_categories(resolved, existing_additional, primary_id, max_total)
+    existing_ids = {(c.get("id") or "").strip() for c in existing_additional}
+    if not any((c.get("id") or "").strip() not in existing_ids for c in additional):
+        return None  # nothing net-new to propose
+    logger.info(
+        "gbp_profile.categories_plan",
+        extra={
+            "proposed_names": len(names), "resolved": len(resolved),
+            "existing_additional": len(existing_additional), "additional": len(additional),
+        },
+    )
+    return {"primary": primary or None, "additional": additional}
 
 
 def _services_grounding(client: dict, existing: list[dict]) -> str:
@@ -1360,6 +1531,13 @@ async def run_draft_job(job: dict) -> None:
             proposed = await _draft_description(client, parsed["description"], card)
             current = parsed["description"]
             if not proposed:
+                raise HTTPException(status_code=502, detail="empty_draft")
+        elif field == "categories":
+            current = parsed["categories_value"]
+            if not (current.get("primary") or {}).get("id"):
+                raise HTTPException(status_code=502, detail="no_primary_category")
+            proposed = await _draft_categories(client, current, card)
+            if not proposed:  # nothing net-new to propose
                 raise HTTPException(status_code=502, detail="empty_draft")
         else:  # services
             resp = await asyncio.to_thread(

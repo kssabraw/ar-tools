@@ -1120,9 +1120,13 @@ function CategoriesCard({ clientId, locationRowId, current, edit, onChanged }: {
   const [primary, setPrimary] = useState<CategoryRef | null>(null)
   const [additional, setAdditional] = useState<CategoryRef[]>([])
   const [query, setQuery] = useState('')
-  const { err, setErr } = useCardJobs(clientId, locationRowId, 'categories', onChanged)
+  const { err, setErr, job } = useCardJobs(clientId, locationRowId, 'categories', () => { onChanged(); refresh() })
   const proposed = edit && typeof edit.proposed_value === 'object' && edit.proposed_value ? (edit.proposed_value as CategoriesValue) : null
   const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+
+  // Ask the AI to propose SECONDARY categories (never the primary), max 7. Lands
+  // as a draft for review — nothing is applied automatically.
+  const draft = () => { setErr(null); job.start(() => api.post<Job>(`/clients/${clientId}/gbp/profile/draft`, { location_row_id: locationRowId, field: 'categories' }).then((j) => j.job_id), undefined) }
 
   const startEdit = () => {
     const src = proposed ?? current
@@ -1155,7 +1159,7 @@ function CategoriesCard({ clientId, locationRowId, current, edit, onChanged }: {
   })
 
   return (
-    <Card title="Categories" subtitle="The listing's primary + additional business categories. Changing the PRIMARY category shifts how the listing ranks — confirm before applying.">
+    <Card title="Categories" subtitle="The listing's primary + additional business categories. The AI proposes up to 7 secondary categories (never the primary). Changing the PRIMARY category shifts how the listing ranks — confirm before applying.">
       {!current?.primary ? <CurrentValue empty>No categories set.</CurrentValue> : (
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#eef2ff', color: '#3730a3', fontWeight: 600 }}>
@@ -1222,6 +1226,9 @@ function CategoriesCard({ clientId, locationRowId, current, edit, onChanged }: {
       ) : (
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button onClick={startEdit} style={btn('#fff', '#334155')}><LayoutGrid size={13} /> Edit categories</button>
+          <button onClick={draft} disabled={job.running || !current?.primary} style={btn('#fff', ACCENT)} title="Propose secondary categories (max 7)">
+            <Sparkles size={13} /> {job.running ? 'Drafting…' : 'Suggest with AI'}
+          </button>
         </div>
       )}
     </Card>
