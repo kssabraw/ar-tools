@@ -1168,7 +1168,7 @@ async def _draft_categories(
                 settings.gbp_profile_service_language_code,
             )
         except Exception as exc:  # noqa: BLE001 — one lookup failing never fails the draft
-            logger.info("gbp_profile.category_search_failed", extra={"name": name, "error": str(exc)[:200]})
+            logger.info("gbp_profile.category_search_failed", extra={"category_name": name, "error": str(exc)[:200]})
             continue
         match = pick_category_match(name, api.parse_category_search(catalog))
         if match:
