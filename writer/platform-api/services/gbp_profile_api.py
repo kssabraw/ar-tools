@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 # state). categories is REQUIRED so the services editor can offer valid ids.
 READ_MASK = (
     "name,title,profile.description,regularHours,specialHours,serviceItems,"
-    "categories,metadata"
+    "categories,metadata,serviceArea,storefrontAddress"
 )
 
 # Mon..Sun → the v1 DayOfWeek enum. Our internal hours rows key on 0=Monday.
@@ -333,6 +333,36 @@ def parse_categories(loc: dict) -> list[dict]:
         if cid:
             out.append({"id": cid, "name": cat.get("displayName") or cid})
     return out
+
+
+def parse_service_area(loc: dict) -> list[str]:
+    """The service-area place NAMES a listing publishes (v1
+    ``serviceArea.places.placeInfos[].placeName``) — the towns/areas the business
+    serves. A candidate list for the services matrix; pure (unit-tested)."""
+    infos = (((loc or {}).get("serviceArea") or {}).get("places") or {}).get("placeInfos") or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for pi in infos:
+        if not isinstance(pi, dict):
+            continue
+        nm = (pi.get("placeName") or "").strip()
+        key = nm.lower()
+        if nm and key not in seen:
+            seen.add(key)
+            out.append(nm)
+    return out
+
+
+def parse_storefront_city(loc: dict) -> str:
+    """The listing's home city as ``"City, ST"`` (v1 ``storefrontAddress``:
+    ``locality`` + ``administrativeArea``), or the best single part available, or
+    ``""`` for a pure service-area business with no storefront. Pure."""
+    addr = (loc or {}).get("storefrontAddress") or {}
+    city = (addr.get("locality") or "").strip()
+    state = (addr.get("administrativeArea") or "").strip()
+    if city and state:
+        return f"{city}, {state}"
+    return city or state or ""
 
 
 def parse_hours(loc: dict) -> dict:

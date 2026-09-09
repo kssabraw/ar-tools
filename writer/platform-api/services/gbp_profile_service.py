@@ -541,13 +541,31 @@ _DESC_SYSTEM = (
 )
 
 _SERVICES_SYSTEM = (
-    "You choose which of Google's approved service types apply to a local "
-    "business's Google Business Profile. You are given the ONLY allowed service "
-    "types (Google-defined, per the listing's categories). Return ONLY a JSON "
-    "array (no prose) of the serviceTypeId strings that genuinely match the "
-    "business's real offering — up to 20, most relevant first. Pick ONLY ids from "
-    "the provided list; NEVER invent an id or a service. Choose a service type "
-    "only if the business actually offers it."
+    "You choose the services to list on a local business's Google Business "
+    "Profile. Return ONLY a JSON object (no prose, no markdown) of this shape:\n"
+    "{\n"
+    '  "structured": ["<serviceTypeId>", ...],\n'
+    '  "services": [{"label": "<service name, NO city>", "category": "<a listing '
+    'category name>", "description": "<optional, <=300 chars>", "localize": true}],\n'
+    '  "areas": ["City, ST", ...]\n'
+    "}\n"
+    "Rules:\n"
+    "- structured: pick ONLY serviceTypeIds from the allowed list you are given "
+    "(most relevant first, up to 20). If none are provided or none genuinely "
+    "apply, use []. NEVER invent an id.\n"
+    "- services: the business's REAL services as concise CUSTOM labels — this is "
+    "the main deliverable, especially when no structured types exist. NEVER put a "
+    "city or location in a label (the app adds locations). Ground every service in "
+    "the facts provided; never invent a service the business doesn't offer. Set "
+    "localize=true for a core service worth offering per-area (one a customer "
+    "searches together with a place name), false for a one-off or non-geographic "
+    "service (e.g. a free consultation). Prefer 6–15 services; do not pad.\n"
+    "- category: the listing category (by its display name) the service belongs "
+    "to — the closest one.\n"
+    "- areas: LEAVE EMPTY unless you are explicitly told no target areas are on "
+    "file; only then list the specific cities/areas this business actually serves, "
+    "drawn STRICTLY from its stated service area or location — never invented.\n"
+    "- No promotional superlatives, no phone numbers, no URLs."
 )
 
 
@@ -609,8 +627,15 @@ def _content_violations(text: str) -> list[str]:
 
 async def _draft_services(
     client: dict, categories: list[dict], existing: list[dict], card: Optional[dict],
-    service_types: list[dict],
+    service_types: list[dict], areas: list[str],
 ) -> list[dict]:
+    """Draft the services list: the model returns a small services PLAN
+    (Google-approved structured picks + real CUSTOM services with a ``localize``
+    flag), and the app deterministically crosses the localizable customs with the
+    client's target ``areas`` (from the card + live listing — never model-invented)
+    into a service×location matrix. When no areas are on file the model may
+    propose the real ones. Returns the merged pick list (may be empty only if the
+    model returned nothing usable)."""
     from services import anthropic_failover  # lazy
     from services.gbp_posts_service import build_client_context, render_voice_card_block
     from services.report_llm import retry_transient
@@ -622,11 +647,16 @@ async def _draft_services(
         type_lines.append(f"Category — {cat['name']}:")
         type_lines.extend(f"  - {st['display_name']} (id: {st['service_type_id']})" for st in cat["service_types"])
     available = "\n".join(type_lines) or "(no structured service types available for these categories)"
+    cat_names = ", ".join(c["name"] for c in categories) or "(none)"
     grounding = _services_grounding(client, existing)
+    areas_line = ", ".join(areas) if areas else "none"
     ask = [
-        "Choose the Google-approved service types that apply to this Google Business Profile.",
-        f"Allowed service types (pick ONLY serviceTypeIds from here):\n{available}",
+        "Choose the services for this Google Business Profile.",
+        f"Listing categories (use these display names for 'category'): {cat_names}",
+        f"Allowed Google service types (pick serviceTypeIds ONLY from here; may be empty):\n{available}",
         f"Known offering / existing services / silo topics:\n{grounding}",
+        f"Target areas already on file (build per-area versions of localizable "
+        f"services from THESE; if 'none', you may propose the real areas): {areas_line}",
     ]
     user = build_client_context(client) + "\n\n" + "\n".join(ask)
     voice_block = render_voice_card_block(card)
@@ -641,7 +671,20 @@ async def _draft_services(
         max_retries=2, log_tag="gbp_profile_services_draft",
     )
     raw = "\n".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
-    return map_drafted_service_types(raw, service_types)
+    plan = parse_service_plan(raw)
+    picks = assemble_service_picks(
+        plan, service_types, categories, areas,
+        settings.gbp_profile_services_max, settings.gbp_profile_matrix_area_cap,
+    )
+    logger.info(
+        "gbp_profile.services_plan",
+        extra={
+            "structured": sum(1 for p in picks if p.get("kind") == "structured"),
+            "custom": sum(1 for p in picks if p.get("kind") == "free_form"),
+            "areas_on_file": len(areas), "areas_proposed": len(plan.get("areas") or []),
+        },
+    )
+    return picks
 
 
 def _services_grounding(client: dict, existing: list[dict]) -> str:
@@ -701,22 +744,34 @@ def map_drafted_services(raw: str, categories: list[dict]) -> list[dict]:
 
 
 def merge_drafted_services(existing: list[dict], additions: list[dict]) -> list[dict]:
-    """Additive AI draft: keep the listing's existing services and append the
-    newly-suggested structured picks not already present (by serviceTypeId), so a
-    'Suggest with AI' never DROPS an existing custom or structured service when
-    applied (the proposed value replaces the whole serviceItems list). Pure
-    (unit-tested)."""
-    have = {
+    """Additive AI draft: keep the listing's existing services and append only the
+    newly-suggested picks not already present — structured deduped by
+    serviceTypeId, free-form (custom) deduped by label (case-insensitive) — so a
+    'Suggest with AI' never DROPS an existing service and never proposes a visible
+    duplicate (the proposed value replaces the whole serviceItems list on apply).
+    Pure (unit-tested)."""
+    have_struct = {
         (s.get("service_type_id") or s.get("label") or "").strip()
         for s in existing or [] if (s.get("kind") or "free_form") == "structured"
     }
+    have_free = {
+        (s.get("label") or "").strip().lower()
+        for s in existing or [] if (s.get("kind") or "free_form") == "free_form"
+    }
     merged = list(existing or [])
     for add in additions or []:
-        sid = (add.get("service_type_id") or "").strip()
-        if sid and sid in have:
-            continue
-        if sid:
-            have.add(sid)
+        if (add.get("kind") or "free_form") == "structured":
+            sid = (add.get("service_type_id") or "").strip()
+            if sid and sid in have_struct:
+                continue
+            if sid:
+                have_struct.add(sid)
+        else:
+            lbl = (add.get("label") or "").strip().lower()
+            if lbl and lbl in have_free:
+                continue
+            if lbl:
+                have_free.add(lbl)
         merged.append(add)
     return merged
 
@@ -764,6 +819,181 @@ def _json_slice(raw: str) -> str:
     return raw[start:end + 1] if 0 <= start < end else raw
 
 
+def _json_object_slice(raw: str) -> str:
+    """The first {...} JSON object in a model reply (tolerates prose/fences)."""
+    start = raw.find("{")
+    end = raw.rfind("}")
+    return raw[start:end + 1] if 0 <= start < end else raw
+
+
+def _area_name(entry) -> str:
+    """A card/listing area entry (a plain string, or a ``{name|placeName}`` dict)
+    → its display name. Pure."""
+    if isinstance(entry, str):
+        return entry.strip()
+    if isinstance(entry, dict):
+        return (entry.get("name") or entry.get("placeName") or "").strip()
+    return ""
+
+
+def collect_target_areas(client: dict, loc: dict, cap: int) -> list[str]:
+    """The 'areas to target' for the service×location matrix, deterministically —
+    the client CARD first (target_cities → gbp.service_area_places →
+    business_location), then the live LISTING (serviceArea places → storefront
+    city). Deduped case-insensitively, capped. Never model-invented. Pure
+    (unit-tested)."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(name: str) -> None:
+        nm = (name or "").strip()
+        key = nm.lower()
+        if nm and key not in seen:
+            seen.add(key)
+            out.append(nm)
+
+    for entry in client.get("target_cities") or []:
+        _add(_area_name(entry))
+    gbp = client.get("gbp") or {}
+    if isinstance(gbp, dict):
+        for entry in gbp.get("service_area_places") or []:
+            _add(_area_name(entry))
+    for nm in api.parse_service_area(loc):
+        _add(nm)
+    _add(client.get("business_location") or "")
+    _add(api.parse_storefront_city(loc))
+    return out[: max(cap, 0)]
+
+
+def _resolve_category(cat_name: str, categories: list[dict]) -> str:
+    """Map a model-named category (a display name) to a listing category id,
+    falling back to the primary/first category. Pure."""
+    by_name = {
+        c["name"].strip().lower(): c["id"]
+        for c in categories or [] if c.get("name") and c.get("id")
+    }
+    default_id = categories[0]["id"] if categories else ""
+    return by_name.get((cat_name or "").strip().lower()) or default_id
+
+
+def parse_service_plan(raw: str) -> dict:
+    """Tolerant parse of the services-draft reply → ``{structured: [id...],
+    services: [{label, category, description, localize}], areas: [str]}``. Accepts
+    the object form or a bare JSON array (legacy: treated as structured ids). A
+    non-JSON reply degrades to empty. Pure (unit-tested)."""
+    empty = {"structured": [], "services": [], "areas": []}
+    try:
+        data = json.loads(_json_object_slice(raw))
+    except Exception:  # noqa: BLE001 — maybe a bare array (legacy) or junk
+        try:
+            arr = json.loads(_json_slice(raw))
+        except Exception:  # noqa: BLE001
+            return dict(empty)
+        return {**empty, "structured": arr if isinstance(arr, list) else []}
+    if isinstance(data, list):
+        return {**empty, "structured": data}
+    if not isinstance(data, dict):
+        return dict(empty)
+    services: list[dict] = []
+    for svc in data.get("services") or []:
+        if not isinstance(svc, dict):
+            continue
+        label = (svc.get("label") or "").strip()
+        if not label:
+            continue
+        services.append({
+            "label": label[:120],
+            "category": (svc.get("category") or "").strip(),
+            "description": (svc.get("description") or "").strip(),
+            "localize": bool(svc.get("localize")),
+        })
+    structured = data.get("structured")
+    areas = [a.strip() for a in (data.get("areas") or []) if isinstance(a, str) and a.strip()]
+    return {
+        "structured": structured if isinstance(structured, list) else [],
+        "services": services,
+        "areas": areas,
+    }
+
+
+def build_service_matrix(base_services: list[dict], areas: list[str], area_cap: int) -> list[dict]:
+    """Cross the localizable base services with the target areas into free-form
+    ``'<service> in <Area>'`` custom services (the service×location matrix). Areas
+    come from the client card/listing, never model-invented. Pure (unit-tested)."""
+    used = [a for a in (areas or []) if a][: max(area_cap, 0)]
+    out: list[dict] = []
+    for svc in base_services or []:
+        if not svc.get("localize"):
+            continue
+        label = (svc.get("label") or "").strip()
+        if not label or not used:
+            continue
+        for area in used:
+            out.append({
+                "kind": "free_form",
+                "label": f"{label} in {area}"[:120],
+                "description": svc.get("description") or "",
+                "category_id": svc.get("category_id") or "",
+            })
+    return out
+
+
+def assemble_service_picks(
+    plan: dict, service_types: list[dict], categories: list[dict], areas: list[str],
+    max_total: int, matrix_area_cap: int,
+) -> list[dict]:
+    """Assemble the draft's service picks from a parsed plan: Google-approved
+    structured picks (from the allowed list) + the real custom services + a
+    service×location matrix (localizable customs × target areas). Areas prefer the
+    ones on file (``areas``); only when none are on file is the model's proposed
+    ``plan['areas']`` used. Deduped (structured by id, free-form by label) and
+    capped at ``max_total`` (structured + base customs kept first, then the matrix
+    fills the remainder). Pure (unit-tested)."""
+    structured = map_drafted_service_types(json.dumps(plan.get("structured") or []), service_types)
+    base: list[dict] = []
+    for svc in plan.get("services") or []:
+        label = (svc.get("label") or "").strip()[:120]
+        if not label:
+            continue
+        base.append({
+            "kind": "free_form", "label": label,
+            "description": (svc.get("description") or "").strip(),
+            "category_id": _resolve_category(svc.get("category"), categories),
+            "localize": bool(svc.get("localize")),
+        })
+    effective_areas = list(areas) if areas else list(plan.get("areas") or [])
+    matrix = build_service_matrix(base, effective_areas, matrix_area_cap)
+    base_clean = [{k: v for k, v in b.items() if k != "localize"} for b in base]
+
+    combined: list[dict] = []
+    seen_struct: set[str] = set()
+    seen_free: set[str] = set()
+
+    def _push(item: dict) -> bool:
+        if item.get("kind") == "structured":
+            sid = (item.get("service_type_id") or "").strip()
+            if not sid or sid in seen_struct:
+                return False
+            seen_struct.add(sid)
+        else:
+            key = (item.get("label") or "").strip().lower()
+            if not key or key in seen_free:
+                return False
+            seen_free.add(key)
+        combined.append(item)
+        return True
+
+    for item in structured:
+        _push(item)
+    for item in base_clean:
+        _push(item)
+    for item in matrix:
+        if len(combined) >= max_total:
+            break
+        _push(item)
+    return combined[: max(max_total, 0)]
+
+
 async def run_draft_job(job: dict) -> None:
     """Handler for job_type='gbp_profile_draft'. Reads the live field, drafts a
     proposed value (description or services), and lands it as a status='draft'
@@ -793,7 +1023,10 @@ async def run_draft_job(job: dict) -> None:
                 settings.gbp_profile_service_language_code,
             )
             service_types = api.parse_service_types(resp, parsed["categories"])
-            ai_picks = await _draft_services(client, parsed["categories"], parsed["services"], card, service_types)
+            areas = collect_target_areas(client, loc, settings.gbp_profile_matrix_area_cap)
+            ai_picks = await _draft_services(
+                client, parsed["categories"], parsed["services"], card, service_types, areas,
+            )
             current = parsed["services"]
             if not ai_picks:
                 raise HTTPException(status_code=502, detail="empty_draft")

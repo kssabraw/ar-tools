@@ -648,7 +648,10 @@ class Settings(BaseSettings):
     # tone; hours are never AI-drafted — see the service). Same family as the
     # other client copy.
     gbp_profile_draft_model: str = "claude-sonnet-4-6"
-    gbp_profile_draft_max_tokens: int = 1024
+    # Bumped from 1024: the services draft now returns a small services PLAN
+    # (core/other custom services + a localize flag + fallback areas), which the
+    # app crosses with the client's target areas into a service×location matrix.
+    gbp_profile_draft_max_tokens: int = 1536
     # Google caps a Business Profile description at 750 chars; enforce app-side.
     gbp_profile_description_max_chars: int = 750
     # After an apply, re-read the field this many seconds later to catch an
@@ -666,6 +669,15 @@ class Settings(BaseSettings):
     # custom services. Overridable per env if a client's market differs.
     gbp_profile_service_region_code: str = "US"
     gbp_profile_service_language_code: str = "en"
+    # AI services draft — custom (free-form) services + a service×location matrix.
+    # Areas come from the client card (target_cities → gbp.service_area_places →
+    # business_location) then the live listing (serviceArea → storefront city), so
+    # a category with NO Google-approved service types (consultants, agencies)
+    # still gets a useful, editable draft instead of an `empty_draft` failure.
+    # `services_max` caps the whole proposed set (the operator prunes on review —
+    # never auto-applied); `matrix_area_cap` caps how many areas the matrix uses.
+    gbp_profile_services_max: int = 40
+    gbp_profile_matrix_area_cap: int = 10
     # Profile monitor: a daily read of each 'ok' listing that alerts on a
     # suspension / access loss or an out-of-band profile change (Google or an
     # outside source). Alert-only (never auto-freezes/reverts). Ships dark on top
