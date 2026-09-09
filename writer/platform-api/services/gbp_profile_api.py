@@ -598,6 +598,214 @@ def search_categories(
         _raise(exc, field="categories")
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Phase 3b — attributes. UNLIKE every other editable field, attributes do NOT
+# ride locations.patch: they live on a SEPARATE endpoint pair —
+# ``locations.getAttributes`` / ``locations.updateAttributes`` (an ``Attributes``
+# resource keyed at ``locations/{id}/attributes``) — with a per-attribute
+# ``updateMask``, category-scoped availability (``attributes.list``), and
+# value-typed values (BOOL / ENUM / URL / REPEATED_ENUM). So the service layer
+# branches the read/write for attributes; everything shaping/validating/diffing
+# stays here, pure + unit-tested.
+#
+# ⚠️ The v1 attributes write shape is one to re-verify live at build time per the
+# module note: the ``updateMask`` entries are the full attribute resource names
+# (``attributes/{id}``), comma-joined; a wrong shape surfaces as a ``rejected``
+# edit at activation test time, never a silent bad write.
+# ───────────────────────────────────────────────────────────────────────────
+ATTRIBUTE_VALUE_TYPES = ("BOOL", "ENUM", "URL", "REPEATED_ENUM")
+
+
+def _coerce_attr_url(value: str) -> str:
+    """A URL-attribute value → a normalized http(s) URL, else ValueError. A bare
+    host gets ``https://``; a foreign scheme is junk. Pure."""
+    v = (value or "").strip()
+    if "://" in v:
+        if not _SCHEME_RE.match(v):
+            raise ValueError("invalid_attribute_url")
+    else:
+        v = "https://" + v
+    if not _HOST_RE.match(v) or "." not in v.split("//", 1)[-1]:
+        raise ValueError("invalid_attribute_url")
+    return v
+
+
+def build_attributes_patch(entries: list[dict], allowed_ids: Optional[set[str]] = None) -> tuple[dict, str]:
+    """(body, updateMask) for an attributes edit. ``entries`` is the SUBSET of
+    attributes to set/clear — each ``{attribute_id, value_type, ...value...}`` —
+    and the mask names exactly those ids (attributes NOT listed are untouched;
+    updateAttributes is masked, not a full replace). An entry with no value clears
+    that attribute (kept in the mask so the clear takes). Pure (unit-tested).
+
+    Per value type:
+      - BOOL: ``values: [true|false]`` (``[]`` clears)
+      - ENUM: ``values: ['<enum value>']`` (single-select; ``[]`` clears)
+      - URL: ``urls: ['https://…']`` → ``uriValues`` (each validated)
+      - REPEATED_ENUM: ``set_values`` / ``unset_values`` → ``repeatedEnumValue``
+
+    ``attribute_id`` must be an ``attributes/{id}`` resource name
+    (``invalid_attribute`` otherwise); ``value_type`` ∈ ATTRIBUTE_VALUE_TYPES
+    (``invalid_attribute_value_type`` otherwise). When ``allowed_ids`` is given
+    every id is validated against it (the picker resolves ids from the live
+    availability list, so this guards a hand-crafted payload)."""
+    attributes: list[dict] = []
+    masks: list[str] = []
+    seen: set[str] = set()
+    for entry in entries or []:
+        aid = (entry.get("attribute_id") or "").strip()
+        if not aid:
+            raise ValueError("attribute_id_required")
+        if not aid.startswith("attributes/"):
+            raise ValueError(f"invalid_attribute:{aid}")
+        if allowed_ids is not None and aid not in allowed_ids:
+            raise ValueError(f"invalid_attribute:{aid}")
+        if aid in seen:
+            continue
+        seen.add(aid)
+        vt = (entry.get("value_type") or "").strip().upper()
+        if vt not in ATTRIBUTE_VALUE_TYPES:
+            raise ValueError(f"invalid_attribute_value_type:{aid}")
+        attr: dict = {"name": aid, "valueType": vt}
+        if vt == "URL":
+            attr["uriValues"] = [
+                {"uri": _coerce_attr_url(u)}
+                for u in (entry.get("urls") or []) if isinstance(u, str) and u.strip()
+            ]
+        elif vt == "REPEATED_ENUM":
+            attr["repeatedEnumValue"] = {
+                "setValues": [str(v).strip() for v in (entry.get("set_values") or []) if str(v).strip()],
+                "unsetValues": [str(v).strip() for v in (entry.get("unset_values") or []) if str(v).strip()],
+            }
+        elif vt == "BOOL":
+            vals = entry.get("values") or []
+            attr["values"] = [bool(vals[0])] if vals else []
+        else:  # ENUM (single-select)
+            vals = [str(v).strip() for v in (entry.get("values") or []) if str(v).strip()]
+            attr["values"] = vals[:1]
+        attributes.append(attr)
+        masks.append(aid)
+    if not attributes:
+        raise ValueError("no_attributes")
+    return {"attributes": attributes}, ",".join(masks)
+
+
+def parse_attributes(response: dict) -> list[dict]:
+    """A v1 ``Attributes`` resource → our internal editor list
+    ``[{attribute_id, value_type, ...value...}]`` — only the attributes that carry
+    a value (getAttributes returns the merchant-set ones). Pure (unit-tested)."""
+    out: list[dict] = []
+    for attr in (response or {}).get("attributes") or []:
+        if not isinstance(attr, dict):
+            continue
+        aid = (attr.get("name") or "").strip()
+        vt = (attr.get("valueType") or "").strip().upper()
+        if not aid or vt not in ATTRIBUTE_VALUE_TYPES:
+            continue
+        entry: dict = {"attribute_id": aid, "value_type": vt}
+        if vt == "URL":
+            entry["urls"] = [
+                (u.get("uri") or "").strip()
+                for u in attr.get("uriValues") or [] if isinstance(u, dict) and u.get("uri")
+            ]
+        elif vt == "REPEATED_ENUM":
+            rev = attr.get("repeatedEnumValue") or {}
+            entry["set_values"] = [str(v) for v in (rev.get("setValues") or [])]
+            entry["unset_values"] = [str(v) for v in (rev.get("unsetValues") or [])]
+        else:  # BOOL / ENUM
+            entry["values"] = list(attr.get("values") or [])
+        out.append(entry)
+    return out
+
+
+def parse_attribute_metadata(response: dict) -> list[dict]:
+    """A v1 ``attributes.list`` response → the attribute picker shape
+    ``[{attribute_id, value_type, display_name, group_name, deprecated,
+    repeatable, value_options}]`` (value_options only for ENUM/REPEATED_ENUM),
+    grouped-sorted by display group then name. Pure (unit-tested)."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for meta in (response or {}).get("attributeMetadata") or []:
+        if not isinstance(meta, dict):
+            continue
+        aid = (meta.get("parent") or "").strip()
+        if not aid or aid in seen:
+            continue
+        seen.add(aid)
+        item: dict = {
+            "attribute_id": aid,
+            "value_type": (meta.get("valueType") or "").strip().upper(),
+            "display_name": meta.get("displayName") or aid,
+            "group_name": meta.get("groupDisplayName") or "",
+            "deprecated": bool(meta.get("deprecated")),
+            "repeatable": bool(meta.get("repeatable")),
+        }
+        options = [
+            {"value": vm.get("value"), "display_name": vm.get("displayName") or str(vm.get("value"))}
+            for vm in meta.get("valueMetadata") or []
+            if isinstance(vm, dict) and vm.get("value") is not None
+        ]
+        if options:
+            item["value_options"] = options
+        out.append(item)
+    out.sort(key=lambda x: (x.get("group_name") or "", x.get("display_name") or ""))
+    return out
+
+
+def _attr_value_key(entry: dict) -> object:
+    """The comparable value of a single attribute entry (order-insensitive for
+    repeated / URL). An entry with no set value returns None (absent == cleared).
+    Pure."""
+    vt = (entry.get("value_type") or "").strip().upper()
+    if vt == "URL":
+        urls = frozenset((u or "").strip() for u in (entry.get("urls") or []) if isinstance(u, str) and (u or "").strip())
+        return ("URL", urls) if urls else None
+    if vt == "REPEATED_ENUM":
+        sv = frozenset(str(v).strip() for v in (entry.get("set_values") or []) if str(v).strip())
+        return ("REPEATED_ENUM", sv) if sv else None
+    vals = [v for v in (entry.get("values") or [])]
+    return (vt, tuple(vals)) if vals else None
+
+
+def _attributes_map(entries: list[dict]) -> dict:
+    """Attribute entries → ``{attribute_id: value_key}`` dropping cleared ones, so
+    an absent attribute compares equal to a cleared one. Pure."""
+    out: dict = {}
+    for entry in entries or []:
+        aid = (entry.get("attribute_id") or "").strip()
+        if not aid:
+            continue
+        key = _attr_value_key(entry)
+        if key is not None:
+            out[aid] = key
+    return out
+
+
+def attributes_diff(snapshot: list[dict], live: list[dict]) -> bool:
+    """True if the whole attribute set drifted between the draft snapshot and a
+    fresh live read (the re-read-and-diff guard, Q3 — conservative: any attribute
+    changing out-of-band trips it). Order-insensitive. Pure (unit-tested)."""
+    return _attributes_map(snapshot) != _attributes_map(live)
+
+
+def attributes_subset_applied(proposed: list[dict], live: list[dict]) -> bool:
+    """True when every attribute in the proposed SUBSET is reflected in the live
+    read (the applied/rejected outcome check — a cleared attribute must be absent
+    live, a set one must match). Attributes outside the subset are ignored. Pure
+    (unit-tested)."""
+    live_map = _attributes_map(live)
+    for entry in proposed or []:
+        aid = (entry.get("attribute_id") or "").strip()
+        if not aid:
+            continue
+        want = _attr_value_key(entry)
+        if want is None:  # this edit clears it → must be absent live
+            if aid in live_map:
+                return False
+        elif live_map.get(aid) != want:
+            return False
+    return True
+
+
 def parse_service_area(loc: dict) -> list[str]:
     """The service-area place NAMES a listing publishes (v1
     ``serviceArea.places.placeInfos[].placeName``) — the towns/areas the business
@@ -1143,6 +1351,8 @@ def classify_profile_error(status_code: Optional[int], message: str = "", field:
             return "invalid_open_status"
         if field == "categories":
             return "invalid_category"
+        if field == "attributes" or "attribute" in msg:
+            return "invalid_attribute"
         if "category" in msg or "service" in msg:
             return "invalid_service_category"
         return "invalid_edit_content"
@@ -1193,3 +1403,63 @@ def patch_location(name: str, body: dict, update_mask: str, field: str = "") -> 
         raise
     except Exception as exc:  # noqa: BLE001
         _raise(exc, field=field)
+
+
+# ── attributes (separate getAttributes / updateAttributes endpoint pair) ─────
+def attributes_name(location_name: str) -> str:
+    """The v1 ``Attributes`` resource name for a location ('locations/{id}' →
+    'locations/{id}/attributes')."""
+    base = (location_name or "").strip().rstrip("/")
+    return base + "/attributes" if not base.endswith("/attributes") else base
+
+
+def get_attributes(name: str) -> dict:
+    """v1 ``locations.getAttributes`` — the raw ``Attributes`` resource for a
+    location. ``name`` is ``locations/{id}/attributes``. Raises a classified
+    HTTPException on failure."""
+    try:
+        return _info_client().locations().getAttributes(name=name).execute()
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _raise(exc, field="attributes")
+
+
+def update_attributes(name: str, body: dict, update_mask: str, field: str = "attributes") -> dict:
+    """v1 ``locations.updateAttributes`` — writes exactly the attributes named in
+    ``update_mask`` (comma-joined ``attributes/{id}`` resource names). ``name`` is
+    ``locations/{id}/attributes``. Returns the updated ``Attributes`` resource.
+    Raises a classified HTTPException on failure."""
+    try:
+        return (
+            _info_client().locations()
+            .updateAttributes(name=name, updateMask=update_mask, body=body)
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _raise(exc, field=field)
+
+
+def list_available_attributes(
+    location_name: str, region_code: str = "US", language_code: str = "en",
+    show_all: bool = False, limit: int = 200,
+) -> dict:
+    """v1 ``attributes.list`` — the attributes AVAILABLE for a listing (scoped to
+    its primary category + region), the picker's source. Returns the raw response
+    (``parse_attribute_metadata`` shapes it). Raises a classified HTTPException on
+    failure."""
+    try:
+        return (
+            _info_client().attributes()
+            .list(
+                parent=location_name, regionCode=region_code, languageCode=language_code,
+                showAll=show_all, pageSize=max(1, min(limit, 500)),
+            )
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        _raise(exc, field="attributes")

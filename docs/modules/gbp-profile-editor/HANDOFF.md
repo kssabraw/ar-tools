@@ -5,8 +5,32 @@
 > reuse map is the sibling `CLAUDE.md`; the root `/HANDOFF.md` remains the suite
 > handoff. This file is the "start here to build it" doc.
 
-## Status (2026-09-04; scope expanded 2026-09-09; Phase 3a built 2026-09-09)
+## Status (2026-09-04; scope expanded 2026-09-09; Phases 3a + 3b built 2026-09-09)
 
+- **✅ PHASE 3b COMPLETE (2026-09-09) — categories + attributes, shipped dark.**
+  `categories` (#1044, migration `20260909130000`) rides `locations.patch` like a
+  Tier-A field + a live catalog SEARCH (`GET …/categories/search?q=`), extra-confirm
+  on a PRIMARY-category change; it gives the `gbp_audit.category_gaps` finding a
+  lever (the strategist loop's generic `stage_strategist_draft`, zero new wiring).
+  **`attributes`** (this PR, migration `20260909140000_gbp_profile_attributes.sql`,
+  **applied live** — relaxes the `field` CHECK; attributes REUSE the
+  `gbp_profile_apply`/`gbp_profile_sync` job types, no new async_jobs type) is the
+  one field that does NOT ride `locations.patch`: the **separate**
+  `getAttributes`/`updateAttributes` endpoint pair + category-scoped `attributes.list`
+  availability (`GET …/attributes/available`), value-typed values
+  (BOOL/ENUM/URL/REPEATED_ENUM), a per-attribute `updateMask`, and a subset-edit model
+  (the mask names only the changed attributes; a cleared attribute stays in the mask
+  with an empty value). The service layer branches read/write for attributes
+  (`_run_apply_attributes`/`_run_sync_attributes`, best-effort attributes read in
+  `read_current` → `attributes_error` never breaks the page), keeping the generic
+  single-`updateMask` path byte-identical for every other field. Pure
+  `build_attributes_patch`/`parse_attributes`/`parse_attribute_metadata`/`attributes_diff`
+  (whole-set drift, Q3)/`attributes_subset_applied` (per-proposed outcome). New
+  `AttributesCard` (lazy availability + per-type control) + `ErrorDetails` codes. 16
+  new unit tests (117 total pass); full platform-api suite green; frontend `tsc -b` +
+  `vite build` clean. Still gated off. **The v1 attributes write shape (the
+  `updateMask` = comma-joined `attributes/{id}`) is the one to re-verify live** at
+  activation — a wrong shape surfaces as a `rejected` edit, never a silent bad write.
 - **✅ PHASE 3a BUILT (2026-09-09) — six Tier-A fields shipped dark.** `website`,
   `labels`, `special_hours`, `more_hours`, `service_area`, `open_info` now ride the
   existing `gbp_profile_edits` machinery. Migration
@@ -115,8 +139,8 @@ be done from the Claude Code sandbox (`developers.google.com` is egress-blocked)
      `special_hours` ships as its OWN field (masks only `specialHours`), separate
      from the `hours` field (which masks only `regularHours` in practice) — no
      dual-write.
-   - **3b — Tier B, category-gated. `categories` ✅ BUILT 2026-09-09 (shipped dark);
-     `attributes` NOT built (its own PR).**
+   - **3b — Tier B, category-gated. ✅ COMPLETE 2026-09-09 — `categories` (#1044) +
+     `attributes` (this PR), both shipped dark.**
      - **`categories`** rides `locations.patch` like a Tier-A field
        (`updateMask=categories`), but the editor needs a live catalog SEARCH
        (`categories.list` → `GET …/categories/search?q=`) to pick valid gcids, and a
@@ -129,13 +153,25 @@ be done from the Claude Code sandbox (`developers.google.com` is egress-blocked)
        flat `categories` key stays the services picker list). Migration
        `20260909130000` (applied live). Card + `primary_category_required` /
        `invalid_category` codes.
-     - **`attributes`** deferred to its OWN PR — it uses a **separate endpoint pair**
-       (`getAttributes`/`updateAttributes` with an `attributeMask`, NOT
-       `locations.patch`), a distinct read path (not on the Location readMask),
-       category-scoped availability (`attributes.list`) + value-typed
-       (bool/enum/url/repeated) values, so it needs its own branches in the
-       apply/reconcile re-read paths. Kept out of the categories PR to preserve the
-       single-`updateMask` apply + the re-read-and-diff invariant.
+     - **`attributes`** ✅ BUILT (this PR, migration `20260909140000`, applied live) —
+       the one field that does NOT ride `locations.patch`: the **separate endpoint
+       pair** `getAttributes`/`updateAttributes` (a per-attribute `updateMask` =
+       comma-joined `attributes/{id}` resource names, an `Attributes` resource keyed at
+       `locations/{id}/attributes`), a distinct read path (best-effort in
+       `read_current` → `attributes_error`, not on the Location readMask),
+       category-scoped availability (`attributes.list` → `GET …/attributes/available`)
+       + value-typed values (BOOL/ENUM/URL/REPEATED_ENUM). The service layer branches
+       read/write (`_run_apply_attributes`/`_run_sync_attributes`, `_is_attributes`) so
+       the generic single-`updateMask` path stays byte-identical for every other field;
+       an edit targets the changed **subset** (mask names only those; a cleared
+       attribute stays in the mask with an empty value). Attributes REUSE the
+       `gbp_profile_apply`/`gbp_profile_sync` job types (no new async_jobs type). Pure
+       `build_attributes_patch`/`parse_attributes`/`parse_attribute_metadata`/`attributes_diff`
+       (whole-set drift, Q3)/`attributes_subset_applied` (per-proposed outcome). Card +
+       `invalid_attribute`/`invalid_attribute_url`/`invalid_attribute_value_type`/
+       `attribute_id_required`/`no_attributes` codes. **The v1 `updateMask` shape is the
+       one to re-verify live at activation** — a wrong shape → a `rejected` edit, never a
+       silent bad write.
    - **3c — Tier C, media (v4 API):** photos/logo/cover via `accounts.locations.media`
      — **mirror GBP Posts (v4/httpx + the image upload/reuse path), NOT the v1
      discovery client**; it's a create/list/delete op, so give it its own storage,
