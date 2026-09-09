@@ -676,8 +676,14 @@ class Settings(BaseSettings):
     # still gets a useful, editable draft instead of an `empty_draft` failure.
     # `services_max` caps the whole proposed set (the operator prunes on review —
     # never auto-applied); `matrix_area_cap` caps how many areas the matrix uses.
-    gbp_profile_services_max: int = 40
-    gbp_profile_matrix_area_cap: int = 10
+    # Kept deliberately TIGHT: a long list of near-duplicate "<service> in
+    # <neighborhood>" custom services reads as keyword-stuffing to Google (risking
+    # a rejected edit) and is redundant with GBP's own service-area field. The
+    # matrix is further limited to the areas the model classifies as distinct
+    # cities (see `_SERVICES_SYSTEM` `matrix_areas`), so neighborhoods stay on the
+    # client card for website location pages but don't flood the GBP listing.
+    gbp_profile_services_max: int = 20
+    gbp_profile_matrix_area_cap: int = 5
     # Profile monitor: a daily read of each 'ok' listing that alerts on a
     # suspension / access loss or an out-of-band profile change (Google or an
     # outside source). Alert-only (never auto-freezes/reverts). Ships dark on top
