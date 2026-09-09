@@ -28,7 +28,7 @@ from typing import Optional
 
 from models.writer import ArticleSection, BrandVoiceCard
 
-from modules.brief.llm import claude_json
+from modules.writer.prose_llm import prose_json
 
 from .banned_terms import BannedTermLeakage, find_banned
 from .voice_directive import distinctiveness_directive
@@ -267,7 +267,7 @@ async def write_intro(
             user_notes=user_notes,
         )
         try:
-            result = await claude_json(INTRO_SYSTEM, user, max_tokens=800, temperature=0.4)
+            result = await prose_json(INTRO_SYSTEM, user, max_tokens=800, temperature=0.4)
         except Exception as exc:
             logger.warning("writer.intro.llm_failed", extra={"error": str(exc), "attempt": attempt + 1})
             return _placeholder_intro(intro_order)

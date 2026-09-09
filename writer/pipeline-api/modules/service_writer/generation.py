@@ -12,7 +12,8 @@ import logging
 from typing import Any, Optional
 
 from models.service_writer import Block
-from modules.service_brief.llm import claude_json_model, synthesis_model
+from modules.service_brief.llm import synthesis_model
+from modules.service_writer.prose_llm import prose_json_model
 from modules.writer.banned_terms import build_banned_regex, find_banned
 
 logger = logging.getLogger(__name__)
@@ -203,7 +204,7 @@ async def generate_title_meta_cta(
             f"Brand: {brand_name or '(unknown)'}\nProduce the JSON now."
         )
     try:
-        result = await claude_json_model(system, user, model=synthesis_model(), max_tokens=400, temperature=0.4)
+        result = await prose_json_model(system, user, model=synthesis_model(), max_tokens=400, temperature=0.4)
         if isinstance(result, dict):
             return {
                 "title": str(result.get("title", "")).strip(),
@@ -265,7 +266,7 @@ async def write_section_blocks(
 
     blocks: list[Block] = []
     try:
-        result = await claude_json_model(_SECTION_SYSTEM, user, model=synthesis_model(), max_tokens=1800, temperature=0.5)
+        result = await prose_json_model(_SECTION_SYSTEM, user, model=synthesis_model(), max_tokens=1800, temperature=0.5)
         blocks = _coerce_blocks(result.get("blocks") if isinstance(result, dict) else None)
     except Exception as exc:
         logger.warning(
@@ -284,7 +285,7 @@ async def write_section_blocks(
                 "Rewrite the blocks without any of them."
             )
             try:
-                result = await claude_json_model(
+                result = await prose_json_model(
                     _SECTION_SYSTEM, retry_user, model=synthesis_model(), max_tokens=1800, temperature=0.5
                 )
                 retried = _coerce_blocks(result.get("blocks") if isinstance(result, dict) else None)
@@ -315,7 +316,7 @@ async def write_faqs(
         f"Answer these questions:\n{questions[:8]}\nReturn the JSON now."
     )
     try:
-        result = await claude_json_model(system, user, model=synthesis_model(), max_tokens=1500, temperature=0.4)
+        result = await prose_json_model(system, user, model=synthesis_model(), max_tokens=1500, temperature=0.4)
         faqs = result.get("faqs") if isinstance(result, dict) else None
         out: list[dict[str, str]] = []
         for f in (faqs or []):

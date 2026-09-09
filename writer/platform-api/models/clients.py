@@ -187,6 +187,11 @@ class ClientDetail(BaseModel):
     is_sab: bool = False
     illustrate_content: bool = False
     client_type: Literal["local", "enterprise"] = "local"
+    # Default provider for the DRAFT prose of this client's content writers
+    # ("anthropic" | "openai"). Applies to every content run/page unless a
+    # per-run/request override is given. "openai" routes drafts to gpt-5.6-luna;
+    # quality gates always stay on Claude.
+    content_writer_provider: str = "anthropic"
     # Content-compliance guardrail (services/content_compliance.py): 'off' for
     # normal clients; 'peptide' for regulated (research-chemical) vendors, which
     # blocks human-dosing / branded-equivalence / guaranteed-results / advocacy
@@ -299,6 +304,7 @@ class ClientCreateRequest(BaseModel):
     is_sab: Optional[bool] = None
     illustrate_content: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
+    content_writer_provider: Optional[Literal["anthropic", "openai"]] = None
     content_compliance_mode: Optional[Literal["off", "peptide"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)
@@ -352,6 +358,7 @@ class ClientUpdateRequest(BaseModel):
     is_sab: Optional[bool] = None
     illustrate_content: Optional[bool] = None
     client_type: Optional[Literal["local", "enterprise"]] = None
+    content_writer_provider: Optional[Literal["anthropic", "openai"]] = None
     content_compliance_mode: Optional[Literal["off", "peptide"]] = None
     # Per-client strategist review day (0=Mon..6=Sun); None → global default.
     strategist_weekday: Optional[int] = Field(None, ge=0, le=6)

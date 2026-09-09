@@ -237,6 +237,21 @@ class Settings(BaseSettings):
     # ("ZDSCS" vs "Zero Down Supply Chain Services"). Warn-and-accept.
     writer_notes_qa_enabled: bool = True
 
+    # Content-writer model provider (owner request 2026-09). A run can route its
+    # PROSE generation (title, intro, body sections, key takeaways, FAQ,
+    # conclusion) to OpenAI instead of Claude. The post-draft quality gates
+    # (voice scoring, ICP/banned-term/QA judges, term reconciliation) always stay
+    # on Claude so grading stays calibration-stable no matter who wrote the draft.
+    # Selection is by PROVIDER ("anthropic" | "openai"); the concrete OpenAI model
+    # id is this config value, so the Luna version bumps via env with no
+    # migration. Mirrors the maps_report_provider / maps_report_openai_model
+    # pattern. Requires OPENAI_API_KEY on the `pipeline` service for the OpenAI
+    # path; absent it, an openai-selected run falls back to Claude.
+    content_writer_openai_model: str = "gpt-5.6-luna"
+    # Bound concurrent OpenAI prose calls (the body-section step fans out with
+    # asyncio.gather). Mirrors anthropic_max_concurrency; 5 is safe default.
+    openai_max_concurrency: int = 5
+
     # Term-coverage enforcement (owner spec 2026-07-09). Deterministic, no
     # LLM for the check itself - both sides (SIE targets + article usage)
     # are already computed.

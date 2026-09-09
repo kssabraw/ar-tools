@@ -31,7 +31,7 @@ async def test_section_prompt_carries_user_notes(monkeypatch):
     call, captured = _capturing({"sections": [
         {"order": 3, "heading": "H", "body": " ".join(["w"] * 200)},
     ]})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     h2_item = {"order": 3, "text": "Top Freight Audit Companies",
                "type": "content", "level": "H2"}
@@ -53,7 +53,7 @@ async def test_section_prompt_omits_notes_block_when_absent(monkeypatch):
     call, captured = _capturing({"sections": [
         {"order": 3, "heading": "H", "body": " ".join(["w"] * 200)},
     ]})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     h2_item = {"order": 3, "text": "Top Freight Audit Companies",
                "type": "content", "level": "H2"}
@@ -71,7 +71,7 @@ async def test_section_prompt_omits_notes_block_when_absent(monkeypatch):
 @pytest.mark.asyncio
 async def test_intro_prompt_carries_user_notes(monkeypatch):
     call, captured = _capturing({"intro": " ".join(["w"] * 100)})
-    monkeypatch.setattr("modules.writer.intro.claude_json", call)
+    monkeypatch.setattr("modules.writer.intro.prose_json", call)
 
     await write_intro(
         keyword="kw",
@@ -91,7 +91,7 @@ async def test_intro_prompt_carries_user_notes(monkeypatch):
 @pytest.mark.asyncio
 async def test_conclusion_prompt_carries_user_notes(monkeypatch):
     call, captured = _capturing({"conclusion": ("kw " + " ".join(["w"] * 110)).strip()})
-    monkeypatch.setattr("modules.writer.conclusion.claude_json", call)
+    monkeypatch.setattr("modules.writer.conclusion.prose_json", call)
 
     await write_conclusion(
         keyword="kw",

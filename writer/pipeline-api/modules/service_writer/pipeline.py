@@ -23,6 +23,7 @@ from models.service_writer import (
 )
 from modules.service_brief import cost
 from modules.writer.distillation import distill_brand_voice
+from modules.writer.prose_llm import set_prose_provider
 from modules.writer.voice_compliance import check_person, check_preferred_terms
 
 from . import entity_coverage, generation
@@ -42,6 +43,9 @@ def _objection_map(strategy: dict[str, Any]) -> dict[str, str]:
 
 async def run_service_writer(request: ServiceWriterRequest) -> ServiceWriterResponse:
     cost.start_accounting()
+    # Route this run's draft prose to the selected provider (per-request
+    # contextvar; the section fan-out inherits it). Quality gates stay on Claude.
+    set_prose_provider(request.content_writer_provider)
     started = time.perf_counter()
     notes: list[str] = []
 

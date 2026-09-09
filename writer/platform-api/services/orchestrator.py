@@ -626,6 +626,9 @@ def _build_writer_payload(
         # as one of the top 10 best"). Rides the run row, never the cached
         # client-agnostic brief.
         "user_notes": (run.get("writer_notes") or "").strip() or None,
+        # Which provider writes the draft prose (resolved to a concrete value at
+        # run creation; "anthropic"/"openai"). None-safe on older run rows.
+        "content_writer_provider": run.get("content_writer_provider"),
         "client_context": {
             "brand_guide_text": brand_guide_text,
             "brand_guide_format": brand_guide_format,
@@ -732,6 +735,8 @@ def _build_service_writer_payload(
         "page_type": _page_type_for(run),
         "location": run.get("location"),
         "services": _run_services(run),
+        # Draft-prose provider (resolved at run creation). None-safe on old rows.
+        "content_writer_provider": run.get("content_writer_provider"),
         "client_context": {
             "brand_guide_text": snapshot.get("brand_guide_text") or "",
             "icp_text": snapshot.get("icp_text") or "",

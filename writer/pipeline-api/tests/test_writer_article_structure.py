@@ -168,7 +168,7 @@ def test_write_conclusion_emits_h2_with_conclusion_heading(monkeypatch):
     async def _fake_call(system, user, **kw):
         return {"conclusion": " ".join(["wrap"] * 100)}
 
-    monkeypatch.setattr("modules.writer.conclusion.claude_json", _fake_call)
+    monkeypatch.setattr("modules.writer.conclusion.prose_json", _fake_call)
 
     section = asyncio.run(write_conclusion(
         keyword="kw",

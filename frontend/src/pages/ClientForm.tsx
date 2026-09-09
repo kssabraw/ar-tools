@@ -6,6 +6,7 @@ import type { Client, GbpProfile, PageStructureType, PageStructureEntry, Everhou
 import { ArrowLeft, Check, Image as ImageIcon, RefreshCw, Upload } from 'lucide-react'
 import { GbpPicker } from '../components/GbpPicker'
 import { TrustAndProofSection, EMPTY_TRUST_SIGNALS } from '../components/TrustAndProofSection'
+import { ContentWriterSelect } from '../components/ContentWriterSelect'
 
 interface FormData {
   name: string
@@ -52,6 +53,7 @@ interface FormData {
   is_sab: boolean
   illustrate_content: boolean
   client_type: 'local' | 'enterprise'
+  content_writer_provider: 'anthropic' | 'openai'
   strategist_weekday: string  // '' = global default, else '0'..'6'
   slack_channel_id: string  // '' = use the master PACE channel
   everhour_project_id: string  // '' = not mapped to an Everhour project
@@ -77,7 +79,7 @@ const empty: FormData = {
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
   ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
-  retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', strategist_weekday: '',
+  retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', content_writer_provider: 'anthropic', strategist_weekday: '',
   slack_channel_id: '',
   everhour_project_id: '',
 }
@@ -286,6 +288,7 @@ export function ClientForm() {
         is_sab: existing.is_sab ?? false,
         illustrate_content: existing.illustrate_content ?? false,
         client_type: existing.client_type ?? 'local',
+        content_writer_provider: existing.content_writer_provider ?? 'anthropic',
         strategist_weekday: existing.strategist_weekday != null ? String(existing.strategist_weekday) : '',
         slack_channel_id: existing.slack_channel_id ?? '',
         everhour_project_id: existing.everhour_project_id ?? '',
@@ -380,6 +383,7 @@ export function ClientForm() {
         is_sab: form.is_sab,
         illustrate_content: form.illustrate_content,
         client_type: form.client_type,
+        content_writer_provider: form.content_writer_provider,
         // Always send (number or null) so clearing back to the global default persists.
         strategist_weekday: form.strategist_weekday !== '' ? Number(form.strategist_weekday) : null,
         // Always send (string or empty) so clearing back to the master PACE channel persists.
@@ -686,6 +690,13 @@ export function ClientForm() {
                 <option value="enterprise">Enterprise / e-commerce (fund Entity first)</option>
               </select>
               <p style={hintStyle}>Sets the Recipe Engine's Diagnose-and-Fund order.</p>
+            </div>
+            <div>
+              <ContentWriterSelect
+                value={form.content_writer_provider}
+                onChange={(v) => setForm(f => ({ ...f, content_writer_provider: v ?? 'anthropic' }))}
+                help="Default model for this client's content drafts (blog, service, Local SEO, Ecommerce). A run or page can override it. Quality checks always run on Claude."
+              />
             </div>
             <div>
               <label style={labelStyle}>Service-Area Business (SAB)</label>

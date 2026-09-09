@@ -26,6 +26,9 @@ class LocalSeoGenerateRequest(BaseModel):
     # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google");
     # None → nlp's default.
     entity_provider: Optional[str] = None
+    # Per-request override of the content-writer provider for the nlp page-body
+    # LLM; None → the client's default (clients.content_writer_provider) → anthropic.
+    content_writer_provider: Optional[Literal["anthropic", "openai"]] = None
 
 
 class LocalSeoPageSpecEditRequest(BaseModel):

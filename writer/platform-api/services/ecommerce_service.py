@@ -28,7 +28,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import ecommerce_facts_cache, job_priority
+from services import content_writer, ecommerce_facts_cache, job_priority
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -88,6 +88,7 @@ def _generate_payload(
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
     reference_page_structure: Optional[str] = None,
     entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
 ) -> dict:
     """Map a suite client row to the nlp GenerateEcommerceRequest. The converged
     brand_voice / detected_icp / differentiators assets are passed through so the
@@ -112,6 +113,9 @@ def _generate_payload(
         # Per-request entity-extraction provider ("textrazor"|"google") for the
         # SERP entity analysis inside nlp; None → nlp's default.
         "entity_provider": entity_provider,
+        # Per-request/per-client content-writer provider ("anthropic"|"openai")
+        # for the nlp page-body generation LLM; resolved by the caller.
+        "content_writer_provider": content_writer_provider,
     }
 
 
@@ -409,6 +413,7 @@ async def generate_page(
     source_url: Optional[str], product_input: Optional[str], user_id: str,
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
     entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
 ) -> dict:
     """Generate an ecommerce page for a client and persist it. Competitor SERP
@@ -422,6 +427,7 @@ async def generate_page(
     Collections use neither (they keep the default structure)."""
     client = _get_client(client_id)
     page_type = _norm_page_type(page_type)
+    writer_provider = content_writer.resolve_content_writer_provider(content_writer_provider, client)
     template_url = None
     reference_structure: Optional[str] = None
     reference_analysis: Optional[dict] = None
@@ -441,6 +447,7 @@ async def generate_page(
         page_template_url=template_url, notes=notes,
         reference_page_structure=reference_structure,
         entity_provider=entity_provider,
+        content_writer_provider=writer_provider,
     )
     # The client's brand guide, distilled into enforceable rules (cached per
     # guide revision). Imported lazily — voice_card_service -> brand_voice_service
@@ -515,6 +522,7 @@ async def reoptimize_from(
     editorial guidance (e.g. drop a designation) the rewrite follows."""
     client = _get_client(client_id)
     page_type = _norm_page_type(page_type)
+    writer_provider = content_writer.resolve_content_writer_provider(None, client)
     if not existing_page_html and not existing_page_url:
         raise HTTPException(status_code=400, detail="page_url_or_html_required")
 
@@ -537,6 +545,7 @@ async def reoptimize_from(
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
         "serp_analysis": serp_analysis,
         "entity_provider": entity_provider,
+        "content_writer_provider": writer_provider,
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "score_threshold": score_threshold,
@@ -889,6 +898,7 @@ async def enqueue_generate(
     source_url: Optional[str], product_input: Optional[str], user_id: str,
     page_template_url: Optional[str] = None, notes: Optional[str] = None,
     entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
 ) -> str:
     """Enqueue an `ecommerce_generate` job. Returns the job id. `page_template_url`
     is an optional per-call override of the client's house PDP template (products
@@ -908,6 +918,7 @@ async def enqueue_generate(
             "notes": (notes or "").strip() or None,
             "user_id": user_id,
             "entity_provider": entity_provider,
+            "content_writer_provider": content_writer_provider,
         },
     }).execute()
     return res.data[0]["id"]
@@ -924,6 +935,7 @@ async def run_generate_job(job: dict) -> None:
             source_url=payload.get("source_url"), product_input=payload.get("product_input"),
             user_id=payload["user_id"], page_template_url=payload.get("page_template_url"),
             notes=payload.get("notes"), entity_provider=payload.get("entity_provider"),
+            content_writer_provider=payload.get("content_writer_provider"),
             on_progress=_job_progress_writer(job_id),
         )
         supabase.table("async_jobs").update(

@@ -25,7 +25,7 @@ from typing import Optional
 
 from models.writer import ArticleSection, BrandVoiceCard
 
-from modules.brief.llm import claude_json
+from modules.writer.prose_llm import prose_json
 
 from .banned_terms import BannedTermLeakage, find_banned
 
@@ -205,7 +205,7 @@ async def write_key_takeaways(
         )
 
         try:
-            result = await claude_json(KEY_TAKEAWAYS_SYSTEM, user, max_tokens=800, temperature=0.3)
+            result = await prose_json(KEY_TAKEAWAYS_SYSTEM, user, max_tokens=800, temperature=0.3)
         except Exception as exc:
             logger.warning(
                 "writer.key_takeaways.llm_failed",

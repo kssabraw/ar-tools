@@ -59,7 +59,7 @@ async def test_section_prompt_surfaces_preferred_and_discouraged_terms(monkeypat
         "h2_body": " ".join(["word"] * 250),
         "h3_bodies": [],
     })
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     h2_item = {"order": 2, "text": "Section Title", "type": "content", "level": "H2"}
     await write_h2_group(
@@ -95,7 +95,7 @@ async def test_intro_prompt_surfaces_preferred_and_discouraged_terms(monkeypatch
     from modules.writer.intro import write_intro
 
     call, captured = _capturing({"intro": " ".join(["word"] * 90)})
-    monkeypatch.setattr("modules.writer.intro.claude_json", call)
+    monkeypatch.setattr("modules.writer.intro.prose_json", call)
 
     await write_intro(
         keyword="kw",
@@ -125,7 +125,7 @@ async def test_conclusion_prompt_surfaces_preferred_and_discouraged_terms(monkey
     from modules.writer.conclusion import write_conclusion
 
     call, captured = _capturing({"conclusion": " ".join(["word"] * 100)})
-    monkeypatch.setattr("modules.writer.conclusion.claude_json", call)
+    monkeypatch.setattr("modules.writer.conclusion.prose_json", call)
 
     await write_conclusion(
         keyword="kw",
@@ -155,7 +155,7 @@ async def test_faq_prompt_surfaces_preferred_and_discouraged_terms(monkeypatch):
     call, captured = _capturing({"faqs": [
         {"question": "Q1?", "answer": "answer text " * 10},
     ]})
-    monkeypatch.setattr("modules.writer.faqs.claude_json", call)
+    monkeypatch.setattr("modules.writer.faqs.prose_json", call)
 
     await write_faqs(
         keyword="kw",

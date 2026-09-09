@@ -126,6 +126,8 @@ export interface Client extends ClientListItem {
   is_sab: boolean
   illustrate_content?: boolean
   client_type: 'local' | 'enterprise'
+  // Default provider for this client's content drafts ('anthropic' | 'openai').
+  content_writer_provider?: 'anthropic' | 'openai'
   // Per-client SerMaStr review day (0=Mon..6=Sun); null → global default.
   strategist_weekday: number | null
   // Slack channel PACE posts this client's PM notifications to; null → master.
@@ -585,6 +587,8 @@ export interface RunDetail {
   }
   // Manually-attached featured/hero image (public wordpress_images URL).
   featured_image_url?: string | null
+  // Which provider wrote (or will write) this run's draft prose.
+  content_writer_provider?: 'anthropic' | 'openai' | null
 }
 
 export interface Profile {

@@ -11,7 +11,7 @@ from modules.service_writer.pipeline import run_service_writer
 from modules.service_writer.render import render_html, render_markdown, render_wordpress
 from models.service_writer import Block, WriterSection
 
-_GEN = "modules.service_writer.generation.claude_json_model"
+_GEN = "modules.service_writer.generation.prose_json_model"
 _DISTILL = "modules.service_writer.pipeline.distill_brand_voice"
 
 

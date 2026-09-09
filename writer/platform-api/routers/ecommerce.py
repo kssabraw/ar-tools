@@ -63,6 +63,7 @@ async def generate_ecommerce_page_async(
         page_template_url=body.page_template_url,
         notes=body.notes,
         entity_provider=body.entity_provider,
+        content_writer_provider=body.content_writer_provider,
     )
     return EcommerceGenerateJob(job_id=job_id, status="pending")
 

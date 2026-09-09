@@ -26,7 +26,7 @@ from typing import Any, Optional
 from config import settings
 from models.writer import ArticleSection, BrandVoiceCard
 
-from modules.brief.llm import claude_json
+from modules.writer.prose_llm import prose_json
 
 from .banned_terms import BannedTermLeakage, find_banned
 from .brand_placement import H2PlacementDirective
@@ -692,7 +692,7 @@ async def write_h2_group(
             # answer-first body + lists/tables, without truncation. The previous
             # 3500-token cap silently truncated mid-string when a brief produced
             # 1 H2 with many H3 children, raising JSONDecodeError downstream.
-            result = await claude_json(SECTION_SYSTEM, user, max_tokens=8000, temperature=0.4)
+            result = await prose_json(SECTION_SYSTEM, user, max_tokens=8000, temperature=0.4)
         except Exception as exc:
             logger.exception(
                 "writer.section.llm_failed",

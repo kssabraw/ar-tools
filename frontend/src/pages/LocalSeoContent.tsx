@@ -29,6 +29,7 @@ import { localSeoScoreAdapter } from '../components/score/adapters'
 import { RankabilityReport } from '../components/localseo/RankabilityReport'
 import { Spinner } from '../components/localseo/Spinner'
 import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
+import { ContentWriterSelect, type ContentWriterProvider } from '../components/ContentWriterSelect'
 import { ErrorDetails } from '../components/ErrorDetails'
 import {
   backLink, card, input, label, outlineBtn, primaryBtn, relativeTime, scoreColor,
@@ -97,6 +98,8 @@ export function LocalSeoContent() {
   const [pageTemplateUrl, setPageTemplateUrl] = useState('')
   // Which entity-extraction engine the nlp SERP analysis uses (default TextRazor).
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
+  // Draft-prose model override for this page. null = inherit the client default.
+  const [contentWriterProvider, setContentWriterProvider] = useState<ContentWriterProvider | null>(null)
   const [savingTemplateDefault, setSavingTemplateDefault] = useState(false)
   const [error, setError] = useState('')
   // A transient nlp failure re-queues the generate job with a backoff; the
@@ -210,6 +213,7 @@ export function LocalSeoContent() {
         keyword: kw, location: location.trim(), location_code: locationCode,
         force_refresh: forceRefresh, page_template_url: pageTemplateUrl.trim() || null,
         entity_provider: entityProvider,
+        content_writer_provider: contentWriterProvider ?? undefined,
       })
       const poll = async () => {
         if (genCancelledRef.current) return
@@ -750,6 +754,13 @@ export function LocalSeoContent() {
 
                 {/* Entity-extraction engine for the competitor SERP analysis. */}
                 <EntityProviderSelect value={entityProvider} onChange={setEntityProvider} />
+
+                {/* Draft-prose model (Claude default | OpenAI); overrides the client default. */}
+                <ContentWriterSelect
+                  value={contentWriterProvider}
+                  onChange={setContentWriterProvider}
+                  allowInherit
+                />
               </div>
             )}
           </div>

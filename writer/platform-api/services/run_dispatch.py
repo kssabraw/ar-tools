@@ -12,7 +12,7 @@ import logging
 from typing import Optional
 
 from db.supabase_client import get_supabase
-from services import brand_voice_service, icp_service
+from services import brand_voice_service, content_writer, icp_service
 from services.file_parser import detect_format
 
 logger = logging.getLogger(__name__)
@@ -54,6 +54,7 @@ def create_run_and_snapshot(
     reoptimize_source_url: Optional[str] = None,
     reoptimize_source_html: Optional[str] = None,
     writer_notes: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
     created_by: Optional[str] = None,
     source_ref: Optional[str] = None,
 ) -> str:
@@ -100,6 +101,13 @@ def create_run_and_snapshot(
             "reoptimize_source_url": reoptimize_source_url,
             "reoptimize_source_html": reoptimize_source_html,
             "writer_notes": writer_notes,
+            # Resolve the draft-prose provider once, at creation, so EVERY path
+            # (interactive, bulk, rerun, fanout, reoptimize) inherits the client
+            # default without each caller re-implementing the fallback. The run
+            # override wins, else the client default, else "anthropic".
+            "content_writer_provider": content_writer.resolve_content_writer_provider(
+                content_writer_provider, client
+            ),
             "status": "queued",
             "created_by": created_by,
             "source_ref": source_ref,

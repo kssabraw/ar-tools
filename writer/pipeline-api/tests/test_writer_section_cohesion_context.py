@@ -34,7 +34,7 @@ async def test_section_prompt_carries_article_title(monkeypatch):
         "h2_body": " ".join(["w"] * 200),
         "h3_bodies": [],
     })
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     h2_item = {"order": 3, "text": "Optimize Your TikTok Shop ROI",
                "type": "content", "level": "H2"}
@@ -53,7 +53,7 @@ async def test_section_prompt_carries_article_title(monkeypatch):
 @pytest.mark.asyncio
 async def test_section_prompt_carries_sibling_outline_with_current_marker(monkeypatch):
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     siblings = [
         "Optimize Your TikTok Shop ROI",
@@ -88,7 +88,7 @@ async def test_section_prompt_carries_sibling_outline_with_current_marker(monkey
 @pytest.mark.asyncio
 async def test_section_prompt_carries_preceding_section_summaries(monkeypatch):
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     summaries = [
         "Section 1 (Inventory Trap): Discusses cash-flow timing and SKU velocity tiers.",
@@ -120,7 +120,7 @@ async def test_outline_skips_empty_sibling_titles_without_breaking_marker(monkey
     Regression for the h2_titles-filter bug where filtering empties
     re-indexed and misaligned current_h2_index."""
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     siblings = [
         "Optimize ROI",
@@ -157,7 +157,7 @@ async def test_section_prompt_carries_reference_structure(monkeypatch):
     """The client's body-structure style block (mode='structure') reaches the
     section prompt when provided, and is absent otherwise."""
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     h2_item = {"order": 3, "text": "Some Section", "type": "content", "level": "H2"}
     block = "REFERENCE STRUCTURE STYLE — write this section in the structural style…"
@@ -174,7 +174,7 @@ async def test_section_prompt_carries_reference_structure(monkeypatch):
 
     # Absent by default — legacy callers are unaffected.
     call2, captured2 = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call2)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call2)
     await write_h2_group(
         keyword="kw", intent="how-to",
         h2_item=h2_item, h3_items=[],
@@ -192,7 +192,7 @@ async def test_section_prompt_omits_cohesion_blocks_when_args_absent(monkeypatch
     get the old prompt shape - no ARTICLE_TITLE / ARTICLE_OUTLINE /
     PRECEDING_SECTIONS lines."""
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     h2_item = {"order": 3, "text": "Some Section",
                "type": "content", "level": "H2"}
@@ -221,7 +221,7 @@ async def test_section_prompt_buckets_required_terms_into_three_categories(monke
     from modules.writer.reconciliation import ReconciledTerm
 
     call, captured = _capturing({"h2_body": " ".join(["w"] * 200), "h3_bodies": []})
-    monkeypatch.setattr("modules.writer.sections.claude_json", call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", call)
 
     filtered = FilteredSIETerms(required=[
         ReconciledTerm(term="TikTok Shop", is_entity=True),
@@ -267,7 +267,7 @@ async def test_first_section_has_no_preceding_summaries_subsequent_sections_do(m
         return {"h2_body": "Body sentence one. Body continued.",
                 "h3_bodies": []}
 
-    monkeypatch.setattr("modules.writer.sections.claude_json", _call)
+    monkeypatch.setattr("modules.writer.sections.prose_json", _call)
 
     siblings = ["A", "B", "C"]
     running: list[str] = []

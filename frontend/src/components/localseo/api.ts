@@ -51,6 +51,8 @@ export const localSeoApi = {
       page_template_url?: string | null
       // Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
       entity_provider?: string | null
+      // Draft-prose model override ("anthropic"|"openai"); omit to inherit the client default.
+      content_writer_provider?: string | null
     },
   ) => api.post<{ job_id: string; status: string }>(`/clients/${clientId}/local-seo/generate-async`, body),
 

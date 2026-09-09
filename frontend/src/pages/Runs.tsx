@@ -18,6 +18,8 @@ import { ReoptimizePanel } from '../components/reoptimize/ReoptimizePanel'
 import { blogAdapter } from '../components/reoptimize/adapters'
 import { ScorePanel } from '../components/score/ScorePanel'
 import { blogScoreAdapter } from '../components/score/adapters'
+import { ContentWriterSelect } from '../components/ContentWriterSelect'
+import type { ContentWriterProvider } from '../components/ContentWriterSelect'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
 
@@ -63,6 +65,9 @@ export function Runs() {
   // IntentType that beats the brief's keyword-pattern classifier — e.g. forcing
   // a "Best X" keyword to a standard blog post instead of a ranked listicle.
   const [intentOverride, setIntentOverride] = useState('')
+  // Draft-prose model override for this run. null = inherit the client default.
+  const [contentWriterProvider, setContentWriterProvider] =
+    useState<ContentWriterProvider | null>(null)
   const [creating, setCreating] = useState(false)
 
   const { data: runsResp, isLoading: runsLoading, isFetching: runsFetching, refetch } = useQuery<RunListResponse>({
@@ -170,6 +175,7 @@ export function Runs() {
       sie_force_refresh: boolean
       brief_force_refresh: boolean
       writer_notes?: string
+      content_writer_provider?: ContentWriterProvider
     }) => api.post('/runs', body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['runs'] })
@@ -177,6 +183,7 @@ export function Runs() {
       setKeyword('')
       setWriterNotes('')
       setIntentOverride('')
+      setContentWriterProvider(null)
     },
   })
 
@@ -201,6 +208,7 @@ export function Runs() {
         sie_force_refresh: false,
         brief_force_refresh: briefForceRefresh,
         writer_notes: writerNotes.trim() || undefined,
+        content_writer_provider: contentWriterProvider ?? undefined,
       })
     } finally {
       setCreating(false)
@@ -348,6 +356,13 @@ export function Runs() {
                 rows={2}
                 placeholder="e.g. mention Zero Down Supply Chain Services as one of the top 10 best"
                 style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', fontFamily: 'inherit' }}
+              />
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <ContentWriterSelect
+                value={contentWriterProvider}
+                onChange={setContentWriterProvider}
+                allowInherit
               />
             </div>
             <div style={{ display: 'flex', gap: 8 }}>

@@ -184,14 +184,14 @@ async def test_writer_happy_path_with_client_context():
     )
 
     with (
-        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.title.prose_json", fake_claude_json),
         patch("modules.writer.distillation.claude_json", fake_claude_json),
         patch("modules.writer.reconciliation.claude_json", fake_claude_json),
-        patch("modules.writer.sections.claude_json", fake_claude_json),
-        patch("modules.writer.faqs.claude_json", fake_claude_json),
-        patch("modules.writer.conclusion.claude_json", fake_claude_json),
-        patch("modules.writer.intro.claude_json", fake_claude_json),
-        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
+        patch("modules.writer.sections.prose_json", fake_claude_json),
+        patch("modules.writer.faqs.prose_json", fake_claude_json),
+        patch("modules.writer.conclusion.prose_json", fake_claude_json),
+        patch("modules.writer.intro.prose_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.prose_json", fake_claude_json),
     ):
         result = await run_writer(req)
 
@@ -236,12 +236,12 @@ async def test_writer_no_client_context_falls_back_to_v14():
     )
 
     with (
-        patch("modules.writer.title.claude_json", fake_claude_json),
-        patch("modules.writer.sections.claude_json", fake_claude_json),
-        patch("modules.writer.faqs.claude_json", fake_claude_json),
-        patch("modules.writer.conclusion.claude_json", fake_claude_json),
-        patch("modules.writer.intro.claude_json", fake_claude_json),
-        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
+        patch("modules.writer.title.prose_json", fake_claude_json),
+        patch("modules.writer.sections.prose_json", fake_claude_json),
+        patch("modules.writer.faqs.prose_json", fake_claude_json),
+        patch("modules.writer.conclusion.prose_json", fake_claude_json),
+        patch("modules.writer.intro.prose_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.prose_json", fake_claude_json),
     ):
         result = await run_writer(req)
 
@@ -326,14 +326,14 @@ async def test_writer_aborts_on_banned_term_in_heading():
         ),
     )
     with (
-        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.title.prose_json", fake_claude_json),
         patch("modules.writer.distillation.claude_json", fake_claude_json),
         patch("modules.writer.reconciliation.claude_json", fake_claude_json),
-        patch("modules.writer.sections.claude_json", fake_claude_json),
-        patch("modules.writer.faqs.claude_json", fake_claude_json),
-        patch("modules.writer.conclusion.claude_json", fake_claude_json),
-        patch("modules.writer.intro.claude_json", fake_claude_json),
-        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
+        patch("modules.writer.sections.prose_json", fake_claude_json),
+        patch("modules.writer.faqs.prose_json", fake_claude_json),
+        patch("modules.writer.conclusion.prose_json", fake_claude_json),
+        patch("modules.writer.intro.prose_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.prose_json", fake_claude_json),
     ):
         with pytest.raises(BannedTermLeakage) as exc_info:
             await run_writer(req)
@@ -413,14 +413,14 @@ async def test_writer_pipeline_invokes_h2_body_length_retry(monkeypatch):
     )
 
     with (
-        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.title.prose_json", fake_claude_json),
         patch("modules.writer.distillation.claude_json", fake_claude_json),
         patch("modules.writer.reconciliation.claude_json", fake_claude_json),
-        patch("modules.writer.sections.claude_json", fake_claude_json),
-        patch("modules.writer.faqs.claude_json", fake_claude_json),
-        patch("modules.writer.conclusion.claude_json", fake_claude_json),
-        patch("modules.writer.intro.claude_json", fake_claude_json),
-        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
+        patch("modules.writer.sections.prose_json", fake_claude_json),
+        patch("modules.writer.faqs.prose_json", fake_claude_json),
+        patch("modules.writer.conclusion.prose_json", fake_claude_json),
+        patch("modules.writer.intro.prose_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.prose_json", fake_claude_json),
         patch(
             "modules.writer.pipeline.validate_h2_body_lengths",
             wrapping_validator,
@@ -478,14 +478,14 @@ async def test_writer_pipeline_skips_h2_body_length_when_floor_zero():
     )
 
     with (
-        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.title.prose_json", fake_claude_json),
         patch("modules.writer.distillation.claude_json", fake_claude_json),
         patch("modules.writer.reconciliation.claude_json", fake_claude_json),
-        patch("modules.writer.sections.claude_json", fake_claude_json),
-        patch("modules.writer.faqs.claude_json", fake_claude_json),
-        patch("modules.writer.conclusion.claude_json", fake_claude_json),
-        patch("modules.writer.intro.claude_json", fake_claude_json),
-        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
+        patch("modules.writer.sections.prose_json", fake_claude_json),
+        patch("modules.writer.faqs.prose_json", fake_claude_json),
+        patch("modules.writer.conclusion.prose_json", fake_claude_json),
+        patch("modules.writer.intro.prose_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.prose_json", fake_claude_json),
         patch(
             "modules.writer.pipeline.validate_h2_body_lengths",
             spy_validator,
@@ -553,14 +553,14 @@ async def test_writer_pipeline_invokes_citation_coverage_validator(monkeypatch):
     )
 
     with (
-        patch("modules.writer.title.claude_json", fake_claude_json),
+        patch("modules.writer.title.prose_json", fake_claude_json),
         patch("modules.writer.distillation.claude_json", fake_claude_json),
         patch("modules.writer.reconciliation.claude_json", fake_claude_json),
-        patch("modules.writer.sections.claude_json", fake_claude_json),
-        patch("modules.writer.faqs.claude_json", fake_claude_json),
-        patch("modules.writer.conclusion.claude_json", fake_claude_json),
-        patch("modules.writer.intro.claude_json", fake_claude_json),
-        patch("modules.writer.key_takeaways.claude_json", fake_claude_json),
+        patch("modules.writer.sections.prose_json", fake_claude_json),
+        patch("modules.writer.faqs.prose_json", fake_claude_json),
+        patch("modules.writer.conclusion.prose_json", fake_claude_json),
+        patch("modules.writer.intro.prose_json", fake_claude_json),
+        patch("modules.writer.key_takeaways.prose_json", fake_claude_json),
         patch(
             "modules.writer.pipeline.validate_citation_coverage",
             spy,
