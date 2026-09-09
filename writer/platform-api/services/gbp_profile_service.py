@@ -547,7 +547,8 @@ _SERVICES_SYSTEM = (
     '  "structured": ["<serviceTypeId>", ...],\n'
     '  "services": [{"label": "<service name, NO city>", "category": "<a listing '
     'category name>", "description": "<optional, <=300 chars>", "localize": true}],\n'
-    '  "areas": ["City, ST", ...]\n'
+    '  "areas": ["City, ST", ...],\n'
+    '  "matrix_areas": ["City, ST", ...]\n'
     "}\n"
     "Rules:\n"
     "- structured: pick ONLY serviceTypeIds from the allowed list you are given "
@@ -565,6 +566,13 @@ _SERVICES_SYSTEM = (
     "- areas: LEAVE EMPTY unless you are explicitly told no target areas are on "
     "file; only then list the specific cities/areas this business actually serves, "
     "drawn STRICTLY from its stated service area or location — never invented.\n"
+    "- matrix_areas: from the target areas you are given, list ONLY the ones that "
+    "are DISTINCT cities or towns worth their own per-area service. OMIT "
+    "neighborhoods, subdivisions, or communities that sit inside a city already in "
+    "the list — a '<service> in <neighborhood>' entry for every subdivision reads "
+    "as keyword-stuffing and can get the listing's edit rejected. Copy the names "
+    "VERBATIM from the given areas; never add one that isn't in that list. When "
+    "unsure, include fewer.\n"
     "- No promotional superlatives, no phone numbers, no URLs."
 )
 
@@ -655,8 +663,10 @@ async def _draft_services(
         f"Listing categories (use these display names for 'category'): {cat_names}",
         f"Allowed Google service types (pick serviceTypeIds ONLY from here; may be empty):\n{available}",
         f"Known offering / existing services / silo topics:\n{grounding}",
-        f"Target areas already on file (build per-area versions of localizable "
-        f"services from THESE; if 'none', you may propose the real areas): {areas_line}",
+        f"Target areas already on file: {areas_line}. Per-area services are built "
+        f"only from the ones you copy into 'matrix_areas' (the distinct cities — "
+        f"NOT every neighborhood); if this says 'none', you may propose the real "
+        f"areas in 'areas' instead.",
     ]
     user = build_client_context(client) + "\n\n" + "\n".join(ask)
     voice_block = render_voice_card_block(card)
@@ -682,6 +692,7 @@ async def _draft_services(
             "structured": sum(1 for p in picks if p.get("kind") == "structured"),
             "custom": sum(1 for p in picks if p.get("kind") == "free_form"),
             "areas_on_file": len(areas), "areas_proposed": len(plan.get("areas") or []),
+            "matrix_cities": len(plan.get("matrix_areas") or []),
         },
     )
     return picks
@@ -881,7 +892,7 @@ def parse_service_plan(raw: str) -> dict:
     services: [{label, category, description, localize}], areas: [str]}``. Accepts
     the object form or a bare JSON array (legacy: treated as structured ids). A
     non-JSON reply degrades to empty. Pure (unit-tested)."""
-    empty = {"structured": [], "services": [], "areas": []}
+    empty = {"structured": [], "services": [], "areas": [], "matrix_areas": []}
     try:
         data = json.loads(_json_object_slice(raw))
     except Exception:  # noqa: BLE001 — maybe a bare array (legacy) or junk
@@ -909,10 +920,14 @@ def parse_service_plan(raw: str) -> dict:
         })
     structured = data.get("structured")
     areas = [a.strip() for a in (data.get("areas") or []) if isinstance(a, str) and a.strip()]
+    matrix_areas = [
+        a.strip() for a in (data.get("matrix_areas") or []) if isinstance(a, str) and a.strip()
+    ]
     return {
         "structured": structured if isinstance(structured, list) else [],
         "services": services,
         "areas": areas,
+        "matrix_areas": matrix_areas,
     }
 
 
@@ -961,7 +976,19 @@ def assemble_service_picks(
             "category_id": _resolve_category(svc.get("category"), categories),
             "localize": bool(svc.get("localize")),
         })
-    effective_areas = list(areas) if areas else list(plan.get("areas") or [])
+    # Areas prefer the ones on file; only when none are on file is the model's
+    # proposed plan['areas'] used. The matrix is then narrowed to the areas the
+    # model classified as distinct CITIES (plan['matrix_areas']) — intersected
+    # with the provided set so an invented name can never slip in — which drops
+    # neighborhoods from the GBP listing while they stay on the card for website
+    # location pages. No classification → fall back to the provided set (the cap
+    # still limits it).
+    provided_areas = list(areas) if areas else list(plan.get("areas") or [])
+    city_picks = {a.strip().lower() for a in (plan.get("matrix_areas") or [])}
+    effective_areas = (
+        [a for a in provided_areas if a.strip().lower() in city_picks]
+        if city_picks else provided_areas
+    )
     matrix = build_service_matrix(base, effective_areas, matrix_area_cap)
     base_clean = [{k: v for k, v in b.items() if k != "localize"} for b in base]
 

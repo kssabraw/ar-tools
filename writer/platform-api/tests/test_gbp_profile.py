@@ -561,7 +561,18 @@ def test_parse_service_plan_object_array_and_junk():
     # Legacy bare array → treated as structured ids.
     assert svc.parse_service_plan('["job_type_id:a"]')["structured"] == ["job_type_id:a"]
     # Junk degrades to empty.
-    assert svc.parse_service_plan("not json") == {"structured": [], "services": [], "areas": []}
+    assert svc.parse_service_plan("not json") == {
+        "structured": [], "services": [], "areas": [], "matrix_areas": [],
+    }
+
+
+def test_parse_service_plan_matrix_areas():
+    plan = svc.parse_service_plan(
+        '{"structured":[],"services":[],"areas":["Boca Raton","Boca Del Mar"],'
+        '"matrix_areas":["Boca Raton"," "]}'
+    )
+    assert plan["areas"] == ["Boca Raton", "Boca Del Mar"]
+    assert plan["matrix_areas"] == ["Boca Raton"]  # blank stripped
 
 
 def test_build_service_matrix_localizable_only_and_area_cap():
@@ -632,6 +643,41 @@ def test_assemble_service_picks_caps_total_keeping_base_over_matrix():
         plan, [], _ASSEMBLE_CATS, areas=["A", "B", "C", "D"], max_total=3, matrix_area_cap=10,
     )
     # Base custom kept, matrix fills to the cap of 3.
+    assert [s["label"] for s in out] == ["Billing", "Billing in A", "Billing in B"]
+
+
+def test_assemble_service_picks_matrix_areas_drops_neighborhoods():
+    plan = {
+        "structured": [],
+        "services": [{"label": "Medical Billing", "category": "Billing service", "localize": True}],
+        "areas": [],
+        # Model classified only the true cities; neighborhoods omitted.
+        "matrix_areas": ["Boca Raton", "Deerfield Beach", "Made Up City"],
+    }
+    # On-file areas include neighborhoods; the matrix must use only the classified
+    # cities that are ALSO on file (the invented one is ignored).
+    out = svc.assemble_service_picks(
+        plan, [], _ASSEMBLE_CATS,
+        areas=["Boca Raton", "Boca Del Mar", "Deerfield Beach", "Boca West"],
+        max_total=40, matrix_area_cap=10,
+    )
+    assert [s["label"] for s in out] == [
+        "Medical Billing",
+        "Medical Billing in Boca Raton",
+        "Medical Billing in Deerfield Beach",
+    ]
+
+
+def test_assemble_service_picks_no_matrix_areas_falls_back_to_all_provided():
+    plan = {
+        "structured": [],
+        "services": [{"label": "Billing", "category": "Billing service", "localize": True}],
+        "areas": [],
+        "matrix_areas": [],  # no classification → use all provided (cap still limits)
+    }
+    out = svc.assemble_service_picks(
+        plan, [], _ASSEMBLE_CATS, areas=["A", "B"], max_total=40, matrix_area_cap=10,
+    )
     assert [s["label"] for s in out] == ["Billing", "Billing in A", "Billing in B"]
 
 
