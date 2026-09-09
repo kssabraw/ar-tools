@@ -1069,7 +1069,13 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             # the critical-severity notification below; a human decides.
             escalation_status = settings.qa_fail_escalation_status or settings.qa_fail_status
             if escalation_status:
-                task_service.update_task(task_id, {"status_key": escalation_status})
+                # A critical fail is a QA-internal escalation, not a client-facing
+                # revision — don't inflate the "keeps missing expectations"
+                # revision_count (owner ruling 2026-09-08). Even when it lands in
+                # the same For Revision lane as a routine revisions bounce.
+                task_service.update_task(
+                    task_id, {"status_key": escalation_status}, bump_revision_count=False
+                )
         elif v in (sig.PASS, sig.ADVISORY) and settings.qa_pass_status:
             # Advisory is shippable — it advances exactly like pass (the
             # recommendations are logged on the review, not a hold).

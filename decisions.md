@@ -395,3 +395,25 @@ it escalates (`fail`) rather than self-looping (`revisions`). `CRITICAL_CHECK_KE
 high-confidence gate is unchanged (the qa_visual judge only bounces on high confidence; low
 confidence / capture failure stays fail-open `needs_human`), so only a *confirmed* broken
 render escalates.
+
+
+---
+
+## QA Agent — critical `fail` excluded from revision_count
+
+**Status: DECIDED (owner, 2026-09-08). Built 2026-09-09.**
+
+Follow-up to the graduated-verdicts entry above (which flagged this as an open,
+discretionary behavior note). A critical `fail` lands in the For Revision lane by
+default, and `task_service.update_task` bumps `tasks.revision_count` on any
+transition into the revision status — so a QA-internal critical escalation was
+inflating the client-facing "keeps missing expectations" counter the same as a
+routine `revisions` bounce. Owner: exclude critical fails.
+
+**Build:** `update_task` gained `bump_revision_count: bool = True` (default =
+prior behavior); `qa_service._apply_outcome`'s `fail` branch passes
+`bump_revision_count=False` when moving the task to the escalation status. A
+routine `revisions` bounce still bumps (it's a real redo). Behavior change is
+scoped to the QA critical-fail path only; every other `update_task` caller is
+unchanged. Tests: `test_task_manager.py` (bump fires by default into
+for_revision; suppressed with the flag). No migration, no API change.

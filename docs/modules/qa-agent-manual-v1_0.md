@@ -181,7 +181,10 @@ Revision** lane where they're easy to see and count. The `Rework:` subtasks QA w
 *precise what-and-why to revise*; a task parked here for a client revision needs the same
 (human-written notes + a revision due date — a documented convention, not app-enforced). A
 critical `fail` lands here too by default (`qa_fail_escalation_status` unset) — but *without*
-the `Rework:` subtasks, so it holds for a human instead of auto-looping.
+the `Rework:` subtasks (it holds for a human instead of auto-looping) and *without* bumping
+`revision_count` (a critical fail is a QA-internal escalation, not a client-facing "keeps
+missing expectations" revision — owner ruling 2026-09-08; a routine `revisions` bounce still
+counts).
 
 **The self-closing rework loop (revisions only):** the `Rework:` subtasks are real work items,
 so when the VA ticks them all off, the board's auto-advance moves the task **from For Revision
