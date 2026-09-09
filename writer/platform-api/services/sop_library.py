@@ -71,6 +71,11 @@ _RELEVANCE: dict[str, list[str]] = {
     # QA Agent grounding (qa-agent-plan §3b): the deliverable acceptance
     # checklists + the shared on-page verdict definition its narratives cite.
     "qa": ["QA_Checklists.md", "On_Page_Criteria_and_Coverage.md"],
+    # GBP business-description work (writing / auditing a listing description):
+    # the standard the GBP Profile Editor's draft + `description_quality` audit
+    # implement. Set by GBP-description vocabulary in the question, or by the
+    # client's gbp_audit reporting a present-but-weak description.
+    "gbp": ["GBP_Description_SOP.md"],
 }
 # Per-doc character caps: only the three genuinely large SOPs need one — every
 # other doc in the corpus is under 13k and is meant to arrive WHOLE.
@@ -189,10 +194,10 @@ def relevant_docs(
     # growth question and wants the How-To-Rank playbook first.
     diagnostic = "organic_drop" in active_domains
     priority = (
-        ("organic_drop", "maps", "maps_growth", "ai_visibility", "offpage",
+        ("organic_drop", "maps", "maps_growth", "gbp", "ai_visibility", "offpage",
          "content", "budget", "leadoff", "qa")
         if diagnostic else
-        ("maps_growth", "ai_visibility", "offpage", "content",
+        ("maps_growth", "gbp", "ai_visibility", "offpage", "content",
          "organic_drop", "maps", "budget", "leadoff", "qa")
     )
     lead = lead_domains or set()

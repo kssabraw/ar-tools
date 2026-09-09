@@ -1620,6 +1620,8 @@ def test_sop_domains_from_question_keywords():
     assert "budget" in slack_assistant.sop_domains("where should the retainer go", {})
     assert "content" in slack_assistant.sop_domains("plan more blog content", {})
     assert "organic_drop" in slack_assistant.sop_domains("rankings fell — is this cannibalization?", {})
+    assert "gbp" in slack_assistant.sop_domains("rewrite the gbp description", {})
+    assert "gbp" in slack_assistant.sop_domains("improve the business profile description", {})
 
 
 def test_sop_domains_from_context_signals():
