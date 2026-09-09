@@ -171,6 +171,23 @@ def test_quiet_client_has_no_active_signals():
     assert sd.active_signal_domains(digest) == set()
 
 
+def test_weak_gbp_description_pulls_gbp_domain():
+    digest = {
+        "open_alerts": {}, "episodes": [], "task_plan": {},
+        "gbp_audit": {"description_quality": {"ok": False, "length": 120,
+                                              "issues": ["keyword_stuffed"]}},
+    }
+    assert "gbp" in sd.active_signal_domains(digest)
+
+
+def test_clean_gbp_description_does_not_pull_gbp_domain():
+    digest = {
+        "open_alerts": {}, "episodes": [], "task_plan": {},
+        "gbp_audit": {"description_quality": {"ok": True, "length": 300, "issues": []}},
+    }
+    assert "gbp" not in sd.active_signal_domains(digest)
+
+
 def test_leadoff_seeded_client_pulls_leadoff_domain():
     # the create-from-market handoff writes a "LeadOff targets — …" goal
     digest = {

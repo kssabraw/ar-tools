@@ -184,7 +184,11 @@ def _recommendations(checks: list[dict], base: dict) -> list[dict]:
     dq = base.get("description_quality") or {}
     if "description" not in failed and dq.get("issues"):
         labels = {"too_short": "it's short", "missing_service_keyword": "it doesn't name the core service",
-                  "missing_location": "it doesn't mention the location"}
+                  "missing_location": "it doesn't mention the location",
+                  "keyword_stuffed": "it repeats the city/keyword (stuffing)",
+                  "promotional_superlatives": "it uses promotional superlatives (best / #1 / guaranteed)",
+                  "marketing_filler": "it leans on generic marketing filler",
+                  "generic_opening": "it opens with fluff instead of naming the business"}
         why = ", ".join(labels.get(i, i) for i in dq["issues"])
         recs.append({"key": "description_quality", "severity": "medium",
                      "title": "Improve the description",

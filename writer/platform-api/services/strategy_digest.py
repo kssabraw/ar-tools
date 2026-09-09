@@ -244,6 +244,11 @@ def active_signal_domains(digest: dict) -> set[str]:
     goals = (digest.get("campaign_goals") or {}).get("goals") or []
     if any(str(g.get("label") or "").startswith("LeadOff targets") for g in goals):
         domains.add("leadoff")
+    # A weak or missing GBP description (the rewrite trigger) pulls the GBP
+    # Description SOP so a proposed rewrite is grounded in the agency standard.
+    dq = (digest.get("gbp_audit") or {}).get("description_quality") or {}
+    if dq.get("issues") or dq.get("ok") is False:
+        domains.add("gbp")
     return domains
 
 
@@ -1134,7 +1139,9 @@ def _prov_gbp_audit(supabase, client_id: str, today: date, now: datetime) -> Opt
             "vs the competitor median (the Recipe Engine funds reviews first when "
             "gating). gaps = failed profile-completeness checks. description_quality "
             "= a present-but-weak description (issues: too_short / "
-            "missing_service_keyword / missing_location) — a quality signal distinct "
+            "missing_service_keyword / missing_location / keyword_stuffed / "
+            "promotional_superlatives / marketing_filler / generic_opening, per the "
+            "GBP Description SOP) — a quality signal distinct "
             "from the binary completeness check, and the trigger for a GBP description "
             "rewrite. Remember the module card: the GBP description is an "
             "AI-visibility factor, not a local-pack ranking factor."

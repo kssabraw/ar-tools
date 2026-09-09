@@ -114,6 +114,17 @@ def test_relevant_docs_qa_domain():
     assert docs[0] == "_ORCHESTRATOR.md"
 
 
+def test_relevant_docs_gbp_domain():
+    docs = sop_library.relevant_docs({"gbp"})
+    assert "GBP_Description_SOP.md" in docs
+    assert docs[0] == "_ORCHESTRATOR.md"
+
+
+def test_select_sops_text_includes_gbp_sop_for_gbp_domain():
+    text = sop_library.select_sops_text({"gbp"}, budget_chars=40_000)
+    assert "GBP_Description_SOP.md" in text
+
+
 def test_qa_sops_text_serves_qa_docs_without_orchestrator():
     text = sop_library.qa_sops_text(budget_chars=16_000)
     assert text.startswith("### SOP DOC: QA_Checklists.md")

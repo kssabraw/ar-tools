@@ -32,6 +32,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import gbp_audit
 from services import gbp_profile_api as api
 
 logger = logging.getLogger(__name__)
@@ -618,15 +619,47 @@ def enqueue_draft(
 
 _DESC_SYSTEM = (
     "You write the 'from the business' description for a local business's Google "
-    "Business Profile. Rules you MUST follow:\n"
-    "- Under 750 characters; aim for 2–4 plain, warm sentences.\n"
-    "- Describe what the business does, who it serves, and where — grounded ONLY "
-    "in the facts provided. NEVER invent services, awards, years in business, or "
-    "guarantees.\n"
+    "Business Profile. A good description is a compact, natural-language "
+    "representation of the business — it establishes WHO the business is, WHAT it "
+    "does, WHERE it operates, WHO it serves, and WHAT makes it different — so that "
+    "it reads well to a prospective customer AND helps a search engine understand "
+    "the business. It is NOT a place to stuff keywords.\n"
+    "\n"
+    "STRUCTURE (adapt to the facts; not every sentence is mandatory):\n"
+    "1. Open by naming the business, its primary category, and its primary market "
+    "in the FIRST sentence — e.g. '<Name> is a <category> serving <city> and "
+    "<broader area>.' Never open with fluff like 'Welcome to…' or 'Looking for…'.\n"
+    "2. Describe the core services, prioritizing the most important ones and using "
+    "the real terms for the work (build natural topical breadth — e.g. roof "
+    "repair, roof replacement, leak detection, inspections — rather than repeating "
+    "one phrase).\n"
+    "3. Give ONE meaningful, factual differentiator (years in business, "
+    "specialization, licensing, family/local ownership, residential vs commercial) "
+    "— only if it's in the facts provided.\n"
+    "4. Optionally connect a service to a real customer situation ('from emergency "
+    "repairs to full replacements…') and/or name who is served (homeowners, "
+    "businesses, property managers) when it genuinely applies.\n"
+    "5. Optionally reinforce geography with a FEW important nearby areas — never a "
+    "long city list.\n"
+    "\n"
+    "HARD RULES:\n"
+    "- Under 750 characters; aim for 3–5 plain, natural sentences.\n"
+    "- Ground EVERYTHING in the facts provided. NEVER invent services, awards, "
+    "years in business, certifications, licenses, warranties, guarantees, review "
+    "counts, or customer numbers.\n"
+    "- NO keyword stuffing: establish the city and each service ONCE; do not repeat "
+    "the city name or an exact-match '<service> <city>' phrase.\n"
+    "- NO long city lists and NO exhaustive service lists (the rest of the profile "
+    "and website carry the detail).\n"
+    "- NO generic marketing filler ('customer satisfaction is our #1 priority', "
+    "'we pride ourselves', 'we go above and beyond', 'treat you like family') — "
+    "replace any such claim with a specific fact.\n"
+    "- No promotional superlatives (best / #1 / top-rated / guaranteed), no "
+    "ALL-CAPS, no emoji, no exclamation-heavy copy.\n"
     "- NO URLs and NO phone numbers (both get the description rejected).\n"
-    "- No promotional superlatives (best / #1 / guaranteed), no ALL-CAPS, no emoji.\n"
     "- No medical, legal, or other regulated claims.\n"
     "- Match the business's brand voice when given.\n"
+    "- It should sound natural read aloud to a customer — not like SEO copy.\n"
     "Return ONLY the description text — no preamble, no quotes, no markdown."
 )
 
@@ -714,12 +747,20 @@ async def _draft_description(client: dict, current: str, card: Optional[dict]) -
 
 def _content_violations(text: str) -> list[str]:
     """The deterministic description trip-wires present in the text (for the
-    corrective rewrite input). Pure."""
+    corrective rewrite input) — the hard content-policy rules plus the GBP
+    Description SOP's writing-quality trip-wires. Pure."""
     hits = []
     if api._URL_RE.search(text or ""):
         hits.append("a URL")
     if api._PHONE_RE.search(text or ""):
         hits.append("a phone number")
+    supers = gbp_audit.find_superlatives(text)
+    if supers:
+        hits.append("promotional superlatives (" + ", ".join(sorted(set(supers))) + ")")
+    if gbp_audit.find_marketing_filler(text):
+        hits.append("generic marketing filler")
+    if gbp_audit.has_generic_opening(text):
+        hits.append("a fluff opening instead of naming the business")
     return hits
 
 

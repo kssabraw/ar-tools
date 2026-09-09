@@ -346,7 +346,9 @@ class MapsGbpReviewGap(BaseModel):
 
 class MapsGbpDescriptionQuality(BaseModel):
     """A present-but-weak GBP description (distinct from the binary completeness
-    check). issues ∈ {too_short, missing_service_keyword, missing_location}."""
+    check). issues ∈ {too_short, missing_service_keyword, missing_location,
+    keyword_stuffed, promotional_superlatives, marketing_filler, generic_opening}
+    (per the GBP Description SOP)."""
     ok: bool = True
     length: int = 0
     issues: list[str] = Field(default_factory=list)

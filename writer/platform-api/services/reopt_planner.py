@@ -926,6 +926,10 @@ def build_gbp_action(
             "too_short": "expand it",
             "missing_service_keyword": "name the core service",
             "missing_location": "name the service area",
+            "keyword_stuffed": "cut the repeated city/keyword",
+            "promotional_superlatives": "drop promotional superlatives",
+            "marketing_filler": "replace generic filler with specifics",
+            "generic_opening": "lead with what the business is, not fluff",
         }
         hints = ", ".join(_dq_hint[i] for i in dq.get("issues", []) if i in _dq_hint)
         parts.append(

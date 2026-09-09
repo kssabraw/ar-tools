@@ -45,6 +45,22 @@ def test_lint_clean_description_has_no_warnings():
     assert api.lint_description("We repair and restore roofs across the Tampa Bay area.") == []
 
 
+def test_lint_description_flags_sop_writing_quality():
+    hits = {w["code"] for w in api.lint_description(
+        "Welcome to Ace Roofing! We pride ourselves on quality across Tampa."
+    )}
+    assert {"filler", "generic_opening"} <= hits
+
+
+def test_content_violations_flags_sop_trip_wires():
+    hits = svc._content_violations("We are the best, guaranteed roofer in town.")
+    assert any("superlative" in h for h in hits)
+    clean = svc._content_violations(
+        "Ace Roofing repairs and replaces roofs for homeowners across Tampa."
+    )
+    assert clean == []
+
+
 def test_build_description_patch():
     body, mask = api.build_description_patch("Hello there")
     assert body == {"profile": {"description": "Hello there"}}

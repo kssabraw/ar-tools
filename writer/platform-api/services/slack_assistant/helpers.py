@@ -303,6 +303,11 @@ _SOP_HINT_RE = re.compile(
 # joined with domains inferred from which modules are live in the context.
 _SOP_DOMAIN_HINTS: list[tuple[str, str]] = [
     (r"maps|gbp|local pack|geo.?grid|review", "maps"),
+    # GBP-description writing/auditing — distinct from Maps ranking. "gbp" alone
+    # still routes to maps above; this fires the description SOP when the turn is
+    # about the listing's description/blurb copy specifically.
+    (r"gbp description|business (?:profile )?description|profile description|"
+     r"describe the (?:business|listing)|gbp (?:copy|content|blurb)", "gbp"),
     (r"ai visibility|ai overview|ai mode|aio\b|aeo\b|chatgpt|perplexity|gemini", "ai_visibility"),
     (r"link.?build|backlink|referring domain|citation|offpage|disavow", "offpage"),
     (r"budget|retainer|allocat|spend|task plan|recipe", "budget"),
