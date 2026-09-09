@@ -115,6 +115,13 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
         "services": parsed["services"],
         "categories": parsed["categories"],
         "metadata": parsed["metadata"],
+        # Phase 3a — Tier A current values.
+        "website": parsed["website"],
+        "labels": parsed["labels"],
+        "special_hours": parsed["special_hours"],
+        "more_hours": parsed["more_hours"],
+        "service_area": parsed["service_area"],
+        "open_info": parsed["open_info"],
         "edits": edits,
     }
 
@@ -136,6 +143,51 @@ async def list_service_types(client_id: str, location_row_id: str) -> dict:
         settings.gbp_profile_service_language_code,
     )
     return {"categories": api.parse_service_types(resp, categories)}
+
+
+async def list_more_hours_types(client_id: str, location_row_id: str) -> dict:
+    """The additional-hours types (kitchen / delivery / senior hours…) the operator
+    can add for this listing — grouped by its categories. moreHoursTypes ride the
+    SAME v1 categories.batchGet(view=FULL) the services picker uses. Best-effort per
+    category; a category with no more-hours types contributes nothing."""
+    _assert_enabled()
+    location = _location(location_row_id, client_id)
+    loc = await asyncio.to_thread(api.get_location, _location_name(location))
+    categories = api.parse_categories(loc)
+    resp = await asyncio.to_thread(
+        api.list_service_types,
+        [c["id"] for c in categories],
+        settings.gbp_profile_service_region_code,
+        settings.gbp_profile_service_language_code,
+    )
+    return {"categories": api.parse_more_hours_types(resp, categories)}
+
+
+async def resolve_places(client_id: str, names: list[str]) -> dict:
+    """Resolve typed service-area place names → Google place ids (the id a v1
+    serviceArea write requires), reusing the shared Google-Geocoding cache
+    (maps_geocode). Returns ``{places: [{query, name, place_id, matched}]}``. A name
+    that doesn't resolve comes back ``matched: false`` with an empty id so the UI can
+    flag it — never a guessed id. Best-effort: no GOOGLE_MAPS_API_KEY → all
+    unmatched (the operator can still keep already-resolved places)."""
+    _assert_enabled()
+    _client(client_id)  # authorize the client exists
+    queries = [n.strip() for n in (names or []) if isinstance(n, str) and n.strip()]
+    if not queries:
+        return {"places": []}
+    from services import maps_geocode  # lazy — google/httpx not needed at import
+
+    resolved = await maps_geocode.forward_geocode_places(queries)
+    out: list[dict] = []
+    for q in queries:
+        info = resolved.get(q) or {}
+        out.append({
+            "query": q,
+            "name": q,
+            "place_id": (info.get("place_id") or "") if info.get("matched") else "",
+            "matched": bool(info.get("matched")),
+        })
+    return {"places": out}
 
 
 def list_edits(client_id: str, location_row_id: Optional[str] = None, field: Optional[str] = None) -> list[dict]:
@@ -161,22 +213,24 @@ def get_edit(edit_id: str) -> dict:
 # ───────────────────────────────────────────────────────────────────────────
 # Proposed-value extraction + validation (per field, via the pure builders)
 # ───────────────────────────────────────────────────────────────────────────
+# The value key each field carries in a create/patch request body. Phase 3a added
+# the five Tier-A fields (special hours ships as its own field, not inside hours).
+_FIELD_KEY = {
+    "description": "description", "hours": "hours", "services": "services",
+    "website": "website", "labels": "labels", "special_hours": "special_hours",
+    "more_hours": "more_hours", "service_area": "service_area", "open_info": "open_info",
+}
+
+
 def _proposed_from_request(field: str, body: dict) -> object:
     """Pull the field's proposed value out of a request body and normalize it to
     the internal shape stored in ``proposed_value``. Raises 400 when absent."""
-    if field == "description":
-        if body.get("description") is None:
-            raise HTTPException(status_code=400, detail="description_required")
-        return body["description"]
-    if field == "hours":
-        if body.get("hours") is None:
-            raise HTTPException(status_code=400, detail="hours_required")
-        return body["hours"]
-    if field == "services":
-        if body.get("services") is None:
-            raise HTTPException(status_code=400, detail="services_required")
-        return body["services"]
-    raise HTTPException(status_code=400, detail="invalid_field")
+    key = _FIELD_KEY.get(field)
+    if key is None:
+        raise HTTPException(status_code=400, detail="invalid_field")
+    if body.get(key) is None:
+        raise HTTPException(status_code=400, detail=f"{key}_required")
+    return body[key]
 
 
 def _build_patch(field: str, proposed, allowed_categories: Optional[set[str]] = None) -> tuple[dict, str]:
@@ -190,17 +244,31 @@ def _build_patch(field: str, proposed, allowed_categories: Optional[set[str]] = 
             return api.build_hours_patch(value.get("regular") or [], value.get("special"))
         if field == "services":
             return api.build_services_patch(proposed or [], allowed_categories=allowed_categories)
+        if field == "website":
+            return api.build_website_patch(proposed or "")
+        if field == "labels":
+            return api.build_labels_patch(proposed or [])
+        if field == "special_hours":
+            return api.build_special_hours_patch(proposed or [])
+        if field == "more_hours":
+            # hoursTypeId is validated live by Google (the picker only offers valid
+            # ids); the builder just requires each entry to name a type + have hours.
+            return api.build_more_hours_patch(proposed or [])
+        if field == "service_area":
+            return api.build_service_area_patch(proposed or {})
+        if field == "open_info":
+            return api.build_open_info_patch(proposed or {})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     raise HTTPException(status_code=400, detail="invalid_field")
 
 
 def _field_value(parsed: dict, field: str) -> object:
-    if field == "description":
-        return parsed["description"]
-    if field == "hours":
-        return parsed["hours"]
-    return parsed["services"]
+    """The parsed live value for a field (the re-read-and-diff comparand)."""
+    key = _FIELD_KEY.get(field)
+    if key is None or key not in parsed:
+        raise HTTPException(status_code=400, detail="invalid_field")
+    return parsed[key]
 
 
 # ───────────────────────────────────────────────────────────────────────────

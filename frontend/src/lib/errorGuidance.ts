@@ -706,6 +706,52 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Re-open the Business Profile tool and re-register the client’s listing.',
     ],
   },
+  invalid_website_url: {
+    title: 'That doesn’t look like a valid website URL',
+    meaning:
+      'The website field needs a real web address (a scheme is added for you, ' +
+      'but it has to be an http/https URL with a domain).',
+    steps: [
+      'Enter the full site URL, e.g. https://www.example.com.',
+      'Leave it blank to clear the website from the listing.',
+    ],
+  },
+  too_many_labels: {
+    title: 'Too many labels',
+    meaning: 'Google allows at most 10 labels on a listing.',
+    steps: ['Remove labels until 10 or fewer remain, then apply again.'],
+  },
+  label_too_long: {
+    title: 'A label is too long',
+    meaning: 'Each label must be 255 characters or fewer.',
+    steps: ['Shorten the flagged label, then apply again.'],
+  },
+  invalid_more_hours_type: {
+    title: 'That additional-hours type isn’t valid for this listing',
+    meaning:
+      'More-hours types (kitchen, delivery, senior hours…) are specific to the ' +
+      'listing’s primary category, and this one isn’t offered for it.',
+    steps: [
+      'Pick an additional-hours type from the dropdown (only valid ones are listed).',
+      'If none fit, this listing’s category doesn’t support extra hours.',
+    ],
+  },
+  invalid_service_area: {
+    title: 'The service area couldn’t be set',
+    meaning:
+      'A service-area write needs each place resolved to a Google place, and one ' +
+      'here isn’t resolved (or the business type is invalid).',
+    steps: [
+      'Re-pick each service area so it resolves to a real place (a ✓ shows when it does).',
+      'Remove any place that won’t resolve, then apply again.',
+    ],
+  },
+  invalid_open_status: {
+    title: 'Invalid open/closed status',
+    meaning:
+      'The status must be Open, Temporarily closed, or Permanently closed.',
+    steps: ['Pick a valid status, then apply again.'],
+  },
 }
 
 /**

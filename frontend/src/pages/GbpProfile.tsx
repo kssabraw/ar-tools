@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Building2, Sparkles, Save, X, Trash2, RefreshCw, CheckCircle2,
   Clock, Plus, AlertTriangle, Info, Search, ShieldCheck, ShieldAlert,
+  Globe, Tag, MapPin, CalendarDays, Power,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -23,12 +24,26 @@ const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
 
 type EditStatus =
   | 'draft' | 'applying' | 'applied' | 'pending_review' | 'rejected' | 'live_changed' | 'failed'
-type Field = 'description' | 'hours' | 'services'
+type Field =
+  | 'description' | 'hours' | 'services'
+  | 'website' | 'labels' | 'special_hours' | 'more_hours' | 'service_area' | 'open_info'
 
 interface GbpLocationRow { id: string; location_id: string; title: string | null; access_status: string }
 interface HoursPeriod { open: string; close: string }
 interface HoursRow { day: number; open_24: boolean; periods: HoursPeriod[] }
-interface HoursValue { regular: HoursRow[]; special?: unknown[] | null }
+interface DateInput { year: number; month: number; day: number }
+interface SpecialHoursRow { start: DateInput; end?: DateInput | null; closed: boolean; open?: string | null; close?: string | null }
+interface HoursValue { regular: HoursRow[]; special?: SpecialHoursRow[] | null }
+interface MoreHoursEntry { hours_type_id: string; regular: HoursRow[] }
+interface ServiceAreaPlace { name: string; place_id: string }
+interface ServiceAreaValue { business_type: string; places: ServiceAreaPlace[]; region_code?: string | null }
+interface OpenInfoValue { status: string; opening_date?: DateInput | null }
+interface MoreHoursType { hours_type_id: string; display_name: string }
+interface MoreHoursTypeCategory { id: string; name: string; more_hours_types: MoreHoursType[] }
+interface ResolvedPlace { query: string; name: string; place_id: string; matched: boolean }
+const OPEN_STATUS_LABELS: Record<string, string> = {
+  OPEN: 'Open', CLOSED_TEMPORARILY: 'Temporarily closed', CLOSED_PERMANENTLY: 'Permanently closed',
+}
 interface ServiceItem {
   kind: 'free_form' | 'structured'; label: string
   description?: string | null; category_id?: string | null
@@ -51,7 +66,10 @@ interface ProfileEdit {
 interface ProfileResponse {
   location_row_id: string; location_id: string; title: string | null
   description: string; hours: HoursValue; services: ServiceItem[]
-  categories: Category[]; metadata: ProfileMetadata; edits: ProfileEdit[]
+  categories: Category[]; metadata: ProfileMetadata
+  website: string; labels: string[]; special_hours: SpecialHoursRow[]
+  more_hours: MoreHoursEntry[]; service_area: ServiceAreaValue; open_info: OpenInfoValue | null
+  edits: ProfileEdit[]
 }
 interface Job { job_id: string }
 interface JobStatus { job_id: string; status: string; edit_id: string | null; error: string | null }
@@ -222,6 +240,12 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
       <DescriptionCard clientId={clientId} locationRowId={locationRowId} current={p.description} edit={editFor('description')} onChanged={onChanged} />
       <ServicesCard clientId={clientId} locationRowId={locationRowId} current={p.services} categories={p.categories} canModify={p.metadata.can_modify_service_list} edit={editFor('services')} onChanged={onChanged} />
       <HoursCard clientId={clientId} locationRowId={locationRowId} current={p.hours} edit={editFor('hours')} onChanged={onChanged} />
+      <SpecialHoursCard clientId={clientId} locationRowId={locationRowId} current={p.special_hours} edit={editFor('special_hours')} onChanged={onChanged} />
+      <MoreHoursCard clientId={clientId} locationRowId={locationRowId} current={p.more_hours} edit={editFor('more_hours')} onChanged={onChanged} />
+      <WebsiteCard clientId={clientId} locationRowId={locationRowId} current={p.website} edit={editFor('website')} onChanged={onChanged} />
+      <ServiceAreaCard clientId={clientId} locationRowId={locationRowId} current={p.service_area} edit={editFor('service_area')} onChanged={onChanged} />
+      <OpenInfoCard clientId={clientId} locationRowId={locationRowId} current={p.open_info} edit={editFor('open_info')} onChanged={onChanged} />
+      <LabelsCard clientId={clientId} locationRowId={locationRowId} current={p.labels} edit={editFor('labels')} onChanged={onChanged} />
     </div>
   )
 }
@@ -664,6 +688,405 @@ function HoursCard({ clientId, locationRowId, current, edit, onChanged }: {
       ) : (
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button onClick={startEdit} style={btn('#fff', '#334155')}><Clock size={13} /> Edit hours</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Website (Phase 3a) ────────────────────────────────────────────────────────
+function WebsiteCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: string; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'website', onChanged)
+  const proposed = typeof edit?.proposed_value === 'string' ? edit.proposed_value : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { website: text })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'website', website: text }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  return (
+    <Card title="Website" subtitle="The website shown on the listing. Leave blank to remove it.">
+      <CurrentValue empty={!current}>{current || 'No website on the listing.'}</CurrentValue>
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{proposed || '(cleared)'}</span>} onChanged={onChanged} setErr={setErr} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="https://www.example.com" style={inputStyle} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button onClick={() => { setText(proposed ?? current ?? ''); setEditing(true) }} style={btn('#fff', '#334155')}><Globe size={13} /> Edit website</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Labels (Phase 3a) ─────────────────────────────────────────────────────────
+function LabelsCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: string[]; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [labels, setLabels] = useState<string[]>([])
+  const [draft, setDraft] = useState('')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'labels', onChanged)
+  const proposed = Array.isArray(edit?.proposed_value) ? (edit!.proposed_value as string[]) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const add = () => { const v = draft.trim(); if (v && !labels.some((l) => l.toLowerCase() === v.toLowerCase())) setLabels([...labels, v]); setDraft('') }
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { labels })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'labels', labels }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  return (
+    <Card title="Labels" subtitle="Internal labels to organise listings (not shown to customers). Up to 10.">
+      {current.length === 0 ? <CurrentValue empty>No labels.</CurrentValue> : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {current.map((l, i) => <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#f1f5f9', color: '#334155' }}>{l}</span>)}
+        </div>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{(proposed ?? []).join(', ') || '(cleared)'}</span>} onChanged={onChanged} setErr={setErr} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {labels.map((l, i) => (
+              <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 6px 3px 9px', borderRadius: 999, background: '#e0f2fe', color: '#334155' }}>
+                {l}<button onClick={() => setLabels(labels.filter((_, j) => j !== i))} style={{ border: 'none', background: 'none', cursor: 'pointer', color: '#64748b', display: 'flex' }}><X size={12} /></button>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); add() } }} placeholder="Add a label…" style={inputStyle} />
+            <button onClick={add} disabled={!draft.trim() || labels.length >= 10} style={btn('#fff', '#334155')}><Plus size={13} /></button>
+          </div>
+          {labels.length >= 10 && <div style={{ fontSize: 12, color: '#b45309' }}>10 labels max.</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button onClick={() => { setLabels(proposed ?? current ?? []); setDraft(''); setEditing(true) }} style={btn('#fff', '#334155')}><Tag size={13} /> Edit labels</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Special (holiday) hours (Phase 3a) ────────────────────────────────────────
+const toDateStr = (d?: DateInput | null) => d ? `${d.year}-${String(d.month).padStart(2, '0')}-${String(d.day).padStart(2, '0')}` : ''
+const fromDateStr = (s: string): DateInput | null => { const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s); return m ? { year: +m[1], month: +m[2], day: +m[3] } : null }
+
+function SpecialHoursCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: SpecialHoursRow[]; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [rows, setRows] = useState<SpecialHoursRow[]>([])
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'special', onChanged)
+  const proposed = Array.isArray(edit?.proposed_value) ? (edit!.proposed_value as SpecialHoursRow[]) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const label = (r: SpecialHoursRow) => `${toDateStr(r.start)}${r.end && toDateStr(r.end) !== toDateStr(r.start) ? `–${toDateStr(r.end)}` : ''}: ${r.closed ? 'Closed' : `${r.open}–${r.close}`}`
+  const valid = rows.every((r) => r.start && r.start.year && (r.closed || (r.open && r.close)))
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { special_hours: rows })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'special_hours', special_hours: rows }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  const setRow = (i: number, patch: Partial<SpecialHoursRow>) => setRows((rs) => rs.map((r, j) => j === i ? { ...r, ...patch } : r))
+  return (
+    <Card title="Holiday & special hours" subtitle="One-off hours for holidays or events. The AI never sets these — enter them by hand.">
+      {current.length === 0 ? <CurrentValue empty>No special hours set.</CurrentValue> : (
+        <div style={{ display: 'grid', gap: 3, fontSize: 13 }}>{current.map((r, i) => <div key={i}>{label(r)}</div>)}</div>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{(proposed ?? []).length} special day(s)</span>} onChanged={onChanged} setErr={setErr} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          {rows.map((r, i) => (
+            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              <input type="date" value={toDateStr(r.start)} onChange={(e) => { const d = fromDateStr(e.target.value); if (d) setRow(i, { start: d, end: d }) }} style={{ ...inputStyle, width: 160 }} />
+              <select value={r.closed ? 'closed' : 'open'} onChange={(e) => setRow(i, e.target.value === 'closed' ? { closed: true } : { closed: false, open: r.open || '09:00', close: r.close || '17:00' })} style={{ ...inputStyle, width: 110 }}>
+                <option value="closed">Closed</option><option value="open">Open</option>
+              </select>
+              {!r.closed && <>
+                <input type="time" value={r.open ?? '09:00'} onChange={(e) => setRow(i, { open: e.target.value })} style={{ ...inputStyle, width: 120 }} />
+                <span style={{ color: '#94a3b8' }}>–</span>
+                <input type="time" value={r.close ?? '17:00'} onChange={(e) => setRow(i, { close: e.target.value })} style={{ ...inputStyle, width: 120 }} />
+              </>}
+              <button onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))} style={btn('#fff', '#b91c1c')}><Trash2 size={13} /></button>
+            </div>
+          ))}
+          <button onClick={() => setRows([...rows, { start: { year: new Date().getFullYear(), month: 1, day: 1 }, closed: true }])} style={{ ...btn('#fff', '#334155'), justifySelf: 'start' }}><Plus size={13} /> Add a special day</button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || !valid} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={() => { setRows((proposed ?? current ?? []).map((r) => ({ ...r }))); setEditing(true) }} style={btn('#fff', '#334155')}><CalendarDays size={13} /> Edit special hours</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// A compact weekly hours editor (reused by More hours). Mirrors the Hours card grid.
+function WeeklyHoursEditor({ rows, onChange }: { rows: HoursRow[]; onChange: (rows: HoursRow[]) => void }) {
+  const byDay = new Map(rows.map((r) => [r.day, r]))
+  const full = DAYS.map((_, d) => byDay.get(d) ?? { day: d, open_24: false, periods: [] })
+  const setDay = (d: number, patch: Partial<HoursRow>) => onChange(full.map((r) => r.day === d ? { ...r, ...patch } : r).filter((r) => r.open_24 || r.periods.length > 0))
+  return (
+    <div style={{ display: 'grid', gap: 6 }}>
+      {full.map((r) => (
+        <div key={r.day} style={{ display: 'grid', gridTemplateColumns: '90px 110px 1fr', gap: 8, alignItems: 'center' }}>
+          <span style={{ fontSize: 12.5, fontWeight: 600 }}>{DAYS[r.day]}</span>
+          <select value={r.open_24 ? '24' : r.periods.length ? 'open' : 'closed'} onChange={(e) => {
+            const v = e.target.value
+            if (v === 'closed') setDay(r.day, { open_24: false, periods: [] })
+            else if (v === '24') setDay(r.day, { open_24: true, periods: [] })
+            else setDay(r.day, { open_24: false, periods: r.periods.length ? r.periods : [{ open: '09:00', close: '17:00' }] })
+          }} style={inputStyle}>
+            <option value="closed">Closed</option><option value="open">Open</option><option value="24">24h</option>
+          </select>
+          {!r.open_24 && r.periods.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <input type="time" value={r.periods[0].open} onChange={(e) => setDay(r.day, { periods: [{ ...r.periods[0], open: e.target.value }] })} style={{ ...inputStyle, width: 116 }} />
+              <span style={{ color: '#94a3b8' }}>–</span>
+              <input type="time" value={r.periods[0].close} onChange={(e) => setDay(r.day, { periods: [{ ...r.periods[0], close: e.target.value }] })} style={{ ...inputStyle, width: 116 }} />
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ── More (additional) hours (Phase 3a) ────────────────────────────────────────
+function MoreHoursCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: MoreHoursEntry[]; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [entries, setEntries] = useState<MoreHoursEntry[]>([])
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'morehours', onChanged)
+  const proposed = Array.isArray(edit?.proposed_value) ? (edit!.proposed_value as MoreHoursEntry[]) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const typesQ = useQuery<{ categories: MoreHoursTypeCategory[] }>({
+    queryKey: ['gbp-more-hours-types', clientId, locationRowId],
+    queryFn: () => api.get(`/clients/${clientId}/gbp/profile/more-hours-types?location_row_id=${locationRowId}`),
+    enabled: editing, retry: false, staleTime: 5 * 60_000,
+  })
+  const allTypes: MoreHoursType[] = (typesQ.data?.categories ?? []).flatMap((c) => c.more_hours_types)
+  const typeName = (id: string) => allTypes.find((t) => t.hours_type_id === id)?.display_name || id
+  const used = new Set(entries.map((e) => e.hours_type_id))
+  const avail = allTypes.filter((t) => !used.has(t.hours_type_id))
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { more_hours: entries })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'more_hours', more_hours: entries }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  const setEntry = (i: number, regular: HoursRow[]) => setEntries((es) => es.map((e, j) => j === i ? { ...e, regular } : e))
+  const summary = (e: MoreHoursEntry) => `${typeName(e.hours_type_id)}: ${e.regular.length} day(s)`
+  return (
+    <Card title="More hours" subtitle="Extra hours for a specific service — e.g. kitchen, delivery, or senior hours. Optional.">
+      {current.length === 0 ? <CurrentValue empty>No additional hours set.</CurrentValue> : (
+        <div style={{ display: 'grid', gap: 3, fontSize: 13 }}>{current.map((e, i) => <div key={i}>{summary(e)}</div>)}</div>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{(proposed ?? []).map((e) => typeName(e.hours_type_id)).join(', ') || '(cleared)'}</span>} onChanged={onChanged} setErr={setErr} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 12, marginTop: 12 }}>
+          {typesQ.isLoading ? <div style={{ fontSize: 12.5, color: '#64748b' }}>Loading additional-hours types…</div>
+            : typesQ.isError ? <ErrorDetails message={(typesQ.error as Error)?.message} />
+            : allTypes.length === 0 ? <div style={{ fontSize: 12.5, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 10px' }}>This listing's category offers no additional-hours types.</div>
+            : <>
+              {entries.map((en, i) => (
+                <div key={i} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 10, display: 'grid', gap: 8 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 13, fontWeight: 600 }}>{typeName(en.hours_type_id)}</span>
+                    <button onClick={() => setEntries((es) => es.filter((_, j) => j !== i))} style={btn('#fff', '#b91c1c')}><Trash2 size={13} /></button>
+                  </div>
+                  <WeeklyHoursEditor rows={en.regular} onChange={(r) => setEntry(i, r)} />
+                </div>
+              ))}
+              {avail.length > 0 && (
+                <select value="" onChange={(e) => { if (e.target.value) setEntries([...entries, { hours_type_id: e.target.value, regular: [{ day: 0, open_24: false, periods: [{ open: '09:00', close: '17:00' }] }] }]) }} style={{ ...inputStyle, justifySelf: 'start', width: 'auto', minWidth: 220 }}>
+                  <option value="">+ Add an additional-hours type…</option>
+                  {avail.map((t) => <option key={t.hours_type_id} value={t.hours_type_id}>{t.display_name}</option>)}
+                </select>
+              )}
+            </>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={() => { setEntries((proposed ?? current ?? []).map((e) => ({ ...e, regular: e.regular.map((r) => ({ ...r })) }))); setEditing(true) }} style={btn('#fff', '#334155')}><Clock size={13} /> Edit more hours</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Service area (Phase 3a) ───────────────────────────────────────────────────
+function ServiceAreaCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: ServiceAreaValue; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const [businessType, setBusinessType] = useState('CUSTOMER_AND_BUSINESS_LOCATION')
+  const [places, setPlaces] = useState<ServiceAreaPlace[]>([])
+  const [draft, setDraft] = useState('')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'servicearea', onChanged)
+  const proposed = edit && typeof edit.proposed_value === 'object' && edit.proposed_value ? (edit.proposed_value as ServiceAreaValue) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const startEdit = () => {
+    const src = proposed ?? current
+    setBusinessType(src?.business_type || 'CUSTOMER_AND_BUSINESS_LOCATION')
+    setPlaces((src?.places ?? []).map((p) => ({ ...p })))
+    setConfirmed(false); setDraft(''); setEditing(true)
+  }
+  const resolveMut = useMutation({
+    mutationFn: (names: string[]) => api.post<{ places: ResolvedPlace[] }>(`/clients/${clientId}/gbp/profile/resolve-places`, { names }),
+  })
+  const addPlace = async () => {
+    const v = draft.trim(); if (!v) return
+    setDraft('')
+    try {
+      const { places: r } = await resolveMut.mutateAsync([v])
+      const hit = r[0]
+      setPlaces((ps) => [...ps, { name: hit?.name || v, place_id: hit?.matched ? hit.place_id : '' }])
+    } catch { setPlaces((ps) => [...ps, { name: v, place_id: '' }]) }
+  }
+  const allResolved = places.every((p) => p.place_id)
+  const value: ServiceAreaValue = { business_type: businessType, places, region_code: current?.region_code || 'US' }
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { service_area: value })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'service_area', service_area: value }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  return (
+    <Card title="Service area" subtitle="The areas a service-area business covers. Changing coverage affects where the listing can show — confirm before applying.">
+      {(current?.places?.length ?? 0) === 0 ? <CurrentValue empty>No service area set.</CurrentValue> : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {current.places.map((p, i) => <span key={i} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#f1f5f9', color: '#334155' }}>{p.name}</span>)}
+        </div>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{(proposed?.places ?? []).map((p) => p.name).join(', ') || '(cleared)'}</span>} onChanged={onChanged} setErr={setErr} confirmBeforeApply={!confirmed} onNeedConfirm={startEdit} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          <select value={businessType} onChange={(e) => setBusinessType(e.target.value)} style={{ ...inputStyle, width: 'auto', minWidth: 260 }}>
+            <option value="CUSTOMER_AND_BUSINESS_LOCATION">Storefront + service area</option>
+            <option value="CUSTOMER_LOCATION_ONLY">Service area only (no storefront)</option>
+          </select>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {places.map((p, i) => (
+              <span key={i} title={p.place_id ? 'Resolved' : 'Not resolved — remove it'} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, padding: '3px 6px 3px 9px', borderRadius: 999, background: p.place_id ? '#f0fdf4' : '#fef2f2', color: p.place_id ? '#15803d' : '#b91c1c' }}>
+                {p.place_id ? <CheckCircle2 size={11} /> : <AlertTriangle size={11} />}{p.name}
+                <button onClick={() => setPlaces(places.filter((_, j) => j !== i))} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'inherit', display: 'flex' }}><X size={12} /></button>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addPlace() } }} placeholder="Add an area (e.g. Tampa, FL)…" style={inputStyle} />
+            <button onClick={addPlace} disabled={!draft.trim() || resolveMut.isPending} style={btn('#fff', '#334155')}><MapPin size={13} /> {resolveMut.isPending ? 'Finding…' : 'Add'}</button>
+          </div>
+          {!allResolved && <div style={{ fontSize: 12, color: '#b45309' }}>Remove any area that didn’t resolve (⚠) before saving.</div>}
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: '#334155', marginTop: 2 }}>
+            <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} />
+            I confirm this service-area change is correct.
+          </label>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || !allResolved || !confirmed} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={startEdit} style={btn('#fff', '#334155')}><MapPin size={13} /> Edit service area</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Open / closed status (Phase 3a) ───────────────────────────────────────────
+function OpenInfoCard({ clientId, locationRowId, current, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: OpenInfoValue | null; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [confirmed, setConfirmed] = useState(false)
+  const [status, setStatus] = useState('OPEN')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'openinfo', onChanged)
+  const proposed = edit && typeof edit.proposed_value === 'object' && edit.proposed_value ? (edit.proposed_value as OpenInfoValue) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const curStatus = current?.status || 'OPEN'
+  const isClosing = status.startsWith('CLOSED')
+  const proposedClosing = (proposed?.status || '').startsWith('CLOSED')
+  const startEdit = () => { setStatus(proposed?.status || curStatus); setConfirmed(false); setEditing(true) }
+  const saveMut = useMutation({
+    mutationFn: () => {
+      const value: OpenInfoValue = { status }
+      return edit && edit.status !== 'applied' && edit.status !== 'rejected'
+        ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { open_info: value })
+        : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'open_info', open_info: value })
+    },
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  return (
+    <Card title="Open / closed status" subtitle="Whether the business is open, temporarily closed, or permanently closed. The AI never closes a business.">
+      <CurrentValue empty={!current}>{OPEN_STATUS_LABELS[curStatus] || curStatus}</CurrentValue>
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{OPEN_STATUS_LABELS[proposed?.status || ''] || proposed?.status}</span>} onChanged={onChanged} setErr={setErr} confirmBeforeApply={proposedClosing && !confirmed} onNeedConfirm={startEdit} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 12 }}>
+          <select value={status} onChange={(e) => { setStatus(e.target.value); setConfirmed(false) }} style={{ ...inputStyle, width: 'auto', minWidth: 220 }}>
+            {Object.entries(OPEN_STATUS_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          {isClosing && (
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8, padding: '8px 10px' }}>
+              <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} style={{ marginTop: 2 }} />
+              I confirm the business is {OPEN_STATUS_LABELS[status].toLowerCase()} — this removes it from normal search/Maps visibility.
+            </label>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || (isClosing && !confirmed)} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={startEdit} style={btn('#fff', '#334155')}><Power size={13} /> Edit status</button>
         </div>
       )}
     </Card>
