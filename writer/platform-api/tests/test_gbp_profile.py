@@ -1242,3 +1242,82 @@ def test_service_area_diff_is_order_insensitive():
     c = {**a, "places": a["places"] + [{"name": "New", "place_id": "p3"}]}
     assert api.diff_field("service_area", a, c)  # a real add IS detected
     assert api.diff_field("service_area", a, {**a, "business_type": "CUSTOMER_AND_BUSINESS_LOCATION"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 3b — categories: pure builder / parsers / service switch points
+# ═══════════════════════════════════════════════════════════════════════════
+def test_build_categories_patch():
+    body, mask = api.build_categories_patch({
+        "primary": {"id": "categories/gcid:roofing_contractor", "name": "Roofing contractor"},
+        "additional": [
+            {"id": "categories/gcid:gutter_service", "name": "Gutter service"},
+            {"id": "categories/gcid:gutter_service", "name": "dup"},  # deduped
+            {"id": "categories/gcid:roofing_contractor", "name": "= primary"},  # primary never in additional
+        ],
+    })
+    assert mask == "categories"
+    assert body["categories"]["primaryCategory"] == {"name": "categories/gcid:roofing_contractor"}
+    assert body["categories"]["additionalCategories"] == [{"name": "categories/gcid:gutter_service"}]
+    # No additional → key omitted; primary-only is valid.
+    b2, _ = api.build_categories_patch({"primary": {"id": "categories/gcid:x"}})
+    assert "additionalCategories" not in b2["categories"]
+
+
+def test_build_categories_patch_validation():
+    with pytest.raises(ValueError, match="primary_category_required"):
+        api.build_categories_patch({"additional": [{"id": "categories/gcid:x"}]})
+    with pytest.raises(ValueError, match="primary_category_required"):
+        api.build_categories_patch({})
+    with pytest.raises(ValueError, match="invalid_category"):
+        api.build_categories_patch(
+            {"primary": {"id": "categories/gcid:not_allowed"}},
+            allowed_ids={"categories/gcid:ok"},
+        )
+
+
+_CAT_LOC = {
+    "categories": {
+        "primaryCategory": {"name": "categories/gcid:roofing_contractor", "displayName": "Roofing contractor"},
+        "additionalCategories": [
+            {"name": "categories/gcid:gutter_service", "displayName": "Gutter service"},
+            {"name": "categories/gcid:roofing_contractor", "displayName": "dup of primary"},  # dropped
+        ],
+    },
+}
+
+
+def test_parse_categories_value():
+    v = api.parse_categories_value(_CAT_LOC)
+    assert v["primary"] == {"id": "categories/gcid:roofing_contractor", "name": "Roofing contractor"}
+    assert v["additional"] == [{"id": "categories/gcid:gutter_service", "name": "Gutter service"}]
+    # No categories → empty selection.
+    assert api.parse_categories_value({}) == {"primary": None, "additional": []}
+
+
+def test_parse_category_search():
+    resp = {"categories": [
+        {"name": "categories/gcid:plumber", "displayName": "Plumber"},
+        {"name": "categories/gcid:plumber", "displayName": "dup"},  # deduped
+        {"displayName": "no id"},  # dropped
+    ]}
+    assert api.parse_category_search(resp) == [{"id": "categories/gcid:plumber", "name": "Plumber"}]
+
+
+def test_categories_roundtrip_and_switch_points():
+    parsed = api.parse_location_fields(_CAT_LOC)
+    assert "categories_value" in parsed
+    # diff-stable when unchanged; a real primary swap is detected.
+    assert not api.diff_field("categories", parsed["categories_value"], parsed["categories_value"])
+    swapped = {"primary": {"id": "categories/gcid:gutter_service", "name": "Gutter service"}, "additional": []}
+    assert api.diff_field("categories", parsed["categories_value"], swapped)
+    # service switch points
+    assert svc._build_patch("categories", parsed["categories_value"])[1] == "categories"
+    assert svc._field_value(parsed, "categories") == parsed["categories_value"]
+    assert svc._proposed_from_request("categories", {"categories_value": {"primary": {"id": "x"}}}) == {"primary": {"id": "x"}}
+    from fastapi import HTTPException as _H
+    with pytest.raises(_H, match="categories_value_required"):
+        svc._proposed_from_request("categories", {})
+    with pytest.raises(_H) as ei:
+        svc._build_patch("categories", {"additional": []})  # no primary
+    assert ei.value.status_code == 400 and "primary_category_required" in ei.value.detail

@@ -115,11 +115,27 @@ be done from the Claude Code sandbox (`developers.google.com` is egress-blocked)
      `special_hours` ships as its OWN field (masks only `specialHours`), separate
      from the `hours` field (which masks only `regularHours` in practice) — no
      dual-write.
-   - **3b — Tier B, category-gated:** `categories` (a `categories.list`/`batchGet`
-     picker; **consumes the existing `gbp_audit.category_gaps` finding** → the
-     loop's auto-reach grows; extra-confirm on a primary-category change; AI never
-     drafts a primary-category downgrade) and `attributes` (the **separate**
-     `getAttributes`/`updateAttributes` + the category-scoped `attributes.list`).
+   - **3b — Tier B, category-gated. `categories` ✅ BUILT 2026-09-09 (shipped dark);
+     `attributes` NOT built (its own PR).**
+     - **`categories`** rides `locations.patch` like a Tier-A field
+       (`updateMask=categories`), but the editor needs a live catalog SEARCH
+       (`categories.list` → `GET …/categories/search?q=`) to pick valid gcids, and a
+       PRIMARY-category change is gated behind an extra confirm (it shifts ranking).
+       **Consumes the existing `gbp_audit.category_gaps` finding for free** —
+       categories is now a valid `field`, so the strategist loop's generic
+       `stage_strategist_draft` can stage a categories draft with zero new wiring.
+       Pure `build_categories_patch`/`parse_categories_value`/`parse_category_search`
+       + `search_categories`; the field's value rides under `categories_value` (the
+       flat `categories` key stays the services picker list). Migration
+       `20260909130000` (applied live). Card + `primary_category_required` /
+       `invalid_category` codes.
+     - **`attributes`** deferred to its OWN PR — it uses a **separate endpoint pair**
+       (`getAttributes`/`updateAttributes` with an `attributeMask`, NOT
+       `locations.patch`), a distinct read path (not on the Location readMask),
+       category-scoped availability (`attributes.list`) + value-typed
+       (bool/enum/url/repeated) values, so it needs its own branches in the
+       apply/reconcile re-read paths. Kept out of the categories PR to preserve the
+       single-`updateMask` apply + the re-read-and-diff invariant.
    - **3c — Tier C, media (v4 API):** photos/logo/cover via `accounts.locations.media`
      — **mirror GBP Posts (v4/httpx + the image upload/reuse path), NOT the v1
      discovery client**; it's a create/list/delete op, so give it its own storage,

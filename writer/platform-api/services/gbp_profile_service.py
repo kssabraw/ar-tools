@@ -122,6 +122,7 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
         "more_hours": parsed["more_hours"],
         "service_area": parsed["service_area"],
         "open_info": parsed["open_info"],
+        "categories_value": parsed["categories_value"],
         "edits": edits,
     }
 
@@ -161,6 +162,20 @@ async def list_more_hours_types(client_id: str, location_row_id: str) -> dict:
         settings.gbp_profile_service_language_code,
     )
     return {"categories": api.parse_more_hours_types(resp, categories)}
+
+
+async def search_categories(client_id: str, query: str) -> dict:
+    """Search Google's business-category catalog by display name (v1
+    categories.list) → ``{categories: [{id, name}]}`` for the categories picker.
+    Region/language-scoped by the same settings as the services picker."""
+    _assert_enabled()
+    _client(client_id)  # authorize the client exists
+    resp = await asyncio.to_thread(
+        api.search_categories, query,
+        settings.gbp_profile_service_region_code,
+        settings.gbp_profile_service_language_code,
+    )
+    return {"categories": api.parse_category_search(resp)}
 
 
 async def resolve_places(client_id: str, names: list[str]) -> dict:
@@ -219,6 +234,9 @@ _FIELD_KEY = {
     "description": "description", "hours": "hours", "services": "services",
     "website": "website", "labels": "labels", "special_hours": "special_hours",
     "more_hours": "more_hours", "service_area": "service_area", "open_info": "open_info",
+    # Phase 3b — the categories field's value rides under `categories_value` (the
+    # flat `categories` key is the services editor's picker list).
+    "categories": "categories_value",
 }
 
 
@@ -258,6 +276,10 @@ def _build_patch(field: str, proposed, allowed_categories: Optional[set[str]] = 
             return api.build_service_area_patch(proposed or {})
         if field == "open_info":
             return api.build_open_info_patch(proposed or {})
+        if field == "categories":
+            # Google validates the gcids for the listing's region on apply; the
+            # picker only offers real catalog ids, so no pre-validation set here.
+            return api.build_categories_patch(proposed or {})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     raise HTTPException(status_code=400, detail="invalid_field")

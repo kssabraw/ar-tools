@@ -752,6 +752,21 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'The status must be Open, Temporarily closed, or Permanently closed.',
     steps: ['Pick a valid status, then apply again.'],
   },
+  primary_category_required: {
+    title: 'A primary category is required',
+    meaning: 'Every listing must have one primary category.',
+    steps: ['Pick a primary category in the Categories editor, then apply again.'],
+  },
+  invalid_category: {
+    title: 'That category isn’t valid for this listing',
+    meaning:
+      'A category here isn’t one Google offers for this listing’s region, or its ' +
+      'id is malformed.',
+    steps: [
+      'Re-pick the category from the search box (only real catalog categories are listed).',
+      'Apply again.',
+    ],
+  },
 }
 
 /**

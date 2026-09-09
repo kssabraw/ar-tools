@@ -496,6 +496,108 @@ def parse_categories(loc: dict) -> list[dict]:
     return out
 
 
+def parse_categories_value(loc: dict) -> dict:
+    """The listing's categories as the editable ``{primary: {id, name} | None,
+    additional: [{id, name}]}`` shape (Phase 3b — distinct from the flat
+    ``parse_categories`` picker list the services editor uses). Pure."""
+    cats = (loc or {}).get("categories") or {}
+
+    def _ref(cat) -> Optional[dict]:
+        if not isinstance(cat, dict):
+            return None
+        cid = cat.get("name")
+        return {"id": cid, "name": cat.get("displayName") or cid} if cid else None
+
+    primary = _ref(cats.get("primaryCategory"))
+    additional: list[dict] = []
+    seen = {primary["id"]} if primary else set()
+    for cat in cats.get("additionalCategories") or []:
+        ref = _ref(cat)
+        if ref and ref["id"] not in seen:
+            seen.add(ref["id"])
+            additional.append(ref)
+    return {"primary": primary, "additional": additional}
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Phase 3b — categories (rides locations.patch like a Tier-A field, but needs a
+# live category catalog SEARCH to pick valid gcids; changing the PRIMARY category
+# shifts ranking behaviour so the UI gates it behind an extra confirm). Consumes
+# the existing gbp_audit.category_gaps finding via the strategist loop's generic
+# stage_strategist_draft — no new wiring, categories is just a valid field now.
+# ───────────────────────────────────────────────────────────────────────────
+def build_categories_patch(value: dict, allowed_ids: Optional[set[str]] = None) -> tuple[dict, str]:
+    """(body, updateMask) for the listing's categories. ``value`` =
+    ``{primary: {id, name}, additional: [{id, name}]}``. The primary category is
+    REQUIRED (``primary_category_required``); each id must be a category resource
+    name (``categories/gcid:…``). ``additional`` is deduped and never contains the
+    primary. When ``allowed_ids`` is given every id is validated against it
+    (``invalid_category``) — the picker resolves ids from the live catalog, so this
+    guards a hand-crafted payload. Pure."""
+    value = value or {}
+    primary = (value.get("primary") or {}) if isinstance(value.get("primary"), dict) else {}
+    pid = (primary.get("id") or "").strip()
+    if not pid:
+        raise ValueError("primary_category_required")
+    if allowed_ids is not None and pid not in allowed_ids:
+        raise ValueError(f"invalid_category:{pid}")
+    body: dict = {"categories": {"primaryCategory": {"name": pid}}}
+    additional: list[dict] = []
+    seen = {pid}
+    for cat in value.get("additional") or []:
+        cid = (cat.get("id") or "").strip() if isinstance(cat, dict) else ""
+        if not cid or cid in seen:
+            continue
+        if allowed_ids is not None and cid not in allowed_ids:
+            raise ValueError(f"invalid_category:{cid}")
+        seen.add(cid)
+        additional.append({"name": cid})
+    if additional:
+        body["categories"]["additionalCategories"] = additional
+    return body, "categories"
+
+
+def parse_category_search(response: dict) -> list[dict]:
+    """A v1 ``categories.list`` response → ``[{id, name}]`` for the category picker.
+    Pure (unit-tested)."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for cat in (response or {}).get("categories") or []:
+        if not isinstance(cat, dict):
+            continue
+        cid = cat.get("name")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        out.append({"id": cid, "name": cat.get("displayName") or cid})
+    return out
+
+
+def search_categories(
+    query: str, region_code: str = "US", language_code: str = "en", limit: int = 20,
+) -> dict:
+    """v1 ``categories.list`` — search Google's business-category catalog by display
+    name (``filter='displayName=<term>'``), region/language-scoped. Returns the raw
+    response (``parse_category_search`` shapes it). Raises a classified HTTPException
+    on failure. An empty query returns no categories (the picker searches on type)."""
+    term = (query or "").strip()
+    if not term:
+        return {"categories": []}
+    try:
+        return (
+            _info_client().categories()
+            .list(
+                regionCode=region_code, languageCode=language_code, view="BASIC",
+                filter=f'displayName="{term}"', pageSize=max(1, min(limit, 100)),
+            )
+            .execute()
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — google HttpError / transport
+        _raise(exc, field="categories")
+
+
 def parse_service_area(loc: dict) -> list[str]:
     """The service-area place NAMES a listing publishes (v1
     ``serviceArea.places.placeInfos[].placeName``) — the towns/areas the business
@@ -804,6 +906,9 @@ def parse_location_fields(loc: dict) -> dict:
         "more_hours": parse_more_hours(loc),
         "service_area": parse_service_area_full(loc),
         "open_info": parse_open_info(loc),
+        # Phase 3b — categories (editable {primary, additional}); distinct from the
+        # flat `categories` picker list above (which the services editor uses).
+        "categories_value": parse_categories_value(loc),
     }
 
 
@@ -1036,6 +1141,8 @@ def classify_profile_error(status_code: Optional[int], message: str = "", field:
             return "invalid_service_area"
         if field == "open_info" or "openinfo" in msg or "openstatus" in msg:
             return "invalid_open_status"
+        if field == "categories":
+            return "invalid_category"
         if "category" in msg or "service" in msg:
             return "invalid_service_category"
         return "invalid_edit_content"

@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 
 from middleware.auth import require_auth, require_staff
 from models.gbp_profile import (
+    CategorySearchResponse,
     GbpAuditResponse,
     GbpChangeEvent,
     GbpMonitorStatus,
@@ -85,6 +86,16 @@ async def list_more_hours_types(
     can add for this listing, grouped by its categories (the more-hours editor's
     type picker — it rides the same categories.batchGet as the services picker)."""
     return await svc.list_more_hours_types(str(client_id), str(location_row_id))
+
+
+@router.get("/clients/{client_id}/gbp/profile/categories/search", response_model=CategorySearchResponse)
+async def search_categories(
+    client_id: UUID, q: str = Query("", min_length=0), auth: dict = Depends(require_auth)
+):
+    """Search Google's business-category catalog by display name (the categories
+    editor's picker — the operator picks valid gcids for the primary + additional
+    categories)."""
+    return await svc.search_categories(str(client_id), q)
 
 
 @router.post("/clients/{client_id}/gbp/profile/resolve-places", response_model=ResolvePlacesResponse)
