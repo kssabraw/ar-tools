@@ -18,6 +18,8 @@ ProfileField = Literal[
     "website", "labels", "special_hours", "more_hours", "service_area", "open_info",
     # Phase 3b — categories (same endpoint; needs a live catalog search + primary confirm).
     "categories",
+    # Phase 3b — attributes (SEPARATE getAttributes/updateAttributes endpoint pair).
+    "attributes",
 ]
 EditSource = Literal["manual", "ai", "strategist"]
 
@@ -103,6 +105,41 @@ class CategorySearchResponse(BaseModel):
     categories: list[Category] = []
 
 
+# ── Phase 3b — attributes value shapes (separate endpoint pair) ──────────────
+class AttributeValue(BaseModel):
+    """One attribute to set/clear (an edit targets a SUBSET; the mask names just
+    these, others are untouched). Exactly one value field is meaningful per
+    ``value_type`` — an empty value clears the attribute."""
+
+    attribute_id: str  # 'attributes/{id}' resource name
+    value_type: Literal["BOOL", "ENUM", "URL", "REPEATED_ENUM"]
+    values: list[Any] = []          # BOOL: [bool]; ENUM: ['<enum value>'] (single)
+    urls: list[str] = []            # URL
+    set_values: list[str] = []      # REPEATED_ENUM (selected)
+    unset_values: list[str] = []    # REPEATED_ENUM (explicitly unselected)
+
+
+class AttributeValueOption(BaseModel):
+    value: Any
+    display_name: str
+
+
+class AttributeMetaItem(BaseModel):
+    attribute_id: str
+    value_type: str
+    display_name: str
+    group_name: str = ""
+    deprecated: bool = False
+    repeatable: bool = False
+    value_options: list[AttributeValueOption] = []
+
+
+class AttributeMetadataResponse(BaseModel):
+    """The attributes available for a listing (attributes.list) — the picker."""
+
+    attributes: list[AttributeMetaItem] = []
+
+
 class ServiceType(BaseModel):
     service_type_id: str
     display_name: str
@@ -139,6 +176,7 @@ class ProfileEditCreateRequest(BaseModel):
     service_area: Optional[ServiceAreaValue] = None
     open_info: Optional[OpenInfoValue] = None
     categories_value: Optional[CategoriesValue] = None
+    attributes: Optional[list[AttributeValue]] = None
 
 
 class ProfileEditPatchRequest(BaseModel):
@@ -154,6 +192,7 @@ class ProfileEditPatchRequest(BaseModel):
     service_area: Optional[ServiceAreaValue] = None
     open_info: Optional[OpenInfoValue] = None
     categories_value: Optional[CategoriesValue] = None
+    attributes: Optional[list[AttributeValue]] = None
 
 
 class ProfileDraftRequest(BaseModel):
@@ -216,6 +255,10 @@ class GbpProfileResponse(BaseModel):
     service_area: ServiceAreaValue = Field(default_factory=ServiceAreaValue)
     open_info: Optional[OpenInfoValue] = None
     categories_value: CategoriesValue = Field(default_factory=CategoriesValue)
+    # Phase 3b — attributes (separate endpoint; best-effort — a read failure sets
+    # attributes_error rather than failing the whole profile read).
+    attributes: list[AttributeValue] = []
+    attributes_error: Optional[str] = None
     edits: list[GbpProfileEdit] = []
 
 

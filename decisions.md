@@ -339,6 +339,16 @@ hours, all built + merged dark in PR #1011). Recorded in the PRD's **v1.1 amendm
   per PRD §8 + the v1.1 block.
 - **Process:** spec-first (owner choice) — PRD/decisions/ADRs updated before code. Build order
   3a → 3b → 3c.
+- **Build status (2026-09-09): Phases 3a + 3b COMPLETE, shipped dark.** 3a (six Tier-A fields,
+  migration `20260909120000`); 3b `categories` (#1044, migration `20260909130000`) + 3b
+  `attributes` (migration `20260909140000`). `attributes` is the one field that does NOT ride
+  `locations.patch` — the SEPARATE `getAttributes`/`updateAttributes` endpoint pair with a
+  per-attribute `updateMask` (comma-joined `attributes/{id}`) and category-scoped `attributes.list`
+  availability; the service branches read/write for it (`_run_apply_attributes`/`_run_sync_attributes`)
+  but REUSES the `gbp_profile_apply`/`gbp_profile_sync` job types (no new async_jobs type). An
+  attributes edit targets the changed SUBSET (mask names only those; a cleared attribute stays in the
+  mask with an empty value); the `read_current` attributes read is best-effort. **The v1 attributes
+  `updateMask` shape is flagged to re-verify live at activation.** Only **3c (media)** remains.
 
 
 ---

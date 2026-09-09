@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, Query
 
 from middleware.auth import require_auth, require_staff
 from models.gbp_profile import (
+    AttributeMetadataResponse,
     CategorySearchResponse,
     GbpAuditResponse,
     GbpChangeEvent,
@@ -96,6 +97,16 @@ async def search_categories(
     editor's picker — the operator picks valid gcids for the primary + additional
     categories)."""
     return await svc.search_categories(str(client_id), q)
+
+
+@router.get("/clients/{client_id}/gbp/profile/attributes/available", response_model=AttributeMetadataResponse)
+async def list_available_attributes(
+    client_id: UUID, location_row_id: UUID = Query(...), auth: dict = Depends(require_auth)
+):
+    """The attributes the operator can set for this listing (scoped to its primary
+    category + region, via v1 attributes.list) — the AttributesCard's picker. A
+    listing with no editable attributes returns an empty list."""
+    return await svc.list_available_attributes(str(client_id), str(location_row_id))
 
 
 @router.post("/clients/{client_id}/gbp/profile/resolve-places", response_model=ResolvePlacesResponse)

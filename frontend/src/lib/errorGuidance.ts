@@ -767,6 +767,42 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Apply again.',
     ],
   },
+  // Attributes (specific codes first — they contain `invalid_attribute`).
+  invalid_attribute_value_type: {
+    title: 'That attribute has an unexpected value type',
+    meaning:
+      'Each attribute is a yes/no, a choice, a URL, or a multi-select — and this ' +
+      'one’s value doesn’t match its type.',
+    steps: [
+      'Re-pick the attribute from the list and set its value with the provided control.',
+      'Apply again.',
+    ],
+  },
+  invalid_attribute_url: {
+    title: 'That attribute URL isn’t valid',
+    meaning: 'A URL attribute (e.g. a menu or booking link) must be a real web address.',
+    steps: ['Enter a full URL (https://…), then apply again.'],
+  },
+  invalid_attribute: {
+    title: 'That attribute isn’t valid for this listing',
+    meaning:
+      'Attributes are specific to the listing’s primary category, and this one ' +
+      'isn’t offered for it (or its id is malformed).',
+    steps: [
+      'Pick an attribute from the list (only the ones available for this listing are shown).',
+      'Apply again.',
+    ],
+  },
+  attribute_id_required: {
+    title: 'Pick an attribute first',
+    meaning: 'An attribute edit needs an attribute selected.',
+    steps: ['Choose an attribute from the list, set its value, then save.'],
+  },
+  no_attributes: {
+    title: 'No attribute changes to save',
+    meaning: 'The attributes edit is empty — nothing to set or clear.',
+    steps: ['Set or clear at least one attribute, then save.'],
+  },
 }
 
 /**

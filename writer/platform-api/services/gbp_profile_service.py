@@ -107,6 +107,20 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
     loc = await asyncio.to_thread(api.get_location, name)
     parsed = api.parse_location_fields(loc)
     edits = list_edits(client_id, location_row_id=location_row_id)
+    # Attributes read from a SEPARATE endpoint (getAttributes) — best-effort so a
+    # secondary-field read failure never breaks the whole profile page; the
+    # AttributesCard surfaces attributes_error and its own picker loads lazily.
+    attributes: list[dict] = []
+    attributes_error: Optional[str] = None
+    try:
+        attributes = api.parse_attributes(
+            await asyncio.to_thread(api.get_attributes, api.attributes_name(name))
+        )
+    except HTTPException as exc:
+        attributes_error = str(exc.detail)
+    except Exception as exc:  # noqa: BLE001 — never break the page over attributes
+        attributes_error = "attributes_read_failed"
+        logger.info("gbp_profile.attributes_read_failed", extra={"error": str(exc)[:200]})
     return {
         "location_row_id": location["id"],
         "location_id": location["location_id"],
@@ -124,6 +138,9 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
         "service_area": parsed["service_area"],
         "open_info": parsed["open_info"],
         "categories_value": parsed["categories_value"],
+        # Phase 3b — attributes (separate endpoint; best-effort).
+        "attributes": attributes,
+        "attributes_error": attributes_error,
         "edits": edits,
     }
 
@@ -177,6 +194,21 @@ async def search_categories(client_id: str, query: str) -> dict:
         settings.gbp_profile_service_language_code,
     )
     return {"categories": api.parse_category_search(resp)}
+
+
+async def list_available_attributes(client_id: str, location_row_id: str) -> dict:
+    """The attributes AVAILABLE for this listing (scoped to its primary category +
+    region) → ``{attributes: [picker items]}`` for the AttributesCard. Loads lazily
+    (v1 attributes.list); a listing with no editable attributes contributes an
+    empty list."""
+    _assert_enabled()
+    location = _location(location_row_id, client_id)
+    resp = await asyncio.to_thread(
+        api.list_available_attributes, _location_name(location),
+        settings.gbp_profile_service_region_code,
+        settings.gbp_profile_service_language_code,
+    )
+    return {"attributes": api.parse_attribute_metadata(resp)}
 
 
 async def resolve_places(client_id: str, names: list[str]) -> dict:
@@ -238,7 +270,20 @@ _FIELD_KEY = {
     # Phase 3b — the categories field's value rides under `categories_value` (the
     # flat `categories` key is the services editor's picker list).
     "categories": "categories_value",
+    # Phase 3b — attributes ride under `attributes`. NOTE: attributes are NOT in
+    # parse_location_fields (a separate endpoint), so `_field_value` is never
+    # called for them — the create/apply/sync paths branch on `_is_attributes`.
+    "attributes": "attributes",
 }
+
+
+def _is_attributes(field: str) -> bool:
+    return field == "attributes"
+
+
+def _attr_name(location: dict) -> str:
+    """The v1 Attributes resource name for a location ('locations/{id}/attributes')."""
+    return api.attributes_name(_location_name(location))
 
 
 def _proposed_from_request(field: str, body: dict) -> object:
@@ -281,6 +326,11 @@ def _build_patch(field: str, proposed, allowed_categories: Optional[set[str]] = 
             # Google validates the gcids for the listing's region on apply; the
             # picker only offers real catalog ids, so no pre-validation set here.
             return api.build_categories_patch(proposed or {})
+        if field == "attributes":
+            # The picker only offers attributes available for the listing, and
+            # Google validates ids/values on apply; the builder is self-describing
+            # (each entry carries its value_type), so no pre-validation set here.
+            return api.build_attributes_patch(proposed or [])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     raise HTTPException(status_code=400, detail="invalid_field")
@@ -304,18 +354,26 @@ async def create_edit(client_id: str, body: dict, user_id: Optional[str], source
     field = body.get("field")
     location = _location(str(body["location_row_id"]), client_id)
     proposed = _proposed_from_request(field, body)
-    # Snapshot the live current value + validate the proposed value (services
-    # validated against the listing's live categories).
-    loc = await asyncio.to_thread(api.get_location, _location_name(location))
-    parsed = api.parse_location_fields(loc)
-    allowed = {c["id"] for c in parsed["categories"]} if field == "services" else None
-    _build_patch(field, proposed, allowed_categories=allowed)  # raises 400 on invalid
+    # Snapshot the live current value + validate the proposed value. Attributes
+    # read from a separate endpoint (getAttributes); everything else from the
+    # Location. Services are validated against the listing's live categories.
+    if _is_attributes(field):
+        current = api.parse_attributes(
+            await asyncio.to_thread(api.get_attributes, _attr_name(location))
+        )
+        _build_patch(field, proposed)  # raises 400 on invalid
+    else:
+        loc = await asyncio.to_thread(api.get_location, _location_name(location))
+        parsed = api.parse_location_fields(loc)
+        allowed = {c["id"] for c in parsed["categories"]} if field == "services" else None
+        _build_patch(field, proposed, allowed_categories=allowed)  # raises 400 on invalid
+        current = _field_value(parsed, field)
     row = {
         "client_id": client_id,
         "location_row_id": location["id"],
         "field": field,
         "source": source,
-        "current_value": _field_value(parsed, field),
+        "current_value": current,
         "proposed_value": proposed,
         "status": "draft",
         "created_by": user_id,
@@ -425,6 +483,9 @@ async def run_apply_job(job: dict) -> None:
             return
         field = edit["field"]
         location = _location(edit["location_row_id"], client_id)
+        if _is_attributes(field):
+            await _run_apply_attributes(job, edit, client_id, location)
+            return
         name = _location_name(location)
 
         # Re-read the live field and diff against the draft snapshot (Q3).
@@ -469,6 +530,52 @@ async def run_apply_job(job: dict) -> None:
         _notify(client_id, "gbp_profile_failed", "GBP profile edit failed",
                 str(detail)[:200], "warning", edit_id)
         logger.warning("gbp_profile.apply_failed", extra={"edit_id": edit_id, "error": str(detail)})
+
+
+async def _run_apply_attributes(job: dict, edit: dict, client_id: str, location: dict) -> None:
+    """Apply an ``attributes`` edit via the SEPARATE getAttributes/updateAttributes
+    endpoint pair (attributes don't ride locations.patch). Re-reads the whole
+    attribute set + aborts into live_changed on out-of-band drift (Q3), patches the
+    masked subset, then settles applied / pending_review / rejected. Attributes
+    usually settle synchronously; the pending path (rare) is checked via the
+    Location's metadata and chased by the same reconciler."""
+    edit_id = edit["id"]
+    field = edit["field"]
+    aname = _attr_name(location)
+    name = _location_name(location)
+
+    live_now = api.parse_attributes(await asyncio.to_thread(api.get_attributes, aname))
+    if api.attributes_diff(edit.get("current_value") or [], live_now):
+        _set_edit(edit_id, {"status": "live_changed", "error": None})
+        _settle_job(job["id"], {"edit_id": edit_id, "state": "live_changed"})
+        logger.info("gbp_profile.live_changed", extra={"edit_id": edit_id, "field": field})
+        return
+
+    body, mask = _build_patch(field, edit["proposed_value"])
+    patched = api.parse_attributes(await asyncio.to_thread(api.update_attributes, aname, body, mask, field))
+    if api.attributes_subset_applied(edit["proposed_value"] or [], patched):
+        _set_edit(edit_id, {"status": "applied", "google_pending": False,
+                            "applied_at": "now()", "next_sync_at": None, "error": None})
+        _settle_job(job["id"], {"edit_id": edit_id, "state": "applied"})
+        logger.info("gbp_profile.applied", extra={"edit_id": edit_id, "field": field, "state": "applied"})
+        return
+
+    # The value didn't take: Google queued it (pending_review) vs rejected it. The
+    # Attributes resource carries no pending flag — read the Location's metadata.
+    meta = api.parse_metadata(await asyncio.to_thread(api.get_location, name, "metadata"))
+    if meta.get("has_pending_edits"):
+        _set_edit(edit_id, {"status": "pending_review", "google_pending": True,
+                            "applied_at": "now()", "sync_attempts": 0,
+                            "next_sync_at": _iso(datetime.now(timezone.utc) + timedelta(seconds=settings.gbp_profile_sync_delay_seconds)),
+                            "error": None})
+        _settle_job(job["id"], {"edit_id": edit_id, "state": "pending_review"})
+        logger.info("gbp_profile.applied", extra={"edit_id": edit_id, "field": field, "state": "pending_review"})
+        return
+    _set_edit(edit_id, {"status": "rejected", "google_pending": False, "error": "google_rejected_or_reverted"})
+    _settle_job(job["id"], {"edit_id": edit_id, "state": "rejected"})
+    _notify(client_id, "gbp_profile_rejected", "GBP profile edit rejected",
+            f"Google rejected the {field} edit.", "warning", edit_id, field)
+    logger.info("gbp_profile.applied", extra={"edit_id": edit_id, "field": field, "state": "rejected"})
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -557,6 +664,9 @@ async def run_sync_job(job: dict) -> None:
             return
         field = edit["field"]
         location = _location(edit["location_row_id"], client_id)
+        if _is_attributes(field):
+            await _run_sync_attributes(job, edit, client_id, location)
+            return
         loc = await asyncio.to_thread(api.get_location, _location_name(location))
         parsed = api.parse_location_fields(loc)
         live_now = _field_value(parsed, field)
@@ -591,6 +701,42 @@ async def run_sync_job(job: dict) -> None:
         detail = getattr(exc, "detail", None) or str(exc)
         _settle_job(job["id"], None, error=str(detail)[:500])
         logger.warning("gbp_profile.sync_failed", extra={"edit_id": edit_id, "error": str(detail)})
+
+
+async def _run_sync_attributes(job: dict, edit: dict, client_id: str, location: dict) -> None:
+    """One reconciler check for a pending ``attributes`` edit (separate endpoint).
+    Re-reads the attribute set + settles applied/rejected or advances the backoff
+    clock — the attributes analogue of the generic run_sync_job body."""
+    edit_id = edit["id"]
+    field = edit["field"]
+    aname = _attr_name(location)
+    name = _location_name(location)
+
+    live_now = api.parse_attributes(await asyncio.to_thread(api.get_attributes, aname))
+    if api.attributes_subset_applied(edit["proposed_value"] or [], live_now):
+        _set_edit(edit_id, {"status": "applied", "google_pending": False,
+                            "next_sync_at": None, "error": None})
+        _settle_job(job["id"], {"edit_id": edit_id, "state": "applied"})
+        logger.info("gbp_profile.reconciled_applied", extra={"edit_id": edit_id})
+        return
+    meta = api.parse_metadata(await asyncio.to_thread(api.get_location, name, "metadata"))
+    if not meta.get("has_pending_edits"):
+        _set_edit(edit_id, {"status": "rejected", "google_pending": False,
+                            "next_sync_at": None, "error": "google_rejected_or_reverted"})
+        _settle_job(job["id"], {"edit_id": edit_id, "state": "rejected"})
+        _notify(client_id, "gbp_profile_rejected", "GBP profile edit rejected",
+                f"Google rejected the {field} edit.", "warning", edit_id, field)
+        return
+    attempts = int(edit.get("sync_attempts") or 0) + 1
+    delay = next_backoff(attempts)
+    update = {"sync_attempts": attempts, "google_pending": True}
+    if delay is None:
+        update["next_sync_at"] = None
+        logger.info("gbp_profile.sync_gave_up", extra={"edit_id": edit_id, "attempts": attempts})
+    else:
+        update["next_sync_at"] = _iso(datetime.now(timezone.utc) + timedelta(seconds=delay))
+    _set_edit(edit_id, update)
+    _settle_job(job["id"], {"edit_id": edit_id, "state": "pending_review", "attempts": attempts})
 
 
 # ───────────────────────────────────────────────────────────────────────────

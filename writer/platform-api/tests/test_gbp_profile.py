@@ -1337,3 +1337,210 @@ def test_categories_roundtrip_and_switch_points():
     with pytest.raises(_H) as ei:
         svc._build_patch("categories", {"additional": []})  # no primary
     assert ei.value.status_code == 400 and "primary_category_required" in ei.value.detail
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pure: attributes (separate getAttributes / updateAttributes endpoint pair)
+# ═══════════════════════════════════════════════════════════════════════════
+def test_build_attributes_patch_value_types():
+    body, mask = api.build_attributes_patch([
+        {"attribute_id": "attributes/has_wheelchair", "value_type": "BOOL", "values": [True]},
+        {"attribute_id": "attributes/pay", "value_type": "ENUM", "values": ["cash", "extra"]},  # single-select
+        {"attribute_id": "attributes/url_menu", "value_type": "URL", "urls": ["example.com/menu"]},
+        {"attribute_id": "attributes/svc", "value_type": "REPEATED_ENUM", "set_values": ["a", "b"], "unset_values": ["c"]},
+    ])
+    assert mask == "attributes/has_wheelchair,attributes/pay,attributes/url_menu,attributes/svc"
+    by_id = {a["name"]: a for a in body["attributes"]}
+    assert by_id["attributes/has_wheelchair"]["values"] == [True]
+    assert by_id["attributes/pay"]["values"] == ["cash"]  # ENUM single-select truncates
+    assert by_id["attributes/url_menu"]["uriValues"] == [{"uri": "https://example.com/menu"}]  # scheme added
+    assert by_id["attributes/svc"]["repeatedEnumValue"] == {"setValues": ["a", "b"], "unsetValues": ["c"]}
+
+
+def test_build_attributes_patch_clear_keeps_id_in_mask():
+    # An entry with no value clears the attribute — it MUST stay in the mask.
+    body, mask = api.build_attributes_patch([
+        {"attribute_id": "attributes/x", "value_type": "BOOL", "values": []},
+    ])
+    assert mask == "attributes/x"
+    assert body["attributes"][0]["values"] == []
+
+
+def test_build_attributes_patch_dedupe_and_bool_false():
+    body, mask = api.build_attributes_patch([
+        {"attribute_id": "attributes/x", "value_type": "BOOL", "values": [False]},
+        {"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]},  # dedupe (first wins)
+    ])
+    assert mask == "attributes/x"
+    assert body["attributes"][0]["values"] == [False]  # BOOL false is a real value
+
+
+def test_build_attributes_patch_validation():
+    with pytest.raises(ValueError, match="no_attributes"):
+        api.build_attributes_patch([])
+    with pytest.raises(ValueError, match="attribute_id_required"):
+        api.build_attributes_patch([{"value_type": "BOOL", "values": [True]}])
+    with pytest.raises(ValueError, match="invalid_attribute:"):
+        api.build_attributes_patch([{"attribute_id": "bad", "value_type": "BOOL", "values": [True]}])
+    with pytest.raises(ValueError, match="invalid_attribute_value_type"):
+        api.build_attributes_patch([{"attribute_id": "attributes/x", "value_type": "WAT"}])
+    with pytest.raises(ValueError, match="invalid_attribute_url"):
+        api.build_attributes_patch([{"attribute_id": "attributes/u", "value_type": "URL", "urls": ["ftp://x.com"]}])
+    with pytest.raises(ValueError, match="invalid_attribute:attributes/x"):
+        api.build_attributes_patch(
+            [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]}],
+            allowed_ids={"attributes/ok"},
+        )
+
+
+def test_parse_attributes():
+    resp = {"attributes": [
+        {"name": "attributes/has_wheelchair", "valueType": "BOOL", "values": [True]},
+        {"name": "attributes/url_menu", "valueType": "URL", "uriValues": [{"uri": "https://x.com"}]},
+        {"name": "attributes/svc", "valueType": "REPEATED_ENUM", "repeatedEnumValue": {"setValues": ["a"], "unsetValues": ["b"]}},
+        {"name": "", "valueType": "BOOL", "values": [True]},          # no id → dropped
+        {"name": "attributes/z", "valueType": "MYSTERY"},              # bad type → dropped
+    ]}
+    parsed = api.parse_attributes(resp)
+    assert parsed == [
+        {"attribute_id": "attributes/has_wheelchair", "value_type": "BOOL", "values": [True]},
+        {"attribute_id": "attributes/url_menu", "value_type": "URL", "urls": ["https://x.com"]},
+        {"attribute_id": "attributes/svc", "value_type": "REPEATED_ENUM", "set_values": ["a"], "unset_values": ["b"]},
+    ]
+
+
+def test_parse_attribute_metadata():
+    resp = {"attributeMetadata": [
+        {"parent": "attributes/pay", "valueType": "REPEATED_ENUM", "displayName": "Payments",
+         "groupDisplayName": "Payments", "valueMetadata": [{"value": "cash", "displayName": "Cash"}]},
+        {"parent": "attributes/has_wheelchair", "valueType": "BOOL", "displayName": "Wheelchair accessible",
+         "groupDisplayName": "Accessibility", "deprecated": False},
+        {"parent": "attributes/pay", "valueType": "REPEATED_ENUM", "displayName": "dup"},  # deduped
+        {"parent": "", "valueType": "BOOL"},  # no id → dropped
+    ]}
+    out = api.parse_attribute_metadata(resp)
+    # grouped-sorted: Accessibility before Payments.
+    assert [m["attribute_id"] for m in out] == ["attributes/has_wheelchair", "attributes/pay"]
+    assert out[1]["value_options"] == [{"value": "cash", "display_name": "Cash"}]
+    assert "value_options" not in out[0]  # BOOL has none
+
+
+def test_attributes_diff_order_insensitive_and_clear_equals_absent():
+    a = [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]},
+         {"attribute_id": "attributes/y", "value_type": "REPEATED_ENUM", "set_values": ["a", "b"]}]
+    b = [{"attribute_id": "attributes/y", "value_type": "REPEATED_ENUM", "set_values": ["b", "a"]},  # reordered
+         {"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]}]
+    assert not api.attributes_diff(a, b)
+    # a cleared attribute equals an absent one.
+    assert not api.attributes_diff(
+        [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": []}], [],
+    )
+    assert api.attributes_diff(a, b[:1])  # dropping x is a real change
+
+
+def test_attributes_subset_applied():
+    live = [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]}]
+    # setting x=True → applied when live matches; the untouched world is ignored.
+    assert api.attributes_subset_applied(
+        [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]}], live)
+    # a mismatch is not applied.
+    assert not api.attributes_subset_applied(
+        [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [False]}], live)
+    # a clear is applied only when the attribute is absent live.
+    assert not api.attributes_subset_applied(
+        [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": []}], live)
+    assert api.attributes_subset_applied(
+        [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": []}], [])
+
+
+def test_classify_error_attributes():
+    assert api.classify_profile_error(400, "", field="attributes") == "invalid_attribute"
+    assert api.classify_profile_error(400, "unknown attribute for category") == "invalid_attribute"
+
+
+def test_attributes_name():
+    assert api.attributes_name("locations/123") == "locations/123/attributes"
+    assert api.attributes_name("locations/123/attributes") == "locations/123/attributes"
+
+
+def test_attributes_service_switch_points():
+    from fastapi import HTTPException as _H
+    body, mask = svc._build_patch("attributes", [{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]}])
+    assert mask == "attributes/x" and body["attributes"][0]["name"] == "attributes/x"
+    assert svc._proposed_from_request("attributes", {"attributes": [{"attribute_id": "attributes/x", "value_type": "BOOL"}]}) \
+        == [{"attribute_id": "attributes/x", "value_type": "BOOL"}]
+    with pytest.raises(_H, match="attributes_required"):
+        svc._proposed_from_request("attributes", {})
+    # an empty attributes edit is rejected (no_attributes).
+    with pytest.raises(_H) as ei:
+        svc._build_patch("attributes", [])
+    assert ei.value.status_code == 400 and "no_attributes" in ei.value.detail
+
+
+# ── attributes flow tests (separate endpoint pair) ───────────────────────────
+def _attr_res(values_true: bool):
+    return {"attributes": [{"name": "attributes/x", "valueType": "BOOL", "values": [values_true]}]}
+
+
+def _attr_edit(sb, **over):
+    row = dict(
+        id="e-1", client_id="c-1", location_row_id="loc-1", field="attributes",
+        source="manual",
+        current_value=[{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [True]}],
+        proposed_value=[{"attribute_id": "attributes/x", "value_type": "BOOL", "values": [False]}],
+        status="applying", google_pending=False, sync_attempts=0, next_sync_at=None,
+    )
+    row.update(over)
+    sb.tables["gbp_profile_edits"].append(row)
+    return row
+
+
+def test_apply_attributes_applied(fake, monkeypatch):
+    _attr_edit(fake, status="applying")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _attr_res(True))  # no drift
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: _attr_res(False))  # took
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    edit = fake.tables["gbp_profile_edits"][0]
+    assert edit["status"] == "applied" and edit.get("applied_at")
+
+
+def test_apply_attributes_live_changed(fake, monkeypatch):
+    _attr_edit(fake, status="applying")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _attr_res(False))  # drifted vs [True]
+    called = {"patched": False}
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: called.__setitem__("patched", True) or {})
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    assert fake.tables["gbp_profile_edits"][0]["status"] == "live_changed"
+    assert called["patched"] is False
+
+
+def test_apply_attributes_rejected_when_not_taken(fake, monkeypatch):
+    _attr_edit(fake, status="applying")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _attr_res(True))  # no drift
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: _attr_res(True))  # value unchanged
+    monkeypatch.setattr(svc.api, "get_location", lambda *a, **k: {"metadata": {"hasPendingEdits": False}})
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    assert fake.tables["gbp_profile_edits"][0]["status"] == "rejected"
+
+
+def test_apply_attributes_pending_review(fake, monkeypatch):
+    _attr_edit(fake, status="applying")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _attr_res(True))
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: _attr_res(True))  # not yet taken
+    monkeypatch.setattr(svc.api, "get_location", lambda *a, **k: {"metadata": {"hasPendingEdits": True}})
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    edit = fake.tables["gbp_profile_edits"][0]
+    assert edit["status"] == "pending_review" and edit["next_sync_at"] is not None
+
+
+def test_sync_attributes_resolves_applied(fake, monkeypatch):
+    _attr_edit(fake, status="pending_review", next_sync_at="2020-01-01T00:00:00+00:00")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _attr_res(False))  # now matches proposed [False]
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_sync_job(job))
+    edit = fake.tables["gbp_profile_edits"][0]
+    assert edit["status"] == "applied" and edit["next_sync_at"] is None

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, Building2, Sparkles, Save, X, Trash2, RefreshCw, CheckCircle2,
   Clock, Plus, AlertTriangle, Info, Search, ShieldCheck, ShieldAlert,
-  Globe, Tag, MapPin, CalendarDays, Power, LayoutGrid, Star,
+  Globe, Tag, MapPin, CalendarDays, Power, LayoutGrid, Star, SlidersHorizontal,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -27,7 +27,7 @@ type EditStatus =
 type Field =
   | 'description' | 'hours' | 'services'
   | 'website' | 'labels' | 'special_hours' | 'more_hours' | 'service_area' | 'open_info'
-  | 'categories'
+  | 'categories' | 'attributes'
 
 interface GbpLocationRow { id: string; location_id: string; title: string | null; access_status: string }
 interface HoursPeriod { open: string; close: string }
@@ -44,6 +44,16 @@ interface MoreHoursTypeCategory { id: string; name: string; more_hours_types: Mo
 interface ResolvedPlace { query: string; name: string; place_id: string; matched: boolean }
 interface CategoryRef { id: string; name: string }
 interface CategoriesValue { primary: CategoryRef | null; additional: CategoryRef[] }
+type AttributeValueType = 'BOOL' | 'ENUM' | 'URL' | 'REPEATED_ENUM'
+interface AttributeValue {
+  attribute_id: string; value_type: AttributeValueType
+  values?: unknown[]; urls?: string[]; set_values?: string[]; unset_values?: string[]
+}
+interface AttributeValueOption { value: unknown; display_name: string }
+interface AttributeMetaItem {
+  attribute_id: string; value_type: AttributeValueType; display_name: string
+  group_name: string; deprecated: boolean; repeatable: boolean; value_options?: AttributeValueOption[]
+}
 const OPEN_STATUS_LABELS: Record<string, string> = {
   OPEN: 'Open', CLOSED_TEMPORARILY: 'Temporarily closed', CLOSED_PERMANENTLY: 'Permanently closed',
 }
@@ -73,6 +83,7 @@ interface ProfileResponse {
   website: string; labels: string[]; special_hours: SpecialHoursRow[]
   more_hours: MoreHoursEntry[]; service_area: ServiceAreaValue; open_info: OpenInfoValue | null
   categories_value: CategoriesValue
+  attributes: AttributeValue[]; attributes_error?: string | null
   edits: ProfileEdit[]
 }
 interface Job { job_id: string }
@@ -251,6 +262,7 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
       <ServiceAreaCard clientId={clientId} locationRowId={locationRowId} current={p.service_area} edit={editFor('service_area')} onChanged={onChanged} />
       <OpenInfoCard clientId={clientId} locationRowId={locationRowId} current={p.open_info} edit={editFor('open_info')} onChanged={onChanged} />
       <LabelsCard clientId={clientId} locationRowId={locationRowId} current={p.labels} edit={editFor('labels')} onChanged={onChanged} />
+      <AttributesCard clientId={clientId} locationRowId={locationRowId} current={p.attributes} currentError={p.attributes_error} edit={editFor('attributes')} onChanged={onChanged} />
     </div>
   )
 }
@@ -1213,6 +1225,202 @@ function CategoriesCard({ clientId, locationRowId, current, edit, onChanged }: {
         </div>
       )}
     </Card>
+  )
+}
+
+// ── Attributes (SEPARATE getAttributes/updateAttributes endpoint pair) ─────────
+function humanizeAttr(id: string): string {
+  const bare = (id || '').replace(/^attributes\//, '').replace(/^[^:]*:/, '').replace(/_/g, ' ').trim()
+  return bare ? bare.replace(/\b\w/g, (c) => c.toUpperCase()) : id
+}
+function attrHasValue(a?: AttributeValue): boolean {
+  if (!a) return false
+  if (a.value_type === 'URL') return (a.urls || []).some((u) => (u || '').trim())
+  if (a.value_type === 'REPEATED_ENUM') return (a.set_values || []).length > 0
+  return (a.values || []).length > 0
+}
+// A comparable key — a cleared/absent value is '' so "clear" == "not present".
+function attrKey(a?: AttributeValue): string {
+  if (!a) return ''
+  if (a.value_type === 'URL') {
+    const u = (a.urls || []).map((s) => (s || '').trim()).filter(Boolean).sort()
+    return u.length ? 'URL:' + u.join('|') : ''
+  }
+  if (a.value_type === 'REPEATED_ENUM') {
+    const s = (a.set_values || []).map(String).sort()
+    return s.length ? 'RE:' + s.join('|') : ''
+  }
+  const v = (a.values || []).map(String)
+  return v.length ? a.value_type + ':' + v.join('|') : ''
+}
+function attrSummary(a: AttributeValue, meta?: AttributeMetaItem): string {
+  const optLabel = (val: string) =>
+    meta?.value_options?.find((o) => String(o.value) === val)?.display_name || val
+  if (a.value_type === 'BOOL') return (a.values || []).length ? (a.values![0] ? 'Yes' : 'No') : '—'
+  if (a.value_type === 'URL') return (a.urls || []).filter(Boolean).join(', ') || '—'
+  if (a.value_type === 'REPEATED_ENUM') return (a.set_values || []).map(optLabel).join(', ') || '—'
+  return (a.values || []).map((v) => optLabel(String(v))).join(', ') || '—'
+}
+
+function AttributesCard({ clientId, locationRowId, current, currentError, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: AttributeValue[]
+  currentError?: string | null; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [working, setWorking] = useState<Record<string, AttributeValue>>({})
+  const [query, setQuery] = useState('')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'attributes', onChanged)
+  const proposed = edit && Array.isArray(edit.proposed_value) ? (edit.proposed_value as AttributeValue[]) : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+
+  const availQ = useQuery<{ attributes: AttributeMetaItem[] }>({
+    queryKey: ['gbp-attributes-available', clientId, locationRowId],
+    queryFn: () => api.get(`/clients/${clientId}/gbp/profile/attributes/available?location_row_id=${locationRowId}`),
+    enabled: editing, retry: false, staleTime: 5 * 60_000,
+  })
+  const metaById = new Map((availQ.data?.attributes ?? []).map((m) => [m.attribute_id, m]))
+  const currentById = new Map(current.map((a) => [a.attribute_id, a]))
+
+  const startEdit = () => {
+    const base: Record<string, AttributeValue> = {}
+    for (const a of current) base[a.attribute_id] = { ...a }
+    for (const a of proposed ?? []) base[a.attribute_id] = { ...a }  // draft's changes win
+    setWorking(base); setQuery(''); setEditing(true)
+  }
+  const setWork = (id: string, next: AttributeValue) => setWorking((w) => ({ ...w, [id]: next }))
+  const ensure = (m: AttributeMetaItem): AttributeValue =>
+    working[m.attribute_id] ?? currentById.get(m.attribute_id) ??
+    { attribute_id: m.attribute_id, value_type: m.value_type }
+
+  // The subset of changed attributes (set or clear vs the live current value).
+  const subset: AttributeValue[] = Object.values(working).filter(
+    (w) => attrKey(w) !== attrKey(currentById.get(w.attribute_id)),
+  )
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { attributes: subset })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'attributes', attributes: subset }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+
+  const rows = (availQ.data?.attributes ?? []).filter((m) => !m.deprecated).filter((m) => {
+    const q = query.trim().toLowerCase()
+    return !q || m.display_name.toLowerCase().includes(q) || m.group_name.toLowerCase().includes(q)
+  })
+
+  return (
+    <Card title="Attributes" subtitle="Listing attributes (accessibility, amenities, service options, identity, links…). Only the attributes Google offers for this listing’s category can be set.">
+      {currentError ? <ErrorDetails message={currentError} /> : current.length === 0 ? (
+        <CurrentValue empty>No attributes set.</CurrentValue>
+      ) : (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {current.map((a) => (
+            <span key={a.attribute_id} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 999, background: '#f1f5f9', color: '#334155' }}>
+              {humanizeAttr(a.attribute_id)}: {attrSummary(a, metaById.get(a.attribute_id))}
+            </span>
+          ))}
+        </div>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => (
+        <span>{(proposed ?? []).map((a) => `${humanizeAttr(a.attribute_id)}: ${attrHasValue(a) ? attrSummary(a, metaById.get(a.attribute_id)) : '(clear)'}`).join(' · ') || '(no changes)'}</span>
+      )} onChanged={onChanged} setErr={setErr} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+
+      {editing ? (
+        <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
+          <div style={{ position: 'relative' }}>
+            <Search size={14} style={{ position: 'absolute', left: 10, top: 10, color: '#94a3b8' }} />
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter attributes… (e.g. wheelchair, appointment)" style={{ ...inputStyle, paddingLeft: 30 }} />
+          </div>
+          {availQ.isLoading ? <div style={{ fontSize: 12.5, color: '#64748b' }}>Loading available attributes…</div>
+            : availQ.isError ? <ErrorDetails message={(availQ.error as Error)?.message} />
+            : rows.length === 0 ? <div style={{ fontSize: 12.5, color: '#94a3b8' }}>{query.trim() ? 'No attributes match.' : 'No editable attributes for this listing.'}</div>
+            : (
+              <div style={{ maxHeight: 340, overflowY: 'auto', border: '1px solid #e2e8f0', borderRadius: 8, padding: 4, display: 'grid', gap: 2 }}>
+                {rows.map((m) => (
+                  <AttributeRow key={m.attribute_id} meta={m} value={ensure(m)} onChange={(v) => setWork(m.attribute_id, v)} />
+                ))}
+              </div>
+            )}
+          <div style={{ fontSize: 12, color: subset.length ? '#0f766e' : '#94a3b8' }}>
+            {subset.length ? `${subset.length} change${subset.length === 1 ? '' : 's'} to save.` : 'No changes yet.'}
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending || subset.length === 0} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <button onClick={startEdit} style={btn('#fff', '#334155')}><SlidersHorizontal size={13} /> Edit attributes</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+function AttributeRow({ meta, value, onChange }: {
+  meta: AttributeMetaItem; value: AttributeValue; onChange: (v: AttributeValue) => void
+}) {
+  const base: AttributeValue = { attribute_id: meta.attribute_id, value_type: meta.value_type }
+  const opts = meta.value_options ?? []
+  let control: React.ReactNode = null
+  if (meta.value_type === 'BOOL') {
+    const state = (value.values ?? []).length ? (value.values![0] ? 'yes' : 'no') : 'unset'
+    control = (
+      <div style={{ display: 'flex', gap: 4 }}>
+        {(['unset', 'yes', 'no'] as const).map((s) => (
+          <button key={s} onClick={() => onChange({ ...base, values: s === 'unset' ? [] : [s === 'yes'] })}
+            style={{ ...btn(state === s ? ACCENT : '#fff', state === s ? '#fff' : '#334155'), padding: '3px 9px', fontSize: 12 }}>
+            {s === 'unset' ? 'Unset' : s === 'yes' ? 'Yes' : 'No'}
+          </button>
+        ))}
+      </div>
+    )
+  } else if (meta.value_type === 'ENUM') {
+    const sel = (value.values ?? [])[0]
+    control = (
+      <select value={sel != null ? String(sel) : ''} onChange={(e) => onChange({ ...base, values: e.target.value ? [e.target.value] : [] })}
+        style={{ ...inputStyle, width: 'auto', minWidth: 160, padding: '6px 8px' }}>
+        <option value="">(unset)</option>
+        {opts.map((o) => <option key={String(o.value)} value={String(o.value)}>{o.display_name}</option>)}
+      </select>
+    )
+  } else if (meta.value_type === 'REPEATED_ENUM') {
+    const set = new Set((value.set_values ?? []).map(String))
+    control = (
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+        {opts.map((o) => {
+          const v = String(o.value)
+          const on = set.has(v)
+          return (
+            <label key={v} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#334155' }}>
+              <input type="checkbox" checked={on} onChange={() => {
+                const next = new Set(set); on ? next.delete(v) : next.add(v)
+                onChange({ ...base, set_values: [...next] })
+              }} />
+              {o.display_name}
+            </label>
+          )
+        })}
+      </div>
+    )
+  } else {  // URL
+    control = (
+      <input value={(value.urls ?? [])[0] ?? ''} onChange={(e) => onChange({ ...base, urls: e.target.value.trim() ? [e.target.value.trim()] : [] })}
+        placeholder="https://…" style={{ ...inputStyle, width: 'auto', minWidth: 220, padding: '6px 8px' }} />
+    )
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 8px', fontSize: 13 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ color: '#0f172a' }}>{meta.display_name}</div>
+        {meta.group_name && <div style={{ fontSize: 11, color: '#94a3b8' }}>{meta.group_name}</div>}
+      </div>
+      {control}
+    </div>
   )
 }
 
