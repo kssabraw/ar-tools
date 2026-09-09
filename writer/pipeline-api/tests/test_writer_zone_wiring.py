@@ -250,7 +250,7 @@ def test_zone_category_target_consumes_shared_scan():
 @pytest.mark.asyncio
 async def test_generate_title_lists_three_categories(monkeypatch):
     call, captured = _capturing_json({"candidates": ["A: TikTok Shop ROI Guide"]})
-    monkeypatch.setattr("modules.writer.title.claude_json", call)
+    monkeypatch.setattr("modules.writer.title.prose_json", call)
 
     title = await generate_title(
         keyword="tiktok shop roi",
@@ -276,7 +276,7 @@ async def test_generate_title_lists_three_categories(monkeypatch):
 async def test_generate_title_clamps_directive_to_listed_count(monkeypatch):
     """SIE recommends 30 entities for the title; only 5 fit the prompt."""
     call, captured = _capturing_json({"candidates": ["TikTok Shop Guide"]})
-    monkeypatch.setattr("modules.writer.title.claude_json", call)
+    monkeypatch.setattr("modules.writer.title.prose_json", call)
 
     await generate_title(
         keyword="tiktok shop",
@@ -295,7 +295,7 @@ async def test_generate_title_clamps_directive_to_listed_count(monkeypatch):
 async def test_generate_title_falls_back_when_no_targets(monkeypatch):
     """All-zero targets produce the legacy 'coverage over brevity' copy."""
     call, captured = _capturing_json({"candidates": ["TikTok Shop Guide"]})
-    monkeypatch.setattr("modules.writer.title.claude_json", call)
+    monkeypatch.setattr("modules.writer.title.prose_json", call)
     await generate_title(
         keyword="tiktok shop",
         intent_type="how-to",
@@ -316,7 +316,7 @@ async def test_generate_title_falls_back_when_no_targets(monkeypatch):
 async def test_generate_h1_enrichment_caps_at_lede_ceiling(monkeypatch):
     """A 25-word lede can't carry more than 2 of any category."""
     call, captured = _capturing_json({"sentence": "lede"})
-    monkeypatch.setattr("modules.writer.title.claude_json", call)
+    monkeypatch.setattr("modules.writer.title.prose_json", call)
     await generate_h1_enrichment(
         keyword="kw",
         h1_text="H1",
@@ -345,7 +345,7 @@ async def test_generate_h1_enrichment_skips_when_all_lists_empty(monkeypatch):
         called = True
         return {"sentence": "x"}
 
-    monkeypatch.setattr("modules.writer.title.claude_json", _call)
+    monkeypatch.setattr("modules.writer.title.prose_json", _call)
     out = await generate_h1_enrichment(
         keyword="kw",
         h1_text="H1",
@@ -387,7 +387,7 @@ async def test_write_faqs_lists_three_categories(monkeypatch):
             {"question": "Q1?", "answer": "answer text placeholder."},
         ]}
 
-    monkeypatch.setattr("modules.writer.faqs.claude_json", _call)
+    monkeypatch.setattr("modules.writer.faqs.prose_json", _call)
     filtered = FilteredSIETerms(required=[
         ReconciledTerm(term="TikTok Shop", is_entity=True),
         ReconciledTerm(term="checkout flow", is_entity=False),
@@ -418,7 +418,7 @@ async def test_write_faqs_skips_directive_when_no_paragraphs_data(monkeypatch):
         captured["user"] = user
         return {"faqs": [{"question": "Q1?", "answer": "answer."}]}
 
-    monkeypatch.setattr("modules.writer.faqs.claude_json", _call)
+    monkeypatch.setattr("modules.writer.faqs.prose_json", _call)
     filtered = FilteredSIETerms(required=[
         ReconciledTerm(term="x", is_entity=True),
     ])

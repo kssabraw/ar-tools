@@ -94,7 +94,7 @@ def test_validate_intro_rejects_numbered_list():
 @pytest.mark.asyncio
 async def test_write_intro_happy_path(monkeypatch):
     monkeypatch.setattr(
-        "modules.writer.intro.claude_json",
+        "modules.writer.intro.prose_json",
         _fake(_valid_payload()),
     )
 
@@ -118,7 +118,7 @@ async def test_write_intro_happy_path(monkeypatch):
 async def test_write_intro_uses_intro_field_verbatim(monkeypatch):
     text = _intro_text(90)
     monkeypatch.setattr(
-        "modules.writer.intro.claude_json",
+        "modules.writer.intro.prose_json",
         _fake({"intro": text}),
     )
 
@@ -135,7 +135,7 @@ async def test_write_intro_uses_intro_field_verbatim(monkeypatch):
 async def test_write_intro_retries_on_word_count_then_succeeds(monkeypatch):
     # First attempt too short, second valid.
     monkeypatch.setattr(
-        "modules.writer.intro.claude_json",
+        "modules.writer.intro.prose_json",
         _fake({"intro": _intro_text(30)}, _valid_payload()),
     )
 
@@ -152,7 +152,7 @@ async def test_write_intro_accepts_with_warning_after_two_failures(monkeypatch):
     # Both attempts produce too-short text - module accepts with warning.
     bad_payload = {"intro": "tiny intro"}
     monkeypatch.setattr(
-        "modules.writer.intro.claude_json",
+        "modules.writer.intro.prose_json",
         _fake(bad_payload, bad_payload),
     )
 
@@ -168,7 +168,7 @@ async def test_write_intro_accepts_with_warning_after_two_failures(monkeypatch):
 @pytest.mark.asyncio
 async def test_write_intro_falls_back_to_placeholder_on_llm_exception(monkeypatch):
     monkeypatch.setattr(
-        "modules.writer.intro.claude_json",
+        "modules.writer.intro.prose_json",
         _fake(RuntimeError("network down")),
     )
 
@@ -190,7 +190,7 @@ async def test_write_intro_supporting_data_appears_in_prompt(monkeypatch):
         captured["user"] = user
         return _valid_payload()
 
-    monkeypatch.setattr("modules.writer.intro.claude_json", _capture)
+    monkeypatch.setattr("modules.writer.intro.prose_json", _capture)
 
     await write_intro(
         keyword="kw", title="t", scope_statement="",
@@ -213,7 +213,7 @@ async def test_write_intro_h2_list_passed_as_context_not_roadmap(monkeypatch):
         captured["user"] = user
         return _valid_payload()
 
-    monkeypatch.setattr("modules.writer.intro.claude_json", _capture)
+    monkeypatch.setattr("modules.writer.intro.prose_json", _capture)
 
     await write_intro(
         keyword="kw", title="t", scope_statement="",
@@ -245,7 +245,7 @@ async def test_write_intro_passes_answer_context(monkeypatch):
         captured["user"] = user
         return _valid_payload()
 
-    monkeypatch.setattr("modules.writer.intro.claude_json", _capture)
+    monkeypatch.setattr("modules.writer.intro.prose_json", _capture)
 
     await write_intro(
         keyword="what is a roth ira", title="t", scope_statement="",

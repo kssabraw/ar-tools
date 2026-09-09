@@ -78,7 +78,7 @@ def _fake(*responses):
 @pytest.mark.asyncio
 async def test_intro_prompt_includes_brand_name_when_present(monkeypatch):
     fake = _fake({"intro": " ".join(["word"] * 90)})
-    monkeypatch.setattr("modules.writer.intro.claude_json", fake)
+    monkeypatch.setattr("modules.writer.intro.prose_json", fake)
 
     card = BrandVoiceCard(brand_name="Ubiquitous", tone_adjectives=["confident"])
     await write_intro(
@@ -94,7 +94,7 @@ async def test_intro_prompt_includes_brand_name_when_present(monkeypatch):
 @pytest.mark.asyncio
 async def test_intro_prompt_skips_brand_block_when_no_brand_name(monkeypatch):
     fake = _fake({"intro": " ".join(["word"] * 90)})
-    monkeypatch.setattr("modules.writer.intro.claude_json", fake)
+    monkeypatch.setattr("modules.writer.intro.prose_json", fake)
 
     card = BrandVoiceCard(tone_adjectives=["confident"])  # no brand_name
     await write_intro(
@@ -115,7 +115,7 @@ async def test_intro_prompt_skips_brand_block_when_no_brand_name(monkeypatch):
 async def test_conclusion_prompt_includes_brand_name_when_present(monkeypatch):
     body = " ".join(["word"] * 100)
     fake = _fake({"conclusion": body})
-    monkeypatch.setattr("modules.writer.conclusion.claude_json", fake)
+    monkeypatch.setattr("modules.writer.conclusion.prose_json", fake)
 
     card = BrandVoiceCard(
         brand_name="Ubiquitous",

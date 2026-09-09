@@ -111,7 +111,7 @@ def test_validate_bullets_max_count_boundary_ok():
 @pytest.mark.asyncio
 async def test_write_key_takeaways_happy_path(monkeypatch):
     monkeypatch.setattr(
-        "modules.writer.key_takeaways.claude_json",
+        "modules.writer.key_takeaways.prose_json",
         _fake(_valid_payload()),
     )
     section = await write_key_takeaways(
@@ -133,7 +133,7 @@ async def test_write_key_takeaways_happy_path(monkeypatch):
 async def test_write_key_takeaways_retries_on_too_few(monkeypatch):
     short = {"key_takeaways": _bullets(count=2, words_per=10)}
     monkeypatch.setattr(
-        "modules.writer.key_takeaways.claude_json",
+        "modules.writer.key_takeaways.prose_json",
         _fake(short, _valid_payload()),
     )
     section = await write_key_takeaways(
@@ -148,7 +148,7 @@ async def test_write_key_takeaways_retries_on_too_few(monkeypatch):
 async def test_write_key_takeaways_accepts_with_warning_after_two_failures(monkeypatch):
     bad = {"key_takeaways": _bullets(count=2, words_per=10)}
     monkeypatch.setattr(
-        "modules.writer.key_takeaways.claude_json",
+        "modules.writer.key_takeaways.prose_json",
         _fake(bad, bad),
     )
     section = await write_key_takeaways(
@@ -164,7 +164,7 @@ async def test_write_key_takeaways_accepts_with_warning_after_two_failures(monke
 @pytest.mark.asyncio
 async def test_write_key_takeaways_falls_back_on_llm_exception(monkeypatch):
     monkeypatch.setattr(
-        "modules.writer.key_takeaways.claude_json",
+        "modules.writer.key_takeaways.prose_json",
         _fake(RuntimeError("network down")),
     )
     section = await write_key_takeaways(
@@ -185,7 +185,7 @@ async def test_write_key_takeaways_article_body_in_prompt(monkeypatch):
         captured["user"] = user
         return _valid_payload()
 
-    monkeypatch.setattr("modules.writer.key_takeaways.claude_json", _capture)
+    monkeypatch.setattr("modules.writer.key_takeaways.prose_json", _capture)
     await write_key_takeaways(
         keyword="kw", intent_type="how-to",
         article_body="UNIQUE_MARKER body content",
@@ -210,7 +210,7 @@ async def test_write_key_takeaways_brand_voice_in_prompt(monkeypatch):
         captured["user"] = user
         return _valid_payload()
 
-    monkeypatch.setattr("modules.writer.key_takeaways.claude_json", _capture)
+    monkeypatch.setattr("modules.writer.key_takeaways.prose_json", _capture)
     card = BrandVoiceCard(
         tone_adjectives=["Confident", "Direct"],
         preferred_terms=["creators", "ROI"],
@@ -231,7 +231,7 @@ async def test_write_key_takeaways_banned_term_retries(monkeypatch):
     leak = {"key_takeaways": ["This bullet uses the badterm here in valid words"] + _bullets(count=3, words_per=10)}
     clean = _valid_payload()
     monkeypatch.setattr(
-        "modules.writer.key_takeaways.claude_json",
+        "modules.writer.key_takeaways.prose_json",
         _fake(leak, clean),
     )
     section = await write_key_takeaways(
@@ -247,7 +247,7 @@ async def test_write_key_takeaways_filters_bool_bullets(monkeypatch):
     # bool is a subclass of int; True/False must not become "- True" / "- False"
     payload = {"key_takeaways": [True, False] + _bullets(count=4, words_per=10)}
     monkeypatch.setattr(
-        "modules.writer.key_takeaways.claude_json",
+        "modules.writer.key_takeaways.prose_json",
         _fake(payload, _valid_payload()),
     )
     section = await write_key_takeaways(

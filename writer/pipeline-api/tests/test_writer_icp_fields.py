@@ -81,7 +81,7 @@ def _fake(*responses):
 @pytest.mark.asyncio
 async def test_intro_prompt_includes_personas_verticals_goals(monkeypatch):
     fake = _fake({"intro": " ".join(["word"] * 90)})
-    monkeypatch.setattr("modules.writer.intro.claude_json", fake)
+    monkeypatch.setattr("modules.writer.intro.prose_json", fake)
 
     card = BrandVoiceCard(
         audience_summary="B2C marketing leaders",
@@ -112,7 +112,7 @@ async def test_intro_prompt_includes_personas_verticals_goals(monkeypatch):
 async def test_conclusion_prompt_includes_pain_points_and_goals(monkeypatch):
     body = " ".join(["word"] * 100)
     fake = _fake({"conclusion": body})
-    monkeypatch.setattr("modules.writer.conclusion.claude_json", fake)
+    monkeypatch.setattr("modules.writer.conclusion.prose_json", fake)
 
     card = BrandVoiceCard(
         audience_summary="B2C marketing leaders",

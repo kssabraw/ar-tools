@@ -72,7 +72,7 @@ async def test_section_body_leakage_degrades_to_log_not_abort():
 
     from modules.writer.reconciliation import FilteredSIETerms
 
-    with patch("modules.writer.sections.claude_json", fake_call):
+    with patch("modules.writer.sections.prose_json", fake_call):
         result = await write_h2_group(
             keyword="kw", intent="how-to",
             h2_item=h2_item, h3_items=[],
@@ -111,7 +111,7 @@ async def test_section_body_leakage_clears_when_retry_succeeds():
 
     from modules.writer.reconciliation import FilteredSIETerms
 
-    with patch("modules.writer.sections.claude_json", fake_call):
+    with patch("modules.writer.sections.prose_json", fake_call):
         result = await write_h2_group(
             keyword="kw", intent="how-to",
             h2_item=h2_item, h3_items=[],
