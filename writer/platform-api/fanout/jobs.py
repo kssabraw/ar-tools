@@ -1147,14 +1147,17 @@ def article_inflight(cluster_id: str) -> bool:
 
 def submit_article(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
-    *, force_refresh: bool = False,
+    *, force_refresh: bool = False, content_writer_provider: str | None = None,
 ) -> bool:
     """Claim the cluster + submit. Returns False if that cluster is already generating."""
     with _article_lock:
         if cluster_id in _article_inflight:
             return False
         _article_inflight.add(cluster_id)
-    _EXECUTOR.submit(run_article_job, session_id, cluster_id, keyword, location_code, force_refresh)
+    _EXECUTOR.submit(
+        run_article_job, session_id, cluster_id, keyword, location_code, force_refresh,
+        content_writer_provider,
+    )
     return True
 
 
@@ -1290,6 +1293,7 @@ def _attach_unused_keywords(cluster_id: str, brief_json: dict, article) -> None:
 
 def split_uncovered_and_write(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
+    *, content_writer_provider: str | None = None,
 ) -> dict:
     """Owner-confirmed: group the cluster's uncovered keywords (cosine ~0.85 so near-dupes
     share one article, never one-per-keyword), split each group into a new auto-split article,
@@ -1333,7 +1337,10 @@ def split_uncovered_and_write(
         except ValueError:
             continue
         store.mark_cluster_auto_split(new_cluster["id"])
-        submitted = submit_article(session_id, new_cluster["id"], rep, location_code)
+        submitted = submit_article(
+            session_id, new_cluster["id"], rep, location_code,
+            content_writer_provider=content_writer_provider,
+        )
         created.append({"cluster_id": new_cluster["id"], "name": rep,
                         "keywords": group, "submitted": submitted})
 
@@ -1348,13 +1355,16 @@ def split_uncovered_and_write(
 @_cancellable
 def run_article_job(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
-    force_refresh: bool = False,
+    force_refresh: bool = False, content_writer_provider: str | None = None,
 ) -> None:
     """Ad-hoc article generation (the Generate button). Thin wrapper: meter-bind + the
     per-cluster inflight guard; the body lives in `generate_article_core` (shared with the
     scheduler worker)."""
     try:
-        generate_article_core(session_id, cluster_id, keyword, location_code, force_refresh)
+        generate_article_core(
+            session_id, cluster_id, keyword, location_code, force_refresh,
+            content_writer_provider=content_writer_provider,
+        )
     finally:
         with _article_lock:
             _article_inflight.discard(cluster_id)
@@ -1405,7 +1415,7 @@ def _resolve_brand_voice_card(session_id: str) -> dict | None:
 def generate_article_core(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
     force_refresh: bool = False, *, scheduled_article_run_id: str | None = None,
-    error_sink: list[str] | None = None,
+    error_sink: list[str] | None = None, content_writer_provider: str | None = None,
 ) -> bool:
     """Generate one article for a cluster's keyword and persist it. Stage 1 ensures the Brief
     (Input A) and SIE (Input C) exist (running them on a miss), then the Writer runs the
@@ -1469,7 +1479,7 @@ def generate_article_core(
         # for info-site generation (unchanged, client-agnostic).
         brand_voice_card = _resolve_brand_voice_card(session_id)
         article = generate_article(
-            brief, sie, warnings=warnings, deps=build_writer_deps(),
+            brief, sie, warnings=warnings, deps=build_writer_deps(content_writer_provider),
             word_budget=s.writer_word_budget, coverage_enabled=s.writer_claim_coverage_enabled,
             timeout_s=s.writer_timeout_s, adherence_threshold=s.writer_adherence_threshold,
             brand_voice_card=brand_voice_card,
@@ -1522,6 +1532,7 @@ def generate_article_core(
         suite_run_id = mirror_blog_article_to_suite(
             session=session or {}, keyword=keyword,
             article_json=article_payload, cost_usd=cost,
+            content_writer_provider=content_writer_provider,
         )
         if suite_run_id and saved and saved.get("id"):
             article_store.set_suite_run_id(saved["id"], suite_run_id)
@@ -1543,7 +1554,7 @@ def generate_article_core(
 def generate_local_seo_page_core(
     *, session: dict, keyword: str, location: str,
     location_code: int | None, user_id: str | None,
-    error_sink: list[str] | None = None,
+    error_sink: list[str] | None = None, content_writer_provider: str | None = None,
 ) -> str | None:
     """Generate one Local SEO page for a cluster's keyword via the suite's nlp-api
     generator (`services.local_seo_service.generate_page`) — competitor analysis +
@@ -1578,6 +1589,7 @@ def generate_local_seo_page_core(
             client_id=client_id, keyword=keyword, location=location,
             location_code=location_code, user_id=user_id,
             force_refresh=False, page_template_url=None,
+            content_writer_provider=content_writer_provider,
         ))
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
         _record(repr(exc))
@@ -1590,6 +1602,7 @@ def generate_local_seo_page_core(
 def generate_service_page_core(
     *, session: dict, keyword: str, user_id: str | None,
     error_sink: list[str] | None = None, scheduled_run_id: str | None = None,
+    content_writer_provider: str | None = None,
 ) -> str | None:
     """Generate one Service Page for a cluster's keyword by creating a suite
     `runs` row (content_type='service_page') and driving the orchestrator
@@ -1633,6 +1646,7 @@ def generate_service_page_core(
         run_id = create_run_and_snapshot(
             client=client, keyword=keyword, content_type="service_page",
             created_by=user_id, source_ref=source_ref,
+            content_writer_provider=content_writer_provider,
         )
         current = (
             (get_supabase().table("runs").select("status").eq("id", run_id).single().execute()).data

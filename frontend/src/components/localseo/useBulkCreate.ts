@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { localSeoApi } from './api'
+import type { ContentWriterProvider } from '../ContentWriterSelect'
 
 // Bulk page creation as background jobs: enqueue one generate job per selected
 // keyword, then poll their status. The user can leave at any time (even switch
@@ -15,6 +16,8 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
   const [failed, setFailed] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('') // enqueue failed (e.g. bad area)
+  // Whole-batch content-writer override. null = inherit the client default (Sonnet).
+  const [contentWriterProvider, setContentWriterProvider] = useState<ContentWriterProvider | null>(null)
 
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -63,6 +66,7 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
       const res = await localSeoApi.generateBulk(clientId, {
         keywords: queue, location: location.trim(), location_code: locationCode,
         force_refresh: false, page_template_url: null,
+        content_writer_provider: contentWriterProvider ?? undefined,
       })
       jobIds = res.job_ids ?? []
     } catch (e) {
@@ -118,5 +122,5 @@ export function useBulkCreate(clientId: string, onCreated?: () => void) {
     onCreated?.()
   }
 
-  return { selected, toggle, setSelection, clear, reset, creating, detached, total, done, failed, elapsed, error, start, leave }
+  return { selected, toggle, setSelection, clear, reset, creating, detached, total, done, failed, elapsed, error, start, leave, contentWriterProvider, setContentWriterProvider }
 }

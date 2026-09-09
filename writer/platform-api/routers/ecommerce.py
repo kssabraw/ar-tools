@@ -112,6 +112,7 @@ async def generate_ecommerce_pages_bulk(
     job_ids = await ecommerce_service.enqueue_generate_bulk(
         str(client_id), body.keywords, body.page_type, auth["user_id"], notes=body.notes,
         entity_provider=body.entity_provider,
+        content_writer_provider=body.content_writer_provider,
     )
     return EcommerceBulkGenerateJob(job_ids=job_ids)
 

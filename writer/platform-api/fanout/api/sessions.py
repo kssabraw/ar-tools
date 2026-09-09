@@ -1859,6 +1859,7 @@ def get_brief(
 # ----- M14 Content Writer (article generation; owner-only) ------------------
 class GenerateArticleBody(BaseModel):
     force_refresh: bool = False
+    content_writer_provider: str | None = None  # anthropic | openai; None ⇒ default
 
 
 @router.post("/sessions/{session_id}/clusters/{cluster_id}/generate-article")
@@ -1879,7 +1880,10 @@ def start_article(
         row = article_store.get_latest_article(cluster_id)
         if row:
             return {"status": "complete", "keyword": keyword, "article": row["article_json"]}
-    if not jobs.submit_article(sid, cluster_id, keyword, location_code, force_refresh=body.force_refresh):
+    if not jobs.submit_article(
+        sid, cluster_id, keyword, location_code, force_refresh=body.force_refresh,
+        content_writer_provider=body.content_writer_provider,
+    ):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Article already generating")
     response.status_code = status.HTTP_202_ACCEPTED
     return {"status": "running", "keyword": keyword}
@@ -1887,6 +1891,7 @@ def start_article(
 
 class BulkGenerateBody(BaseModel):
     cluster_ids: list[str]
+    content_writer_provider: str | None = None  # anthropic | openai; None ⇒ default
 
 
 @router.post("/sessions/{session_id}/generate-articles")
@@ -1907,7 +1912,8 @@ def start_articles(
             skipped.append(cid)
             continue
         if article_store.get_latest_article(cid) or not jobs.submit_article(
-            sid, cid, keyword, location_code
+            sid, cid, keyword, location_code,
+            content_writer_provider=body.content_writer_provider,
         ):
             skipped.append(cid)
             continue

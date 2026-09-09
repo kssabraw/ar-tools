@@ -967,6 +967,7 @@ def get_generate_job(job_id: str, client_id: str) -> dict:
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], page_type: str, user_id: str,
     notes: Optional[str] = None, entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
 ) -> list[str]:
     """Enqueue one `ecommerce_generate` job per keyword. Returns job ids. `notes`
     is batch-level writing guidance applied to every page in the batch."""
@@ -986,6 +987,7 @@ async def enqueue_generate_bulk(
                 "client_id": client_id, "keyword": kw.strip(), "page_type": ptype,
                 "source_url": None, "product_input": None, "notes": note, "user_id": user_id,
                 "entity_provider": entity_provider,
+                "content_writer_provider": content_writer_provider,
             },
         })
     if not rows:

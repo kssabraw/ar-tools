@@ -439,6 +439,9 @@ class Settings(BaseSettings):
     # (CTA); no Opus (PRD §17). Embeddings reuse the app embedder (3-small, 1536-dim).
     writer_section_model: str = "claude-sonnet-4-6"
     writer_short_model: str = "claude-haiku-4-5"
+    # "Luna" path for the Fanout blog writer: the OpenAI model used when a run
+    # selects content_writer_provider="openai". Both section + short prose use it.
+    content_writer_openai_model: str = "gpt-5.6-luna"
     writer_word_budget: int = 2500
     # Keyword Research report — the exec-summary narrative (best-effort; falls
     # back to a deterministic summary when the LLM is unavailable).

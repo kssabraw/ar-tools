@@ -60,6 +60,8 @@ export const ecommerceApi = {
       page_type: EcommercePageType
       notes?: string | null
       entity_provider?: string | null
+      // Whole-batch draft-model override ("anthropic"|"openai"); omit → client default.
+      content_writer_provider?: string | null
     },
   ) => api.post<{ job_ids: string[] }>(`/clients/${clientId}/ecommerce/generate-bulk`, body),
 

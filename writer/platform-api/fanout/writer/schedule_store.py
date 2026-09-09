@@ -22,6 +22,7 @@ def create_schedule(
     wp_publish: bool = False, wp_status: str = "draft",
     weekday: int | None = None, weekdays: list[int] | None = None,
     day_of_month: int | None = None, week_of_month: int | None = None,
+    content_writer_provider: str | None = None,
 ) -> dict:
     """Insert the parent schedule + one queued run per planned cluster. Returns the parent
     row augmented with `run_count`. (Two statements — PostgREST has no multi-table txn; the
@@ -45,6 +46,7 @@ def create_schedule(
         "wp_publish": wp_publish, "wp_status": wp_status,
         "weekday": weekday, "weekdays": weekdays,
         "day_of_month": day_of_month, "week_of_month": week_of_month,
+        "content_writer_provider": content_writer_provider,
     }).execute().data[0]
 
     rows = [{

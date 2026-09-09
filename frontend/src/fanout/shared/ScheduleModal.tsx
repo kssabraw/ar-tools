@@ -72,6 +72,9 @@ export function ScheduleModal(props: {
   const [contentType, setContentType] = useState<ContentType>(
     props.defaultContentType ?? "blog_post",
   );
+  // Draft-prose model for every piece in this schedule. "anthropic" = Sonnet
+  // (default) | "openai" = Luna. Quality checks always run on Claude.
+  const [contentWriterProvider, setContentWriterProvider] = useState<"anthropic" | "openai">("anthropic");
   // Committed (picked) location vs the raw field text. A picked suggestion is the
   // canonical DataForSEO name; we fall back to the raw text so an unmatched area
   // is still submittable (preserves the old free-text behavior).
@@ -132,6 +135,7 @@ export function ScheduleModal(props: {
     auto_publish: clientId ? autoPublish : undefined,
     wp_publish: showWordPress ? wpPublish : undefined,
     wp_status: showWordPress && wpPublish ? wpStatus : undefined,
+    content_writer_provider: contentWriterProvider,
   };
 
   // Live preview — re-estimates as the inputs change.
@@ -213,6 +217,29 @@ export function ScheduleModal(props: {
                 keyword. Keyword-only. Requires this session to be linked to a client.
               </span>
             )}
+          </div>
+
+          <div className="field">
+            <span className="field-label">Content writing model</span>
+            <div className="seg-radios">
+              {([
+                ["anthropic", "Sonnet"],
+                ["openai", "Luna"],
+              ] as ["anthropic" | "openai", string][]).map(([p, label]) => (
+                <button
+                  key={p}
+                  type="button"
+                  className={"seg-radio" + (contentWriterProvider === p ? " seg-radio-active" : "")}
+                  onClick={() => setContentWriterProvider(p)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <span className="field-hint">
+              Which model writes the draft for every piece in this schedule. Quality checks
+              (brand voice, QA) always run on Claude.
+            </span>
           </div>
 
           {isLocalSeo && (

@@ -25,6 +25,9 @@ export default function ArticlePanel(props: {
   const [error, setError] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const [forceNext, setForceNext] = useState(false);
+  // Draft-prose model for this article. "anthropic" = Sonnet (default) |
+  // "openai" = Luna. Applied on (re)generation; quality checks stay on Claude.
+  const [writerProvider, setWriterProvider] = useState<"anthropic" | "openai">("anthropic");
   const timer = useRef<number | null>(null);
 
   useEffect(() => {
@@ -85,7 +88,10 @@ export default function ArticlePanel(props: {
       return () => { cancelled = true; };
     }
 
-    startArticle(sessionId, clusterId, force ? { force_refresh: true } : undefined)
+    startArticle(sessionId, clusterId, {
+      ...(force ? { force_refresh: true } : {}),
+      content_writer_provider: writerProvider,
+    })
       .then((res) => {
         if (cancelled) return;
         if (res.status === "complete" && res.article) {
@@ -212,7 +218,17 @@ export default function ArticlePanel(props: {
                 )}
               </div>
             )}
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <select
+                className="input"
+                style={{ width: "auto" }}
+                value={writerProvider}
+                title="Which model writes the draft on Regenerate. Quality checks (brand voice, QA) always run on Claude."
+                onChange={(e) => setWriterProvider(e.target.value as "anthropic" | "openai")}
+              >
+                <option value="anthropic">Model: Sonnet</option>
+                <option value="openai">Model: Luna</option>
+              </select>
               <button className="btn btn-sm" onClick={() => setForceNext((f) => !f)}>Regenerate</button>
               <button className="btn btn-sm" onClick={copyMarkdown}>Copy Markdown</button>
               <button className="btn btn-sm" onClick={downloadMarkdown}>Download .md</button>
