@@ -571,3 +571,20 @@ def test_run_rubric_blog_does_not_call_suite_deliverable():
         checks, urls, comp = _run(qa_service._run_rubric(sig.RUBRIC_BLOG, task, {}, None))
     m.assert_not_called()
     assert checks  # blog structural checks ran
+
+
+def test_blog_markdown_reads_html_section_bodies():
+    # Regression: the sources_cited payload has no renderings.markdown and its
+    # section prose is an HTML `body` — _blog_markdown must recover it (the old
+    # content/text read produced headings only, false-failing CTA + citations).
+    payload = {
+        "enriched_article": {"article": [
+            {"heading": "Wrap up", "body": "<p>Call us today. "
+             "<a href='https://ex.com/s'>Source</a></p>"},
+        ]},
+    }
+    rows = [{"output_payload": payload}]
+    with patch.object(qa_service, "get_supabase", lambda: _FakeSupabase(rows)):
+        md = qa_service._blog_markdown("run-1")
+    assert md and "Call us today." in md
+    assert "[Source](https://ex.com/s)" in md

@@ -434,7 +434,9 @@ async def _synthesize_narrative(
 
 def _blog_markdown(run_id: str) -> Optional[str]:
     """The finished article markdown for a content run (sources_cited output —
-    same source the publish path reads)."""
+    same source the publish path reads). The reconstruction is the pure
+    ``sig.article_payload_to_markdown`` (renderings.markdown → HTML section
+    bodies flattened) — this is a thin DB read over it."""
     try:
         rows = (
             get_supabase().table("module_outputs")
@@ -444,20 +446,7 @@ def _blog_markdown(run_id: str) -> Optional[str]:
         ).data
         if not rows:
             return None
-        payload = rows[0].get("output_payload") or {}
-        md = (payload.get("renderings") or {}).get("markdown") or ""
-        if md.strip():
-            return md
-        sections = (payload.get("enriched_article") or {}).get("article") or payload.get("sections") or []
-        parts = []
-        for s in sections:
-            if isinstance(s, dict):
-                h = s.get("heading") or s.get("title")
-                if h:
-                    parts.append(f"## {h}")
-                parts.append(s.get("content") or s.get("text") or "")
-        joined = "\n\n".join(p for p in parts if p)
-        return joined or None
+        return sig.article_payload_to_markdown(rows[0].get("output_payload") or {}) or None
     except Exception:
         return None
 

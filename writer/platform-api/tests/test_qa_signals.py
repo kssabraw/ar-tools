@@ -961,3 +961,74 @@ def test_should_run_visual_runs_when_any_signal_weak():
     assert sig.should_run_visual(True, True, None, thr, margin) is True    # no structure score
     # skip_enabled=False always runs, even on two clean signals.
     assert sig.should_run_visual(True, True, 99.0, thr, margin, skip_enabled=False) is True
+
+
+# ---------------------------------------------------------------------------
+# article_payload_to_markdown — the blog reconstruction (regression: the
+# section body field is `body` and it's HTML, not `content`/`text` markdown)
+# ---------------------------------------------------------------------------
+def _sources_cited_payload():
+    """Mirrors the live sources_cited output_payload shape: no renderings key,
+    enriched_article.article sections whose prose lives in an HTML `body`."""
+    return {
+        "enriched_article": {
+            "title": "AI Search & Local SEO",
+            "article": [
+                {"heading": "Key Takeaways", "level": 2,
+                 "body": "<ul><li>AI answers now cite structured data.</li></ul>"},
+                {"heading": "What changed", "level": 2,
+                 "body": "<p>Google's AI Overviews reshaped local results.</p>"},
+                {"heading": "Ready to improve your rankings?", "level": 2,
+                 "body": "<p>Contact us today for a free consultation.</p>"},
+                {"heading": "Sources", "level": 2,
+                 "body": ('<ol class="sources-cited"><li id="sc-1">'
+                          '<a href="https://www.nu.edu/blog/ai-statistics/" rel="nofollow">'
+                          'National University</a></li></ol>')},
+            ],
+        },
+        "sources_cited_metadata": {},
+    }
+
+
+def test_article_payload_reconstructs_html_bodies():
+    md = sig.article_payload_to_markdown(_sources_cited_payload())
+    # The section bodies survive (the old content/text read dropped them).
+    assert "Contact us today for a free consultation." in md
+    assert "AI answers now cite structured data." in md
+    # HTML anchors become markdown links so citations are countable.
+    assert "[National University](https://www.nu.edu/blog/ai-statistics/)" in md
+    # Headings preserved for the dup-heading / Key-Takeaways checks.
+    assert "## Key Takeaways" in md
+
+
+def test_article_payload_feeds_blog_checks_correctly():
+    """The exact false-fail this fix targets: CTA + external citations were
+    failing because the reconstruction dropped the HTML bodies."""
+    md = sig.article_payload_to_markdown(_sources_cited_payload())
+    checks = {c["key"]: c for c in sig.check_blog_markdown(md)}
+    assert checks["key_takeaways"]["ok"] is True
+    assert checks["cta"]["ok"] is True          # was false-failing on every blog
+    assert checks["citations"]["ok"] is True    # was reporting 0 external links
+    verdict = sig.build_verdict(list(checks.values()))
+    assert verdict["verdict"] == sig.PASS
+
+
+def test_article_payload_prefers_prerendered_markdown():
+    payload = {"renderings": {"markdown": "## Ready\nCall us. [x](https://a.com)"},
+               "enriched_article": {"article": [{"heading": "Ignored", "body": "<p>no</p>"}]}}
+    assert sig.article_payload_to_markdown(payload) == "## Ready\nCall us. [x](https://a.com)"
+
+
+def test_article_payload_keeps_plain_text_body():
+    # A tagless (markdown/plain) body must be kept verbatim, not flattened to "".
+    payload = {"enriched_article": {"article": [
+        {"heading": "Intro", "body": "Call us today for a free quote."}]}}
+    md = sig.article_payload_to_markdown(payload)
+    assert "Call us today for a free quote." in md
+
+
+def test_article_payload_empty_or_malformed():
+    assert sig.article_payload_to_markdown({}) == ""
+    assert sig.article_payload_to_markdown(None) == ""
+    # Non-dict sections are skipped, not fatal.
+    assert sig.article_payload_to_markdown({"sections": ["not a dict", 3]}) == ""

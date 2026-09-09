@@ -761,6 +761,54 @@ def html_to_markdownish(html: str) -> str:
     return "\n\n".join(lines)
 
 
+_HTML_TAG_RE = re.compile(r"<[a-zA-Z!/][^>]*>")
+
+
+def _looks_like_html(text: Optional[str]) -> bool:
+    """True when ``text`` carries at least one HTML tag. Guards the choice
+    between ``html_to_markdownish`` (for an HTML body) and using the string
+    as-is (for a plain-text/markdown body) — running the HTML flattener over
+    tagless prose finds no block elements and returns "", silently dropping the
+    body. Pure."""
+    return bool(_HTML_TAG_RE.search(text or ""))
+
+
+def article_payload_to_markdown(payload: Optional[dict]) -> str:
+    """Reconstruct a finished article as the light Markdown ``check_blog_markdown``
+    reads, from a ``sources_cited`` module ``output_payload``.
+
+    Prefers a pre-rendered ``renderings.markdown`` when present; otherwise
+    rebuilds from the ``enriched_article.article`` sections (``sections`` as a
+    last resort). Each section's prose lives in a **``body``** field that is HTML
+    in the current pipeline, so an HTML body is flattened through
+    ``html_to_markdownish`` (recovering the CTA text, list items, and ``<a href>``
+    citations) and a plain-text body is kept verbatim. Pure.
+
+    History: the previous inline reconstruction read ``content``/``text`` — fields
+    the payload does not carry — so every section body was dropped and the blog
+    rubric saw headings only, false-failing ``CTA present`` and reporting zero
+    external citations on essentially every article."""
+    payload = payload or {}
+    md = ((payload.get("renderings") or {}).get("markdown") or "").strip()
+    if md:
+        return md
+    sections = (payload.get("enriched_article") or {}).get("article") or payload.get("sections") or []
+    parts: list[str] = []
+    for s in sections:
+        if not isinstance(s, dict):
+            continue
+        heading = normalize_ws(s.get("heading") or s.get("title"))
+        if heading:
+            parts.append(f"## {heading}")
+        raw = s.get("body") or s.get("content") or s.get("text") or ""
+        if not isinstance(raw, str):
+            continue
+        body = html_to_markdownish(raw) if _looks_like_html(raw) else raw.strip()
+        if body:
+            parts.append(body)
+    return "\n\n".join(p for p in parts if p)
+
+
 def asset_urls_of(html: str, base_url: str, cap: int = 12) -> dict[str, list[str]]:
     """The page's image srcs + stylesheet hrefs, absolutized against the page
     URL, deduped, capped — the free asset-integrity layer of the visual
