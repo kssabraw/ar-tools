@@ -337,6 +337,23 @@ async def native_workload(auth: dict = Depends(require_auth)) -> dict:
         raise HTTPException(status_code=500, detail="internal_error") from exc
 
 
+# Declared before /tasks/{task_id} so the static path isn't captured as a task id.
+@router.get("/tasks/qa-accuracy")
+async def qa_verdict_accuracy(window_days: int = 90,
+                              auth: dict = Depends(require_auth)) -> dict:
+    """QA verdict-accuracy rollup over a recent window: how often humans upheld
+    vs overturned QA's verdicts, split into false alarms (flagged deliverables
+    shipped anyway) and missed defects (passed deliverables later bounced).
+    Read-only; populated by the daily qa_feedback sweep."""
+    try:
+        from services import qa_feedback
+
+        return qa_feedback.accuracy_report(window_days=max(1, min(window_days, 365)))
+    except Exception as exc:
+        logger.error("qa_accuracy_failed", extra={"error": str(exc)})
+        raise HTTPException(status_code=500, detail="internal_error") from exc
+
+
 # ---------------------------------------------------------------------------
 # Board read (Phase 1): a client's sections + live top-level tasks + subtask
 # progress in one call — the per-client Tasks page's single data source.
