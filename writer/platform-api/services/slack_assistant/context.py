@@ -1225,7 +1225,7 @@ def _ctx_qa(supabase, client_id: str, today: date) -> Optional[dict]:
     since = (today - timedelta(days=30)).isoformat()
     rows = (
         supabase.table("qa_reviews")
-        .select("task_id, rubric, verdict, issues, narrative, created_at")
+        .select("task_id, rubric, verdict, issues, narrative, human_disposition, created_at")
         .eq("client_id", client_id)
         .gte("created_at", since)
         .order("created_at", desc=True)
@@ -1260,6 +1260,23 @@ def _ctx_qa(supabase, client_id: str, today: date) -> Optional[dict]:
             }
             for r in attention[:6]
         ]
+    # Verdict accuracy (did humans uphold or overturn QA's calls, last 30d) —
+    # populated by the qa_feedback sweep; only surfaced once some verdicts are
+    # decided, so it stays silent until the loop has signal.
+    try:
+        from services import qa_feedback
+
+        acc = qa_feedback.accuracy_stats(list(latest.values()))
+        if acc.get("decided"):
+            out["verdict_accuracy"] = {
+                "decided": acc["decided"],
+                "overturned": acc["overturned"],
+                "overturn_rate": acc["overturn_rate"],
+                "false_alarms": acc["false_alarms"],
+                "missed_defects": acc["missed_defects"],
+            }
+    except Exception:
+        pass
     return out
 
 

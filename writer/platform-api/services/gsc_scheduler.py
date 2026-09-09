@@ -633,6 +633,7 @@ async def gsc_scheduler() -> None:
     from services.response_episodes import run_episode_sync
     from services.goal_escalation import run_goal_escalation_sweep
     from services.interventions import run_intervention_sync
+    from services.qa_feedback import run_qa_feedback_sweep
     from services.everhour_sync import enqueue_due_everhour_sync
     from services.orchestrator import redispatch_due_retries
 
@@ -714,6 +715,11 @@ async def gsc_scheduler() -> None:
                 # reoptimization work move the metric — 2-week/6-week verdicts).
                 # Self-gated: no-ops while intervention_tracking_enabled is false.
                 _safe("intervention_sync", run_intervention_sync)
+                # Daily QA verdict-accuracy sweep: classify whether humans upheld
+                # or overturned each recent QA verdict (measurement only, no board
+                # effects). Self-gated: no-ops unless qa_enabled AND
+                # qa_feedback_enabled.
+                _safe("qa_feedback_sweep", run_qa_feedback_sweep)
                 # Daily offpage sweep (RD loss / unnatural spike — SOP §A.5).
                 _safe("offpage_sweep", run_offpage_sweep)
                 # Daily scan-health watch: alert when a client's scheduled

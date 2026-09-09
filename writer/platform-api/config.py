@@ -2069,6 +2069,18 @@ class Settings(BaseSettings):
     # another URL rubric (guest post / press release / citation / map embed).
     qa_url_default_rubric: str = "website_page"
 
+    # QA verdict-accuracy feedback loop (services/qa_feedback.py — the
+    # measurement half of QA). A daily sweep reads each review's later board
+    # trajectory (status changes + re-reviews) and records whether humans UPHELD
+    # or OVERTURNED the verdict, so QA's false-alarm / missed-defect rate is
+    # queryable instead of hand-derived. Read-only measurement — no board
+    # effects, no auto-tuning (measure first). Own gate on top of qa_enabled so
+    # it ships dark; mirrors intervention_tracking_enabled.
+    qa_feedback_enabled: bool = False            # QA_FEEDBACK_ENABLED — sweep + writeback gate
+    qa_feedback_window_days: int = 45            # how far back the sweep (re)evaluates pending reviews
+    qa_feedback_sweep_limit: int = 500           # reviews scanned per daily sweep
+    qa_feedback_min_samples: int = 3             # suppress a headline rate below this many decided reviews
+
     # PACE — Project Assignment, Coordination & Execution agent
     # (docs/modules/project-manager-agent-plan-v1_0.md). Phase 0A ships only the
     # deterministic pm_signals layer (pure reads, no LLM, no writes, wired to
