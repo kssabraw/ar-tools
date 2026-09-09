@@ -36,6 +36,11 @@ class RunCreateRequest(BaseModel):
     # into the writer's section/intro/conclusion prompts - deliberately never
     # part of the brief, which is client-agnostic and globally cached.
     writer_notes: Optional[str] = Field(default=None, max_length=4000)
+    # Per-run override of which provider writes the DRAFT prose. None ⇒ inherit
+    # the client's content_writer_provider default (which itself defaults to
+    # "anthropic"). "openai" routes the draft to gpt-5.6-luna; quality gates stay
+    # on Claude. Applies to blog + service/location runs.
+    content_writer_provider: Optional[Literal["anthropic", "openai"]] = None
 
 
 class RunListItem(BaseModel):
@@ -156,6 +161,9 @@ class RunDetail(BaseModel):
     featured_image_url: Optional[str] = None
     # Editorial notes the run was created with (echoed for the UI).
     writer_notes: Optional[str] = None
+    # Which provider wrote (or will write) the draft prose, resolved at creation
+    # (run override ?? client default ?? "anthropic"). Echoed for the UI.
+    content_writer_provider: Optional[str] = None
 
 
 class RunCreateResponse(BaseModel):

@@ -261,6 +261,7 @@ async def get_run(
         services=run.get("services") or [],
         featured_image_url=run.get("featured_image_url"),
         writer_notes=run.get("writer_notes"),
+        content_writer_provider=run.get("content_writer_provider"),
     )
 
 
@@ -316,6 +317,7 @@ async def create_run(
         sie_force_refresh=body.sie_force_refresh,
         brief_force_refresh=body.brief_force_refresh,
         writer_notes=(body.writer_notes or "").strip() or None,
+        content_writer_provider=body.content_writer_provider,
         created_by=auth["user_id"],
     )
 
@@ -922,6 +924,8 @@ async def rerun(
             # A rerun keeps the original's editorial guidance - the notes
             # describe the article, not the attempt.
             "writer_notes": original.get("writer_notes"),
+            # Keep the original's draft-prose provider (describes the output).
+            "content_writer_provider": original.get("content_writer_provider"),
             "status": "queued",
             "created_by": auth["user_id"],
         }

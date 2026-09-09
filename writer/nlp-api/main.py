@@ -254,6 +254,22 @@ async def _gemini_embed(texts: List[str]) -> List[List[float]]:
 # referencing undefined names (NameError -> 502). Tuned core: do not edit wording.
 GENERATION_MODEL = "claude-sonnet-4-6"
 
+# Content-writer provider selection (owner request 2026-09). A generate /
+# reoptimize request can route its PAGE-BODY prose (the primary generation call)
+# to OpenAI instead of Claude; every scoring / corrective / voice / MCS pass stays
+# on Claude, so the quality gates keep grading consistently. Only the primary
+# prose call switches. Provider is chosen per-request ("anthropic" | "openai");
+# the concrete OpenAI model is CONTENT_WRITER_OPENAI_MODEL, so the Luna version
+# bumps via env. Mirrors the entity_provider selection pattern. Requires
+# OPENAI_API_KEY on the `nlp` service for the OpenAI path; absent it, an
+# openai-selected request degrades to Claude.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+CONTENT_WRITER_PROVIDERS = ("anthropic", "openai")
+CONTENT_WRITER_PROVIDER_DEFAULT = (
+    os.environ.get("CONTENT_WRITER_PROVIDER", "anthropic") or "anthropic"
+).lower()
+CONTENT_WRITER_OPENAI_MODEL = os.environ.get("CONTENT_WRITER_OPENAI_MODEL", "gpt-5.6-luna")
+
 # Model for the SECTION-SCOPED page-spec edit passes — section trim (reduce an
 # over-band section), section fix (rewrite a section flagged for a
 # block/FAQ/intent/sentiment issue), and section add (write a missing required
@@ -2494,6 +2510,110 @@ def resolve_entity_provider(requested: Optional[str]) -> str:
                 )
             return alt
     return choice  # neither keyed — extractor returns [] (best-effort, unchanged)
+
+
+# ---- Content-writer provider (page-body prose: Claude default | OpenAI) ----
+
+def resolve_content_writer_provider(requested: Optional[str]) -> str:
+    """Pick the provider that writes a page's DRAFT prose. Honours the request's
+    choice when it names a known provider whose key is configured; otherwise falls
+    back to Anthropic (the always-configured default), so a request never fails to
+    generate because its chosen provider is unkeyed. Mirrors
+    resolve_entity_provider."""
+    choice = (requested or CONTENT_WRITER_PROVIDER_DEFAULT or "anthropic").lower()
+    if choice not in CONTENT_WRITER_PROVIDERS:
+        choice = "anthropic"
+    if choice == "openai" and not OPENAI_API_KEY:
+        logger.warning(
+            "content_writer_provider 'openai' requested but OPENAI_API_KEY unset; "
+            "using anthropic"
+        )
+        return "anthropic"
+    return choice
+
+
+class _ProseMsg:
+    """Anthropic-message-shaped result so the OpenAI path is a drop-in at the
+    existing call sites: exposes `.content[0].text` and
+    `.usage.input_tokens`/`.output_tokens`."""
+
+    class _Block:
+        def __init__(self, text: str):
+            self.text = text
+
+    class _Usage:
+        def __init__(self, input_tokens: int, output_tokens: int):
+            self.input_tokens = input_tokens
+            self.output_tokens = output_tokens
+
+    def __init__(self, text: str, input_tokens: int, output_tokens: int):
+        self.content = [self._Block(text)]
+        self.usage = self._Usage(input_tokens, output_tokens)
+
+
+_openai_client_singleton = None
+
+
+def _openai_client():
+    global _openai_client_singleton
+    if _openai_client_singleton is None:
+        from openai import AsyncOpenAI  # lazy — only when the OpenAI path is used
+
+        _openai_client_singleton = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    return _openai_client_singleton
+
+
+async def _openai_generate_prose(system_prompt: str, user_prompt: str, *, max_tokens: int) -> "_ProseMsg":
+    """One OpenAI content-writer completion, returned in the Anthropic message
+    shape. PLAIN TEXT (no JSON mode) — page generation returns HTML with a
+    <title> tag + embedded JSON-LD, parsed downstream exactly as the Claude
+    output is. Temperature is NOT sent (GPT-5 models reject a non-default
+    temperature)."""
+    resp = await _openai_client().chat.completions.create(
+        model=CONTENT_WRITER_OPENAI_MODEL,
+        max_completion_tokens=max_tokens,
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    )
+    choice = (resp.choices or [None])[0]
+    text = ""
+    if choice is not None and getattr(choice, "message", None) is not None:
+        text = choice.message.content or ""
+    usage = getattr(resp, "usage", None)
+    return _ProseMsg(
+        text,
+        getattr(usage, "prompt_tokens", 0) or 0,
+        getattr(usage, "completion_tokens", 0) or 0,
+    )
+
+
+async def _generate_prose(
+    *,
+    provider: Optional[str],
+    client,
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int,
+    temperature: Optional[float] = None,
+):
+    """Generate page-body prose with the request's selected provider, returning an
+    Anthropic-message-shaped object so every call site's downstream text
+    extraction + token recording is unchanged. The Anthropic branch is
+    byte-identical to the prior inline call (prompt-cached ephemeral system
+    block); the OpenAI branch uses CONTENT_WRITER_OPENAI_MODEL."""
+    if resolve_content_writer_provider(provider) == "openai":
+        return await _openai_generate_prose(system_prompt, user_prompt, max_tokens=max_tokens)
+    kwargs = {
+        "model": GENERATION_MODEL,
+        "max_tokens": max_tokens,
+        "system": [{"type": "text", "text": system_prompt, "cache_control": {"type": "ephemeral"}}],
+        "messages": [{"role": "user", "content": user_prompt}],
+    }
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    return await client.messages.create(**kwargs)
 
 
 async def get_serp_entities(paragraph_docs: List[str], provider: Optional[str] = None) -> List[dict]:
@@ -8531,6 +8651,7 @@ def _internal_links_block(links: Optional[List[dict]]) -> str:
 class GeneratePageRequest(BaseModel):
     keyword: str
     entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
+    content_writer_provider: Optional[str] = None  # 'anthropic' (default) | 'openai'
     location: str
     location_code: Optional[int] = None  # DataForSEO numeric location code (preferred)
     business_name: str
@@ -9044,14 +9165,15 @@ Full location: {body.location}
         await q.put({"step": "progress", "progress": 65, "message": "Generating your page…"})
 
         try:
-            claude_msg = await client.messages.create(
-                model=GENERATION_MODEL,
+            claude_msg = await _generate_prose(
+                provider=body.content_writer_provider,
+                client=client,
+                system_prompt=_GEN_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
                 max_tokens=16000,
-                system=[{"type": "text", "text": _GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": user_prompt}],
             )
         except Exception as e:
-            logger.exception("Claude generation error")
+            logger.exception("Content generation error")
             raise Exception("Content generation failed. Please try again.")
 
         token_rec = _token_record("generate-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
@@ -9516,6 +9638,7 @@ Full location: {body.location}
 class ReoptimizePageRequest(BaseModel):
     keyword: str
     location: str
+    content_writer_provider: Optional[str] = None  # 'anthropic' (default) | 'openai'
     existing_page_html: Optional[str] = None   # if omitted, fetched from existing_page_url
     existing_page_url: Optional[str] = None
     deficiencies: List[dict]
@@ -9698,14 +9821,15 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
         await q.put({"step": "progress", "progress": 40, "message": "Rewriting your page…"})
 
         try:
-            claude_msg = await client.messages.create(
-                model=GENERATION_MODEL,
+            claude_msg = await _generate_prose(
+                provider=body.content_writer_provider,
+                client=client,
+                system_prompt=_GEN_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
                 max_tokens=8000,
-                system=[{"type": "text", "text": _GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": user_prompt}],
             )
         except Exception as e:
-            logger.exception("Claude reoptimize error")
+            logger.exception("Content reoptimize error")
             raise Exception("Content generation failed. Please try again.")
 
         token_rec = _token_record("reoptimize-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
@@ -11794,6 +11918,7 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
 class GenerateEcommerceRequest(BaseModel):
     keyword: str
     entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
+    content_writer_provider: Optional[str] = None  # 'anthropic' (default) | 'openai'
     page_type: str = "product"           # "product" | "collection"
     business_name: str
     website: Optional[str] = None
@@ -12182,15 +12307,16 @@ Primary keyword: {body.keyword}
 
         await q.put({"step": "progress", "progress": 65, "message": "Writing your page…"})
         try:
-            claude_msg = await client.messages.create(
-                model=GENERATION_MODEL,
+            claude_msg = await _generate_prose(
+                provider=body.content_writer_provider,
+                client=client,
+                system_prompt=_ECOMMERCE_GEN_SYSTEM_PROMPT,
+                user_prompt=user_prompt,
                 max_tokens=16000,
-                temperature=0,  # deterministic generation run-to-run
-                system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0,  # deterministic generation run-to-run (Claude path)
             )
         except Exception:
-            logger.exception("Claude ecommerce generation error")
+            logger.exception("Content ecommerce generation error")
             raise Exception("Content generation failed. Please try again.")
 
         token_rec = _token_record("generate-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
@@ -12299,6 +12425,7 @@ Primary keyword: {body.keyword}
 class ReoptimizeEcommerceRequest(BaseModel):
     keyword: str
     page_type: str = "product"
+    content_writer_provider: Optional[str] = None  # 'anthropic' (default) | 'openai'
     existing_page_html: Optional[str] = None   # if omitted, fetched from existing_page_url
     existing_page_url: Optional[str] = None
     deficiencies: List[dict] = []
@@ -12464,15 +12591,16 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
                                      else f"Score {best['score'] if best else '?'}/100 — "
                                           f"optimizing (pass {pass_num} of {MAX_ECOMMERCE_AUTO_PASSES})…")})
             try:
-                claude_msg = await client.messages.create(
-                    model=GENERATION_MODEL,
+                claude_msg = await _generate_prose(
+                    provider=body.content_writer_provider,
+                    client=client,
+                    system_prompt=_ECOMMERCE_GEN_SYSTEM_PROMPT,
+                    user_prompt=_build_reopt_prompt(current_text, current_def_text),
                     max_tokens=16000,
                     temperature=0,
-                    system=[{"type": "text", "text": _ECOMMERCE_GEN_SYSTEM_PROMPT, "cache_control": {"type": "ephemeral"}}],
-                    messages=[{"role": "user", "content": _build_reopt_prompt(current_text, current_def_text)}],
                 )
             except Exception:
-                logger.exception("Claude ecommerce reoptimize error")
+                logger.exception("Content ecommerce reoptimize error")
                 if best is None:
                     raise Exception("Content generation failed. Please try again.")
                 break

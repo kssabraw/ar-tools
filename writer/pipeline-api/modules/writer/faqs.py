@@ -14,7 +14,7 @@ from typing import Optional
 
 from models.writer import ArticleSection, BrandVoiceCard
 
-from modules.brief.llm import claude_json
+from modules.writer.prose_llm import prose_json
 
 from .banned_terms import BannedTermLeakage, find_banned
 from .reconciliation import FilteredSIETerms
@@ -197,7 +197,7 @@ async def write_faqs(
         if last_retry_term:
             sys_prompt += f"\n\nIMPORTANT: A previous attempt included the forbidden term '{last_retry_term}'. Rewrite without it."
         try:
-            result = await claude_json(sys_prompt, user, max_tokens=2500, temperature=0.4)
+            result = await prose_json(sys_prompt, user, max_tokens=2500, temperature=0.4)
         except Exception as exc:
             logger.warning("FAQ writing failed: %s", exc)
             return _placeholder_faqs(faq_questions, faq_header_text, faq_header_order, question_orders)

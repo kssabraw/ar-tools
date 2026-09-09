@@ -15,7 +15,7 @@ from typing import Optional
 
 from models.writer import ArticleSection, BrandVoiceCard
 
-from modules.brief.llm import claude_json
+from modules.writer.prose_llm import prose_json
 
 from .banned_terms import BannedTermLeakage, find_banned
 from .voice_directive import distinctiveness_directive
@@ -146,7 +146,7 @@ async def write_conclusion(
         if last_retry:
             sys_prompt += f"\n\nIMPORTANT: A previous attempt included the forbidden term '{last_retry}'. Rewrite without it."
         try:
-            result = await claude_json(sys_prompt, user, max_tokens=600, temperature=0.4)
+            result = await prose_json(sys_prompt, user, max_tokens=600, temperature=0.4)
         except Exception as exc:
             logger.warning("Conclusion writing failed: %s", exc)
             return _placeholder_conclusion(conclusion_order)

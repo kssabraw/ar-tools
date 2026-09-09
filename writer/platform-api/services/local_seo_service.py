@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import analysis_cache, job_priority, locations_service, page_spec, page_spec_store
+from services import analysis_cache, content_writer, job_priority, locations_service, page_spec, page_spec_store
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -76,6 +76,7 @@ def _business_fields(client: dict) -> dict:
 def _gbp_to_generate_payload(
     client: dict, keyword: str, location: str, location_code: Optional[int] = None,
     include_decision_map: bool = True, entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
 ) -> dict:
     """Map a suite client row (with its `gbp` JSONB) to the nlp service's
     GeneratePageRequest. The converged brand_voice / detected_icp /
@@ -108,6 +109,10 @@ def _gbp_to_generate_payload(
         # nlp's default. Threaded from the UI so the SERP entity analysis inside
         # nlp uses the chosen engine.
         "entity_provider": entity_provider,
+        # Per-request/per-client content-writer provider ("anthropic"|"openai")
+        # for the nlp page-body generation LLM; resolved by the caller (override
+        # ?? client default ?? "anthropic").
+        "content_writer_provider": content_writer_provider,
         # ── Trust & Proof (docs/modules/local-landing-page-structure.md) ───────
         # Business-supplied badges / facts the deterministic Trust & Proof block
         # renders (never model-authored). Scalar/list facts come from the
@@ -771,6 +776,7 @@ async def generate_page(
     include_decision_map: bool = True,
     notes: Optional[str] = None,
     entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     internal_links: Optional[list[dict]] = None,
     job_id: Optional[str] = None,
@@ -793,9 +799,11 @@ async def generate_page(
     scrape."""
     client = _get_client(client_id)
     location, location_code = await locations_service.resolve_location(client, location, location_code)
+    writer_provider = content_writer.resolve_content_writer_provider(content_writer_provider, client)
     payload = _gbp_to_generate_payload(
         client, keyword, location, location_code, include_decision_map=include_decision_map,
         entity_provider=entity_provider,
+        content_writer_provider=writer_provider,
     )
     # Media gallery (Trust & Proof block) — a separate table, loaded here since
     # the mapper above is pure over the client row. Best-effort.
@@ -943,6 +951,7 @@ async def enqueue_generate(
     client_id: str, keyword: str, location: str, location_code: Optional[int],
     user_id: str, page_template_url: Optional[str] = None, force_refresh: bool = False,
     entity_provider: Optional[str] = None,
+    content_writer_provider: Optional[str] = None,
 ) -> str:
     """Validate the area, then enqueue a `local_seo_generate` job. Returns the job
     id. The location is resolved up front so a mistyped area fails fast (400) before
@@ -965,6 +974,7 @@ async def enqueue_generate(
                     "page_template_url": (page_template_url or "").strip() or None,
                     "force_refresh": bool(force_refresh),
                     "entity_provider": entity_provider,
+                    "content_writer_provider": content_writer_provider,
                 },
             }
         )
@@ -1021,6 +1031,7 @@ async def run_generate_job(job: dict) -> None:
                 force_refresh=bool(payload.get("force_refresh")),
                 page_template_url=payload.get("page_template_url"),
                 entity_provider=payload.get("entity_provider"),
+                content_writer_provider=payload.get("content_writer_provider"),
                 on_progress=_job_progress_writer(job_id),
                 internal_links=payload.get("internal_links") or None,
                 job_id=job_id,
@@ -1519,6 +1530,7 @@ async def reoptimize_page(
     generate — a reoptimize pass must not strip the silo."""
     client = _get_client(client_id)
     fields = _business_fields(client)
+    writer_provider = content_writer.resolve_content_writer_provider(None, client)
     if not existing_page_html and not existing_page_url:
         raise HTTPException(status_code=400, detail="page_url_or_html_required")
 
@@ -1553,6 +1565,7 @@ async def reoptimize_page(
         "phone": fields["phone"],
         "serp_analysis": serp_analysis,
         "entity_provider": entity_provider,
+        "content_writer_provider": writer_provider,
         "voice_card": voice_card,
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,

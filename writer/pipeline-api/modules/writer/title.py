@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from modules.brief.llm import claude_json
+from modules.writer.prose_llm import prose_json
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +110,7 @@ async def generate_title(
     )
 
     try:
-        result = await claude_json(TITLE_SYSTEM, user, max_tokens=300, temperature=0.6)
+        result = await prose_json(TITLE_SYSTEM, user, max_tokens=300, temperature=0.6)
         candidates = (result.get("candidates") if isinstance(result, dict) else None) or []
         candidates = [c.strip() for c in candidates if isinstance(c, str) and c.strip()]
     except Exception as exc:
@@ -221,7 +221,7 @@ async def generate_h1_enrichment(
         "('one of those', 'many people find')."
     )
     try:
-        result = await claude_json(system, user, max_tokens=120, temperature=0.4)
+        result = await prose_json(system, user, max_tokens=120, temperature=0.4)
         sentence = result.get("sentence", "") if isinstance(result, dict) else ""
         if isinstance(sentence, str):
             return sentence.strip()

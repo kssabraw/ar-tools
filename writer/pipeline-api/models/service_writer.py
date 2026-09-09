@@ -53,6 +53,11 @@ class ServiceWriterRequest(BaseModel):
     prior_sections: list[dict[str, Any]] = Field(default_factory=list)
     # Scorer deficiencies: [{engine, engine_key, score, issues[], recommendations[]}].
     deficiencies: list[dict[str, Any]] = Field(default_factory=list)
+    # Which provider writes the DRAFT prose (title/meta/CTA, section bodies, FAQs).
+    # "openai" routes them to content_writer_openai_model (gpt-5.6-luna); every
+    # post-draft quality gate stays on Claude. Resolved upstream (run override ??
+    # client default ?? "anthropic"). None/absent ⇒ Anthropic (unchanged).
+    content_writer_provider: Optional[str] = None
 
 
 # ----------------------------------------------------------------------

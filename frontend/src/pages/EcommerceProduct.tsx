@@ -16,6 +16,7 @@ import { ecommerceScoreAdapter } from '../components/score/adapters'
 import { useBulkGenerate } from '../components/ecommerce/useBulkGenerate'
 import { Spinner } from '../components/localseo/Spinner'
 import { EntityProviderSelect, type EntityProvider } from '../components/EntityProviderSelect'
+import { ContentWriterSelect, type ContentWriterProvider } from '../components/ContentWriterSelect'
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
@@ -78,6 +79,8 @@ export function EcommerceProduct() {
   const [notes, setNotes] = useState('')
   // Which entity-extraction engine the nlp SERP analysis uses (default TextRazor).
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
+  // Draft-prose model override for this page. null = inherit the client default.
+  const [contentWriterProvider, setContentWriterProvider] = useState<ContentWriterProvider | null>(null)
   const [bulkKeywords, setBulkKeywords] = useState('')
   const [bulkNotes, setBulkNotes] = useState('')
   const [error, setError] = useState('')
@@ -133,6 +136,7 @@ export function EcommerceProduct() {
         product_input: productInput.trim() || null,
         notes: notes.trim() || null,
         entity_provider: entityProvider,
+        content_writer_provider: contentWriterProvider ?? undefined,
       })
       const poll = async () => {
         if (genCancelledRef.current) return
@@ -411,6 +415,15 @@ export function EcommerceProduct() {
 
           {/* Entity-extraction engine for the competitor SERP analysis */}
           <EntityProviderSelect value={entityProvider} onChange={setEntityProvider} />
+
+          {/* Draft-prose model (Claude default | OpenAI); overrides the client default. */}
+          <div style={{ marginTop: 12 }}>
+            <ContentWriterSelect
+              value={contentWriterProvider}
+              onChange={setContentWriterProvider}
+              allowInherit
+            />
+          </div>
 
           {error && <ErrorDetails message={error} />}
 

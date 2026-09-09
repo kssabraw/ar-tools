@@ -57,6 +57,7 @@ from .heading_sanitizer import SanitizationLog, sanitize_heading_structure
 from .heading_seo_optimizer import optimize_headings
 from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
+from .prose_llm import current_prose_provider, effective_prose_model, set_prose_provider
 from .reopt import reopt_directive
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
@@ -306,6 +307,12 @@ def _validate_article_structure(article: list[ArticleSection]) -> list[str]:
 
 async def run_writer(req: WriterRequest) -> WriterResponse:
     started = time.perf_counter()
+    # Route this run's DRAFT prose (title/intro/body/key-takeaways/FAQ/conclusion)
+    # to the selected provider. Contextvar is per-request (each FastAPI request is
+    # its own asyncio task) and is inherited by the body-section fan-out. Every
+    # post-draft quality gate keeps calling claude_json directly, so grading stays
+    # on Claude regardless. Default/None ⇒ Anthropic (unchanged).
+    set_prose_provider(req.content_writer_provider)
     keyword, intent_type, heading_structure, faq_questions, citations = _validate_inputs(req)
 
     # ---- Step 0.5 - Heading-structure sanitizer ----
@@ -954,6 +961,8 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         entity_rewrite_resolved=term_coverage_result.rewrite_resolved,
         schema_version=schema_effective,
         brief_schema_version=(brief.get("metadata") or {}).get("schema_version", "1.7"),
+        prose_provider=current_prose_provider(),
+        prose_model=effective_prose_model(),
         generation_time_ms=int((time.perf_counter() - started) * 1000),
     )
 

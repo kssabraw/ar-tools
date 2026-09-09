@@ -79,6 +79,13 @@ class WriterRequest(BaseModel):
     mode: Literal["generate", "reoptimize"] = "generate"
     prior_sections: list[dict[str, Any]] = Field(default_factory=list)
     deficiencies: list[dict[str, Any]] = Field(default_factory=list)
+    # Which provider writes the DRAFT prose (title, intro, body sections, key
+    # takeaways, FAQ, conclusion). "openai" routes those calls to
+    # content_writer_openai_model (gpt-5.6-luna); every post-draft quality gate
+    # stays on Claude regardless. Resolved upstream (run override ?? client
+    # default ?? "anthropic"). None/absent ⇒ Anthropic (unchanged behaviour).
+    # Input-only — no output schema bump.
+    content_writer_provider: Optional[str] = None
 
 
 # ---- Brand voice card (output of Step 3.5a) ----
@@ -331,6 +338,11 @@ class WriterMetadata(BaseModel):
     entity_rewrite_resolved: Optional[bool] = None
     schema_version: SchemaVersion = "1.9"
     brief_schema_version: str = "2.0"
+    # Which provider actually wrote the draft prose ("anthropic" | "openai").
+    # Reflects the EFFECTIVE choice (an openai-selected run with no key configured
+    # degrades to anthropic). Additive metadata — no schema bump.
+    prose_provider: str = "anthropic"
+    prose_model: Optional[str] = None
     generation_time_ms: int = 0
 
 

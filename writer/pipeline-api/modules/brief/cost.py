@@ -28,6 +28,12 @@ _PRICES: dict[str, tuple[float, float]] = {
     "haiku": (1.00, 5.00),
     "sonnet": (3.00, 15.00),
     "opus": (5.00, 25.00),
+    # OpenAI content-writer prose models (gpt-5.6-luna). ESTIMATE — confirm
+    # against OpenAI's live pricing; this cost accounting is advisory
+    # (module_outputs.cost_usd). Substring-matched like the Claude tiers so a
+    # dated/variant id ("gpt-5.6-luna") still resolves.
+    "luna": (1.25, 10.00),
+    "gpt-5": (1.25, 10.00),
 }
 
 _cost_accumulator: contextvars.ContextVar[Optional[list[float]]] = contextvars.ContextVar(

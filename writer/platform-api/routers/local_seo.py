@@ -78,6 +78,7 @@ async def generate_local_seo_page_async(
         page_template_url=body.page_template_url,
         force_refresh=body.force_refresh,
         entity_provider=body.entity_provider,
+        content_writer_provider=body.content_writer_provider,
     )
     return LocalSeoGenerateJob(job_id=job_id, status="pending")
 
