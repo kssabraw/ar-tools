@@ -101,6 +101,8 @@ def test_build_live_fields_and_address():
 
 def test_merge_history_merges_and_sorts():
     edits = [{"field": "description", "source": "ai", "status": "applied", "created_by": "u1",
+              "current_value": "We are a family owned roofer.",
+              "proposed_value": "Family-owned roofing experts serving Fort Lauderdale.",
               "applied_at": "2026-09-04T10:00:00Z", "updated_at": "2026-09-04T10:00:00Z"}]
     changes = [
         {"kind": "outside_change", "detail": {"fields": ["phone", "website"]}, "detected_at": "2026-09-04T12:00:00Z"},
@@ -109,7 +111,12 @@ def test_merge_history_merges_and_sorts():
     out = a.merge_history(edits, changes, {"u1": "Ivy"}, 10)
     assert [e["kind"] for e in out] == ["outside_change", "edit", "suspended"]
     assert out[0]["detail"] == "Changed outside the tool: phone number, website"
+    # The team edit now names the field and shows the before→after, not just "ai edit".
     assert out[1]["source"] == "team" and out[1]["who"] == "Ivy"
+    assert out[1]["detail"] == (
+        'ai edit · description: "We are a family owned roofer." '
+        '→ "Family-owned roofing experts serving Fo…" — applied'
+    )
     assert out[2]["detail"].startswith("Listing appears suspended")
 
 
@@ -122,6 +129,7 @@ def test_merge_history_respects_limit():
 def test_merge_history_labels_a_revert_and_carries_edit_ids():
     edits = [
         {"id": "e-2", "field": "description", "source": "revert", "status": "applied",
+         "proposed_value": "The original description.",
          "reverts_edit_id": "e-1", "applied_at": "2026-09-05T10:00:00Z",
          "updated_at": "2026-09-05T10:00:00Z"},
         {"id": "e-1", "field": "description", "source": "ai", "status": "applied",
@@ -129,7 +137,38 @@ def test_merge_history_labels_a_revert_and_carries_edit_ids():
     ]
     out = a.merge_history(edits, [], {}, 10)
     rev = out[0]
-    assert rev["detail"] == "reverted description to a prior value — applied"
+    # The revert names the field and previews the restored value.
+    assert rev["detail"] == 'reverted description to "The original description." — applied'
     assert rev["edit_id"] == "e-2" and rev["reverts_edit_id"] == "e-1"
     # An ordinary applied edit carries its id (the Revert target) and no back-link.
     assert out[1]["edit_id"] == "e-1" and out[1]["reverts_edit_id"] is None
+
+
+def test_describe_change_names_field_and_summarizes_per_type():
+    # Website: before → after.
+    assert a.describe_change("website", "http://old.com", "https://new.com") == (
+        'website: "http://old.com" → "https://new.com"'
+    )
+    # Services: count change + the new labels.
+    svc = a.describe_change(
+        "services", [{"label": "Roof Repair"}],
+        [{"label": "Roof Repair"}, {"label": "Roof Replacement"}],
+    )
+    assert svc == "services: 1 → 2 — Roof Repair, Roof Replacement"
+    # Hours (structured, no per-item diff): still names the field.
+    assert a.describe_change("hours", {"regular": []}, {"regular": [1, 2]}) == "hours updated"
+    # open/closed status renders the target status.
+    assert a.describe_change("open_info", None, {"status": "CLOSED_TEMPORARILY"}) == (
+        "open/closed status → Closed Temporarily"
+    )
+    # A missing/unparseable value degrades to '<field> updated', never raises.
+    assert a.describe_change("labels", None, None) == "labels cleared"
+
+
+def test_merge_history_new_field_gets_a_label_not_a_raw_key():
+    # A Phase 3a field the old label map lacked (labels) must not surface as a raw key.
+    edits = [{"field": "labels", "source": "manual", "status": "applied",
+              "proposed_value": ["promo", "seasonal"],
+              "applied_at": "2026-09-05T10:00:00Z", "updated_at": "2026-09-05T10:00:00Z"}]
+    out = a.merge_history(edits, [], {}, 10)
+    assert out[0]["detail"] == "manual edit · labels: promo, seasonal — applied"

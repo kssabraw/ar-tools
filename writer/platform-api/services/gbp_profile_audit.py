@@ -288,8 +288,90 @@ def log_change(client_id: str, location_row_id: str, kind: str, detail: Optional
 _FIELD_LABELS = {
     "title": "business name", "description": "description", "categories": "categories",
     "phone": "phone number", "website": "website", "address": "address",
-    "hours": "hours", "services": "services", "open_status": "open/closed status",
+    "hours": "hours", "services": "services",
+    # Both the monitor's field key (open_status) and the editor's field (open_info)
+    # map to the same human label.
+    "open_status": "open/closed status", "open_info": "open/closed status",
+    # Phase 3a / 3b editable fields.
+    "labels": "labels", "special_hours": "special hours", "more_hours": "additional hours",
+    "service_area": "service area", "attributes": "attributes",
 }
+
+
+def _short(value: object, n: int = 60) -> str:
+    """Collapse whitespace and truncate for a one-line history row."""
+    s = " ".join(str(value or "").split())
+    return s if len(s) <= n else s[: n - 1].rstrip() + "…"
+
+
+def _value_preview(field: str, value: object) -> str:
+    """A short, label-less preview of a single field value (the revert target)."""
+    try:
+        if field in ("description", "website"):
+            return f'"{_short(value, 50)}"' if value else "empty"
+        if field == "labels":
+            return _short(", ".join(map(str, value or [])), 60) if value else "none"
+        if field == "services":
+            return f"{len(value or [])} listed"
+        if field == "categories":
+            primary = ((value or {}).get("primary") or {}).get("name")
+            return f"primary {primary}" if primary else "a prior selection"
+        if field == "open_info":
+            status = (value or {}).get("status")
+            return status.replace("_", " ").title() if status else "a prior status"
+        if isinstance(value, list):
+            return f"{len(value)} entr{'y' if len(value) == 1 else 'ies'}"
+    except Exception:  # noqa: BLE001 — a preview is a nicety, never a failure
+        pass
+    return "a prior value"
+
+
+def describe_change(field: str, current: object, proposed: object) -> str:
+    """A concise, human 'what exactly changed' summary for one field edit —
+    a before→after for text fields, a labelled summary for structured ones.
+    Pure + defensive (a shape it can't parse degrades to '<field> updated')."""
+    label = _FIELD_LABELS.get(field, field or "profile")
+    try:
+        if field in ("description", "website"):
+            new = str(proposed or "").strip()
+            old = str(current or "").strip()
+            if not new:
+                return f"{label} cleared"
+            if old and old != new:
+                return f'{label}: "{_short(old, 40)}" → "{_short(new, 40)}"'
+            return f'{label} set to "{_short(new, 60)}"'
+        if field == "labels":
+            new = proposed or []
+            return f"{label}: {_short(', '.join(map(str, new)), 70)}" if new else f"{label} cleared"
+        if field == "services":
+            cur_n, new_n = len(current or []), len(proposed or [])
+            names = ", ".join(
+                str(s.get("label", "")).strip()
+                for s in (proposed or [])
+                if isinstance(s, dict) and s.get("label")
+            )
+            base = f"{label} ({new_n} listed)" if cur_n == new_n else f"{label}: {cur_n} → {new_n}"
+            return f"{base} — {_short(names, 60)}" if names else base
+        if field == "categories":
+            prop = proposed or {}
+            primary = ((prop.get("primary") or {}) or {}).get("name")
+            extra = len(prop.get("additional") or [])
+            if primary:
+                return f"{label}: primary {primary}" + (f" +{extra} more" if extra else "")
+            return f"{label} updated"
+        if field == "open_info":
+            status = ((proposed or {}) or {}).get("status")
+            return f"{label} → {status.replace('_', ' ').title()}" if status else f"{label} updated"
+        if field == "attributes":
+            n = len(proposed or [])
+            return f"{label}: {n} attribute{'' if n == 1 else 's'} set"
+        # Structured hours-family fields (hours / special_hours / more_hours /
+        # service_area): name the field, count entries when it's a list.
+        if isinstance(proposed, list):
+            return f"{label} updated ({len(proposed)})"
+        return f"{label} updated"
+    except Exception:  # noqa: BLE001 — history text must never break the read
+        return f"{label} updated"
 
 
 def merge_history(edits: list[dict], changes: list[dict], names: dict, limit: int) -> list[dict]:
@@ -299,11 +381,16 @@ def merge_history(edits: list[dict], changes: list[dict], names: dict, limit: in
     for e in edits or []:
         at = e.get("applied_at") or e.get("updated_at") or e.get("created_at")
         src = e.get("source") or "manual"
-        field_label = _FIELD_LABELS.get(e.get("field"), e.get("field") or "profile")
+        field = e.get("field")
+        field_label = _FIELD_LABELS.get(field, field or "profile")
+        current, proposed = e.get("current_value"), e.get("proposed_value")
+        status = e.get("status")
         if src == "revert":
-            detail = f"reverted {field_label} to a prior value — {e.get('status')}"
+            # A revert restores a field to a prior value (its proposed_value is the
+            # value being restored); name the field + preview what it restores to.
+            detail = f"reverted {field_label} to {_value_preview(field, proposed)} — {status}"
         else:
-            detail = f"{src} edit — {e.get('status')}"
+            detail = f"{src} edit · {describe_change(field, current, proposed)} — {status}"
         events.append({
             "at": at, "source": "team", "kind": "edit",
             "field": e.get("field"),
@@ -340,7 +427,8 @@ def get_history(client_id: str, location_row_id: str, limit: int = 50) -> list[d
     supabase = get_supabase()
     edits = (
         supabase.table("gbp_profile_edits")
-        .select("id, field, source, status, reverts_edit_id, created_by, applied_at, updated_at, created_at")
+        .select("id, field, source, status, current_value, proposed_value, "
+                "reverts_edit_id, created_by, applied_at, updated_at, created_at")
         .eq("client_id", client_id).eq("location_row_id", location_row_id)
         .in_("status", ["applied", "pending_review", "rejected", "live_changed"])
         .order("updated_at", desc=True).limit(limit).execute().data or []
