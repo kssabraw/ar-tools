@@ -348,3 +348,83 @@ def test_coerce_blocks_tolerates_bad_level():
     assert len(blocks) == 4
     assert blocks[0].type == "subheading" and blocks[0].level == 3  # safe default
     assert blocks[3].type == "paragraph"
+
+
+# ---- mid-page voice-drift localizer wiring (Lever 2) ----
+
+def test_prior_sections_for_audit_extracts_text_and_drops_empty():
+    from modules.service_writer.pipeline import _prior_sections_for_audit
+
+    prior = [
+        {"heading": "Our Promise", "blocks": [
+            {"type": "paragraph", "text": "We respond fast."},
+            {"type": "list", "items": ["24/7", "Licensed"]},
+        ]},
+        {"heading": "Bare CTA", "blocks": [{"type": "cta", "text": ""}]},  # no body -> dropped
+        {"heading": "", "blocks": [{"type": "paragraph", "text": "Body with no heading."}]},
+        "not a dict",  # tolerated
+    ]
+    out = _prior_sections_for_audit(prior)
+    assert [s["key"] for s in out] == ["Our Promise", "section-3"]
+    assert out[0]["text"] == "We respond fast.\n24/7\nLicensed"
+    assert out[1]["heading"] == ""  # keyless heading -> positional key, heading kept blank
+
+
+async def test_reopt_localizes_voice_drift_into_section_prompts():
+    captured: list[str] = []
+
+    async def fake(system, user, **kwargs):
+        if "ONE section body" in system:
+            captured.append(user)
+            return {"blocks": [{"type": "paragraph", "text": "We serve Austin fast."}]}
+        if "SEO metadata" in system:
+            return {"title": "t", "meta_description": "m", "cta_text": "Call"}
+        if "answer FAQs" in system:
+            return {"faqs": []}
+        return {}
+
+    sentinel = "SECTIONS THAT DRIFT FROM THE BRAND VOICE:\n  [Our Promise] — register — flat catalogue\n"
+    req = ServiceWriterRequest(
+        run_id="run-vl", service_brief_output=_brief(),
+        client_context=ClientContextInput(brand_guide_text="Be confident."),
+        mode="reoptimize",
+        deficiencies=[{"engine_key": "brand_voice", "issues": ["voice scored 72"]}],
+        prior_sections=[{"order": 1, "level": "H2", "heading": "Our Promise",
+                         "blocks": [{"type": "paragraph", "text": "Flat catalogue copy."}]}],
+    )
+    with patch(_GEN, AsyncMock(side_effect=fake)), \
+         patch(_DISTILL, AsyncMock(return_value=BrandVoiceCard(brand_name="Acme"))), \
+         patch("modules.writer.voice_review.localize_voice_drift",
+               AsyncMock(return_value=sentinel)) as loc:
+        result = await run_service_writer(req)
+
+    assert loc.await_count == 1  # audit ran once, on the reopt
+    assert captured, "section bodies were generated"
+    assert all(sentinel in u for u in captured)  # drift block reached every section prompt
+    assert "voice_drift_localized" in result.metadata.degraded_notes
+
+
+async def test_reopt_without_drift_is_a_noop():
+    """An empty audit (nothing drifts / no guide) leaves the reopt unchanged."""
+    async def fake(system, user, **kwargs):
+        if "ONE section body" in system:
+            return {"blocks": [{"type": "paragraph", "text": "We serve Austin fast."}]}
+        if "SEO metadata" in system:
+            return {"title": "t", "meta_description": "m", "cta_text": "Call"}
+        if "answer FAQs" in system:
+            return {"faqs": []}
+        return {}
+
+    req = ServiceWriterRequest(
+        run_id="run-vl2", service_brief_output=_brief(),
+        client_context=ClientContextInput(brand_guide_text="x"),
+        mode="reoptimize", deficiencies=[{"engine_key": "aeo_llm_retrieval"}],
+        prior_sections=[{"heading": "Our Promise", "blocks": [{"type": "paragraph", "text": "x"}]}],
+    )
+    with patch(_GEN, AsyncMock(side_effect=fake)), \
+         patch(_DISTILL, AsyncMock(return_value=BrandVoiceCard(brand_name="Acme"))), \
+         patch("modules.writer.voice_review.localize_voice_drift", AsyncMock(return_value="")):
+        result = await run_service_writer(req)
+
+    assert "voice_drift_localized" not in result.metadata.degraded_notes
+    assert result.renderings.markdown  # still produced a page

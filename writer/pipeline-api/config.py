@@ -262,6 +262,17 @@ class Settings(BaseSettings):
     service_entity_coverage_floor: float = 0.75
     service_entity_rewrite_max_sections: int = 3
 
+    # Mid-page voice-drift localizer (Lever 2, mirrors nlp-api VOICE_LOCALIZE_*).
+    # Before a service/location reoptimize pass, one cheap Haiku call audits the
+    # prior page's body sections against the brand-voice guide and names the
+    # sections that DRIFT (register/rhythm/distinctiveness/tone/vocabulary/person),
+    # so the regeneration re-voices exactly those instead of sweeping blind. The
+    # intro + FAQ usually hold the voice while the mid-page service sections slip —
+    # this aims the corrective pass at them. Best-effort: disabled/failed/empty →
+    # prior behaviour. Haiku (categorization only), like nlp VOICE_LOCALIZE_MODEL.
+    service_voice_localize_enabled: bool = True
+    service_voice_localize_model: str = "claude-haiku-4-5-20251001"
+
     # ------------------------------------------------------------
     # Service Page Brief Generator (PRD §7 - model tiering + cache)
     # ------------------------------------------------------------
