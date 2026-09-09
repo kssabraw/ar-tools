@@ -500,6 +500,148 @@ def test_merge_drafted_services_empty_existing():
     assert svc.merge_drafted_services(None, None) == []
 
 
+def test_merge_drafted_services_dedupes_free_form_by_label():
+    existing = [{"kind": "free_form", "label": "Medical Billing", "category_id": "c"}]
+    additions = [
+        {"kind": "free_form", "label": "medical billing", "category_id": "c"},  # dup (ci) → dropped
+        {"kind": "free_form", "label": "Medical Coding", "category_id": "c"},   # new → kept
+    ]
+    out = svc.merge_drafted_services(existing, additions)
+    assert [s["label"] for s in out] == ["Medical Billing", "Medical Coding"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pure: target areas, service plan, matrix, and pick assembly
+# ═══════════════════════════════════════════════════════════════════════════
+def test_parse_service_area_and_storefront_city():
+    loc = {
+        "serviceArea": {"places": {"placeInfos": [
+            {"placeName": "Tampa, FL"}, {"placeName": "Orlando, FL"}, {"placeName": "Tampa, FL"},
+        ]}},
+        "storefrontAddress": {"locality": "Brandon", "administrativeArea": "FL"},
+    }
+    assert api.parse_service_area(loc) == ["Tampa, FL", "Orlando, FL"]
+    assert api.parse_storefront_city(loc) == "Brandon, FL"
+    assert api.parse_service_area({}) == []
+    assert api.parse_storefront_city({}) == ""
+    assert api.parse_storefront_city({"storefrontAddress": {"locality": "Miami"}}) == "Miami"
+
+
+def test_collect_target_areas_card_first_then_listing():
+    client = {
+        "target_cities": ["Tampa, FL", "Tampa, FL"],  # dedupe
+        "gbp": {"service_area_places": ["Clearwater, FL", {"name": "St. Petersburg, FL"}]},
+        "business_location": "Brandon, FL",
+    }
+    loc = {
+        "serviceArea": {"places": {"placeInfos": [{"placeName": "Orlando, FL"}]}},
+        "storefrontAddress": {"locality": "Brandon", "administrativeArea": "FL"},
+    }
+    areas = svc.collect_target_areas(client, loc, cap=10)
+    # Card manual first, then captured, then listing serviceArea, then business_location;
+    # "Brandon, FL" from the card dedupes the storefront's identical value.
+    assert areas == ["Tampa, FL", "Clearwater, FL", "St. Petersburg, FL", "Orlando, FL", "Brandon, FL"]
+    assert svc.collect_target_areas(client, loc, cap=2) == ["Tampa, FL", "Clearwater, FL"]
+    # No areas anywhere → empty (matrix will be skipped).
+    assert svc.collect_target_areas({}, {}, cap=10) == []
+
+
+def test_parse_service_plan_object_array_and_junk():
+    plan = svc.parse_service_plan(
+        'here: {"structured":["job_type_id:x"],'
+        '"services":[{"label":"Medical Billing","category":"Billing service","localize":true},'
+        '{"label":"","category":"x"}],'  # blank label dropped
+        '"areas":["Tampa, FL"," "]}'
+    )
+    assert plan["structured"] == ["job_type_id:x"]
+    assert plan["services"] == [
+        {"label": "Medical Billing", "category": "Billing service", "description": "", "localize": True}
+    ]
+    assert plan["areas"] == ["Tampa, FL"]
+    # Legacy bare array → treated as structured ids.
+    assert svc.parse_service_plan('["job_type_id:a"]')["structured"] == ["job_type_id:a"]
+    # Junk degrades to empty.
+    assert svc.parse_service_plan("not json") == {"structured": [], "services": [], "areas": []}
+
+
+def test_build_service_matrix_localizable_only_and_area_cap():
+    base = [
+        {"kind": "free_form", "label": "Medical Billing", "category_id": "c", "localize": True},
+        {"kind": "free_form", "label": "Free Consultation", "category_id": "c", "localize": False},
+    ]
+    out = svc.build_service_matrix(base, ["Tampa, FL", "Orlando, FL", "Miami, FL"], area_cap=2)
+    assert [s["label"] for s in out] == ["Medical Billing in Tampa, FL", "Medical Billing in Orlando, FL"]
+    assert all(s["kind"] == "free_form" and s["category_id"] == "c" for s in out)
+    assert svc.build_service_matrix(base, [], area_cap=5) == []  # no areas → no matrix
+
+
+_ASSEMBLE_TYPES = [
+    {"id": "gcid:billing", "name": "Billing service", "service_types": [
+        {"service_type_id": "job_type_id:medical_billing", "display_name": "Medical billing"},
+    ]},
+]
+_ASSEMBLE_CATS = [{"id": "gcid:billing", "name": "Billing service"}]
+
+
+def test_assemble_service_picks_structured_custom_and_matrix():
+    plan = {
+        "structured": ["job_type_id:medical_billing", "job_type_id:not_real"],
+        "services": [
+            {"label": "Revenue Cycle Management", "category": "Billing service", "localize": True},
+            {"label": "Free Practice Assessment", "category": "Nonexistent", "localize": False},
+        ],
+        "areas": [],
+    }
+    out = svc.assemble_service_picks(
+        plan, _ASSEMBLE_TYPES, _ASSEMBLE_CATS, areas=["Tampa, FL", "Orlando, FL"],
+        max_total=40, matrix_area_cap=10,
+    )
+    labels = [s["label"] for s in out]
+    # Structured first (unknown id dropped), then base customs, then the matrix.
+    assert labels == [
+        "Medical billing",
+        "Revenue Cycle Management",
+        "Free Practice Assessment",
+        "Revenue Cycle Management in Tampa, FL",
+        "Revenue Cycle Management in Orlando, FL",
+    ]
+    # Non-localizable custom fell back to the primary category; no 'localize' leaks out.
+    assert all("localize" not in s for s in out)
+    assert next(s for s in out if s["label"] == "Free Practice Assessment")["category_id"] == "gcid:billing"
+
+
+def test_assemble_service_picks_uses_plan_areas_when_none_on_file():
+    plan = {
+        "structured": [],
+        "services": [{"label": "Medical Coding", "category": "Billing service", "localize": True}],
+        "areas": ["Jacksonville, FL"],
+    }
+    out = svc.assemble_service_picks(
+        plan, [], _ASSEMBLE_CATS, areas=[], max_total=40, matrix_area_cap=10,
+    )
+    assert [s["label"] for s in out] == ["Medical Coding", "Medical Coding in Jacksonville, FL"]
+
+
+def test_assemble_service_picks_caps_total_keeping_base_over_matrix():
+    plan = {
+        "structured": [],
+        "services": [{"label": "Billing", "category": "Billing service", "localize": True}],
+        "areas": [],
+    }
+    out = svc.assemble_service_picks(
+        plan, [], _ASSEMBLE_CATS, areas=["A", "B", "C", "D"], max_total=3, matrix_area_cap=10,
+    )
+    # Base custom kept, matrix fills to the cap of 3.
+    assert [s["label"] for s in out] == ["Billing", "Billing in A", "Billing in B"]
+
+
+def test_assemble_service_picks_empty_plan_is_empty():
+    assert svc.assemble_service_picks(
+        {"structured": [], "services": [], "areas": []}, [], _ASSEMBLE_CATS,
+        areas=[], max_total=40, matrix_area_cap=10,
+    ) == []
+
+
 def test_next_backoff_ladder():
     ladder = svc.settings.gbp_profile_sync_backoff
     assert [svc.next_backoff(i) for i in range(len(ladder))] == ladder

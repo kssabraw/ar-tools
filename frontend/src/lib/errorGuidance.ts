@@ -593,6 +593,18 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Prove the write path with verify_gbp_api_access.py --edit-test first.',
     ],
   },
+  empty_draft: {
+    title: 'The AI couldn’t draft anything to suggest',
+    meaning:
+      'The draft came back empty. For services this usually means the listing’s ' +
+      'categories offer no Google-approved service types AND there wasn’t enough ' +
+      'on the client to write custom services from — or a one-off model hiccup.',
+    steps: [
+      'Add a few target cities on the client (Client → Edit) so the AI can build a service × location matrix.',
+      'Make sure the client’s ICP / services / silo topics are filled in — that’s what custom services are written from.',
+      'Try “Suggest with AI” again — a single empty reply can be transient.',
+    ],
+  },
   gbp_listing_read_only: {
     title: 'The connected account can’t edit this listing',
     meaning:
