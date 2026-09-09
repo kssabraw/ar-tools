@@ -1,6 +1,6 @@
-# GBP Profile Editor Module — PRD v1.0
+# GBP Profile Editor Module — PRD v1.1
 
-**Status:** **Approved for build (owner, 2026-09-04).** Authoritative for the GBP Profile Editor module. The twelve design decisions from the 2026-09-04 grilling session are folded in below and recorded in the root `decisions.md` ("GBP Profile Editor") and `docs/adr/0004-gbp-profile-edits-never-auto-applied.md`.
+**Status:** **Built (Phases 0–2, shipped dark — PR #1011) + field-scope EXPANDED (owner, 2026-09-09).** Authoritative for the GBP Profile Editor module. The v1.0 body (three fields: description / services / hours) is built and merged to `main`, gated off. The **v1.1 amendments block directly below** expands the editable-field surface per the owner's 2026-09-09 decision; **it is authoritative on scope where it differs from the v1.0 body.** The twelve original design decisions from the 2026-09-04 grilling session are folded in below and recorded in the root `decisions.md` ("GBP Profile Editor"), `docs/adr/0004-gbp-profile-edits-never-auto-applied.md`, and the new `docs/adr/0005-gbp-nap-fields-excluded-from-api-editing.md`.
 
 **Owner ask (2026-09-03):** "Could we use [the GBP API] to update/edit the business description, services, and operating hours? … I would like to build this. Edits can be AI drafted."
 
@@ -13,6 +13,57 @@
 **Sibling code already shipped:** the **`gbp_audit` description-quality upgrade** (PR #1009) — the deferred follow-up that de-idles this module's strategist loop for the description field. `gbp_audit` now emits a `description_quality: {ok, length, issues[]}` finding (`too_short`/`missing_service_keyword`/`missing_location`) alongside the binary completeness check, so a mature client's present-but-thin description is diagnosable and this module's loop can act on it. See §1-Why and §4-Phase-2.
 
 **Preflight tool:** the existing `writer/platform-api/scripts/verify_gbp_api_access.py` proves the connection chain (auth → account → location). Phase 0 extends it with a `locations.get` read + a `locations.patch` round-trip on a designated test listing (see §3).
+
+---
+
+## v1.1 amendments — field-scope expansion (owner, 2026-09-09)
+
+**This block is authoritative on scope where it differs from the v1.0 body below.** The v1.0 module edits three fields (description / services / hours) and is built + merged (PR #1011), shipped dark. The owner has expanded the editable-field surface to **the full Business-Profile editable set except the NAP identity triplet**. The body's "three fields" framing (title, §1, §4 non-goals) is superseded by the tiered scope here.
+
+**Unchanged and now covering every field below:** the **approval model (§5) and ADR 0004** — *nothing is ever auto-applied*, on any field. Every edit — manual, AI-drafted, or strategist-proposed — is applied only on an explicit operator **Apply** click, re-read-and-diff at Apply (Q3), freeze-gated. The connection layer, the `gbp_profile_edits` row/reconciler machinery, and the per-field `updateMask` discipline all extend to the new fields unchanged.
+
+### Editable-field scope (tiered)
+
+Tiers A and B are in scope; Tier C = **media only** (owner picked media; NAP is OUT — see below). Every write field re-verifies its exact v1 shape at build time from the PLATFORM shell (§2 verification note).
+
+| Field | Write path | Shape / gate | AI-drafted? | Extra confirm? | Phase |
+|---|---|---|---|---|---|
+| **`websiteUri`** | `locations.patch` `updateMask=websiteUri` | plain URL string | prefill from the client's known website; human confirms | — | 3a |
+| **`labels`** | `locations.patch` `updateMask=labels` | `List[str]`, ≤10 labels, ≤255 chars each (internal, not customer-facing) | manual | — | 3a |
+| **`specialHours`** (holiday) | `locations.patch` `updateMask=specialHours` | `{specialHourPeriods:[{startDate,endDate,openTime,closeTime,closed}]}` | **never invented** (like regular hours) — manual | — | 3a |
+| **`moreHours`** | `locations.patch` `updateMask=moreHours` | `[{hoursTypeId, periods}]`; **`hoursTypeId` gated to the primary category's valid `moreHoursTypes`** | manual | — | 3a |
+| **`serviceArea`** (SAB) | `locations.patch` `updateMask=serviceArea` | `{businessType, places:{placeInfos:[…]}, regionCode}` | **AI-assist prefill** from `clients.gbp.service_area_places` / `clients.target_cities` (already captured); human confirms | ✅ (SAB coverage change) | 3a |
+| **`openInfo`** | `locations.patch` `updateMask=openInfo` | `{status: OPEN\|CLOSED_TEMPORARILY\|CLOSED_PERMANENTLY, openingDate}` | **manual only — the AI NEVER drafts a closure** | ✅ (any `CLOSED_*` is drastic) | 3a |
+| **`categories`** | `locations.patch` `updateMask=categories` | `{primaryCategory, additionalCategories}`, each `categories/gcid:…`; needs a `categories.list`/`batchGet` lookup (region+language) to resolve valid ids | **AI suggests** from services + keyword research + the existing `gbp_audit` **`category_gaps`** finding; human picks the primary | ✅ (ranking impact; primary-category change) | 3b |
+| **`attributes`** | **separate endpoint** — `locations.getAttributes` / `updateAttributes`, availability via `attributes.list` (**category + region gated**) | enum/bool/url attribute values keyed by `attributeId`; only attributes valid for the listing's category can be set | AI suggests applicable ones from category + business context; human confirms | — | 3b |
+| **`media`** (photos / logo / cover) | **different API — v4** `accounts.locations.media` create/list/delete (**NOT `locations.patch`**) | `MediaItem{mediaFormat: PHOTO, locationAssociation.category: COVER\|PROFILE\|LOGO\|ADDITIONAL\|…}`; upload by `sourceUrl` or the resumable `media:startUpload` flow | **human-supplied** — AI does not fabricate photos (reuse the suite's existing image handling / GBP-Posts image upload path) | ✅ (logo/cover replace) | 3c |
+
+### Explicitly still OUT of scope (owner, 2026-09-09)
+
+- **The NAP identity triplet — `title` (business name), `storefrontAddress`, `phoneNumbers`.** Editing these via the API is the classic trigger for **GBP re-verification or suspension** on an established listing, and a wrong value on core identity is the highest-blast-radius mistake the tool could make. Held deliberately; recorded in **ADR 0005**. Not editable through this tool in v1.1. (If ever revisited, they get their own hardened flow: unverified-listing block, an explicit typed-value confirm, and probably owner-only permission — not a fold-in.)
+- **Review replies / Q&A / product editor / posts** — separate surfaces (Posts is its own module), unchanged from §4.
+
+### Approval-model extensions (ADR 0004 still governs — no auto-apply)
+
+- The **extra "confirm the values you typed" step** that v1.0 puts on hours now also gates **`serviceArea`**, **`openInfo`** (any `CLOSED_*`), **`categories`** (a **primary-category** change specifically), and **`media`** (a logo/cover *replace*). These are the changes where a mistake is either ranking-affecting, trust-affecting, or hard to notice.
+- **The AI never drafts:** operating hours (existing rule), a business **closure** (`openInfo=CLOSED_*`), or a **primary-category downgrade**. It may *suggest* additional categories, service-area places, and applicable attributes; a human always confirms.
+
+### Phasing (supersedes §4 "Phase 3 — Extensions (deferred)")
+
+The v1.0 §4 phasing (Phases 0–2) is **done and merged**. The old §4 "Phase 3" bucket is replaced by:
+
+- **Phase 3a — Tier A, same `locations.patch` endpoint.** `websiteUri`, `labels`, `specialHours`, `moreHours`, `serviceArea`, `openInfo`. Each is a new pure `build_*_patch` builder + validator + a field card in `GbpProfile.tsx`, riding the *existing* `gbp_profile_edits` row, apply job (re-read-and-diff), reconciler, freeze gate, and history unchanged — the widest reach for the least new machinery. `moreHours` needs the primary category's valid `moreHoursTypes` (read from the location); `serviceArea` reuses the captured places for its prefill.
+- **Phase 3b — Tier B, category-gated reads.** `categories` (a `categories.list`/`batchGet` picker so the operator resolves a real `gcid`; consumes the existing `category_gaps` finding — see loop reach below) and `attributes` (the **separate** `getAttributes`/`updateAttributes` endpoints + the category-scoped `attributes.list` to know which are even offered). Both need a live category read *before* the editor can render — the category is the gate.
+- **Phase 3c — Tier C, media (v4 API).** The one field on a **different API surface** — mirror the **GBP Posts** v4/httpx pattern (not the v1 discovery client), reusing the existing image upload/reuse path. Media is a **create/list/delete of media items**, not a field patch, so it does **not** fit the `current→proposed` edit-row cleanly — build it as its own small op (a `gbp_profile_media` handling and, likely, its own storage/reference), not by forcing it into `gbp_profile_edits`. Verify the v4 media resource + upload flow + access grant on PLATFORM first (the media API has its own restrictions distinct from the Business Information grant).
+
+### Strategist-loop reach grows (an honest gain from this expansion)
+
+The v1.0 §1 table noted `category`/`category_gaps` as a `gbp_audit` finding with **no lever** ("❌ out of scope v1"). Phase 3b's category editor **gives it one** — `gbp_audit.category_gaps` now maps to the categories lever, so the loop's *automatic* producer reach genuinely widens (description-quality + hours-missing + **now category gaps**), with the same "stages a draft, never applies" contract. `attributes`, `serviceArea`, `openInfo`, `labels`, `website` have no `gbp_audit` trigger and are on-demand/manual only — no new auto-trigger claimed for them.
+
+### Data-model & error deltas
+
+- **`gbp_profile_edits.field`** widens from `description|hours|services` to also accept `website|labels|special_hours|more_hours|service_area|open_info|categories|attributes`. `proposed_value`/`current_value` stay `jsonb` (each field serializes its own shape). **`media` is NOT a `field` value** — it's the distinct Phase-3c op (§Phase 3c). **A migration IS required:** the live column carries a `check (field in ('description','hours','services'))` constraint (verified 2026-09-09 in `20260904120000_gbp_profile_edits.sql:25`) — Phase 3a/3b must drop/rebuild that CHECK to add the new values (a small `ALTER … DROP CONSTRAINT … ADD CONSTRAINT` migration; not free-text as an earlier draft assumed).
+- **New `ErrorDetails` codes** (extend §8): `invalid_website_url`, `invalid_category` (a `gcid` not resolvable / not allowed for the listing), `invalid_attribute` (an `attributeId` not offered for the category/region), `invalid_more_hours_type`, `invalid_service_area`, `open_info_requires_confirm` (the extra-confirm gate), and for media `media_upload_failed` / `media_api_unavailable` / `invalid_media_category`. All carry the offending value (the #844 lesson).
 
 ---
 
@@ -43,7 +94,7 @@ So the loop's **automatic** half (the Action-Plan producer) fires on **descripti
 
 ### Non-goals (v1)
 
-- **Editing anything other than description, services, and hours.** Categories, attributes, phone numbers, website URL, business name, address, service area, opening date, labels, photos, logo/cover — all separate GBP fields; out of scope for v1 (categories + attributes are the obvious Phase 3 extension since `gbp_audit` also flags category gaps — see §4).
+- **[SUPERSEDED by the v1.1 amendments block above.]** ~~Editing anything other than description, services, and hours.~~ As of v1.1 (owner, 2026-09-09) the scope is the full editable set **except the NAP identity triplet** (business name / address / phone — held, ADR 0005). In scope: website, labels, special & more hours, service area, open info, categories, attributes, and media (photos/logo/cover). See the v1.1 amendments block for the tiered scope, phasing (3a/3b/3c), and approval extensions.
 - **Review replies / Q&A / product editor / posts** — separate surfaces (Posts is its own module).
 - **Auto-apply.** Every edit requires an explicit human Apply in v1 (§5, ADR 0004). AI *drafts*; a human *applies*.
 - **Bulk cross-client / cross-location apply.** v1 is per-client, **per-location, one location at a time** (§4). (A "roll this hours change across N locations" flow is a possible follow-up but is not v1.)

@@ -1,6 +1,6 @@
 # GBP profile edits are never auto-applied (unlike GBP posts)
 
-**Status:** accepted (2026-09-04)
+**Status:** accepted (2026-09-04); **scope extended (2026-09-09)** — the module's field set grew in PRD v1.1 (website, labels, special/more hours, service area, open info, categories, attributes, media). **This "no auto-apply, ever" decision covers every one of those fields**, not just the original three; nothing below is weakened by the expansion (if anything the larger, more ranking-/verification-sensitive surface reinforces it). The NAP identity triplet is excluded from the tool entirely — see `docs/adr/0005-gbp-nap-fields-excluded-from-api-editing.md`.
 
 The GBP Profile Editor module (`docs/modules/gbp-profile-editor-prd-v1_0.md`)
 writes three **structured, persistent** fields of a client's Google Business

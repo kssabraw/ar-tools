@@ -83,10 +83,19 @@ Reuse these — do not re-implement. `writer/platform-api/` unless noted.
 
 ## Don't
 
-- Don't edit any GBP field other than description / services / hours (categories,
-  attributes, phone, etc. are out of v1 — PRD non-goals).
+- **Don't edit the NAP identity triplet** — `title` (business name),
+  `storefrontAddress`, `phoneNumbers`. These are excluded from the tool entirely
+  (ADR 0005 — API edits trigger GBP re-verification/suspension). Never add them to
+  an `updateMask`. (This is the one hard field boundary; as of PRD v1.1 the rest of
+  the editable surface — website, labels, special/more hours, service area, open
+  info, categories, attributes, media — is IN scope, phased 3a/3b/3c.)
 - Don't build the `gbp_audit` **service-gap** check yet (it needs this module's
-  live `serviceItems` read; Phase 3).
+  live `serviceItems` read; deferred).
+- Don't force **media** into the `gbp_profile_edits` field-patch row — it's a v4
+  create/list/delete op with its own storage (Phase 3c; mirror GBP Posts' v4/httpx
+  image path, not the v1 discovery client).
+- Don't let the AI draft **hours**, a **business closure** (`openInfo=CLOSED_*`),
+  or a **primary-category downgrade** (PRD v1.1 approval extensions).
 - Don't wire keyword-research / page-inventory into the services draft (Phase 2.5).
 - Don't expose the module until both `gbp_api_enabled` and `gbp_profile_enabled`
   are on (both default False).

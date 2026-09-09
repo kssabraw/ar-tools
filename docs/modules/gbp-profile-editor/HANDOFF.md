@@ -5,8 +5,13 @@
 > reuse map is the sibling `CLAUDE.md`; the root `/HANDOFF.md` remains the suite
 > handoff. This file is the "start here to build it" doc.
 
-## Status (2026-09-04)
+## Status (2026-09-04; scope expanded 2026-09-09)
 
+- **📌 SCOPE EXPANDED (owner, 2026-09-09) — PRD bumped to v1.1, spec-first.** The
+  editable-field surface grew from three fields to the full set **except the NAP
+  triplet** (name/address/phone — held, ADR 0005). Media (v4 API) is in; NAP is
+  out. Spec is updated (PRD v1.1 amendments block, `decisions.md`, ADR 0005);
+  **code for Phases 3a/3b/3c is NOT yet built** — see the Build plan below.
 - **✅ BUILT + MERGED (Phases 0–2), shipped dark.** PR
   [#1011](https://github.com/kssabraw/ar-tools/pull/1011) (`feat(gbp): GBP
   Profile Editor module (description / services / hours)`) — squash-merged to
@@ -80,10 +85,39 @@ be done from the Claude Code sandbox (`developers.google.com` is egress-blocked)
    silo plans. AI suggests a category per drafted service; operator confirms.
    Wire BOTH the `update_gbp_profile` SerMaStr action (stages a draft) and the
    Action-Plan producer (board task deep-linking into the pre-seeded editor).
-4. **Phase 3 — deferred.** Structured services; a real `service_gap` `gbp_audit`
-   check (rides this module's live-services read); categories/attributes editing;
-   scheduled periodic drift detection; a Client Report line + a strategy-digest
-   `gbp_profile` provider.
+4. **Phase 3 — field-scope expansion (owner, 2026-09-09; PRD v1.1).** The editable
+   surface grew to the full set **except the NAP triplet** (title/address/phone —
+   held, ADR 0005). Build order:
+   - **3a — Tier A, same `locations.patch`:** `websiteUri`, `labels`,
+     `specialHours`, `moreHours`, `serviceArea`, `openInfo`. Each = a pure
+     `build_*_patch` + validator + a field card, riding the *existing*
+     `gbp_profile_edits` row / apply job (re-read-and-diff) / reconciler / freeze
+     gate / history unchanged. `moreHours` needs the primary category's valid
+     `moreHoursTypes`; `serviceArea` prefills from `clients.gbp.service_area_places`
+     / `clients.target_cities`. Extra-confirm gate on `serviceArea` + any
+     `openInfo=CLOSED_*`; AI never drafts a closure.
+   - **3b — Tier B, category-gated:** `categories` (a `categories.list`/`batchGet`
+     picker; **consumes the existing `gbp_audit.category_gaps` finding** → the
+     loop's auto-reach grows; extra-confirm on a primary-category change; AI never
+     drafts a primary-category downgrade) and `attributes` (the **separate**
+     `getAttributes`/`updateAttributes` + the category-scoped `attributes.list`).
+   - **3c — Tier C, media (v4 API):** photos/logo/cover via `accounts.locations.media`
+     — **mirror GBP Posts (v4/httpx + the image upload/reuse path), NOT the v1
+     discovery client**; it's a create/list/delete op, so give it its own storage,
+     don't force it into `gbp_profile_edits`. Verify the media access grant on
+     PLATFORM (distinct from the Business Information grant).
+   - Still deferred: structured services + AI-assigned categories; a real
+     `service_gap` `gbp_audit` check (rides this module's live-services read);
+     scheduled periodic drift detection; a Client Report line + a strategy-digest
+     `gbp_profile` provider.
+   - **`gbp_profile_edits.field` widens** (add `website|labels|special_hours|
+     more_hours|service_area|open_info|categories|attributes`). **Needs a
+     migration** — the live column has `check (field in
+     ('description','hours','services'))` (`20260904120000_gbp_profile_edits.sql:25`,
+     verified 2026-09-09), so 3a/3b drop/rebuild that CHECK. `media` is NOT a
+     `field` value. New `ErrorDetails` codes per PRD §8 + the v1.1 block.
+   - **NAP is out** (ADR 0005). Do not add `title`/`storefrontAddress`/
+     `phoneNumbers` to any `updateMask`.
 
 ## Gotchas (each one has cost real time in this repo)
 
