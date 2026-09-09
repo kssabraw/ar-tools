@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, ClipboardCheck, CheckCircle2, XCircle, ShieldAlert,
-  Pencil, Globe2, Star, ExternalLink, History,
+  Pencil, Globe2, Star, ExternalLink, History, RotateCcw,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { ConnectionBar, RegisterLocations } from '../components/gbp/GbpConnection'
@@ -30,6 +30,7 @@ interface AuditResponse {
 interface ChangeEvent {
   at: string | null; source: 'team' | 'external'; kind: string; field: string | null
   detail: string; who: string | null; edit_source: string | null; status: string | null
+  edit_id: string | null; reverts_edit_id: string | null
 }
 
 const SEV: Record<AuditRec['severity'], { label: string; color: string; bg: string }> = {
@@ -201,14 +202,16 @@ function AuditView({ clientId, locationRowId }: { clientId: string; locationRowI
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 15, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
           <History size={16} /> Change history
         </div>
-        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>Your team's applied edits and the outside / Google changes the monitor caught.</div>
+        <div style={{ fontSize: 12, color: '#94a3b8', marginBottom: 12 }}>Your team's applied edits and the outside / Google changes the monitor caught. Revert an applied change to stage a draft that restores its previous value.</div>
         {historyQ.isLoading ? (
           <div style={{ fontSize: 12.5, color: '#64748b' }}>Loading…</div>
         ) : (historyQ.data ?? []).length === 0 ? (
           <div style={{ fontSize: 12.5, color: '#94a3b8' }}>No recorded changes yet.</div>
         ) : (
           <div style={{ display: 'grid', gap: 2 }}>
-            {(historyQ.data ?? []).map((e, i) => <HistoryRow key={i} e={e} />)}
+            {(historyQ.data ?? []).map((e, i) => (
+              <HistoryRow key={e.edit_id ?? i} e={e} clientId={clientId} locationRowId={locationRowId} />
+            ))}
           </div>
         )}
       </div>
@@ -233,18 +236,45 @@ function RecAction({ target, clientId }: { target: string | null; clientId: stri
   return null
 }
 
-function HistoryRow({ e }: { e: ChangeEvent }) {
+function HistoryRow({ e, clientId, locationRowId }: { e: ChangeEvent; clientId: string; locationRowId: string }) {
+  const qc = useQueryClient()
   const external = e.source === 'external'
   const critical = e.kind === 'suspended' || e.kind === 'access_lost'
-  const icon = critical ? <ShieldAlert size={14} color="#b91c1c" />
+  const isRevert = e.edit_source === 'revert'
+  const icon = isRevert ? <RotateCcw size={14} color={ACCENT} />
+    : critical ? <ShieldAlert size={14} color="#b91c1c" />
     : external ? <Globe2 size={14} color="#b45309" />
     : <Pencil size={14} color={ACCENT} />
+  // A revert can only be staged from an applied change that actually landed live.
+  const canRevert = e.source === 'team' && e.status === 'applied' && !!e.edit_id
+  const revertMut = useMutation({
+    mutationFn: () => api.post(`/clients/${clientId}/gbp/profile/edits/${e.edit_id}/revert`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['gbp-audit-history', clientId, locationRowId] }),
+  })
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '20px 1fr auto', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 12.5 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '20px 1fr auto auto', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9', fontSize: 12.5 }}>
       <span>{icon}</span>
       <span style={{ color: critical ? '#b91c1c' : '#334155' }}>
         {e.detail}{e.who ? ` · ${e.who}` : ''}
       </span>
+      {canRevert ? (
+        revertMut.isSuccess ? (
+          <Link to={`/clients/${clientId}/gbp?tab=profile`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600, color: ACCENT, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+            <Pencil size={11} /> Review & apply
+          </Link>
+        ) : (
+          <button
+            onClick={() => revertMut.mutate()}
+            disabled={revertMut.isPending}
+            title="Stage a draft that restores this field's previous value (you review + apply it)"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, fontWeight: 600, color: revertMut.isError ? '#b91c1c' : '#64748b', background: 'none', border: '1px solid #e2e8f0', borderRadius: 6, padding: '2px 8px', cursor: revertMut.isPending ? 'default' : 'pointer', whiteSpace: 'nowrap' }}
+          >
+            <RotateCcw size={11} /> {revertMut.isPending ? 'Reverting…' : revertMut.isError ? 'Retry revert' : 'Revert'}
+          </button>
+        )
+      ) : (
+        <span />
+      )}
       <span style={{ color: '#94a3b8', fontSize: 11.5, whiteSpace: 'nowrap' }}>{fmtWhen(e.at)}</span>
     </div>
   )

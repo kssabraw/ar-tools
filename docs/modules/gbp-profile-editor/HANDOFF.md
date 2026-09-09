@@ -5,8 +5,31 @@
 > reuse map is the sibling `CLAUDE.md`; the root `/HANDOFF.md` remains the suite
 > handoff. This file is the "start here to build it" doc.
 
-## Status (2026-09-04; scope expanded 2026-09-09; Phases 3a + 3b built 2026-09-09)
+## Status (2026-09-04; scope expanded 2026-09-09; Phases 3a + 3b built 2026-09-09; revert added 2026-09-09)
 
+- **✅ REVERT / change-on-file (2026-09-09) — every applied change can be undone.**
+  The prior value of every field was already on file (each `gbp_profile_edits` row
+  keeps `current_value`, the re-read-and-diff baseline; on a SUCCESSFULLY applied
+  edit it is exactly the value that was live immediately before the patch, since
+  apply aborts into `live_changed` on any drift). Added the **revert action** that
+  turns that on-file value into an undo: `svc.revert_edit(client_id, edit_id, user_id)`
+  stages a NEW `source='revert'` draft whose `proposed_value` is the applied edit's
+  `current_value`, linked back via a new `reverts_edit_id` column
+  (migration `20260909150000_gbp_profile_edit_revert.sql`, **applied live** — adds
+  `'revert'` to the source CHECK + the nullable self-FK). It reuses `create_edit`
+  wholesale (re-snapshots the CURRENT live value as the new baseline + validates the
+  target), so the operator then **reviews and clicks Apply** — nothing is
+  auto-applied (ADR 0004: a revert is still a persistent write; re-read-and-diff
+  protects it exactly like any apply, so a revert of an already-drifted field aborts
+  into `live_changed`). Only an `applied` edit can be reverted (409
+  `revert_not_applied:<status>`); a missing baseline → 409 `revert_no_baseline`.
+  `POST …/gbp/profile/edits/{edit_id}/revert` (require_staff, NOT freeze-gated — the
+  subsequent Apply is the freeze-gated step). Surfaced on the **Audit tab change
+  trail** (`GbpAudit.tsx`): applied team edits get a **Revert** button →
+  "Review & apply" link into the editor; reverts render with a ↺ icon and a
+  "reverted <field> to a prior value" label. `merge_history`/`GbpChangeEvent` now
+  carry `edit_id`/`reverts_edit_id`. Error codes in `errorGuidance.ts`. 5 new unit
+  tests (revert flow + refusals + the merge-history label); 138 module tests pass.
 - **✅ PHASE 3b COMPLETE (2026-09-09) — categories + attributes, shipped dark.**
   `categories` (#1044, migration `20260909130000`) rides `locations.patch` like a
   Tier-A field + a live catalog SEARCH (`GET …/categories/search?q=`), extra-confirm

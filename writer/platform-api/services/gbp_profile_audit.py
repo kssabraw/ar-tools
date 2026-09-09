@@ -298,12 +298,19 @@ def merge_history(edits: list[dict], changes: list[dict], names: dict, limit: in
     events: list[dict] = []
     for e in edits or []:
         at = e.get("applied_at") or e.get("updated_at") or e.get("created_at")
+        src = e.get("source") or "manual"
+        field_label = _FIELD_LABELS.get(e.get("field"), e.get("field") or "profile")
+        if src == "revert":
+            detail = f"reverted {field_label} to a prior value — {e.get('status')}"
+        else:
+            detail = f"{src} edit — {e.get('status')}"
         events.append({
             "at": at, "source": "team", "kind": "edit",
             "field": e.get("field"),
-            "detail": f"{e.get('source') or 'manual'} edit — {e.get('status')}",
+            "detail": detail,
             "who": names.get(e.get("created_by")) if e.get("created_by") else None,
-            "edit_source": e.get("source"), "status": e.get("status"),
+            "edit_source": src, "status": e.get("status"),
+            "edit_id": e.get("id"), "reverts_edit_id": e.get("reverts_edit_id"),
         })
     for c in changes or []:
         kind = c.get("kind")
@@ -333,7 +340,7 @@ def get_history(client_id: str, location_row_id: str, limit: int = 50) -> list[d
     supabase = get_supabase()
     edits = (
         supabase.table("gbp_profile_edits")
-        .select("field, source, status, created_by, applied_at, updated_at, created_at")
+        .select("id, field, source, status, reverts_edit_id, created_by, applied_at, updated_at, created_at")
         .eq("client_id", client_id).eq("location_row_id", location_row_id)
         .in_("status", ["applied", "pending_review", "rejected", "live_changed"])
         .order("updated_at", desc=True).limit(limit).execute().data or []

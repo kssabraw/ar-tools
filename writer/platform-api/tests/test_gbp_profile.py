@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 
 from services import gbp_profile_api as api
 from services import gbp_profile_service as svc
@@ -886,6 +887,49 @@ def test_apply_job_idempotent_when_already_applied(fake, monkeypatch):
     asyncio.run(svc.run_apply_job(job))
     assert fake.tables["async_jobs"] == []  # settle updates the job row; none created here
     assert fake.tables["gbp_profile_edits"][0]["status"] == "applied"
+
+
+# ── revert (stage a draft that restores an applied edit's prior value) ────────
+def _enable(monkeypatch):
+    monkeypatch.setattr(svc.settings, "gbp_api_enabled", True)
+    monkeypatch.setattr(svc.settings, "gbp_profile_enabled", True)
+
+
+def test_revert_stages_draft_from_prior_value(fake, monkeypatch):
+    _enable(monkeypatch)
+    _edit(fake, status="applied", current_value="old", proposed_value="new", field="description")
+    _stub_live(monkeypatch, description="new")  # live now carries the applied value
+    row = asyncio.run(svc.revert_edit("c-1", "e-1", "u-1"))
+    assert row["source"] == "revert"
+    assert row["proposed_value"] == "old"       # restores the prior value
+    assert row["reverts_edit_id"] == "e-1"      # audit link back to the applied edit
+    assert row["status"] == "draft"             # never auto-applied (ADR 0004)
+    assert row["current_value"] == "new"        # re-snapshots the CURRENT live value
+
+
+def test_revert_refuses_non_applied_edit(fake, monkeypatch):
+    _enable(monkeypatch)
+    _edit(fake, status="draft", current_value="old")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(svc.revert_edit("c-1", "e-1", "u-1"))
+    assert exc.value.status_code == 409
+    assert "revert_not_applied" in str(exc.value.detail)
+
+
+def test_revert_refuses_when_no_baseline_on_file(fake, monkeypatch):
+    _enable(monkeypatch)
+    _edit(fake, status="applied", current_value=None)
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(svc.revert_edit("c-1", "e-1", "u-1"))
+    assert exc.value.status_code == 409 and exc.value.detail == "revert_no_baseline"
+
+
+def test_revert_rejects_client_mismatch(fake, monkeypatch):
+    _enable(monkeypatch)
+    _edit(fake, status="applied", current_value="old")
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(svc.revert_edit("c-2", "e-1", "u-1"))
+    assert exc.value.status_code == 404
 
 
 def test_sync_job_resolves_applied(fake, monkeypatch):

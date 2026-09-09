@@ -706,6 +706,27 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Re-open the Business Profile tool and re-register the client’s listing.',
     ],
   },
+  revert_not_applied: {
+    title: 'Only an applied change can be reverted',
+    meaning:
+      'Revert restores the value a change replaced on the live listing, so it ' +
+      'only works on a change that actually landed (status “applied”). A draft, ' +
+      'a rejected edit, or one still pending Google’s review never changed the ' +
+      'listing, so there is nothing to undo.',
+    steps: [
+      'Revert the applied version of this field instead, if there is one.',
+      'To change a draft, edit it directly rather than reverting.',
+    ],
+  },
+  revert_no_baseline: {
+    title: 'No previous value on file',
+    meaning:
+      'This applied change didn’t capture the value it replaced, so there’s no ' +
+      'prior value to restore.',
+    steps: [
+      'Edit the field directly in the Profile editor to set the value you want.',
+    ],
+  },
   invalid_website_url: {
     title: 'That doesn’t look like a valid website URL',
     meaning:

@@ -117,3 +117,19 @@ def test_merge_history_respects_limit():
     changes = [{"kind": "outside_change", "detail": {"fields": ["hours"]},
                 "detected_at": f"2026-09-0{i}T00:00:00Z"} for i in range(1, 6)]
     assert len(a.merge_history([], changes, {}, 3)) == 3
+
+
+def test_merge_history_labels_a_revert_and_carries_edit_ids():
+    edits = [
+        {"id": "e-2", "field": "description", "source": "revert", "status": "applied",
+         "reverts_edit_id": "e-1", "applied_at": "2026-09-05T10:00:00Z",
+         "updated_at": "2026-09-05T10:00:00Z"},
+        {"id": "e-1", "field": "description", "source": "ai", "status": "applied",
+         "applied_at": "2026-09-04T10:00:00Z", "updated_at": "2026-09-04T10:00:00Z"},
+    ]
+    out = a.merge_history(edits, [], {}, 10)
+    rev = out[0]
+    assert rev["detail"] == "reverted description to a prior value — applied"
+    assert rev["edit_id"] == "e-2" and rev["reverts_edit_id"] == "e-1"
+    # An ordinary applied edit carries its id (the Revert target) and no back-link.
+    assert out[1]["edit_id"] == "e-1" and out[1]["reverts_edit_id"] is None
