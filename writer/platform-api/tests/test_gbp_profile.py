@@ -1036,3 +1036,209 @@ def test_monitor_noop_when_disabled(fake, monkeypatch):
     monkeypatch.setattr(mon, "get_supabase", lambda: fake)
     asyncio.run(mon.run_monitor_job({"id": "jm", "payload": {"client_id": "c-1", "location_row_id": "loc-1"}}))
     assert alerts == [] and fake.tables["gbp_profile_snapshots"] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 3a — Tier A fields: pure builders / validators / parsers
+# ═══════════════════════════════════════════════════════════════════════════
+def test_build_website_patch_adds_scheme_and_clears():
+    body, mask = api.build_website_patch("example.com/roofs")
+    assert body == {"websiteUri": "https://example.com/roofs"} and mask == "websiteUri"
+    assert api.build_website_patch("https://x.io")[0] == {"websiteUri": "https://x.io"}
+    # Empty clears the website field (masked, so Google removes it).
+    assert api.build_website_patch("  ")[0] == {"websiteUri": ""}
+
+
+def test_build_website_patch_rejects_junk():
+    for bad in ("not a url", "http://", "ftp://x.com", "just-a-word"):
+        with pytest.raises(ValueError, match="invalid_website_url"):
+            api.build_website_patch(bad)
+
+
+def test_build_labels_patch_dedupes_and_caps():
+    body, mask = api.build_labels_patch([" VIP ", "vip", "Spring 2026", "", "Spring 2026"])
+    assert mask == "labels"
+    assert body["labels"] == ["VIP", "Spring 2026"]  # case-insensitive dedupe, empties dropped
+    assert api.build_labels_patch([])[0] == {"labels": []}  # clears
+    with pytest.raises(ValueError, match="too_many_labels"):
+        api.build_labels_patch([f"l{i}" for i in range(11)])
+    with pytest.raises(ValueError, match="label_too_long"):
+        api.build_labels_patch(["x" * 256])
+
+
+def test_build_special_hours_patch():
+    body, mask = api.build_special_hours_patch([
+        {"start": {"year": 2026, "month": 12, "day": 25}, "closed": True},
+        {"start": {"year": 2026, "month": 12, "day": 31}, "end": {"year": 2026, "month": 12, "day": 31},
+         "open": "10:00", "close": "14:00"},
+    ])
+    assert mask == "specialHours"
+    periods = body["specialHours"]["specialHourPeriods"]
+    assert periods[0]["closed"] is True and periods[0]["startDate"] == {"year": 2026, "month": 12, "day": 25}
+    assert periods[1]["openTime"] == {"hours": 10} and periods[1]["closeTime"] == {"hours": 14}
+    assert api.build_special_hours_patch([])[0] == {"specialHours": {"specialHourPeriods": []}}
+
+
+def test_build_more_hours_patch():
+    body, mask = api.build_more_hours_patch([
+        {"hours_type_id": "kitchen", "regular": [{"day": 0, "periods": [{"open": "11:00", "close": "22:00"}]}]},
+        {"hours_type_id": "delivery", "regular": []},  # no periods → dropped
+        {"hours_type_id": "kitchen", "regular": [{"day": 1, "periods": [{"open": "11:00", "close": "22:00"}]}]},  # dup id → skipped
+    ])
+    assert mask == "moreHours"
+    assert len(body["moreHours"]) == 1
+    mh = body["moreHours"][0]
+    assert mh["hoursTypeId"] == "kitchen"
+    assert mh["periods"][0] == {"openDay": "MONDAY", "openTime": {"hours": 11}, "closeDay": "MONDAY", "closeTime": {"hours": 22}}
+
+
+def test_build_more_hours_patch_validation():
+    with pytest.raises(ValueError, match="more_hours_type_required"):
+        api.build_more_hours_patch([{"regular": [{"day": 0, "periods": [{"open": "9:00", "close": "17:00"}]}]}])
+    with pytest.raises(ValueError, match="invalid_more_hours_type"):
+        api.build_more_hours_patch(
+            [{"hours_type_id": "brunch", "regular": [{"day": 0, "periods": [{"open": "9:00", "close": "11:00"}]}]}],
+            allowed_type_ids={"kitchen"},
+        )
+    assert api.build_more_hours_patch([])[0] == {"moreHours": []}  # clears
+
+
+def test_build_service_area_patch():
+    body, mask = api.build_service_area_patch({
+        "business_type": "CUSTOMER_LOCATION_ONLY",
+        "places": [
+            {"name": "Tampa, FL", "place_id": "ChIJ_tampa"},
+            {"name": "Tampa dup", "place_id": "ChIJ_tampa"},  # dup place_id → skipped
+        ],
+        "region_code": "US",
+    })
+    assert mask == "serviceArea"
+    assert body["serviceArea"]["businessType"] == "CUSTOMER_LOCATION_ONLY"
+    assert body["serviceArea"]["regionCode"] == "US"
+    infos = body["serviceArea"]["places"]["placeInfos"]
+    assert infos == [{"placeId": "ChIJ_tampa", "placeName": "Tampa, FL"}]
+    # Default business type when omitted; empty places clears coverage.
+    assert api.build_service_area_patch({"places": []})[0]["serviceArea"]["businessType"] == "CUSTOMER_AND_BUSINESS_LOCATION"
+
+
+def test_build_service_area_patch_validation():
+    with pytest.raises(ValueError, match="invalid_service_area:business_type"):
+        api.build_service_area_patch({"business_type": "NOPE", "places": []})
+    with pytest.raises(ValueError, match="invalid_service_area:unresolved"):
+        api.build_service_area_patch({"places": [{"name": "Somewhere", "place_id": ""}]})
+
+
+def test_build_open_info_patch():
+    body, mask = api.build_open_info_patch({"status": "open"})  # normalized upper
+    assert mask == "openInfo" and body == {"openInfo": {"status": "OPEN"}}
+    body2, _ = api.build_open_info_patch({"status": "OPEN", "opening_date": {"year": 2026, "month": 10, "day": 1}})
+    assert body2["openInfo"]["openingDate"] == {"year": 2026, "month": 10, "day": 1}
+    for bad in ("", "PAUSED", "closed_maybe"):
+        with pytest.raises(ValueError, match="invalid_open_status"):
+            api.build_open_info_patch({"status": bad})
+
+
+_TIER_A_LOC = {
+    "name": "locations/1",
+    "websiteUri": "https://acme.example",
+    "labels": ["VIP", "  ", "Spring"],
+    "specialHours": {"specialHourPeriods": [
+        {"startDate": {"year": 2026, "month": 12, "day": 25}, "closed": True},
+    ]},
+    "moreHours": [
+        {"hoursTypeId": "kitchen", "periods": [
+            {"openDay": "MONDAY", "openTime": {"hours": 11}, "closeDay": "MONDAY", "closeTime": {"hours": 22}},
+        ]},
+    ],
+    "serviceArea": {"businessType": "CUSTOMER_LOCATION_ONLY", "places": {"placeInfos": [
+        {"placeName": "Tampa, FL", "placeId": "ChIJ_tampa"},
+    ]}, "regionCode": "US"},
+    "openInfo": {"status": "OPEN"},
+}
+
+
+def test_parse_tier_a_fields():
+    assert api.parse_website(_TIER_A_LOC) == "https://acme.example"
+    assert api.parse_labels(_TIER_A_LOC) == ["VIP", "Spring"]  # empties stripped
+    assert api.parse_special_hours(_TIER_A_LOC)[0]["closed"] is True
+    mh = api.parse_more_hours(_TIER_A_LOC)
+    assert mh == [{"hours_type_id": "kitchen", "regular": [
+        {"day": 0, "open_24": False, "periods": [{"open": "11:00", "close": "22:00"}]}]}]
+    sa = api.parse_service_area_full(_TIER_A_LOC)
+    assert sa["business_type"] == "CUSTOMER_LOCATION_ONLY"
+    assert sa["places"] == [{"name": "Tampa, FL", "place_id": "ChIJ_tampa"}]
+    assert sa["region_code"] == "US"
+    assert api.parse_open_info(_TIER_A_LOC) == {"status": "OPEN", "opening_date": None}
+
+
+def test_parse_location_fields_carries_tier_a():
+    parsed = api.parse_location_fields(_TIER_A_LOC)
+    for key in ("website", "labels", "special_hours", "more_hours", "service_area", "open_info"):
+        assert key in parsed
+
+
+def test_parse_more_hours_types():
+    resp = {"categories": [{
+        "name": "categories/gcid:restaurant", "displayName": "Restaurant",
+        "moreHoursTypes": [
+            {"hoursTypeId": "kitchen", "displayName": "Kitchen"},
+            {"hoursTypeId": "delivery", "localizedDisplayName": "Delivery"},
+            {"hoursTypeId": "kitchen", "displayName": "Dup"},  # dedupe
+        ],
+    }]}
+    out = api.parse_more_hours_types(resp, [{"id": "categories/gcid:restaurant", "name": "Restaurant"}])
+    assert out[0]["more_hours_types"] == [
+        {"hours_type_id": "kitchen", "display_name": "Kitchen"},
+        {"hours_type_id": "delivery", "display_name": "Delivery"},
+    ]
+
+
+def test_tier_a_roundtrip_diff_stable():
+    # A parsed value re-applied and re-read is diff-stable (no false live_changed).
+    for field in ("website", "labels", "special_hours", "more_hours", "service_area", "open_info"):
+        parsed = api.parse_location_fields(_TIER_A_LOC)
+        assert not api.diff_field(field, parsed[field], parsed[field])
+    # A real labels change IS detected.
+    assert api.diff_field("labels", ["VIP"], ["VIP", "New"])
+
+
+# ── service-level switch points (pure — no DB / Google) ─────────────────────
+def test_service_build_patch_covers_tier_a():
+    assert svc._build_patch("website", "x.com")[1] == "websiteUri"
+    assert svc._build_patch("labels", ["a"])[1] == "labels"
+    assert svc._build_patch("special_hours", [])[1] == "specialHours"
+    assert svc._build_patch("more_hours", [])[1] == "moreHours"
+    assert svc._build_patch("service_area", {"places": []})[1] == "serviceArea"
+    assert svc._build_patch("open_info", {"status": "OPEN"})[1] == "openInfo"
+
+
+def test_service_build_patch_maps_valueerror_to_400():
+    from fastapi import HTTPException as _H
+    with pytest.raises(_H) as ei:
+        svc._build_patch("open_info", {"status": "NOPE"})
+    assert ei.value.status_code == 400 and "invalid_open_status" in ei.value.detail
+
+
+def test_service_proposed_from_request_new_fields():
+    assert svc._proposed_from_request("website", {"website": "x.com"}) == "x.com"
+    assert svc._proposed_from_request("labels", {"labels": ["a"]}) == ["a"]
+    from fastapi import HTTPException as _H
+    with pytest.raises(_H, match="labels_required"):
+        svc._proposed_from_request("labels", {})
+
+
+def test_service_field_value_reads_tier_a():
+    parsed = api.parse_location_fields(_TIER_A_LOC)
+    assert svc._field_value(parsed, "website") == "https://acme.example"
+    assert svc._field_value(parsed, "open_info") == {"status": "OPEN", "opening_date": None}
+
+
+def test_service_area_diff_is_order_insensitive():
+    a = {"business_type": "CUSTOMER_LOCATION_ONLY", "region_code": "US", "places": [
+        {"name": "Tampa", "place_id": "p1"}, {"name": "Ocala", "place_id": "p2"}]}
+    b = {"business_type": "CUSTOMER_LOCATION_ONLY", "region_code": "US", "places": [
+        {"name": "Ocala", "place_id": "p2"}, {"name": "Tampa", "place_id": "p1"}]}  # reordered
+    assert not api.diff_field("service_area", a, b)
+    c = {**a, "places": a["places"] + [{"name": "New", "place_id": "p3"}]}
+    assert api.diff_field("service_area", a, c)  # a real add IS detected
+    assert api.diff_field("service_area", a, {**a, "business_type": "CUSTOMER_AND_BUSINESS_LOCATION"})

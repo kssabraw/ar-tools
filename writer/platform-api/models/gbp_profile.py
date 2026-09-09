@@ -12,7 +12,11 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-ProfileField = Literal["description", "hours", "services"]
+ProfileField = Literal[
+    "description", "hours", "services",
+    # Phase 3a — Tier A fields (same locations.patch endpoint).
+    "website", "labels", "special_hours", "more_hours", "service_area", "open_info",
+]
 EditSource = Literal["manual", "ai", "strategist"]
 
 
@@ -46,6 +50,30 @@ class HoursValue(BaseModel):
     regular: list[HoursRow] = []
     # None leaves special hours untouched; [] clears them.
     special: Optional[list[SpecialHoursRow]] = None
+
+
+# ── Phase 3a value shapes (more hours / service area / open info) ────────────
+class MoreHoursEntry(BaseModel):
+    """One additional-hours type + its weekly hours (kitchen / delivery / …)."""
+
+    hours_type_id: str
+    regular: list[HoursRow] = []
+
+
+class ServiceAreaPlace(BaseModel):
+    name: str = ""
+    place_id: str = ""  # the Google place id a v1 serviceArea write requires
+
+
+class ServiceAreaValue(BaseModel):
+    business_type: str = ""  # CUSTOMER_AND_BUSINESS_LOCATION | CUSTOMER_LOCATION_ONLY
+    places: list[ServiceAreaPlace] = []
+    region_code: Optional[str] = None
+
+
+class OpenInfoValue(BaseModel):
+    status: str  # OPEN | CLOSED_TEMPORARILY | CLOSED_PERMANENTLY
+    opening_date: Optional[DateInput] = None
 
 
 class ServiceItemInput(BaseModel):
@@ -82,14 +110,21 @@ class ServiceTypesResponse(BaseModel):
 
 # ── requests ────────────────────────────────────────────────────────────────
 class ProfileEditCreateRequest(BaseModel):
-    """Create a manual draft edit for one field. Exactly one of description /
-    hours / services must be supplied, matching ``field``."""
+    """Create a manual draft edit for one field. Exactly one value key must be
+    supplied, matching ``field``."""
 
     location_row_id: UUID
     field: ProfileField
     description: Optional[str] = None
     hours: Optional[HoursValue] = None
     services: Optional[list[ServiceItemInput]] = None
+    # Phase 3a fields.
+    website: Optional[str] = None
+    labels: Optional[list[str]] = None
+    special_hours: Optional[list[SpecialHoursRow]] = None
+    more_hours: Optional[list[MoreHoursEntry]] = None
+    service_area: Optional[ServiceAreaValue] = None
+    open_info: Optional[OpenInfoValue] = None
 
 
 class ProfileEditPatchRequest(BaseModel):
@@ -98,6 +133,12 @@ class ProfileEditPatchRequest(BaseModel):
     description: Optional[str] = None
     hours: Optional[HoursValue] = None
     services: Optional[list[ServiceItemInput]] = None
+    website: Optional[str] = None
+    labels: Optional[list[str]] = None
+    special_hours: Optional[list[SpecialHoursRow]] = None
+    more_hours: Optional[list[MoreHoursEntry]] = None
+    service_area: Optional[ServiceAreaValue] = None
+    open_info: Optional[OpenInfoValue] = None
 
 
 class ProfileDraftRequest(BaseModel):
@@ -105,6 +146,12 @@ class ProfileDraftRequest(BaseModel):
 
     location_row_id: UUID
     field: Literal["description", "services"]
+
+
+class ResolvePlacesRequest(BaseModel):
+    """Resolve typed service-area place names → Google place ids."""
+
+    names: list[str] = []
 
 
 # ── responses ───────────────────────────────────────────────────────────────
@@ -146,7 +193,43 @@ class GbpProfileResponse(BaseModel):
     services: list[ServiceItemInput] = []
     categories: list[Category] = []
     metadata: ProfileMetadata
+    # Phase 3a — Tier A current values.
+    website: str = ""
+    labels: list[str] = []
+    special_hours: list[SpecialHoursRow] = []
+    more_hours: list[MoreHoursEntry] = []
+    service_area: ServiceAreaValue = Field(default_factory=ServiceAreaValue)
+    open_info: Optional[OpenInfoValue] = None
     edits: list[GbpProfileEdit] = []
+
+
+class MoreHoursType(BaseModel):
+    hours_type_id: str
+    display_name: str
+
+
+class MoreHoursTypeCategory(BaseModel):
+    id: str
+    name: str
+    more_hours_types: list[MoreHoursType] = []
+
+
+class MoreHoursTypesResponse(BaseModel):
+    """The additional-hours types the operator can add, grouped by the listing's
+    categories (categories.batchGet, view=FULL — the same call as service types)."""
+
+    categories: list[MoreHoursTypeCategory] = []
+
+
+class ResolvedPlace(BaseModel):
+    query: str
+    name: str
+    place_id: str = ""
+    matched: bool = False
+
+
+class ResolvePlacesResponse(BaseModel):
+    places: list[ResolvedPlace] = []
 
 
 class GbpProfileJob(BaseModel):

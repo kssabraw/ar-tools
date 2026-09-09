@@ -5,13 +5,28 @@
 > reuse map is the sibling `CLAUDE.md`; the root `/HANDOFF.md` remains the suite
 > handoff. This file is the "start here to build it" doc.
 
-## Status (2026-09-04; scope expanded 2026-09-09)
+## Status (2026-09-04; scope expanded 2026-09-09; Phase 3a built 2026-09-09)
 
+- **✅ PHASE 3a BUILT (2026-09-09) — six Tier-A fields shipped dark.** `website`,
+  `labels`, `special_hours`, `more_hours`, `service_area`, `open_info` now ride the
+  existing `gbp_profile_edits` machinery. Migration
+  `20260909120000_gbp_profile_fields_phase3a.sql` (**applied live** — widens the
+  `field` CHECK). Pure `build_*_patch`/`parse_*` in `gbp_profile_api.py` +
+  `parse_more_hours_types`; the service's three switch points + `READ_MASK` +
+  `read_current` extend to all six; two new read endpoints — `GET
+  …/gbp/profile/more-hours-types` (type picker, reuses the batchGet) and `POST
+  …/gbp/profile/resolve-places` (service-area place→placeId via `maps_geocode`); six
+  new `GbpProfile.tsx` cards with the extra-confirm gate on `service_area` +
+  `open_info=CLOSED_*`. New `ErrorDetails` codes. 17 new unit tests (95 total pass).
+  Still gated off (`gbp_profile_enabled`). **`service_area`'s v1 write shape
+  (placeInfos require placeId; regionCode) is the one to re-verify live** at Phase-3a
+  activation — a wrong shape surfaces as a `rejected` edit, never a silent bad write.
 - **📌 SCOPE EXPANDED (owner, 2026-09-09) — PRD bumped to v1.1, spec-first.** The
   editable-field surface grew from three fields to the full set **except the NAP
   triplet** (name/address/phone — held, ADR 0005). Media (v4 API) is in; NAP is
-  out. Spec is updated (PRD v1.1 amendments block, `decisions.md`, ADR 0005);
-  **code for Phases 3a/3b/3c is NOT yet built** — see the Build plan below.
+  out. Spec is updated (PRD v1.1 amendments block, `decisions.md`, ADR 0005). **3a
+  is built (above); 3b (categories/attributes) + 3c (media) are NOT yet built** —
+  see the Build plan below.
 - **✅ BUILT + MERGED (Phases 0–2), shipped dark.** PR
   [#1011](https://github.com/kssabraw/ar-tools/pull/1011) (`feat(gbp): GBP
   Profile Editor module (description / services / hours)`) — squash-merged to
@@ -88,14 +103,18 @@ be done from the Claude Code sandbox (`developers.google.com` is egress-blocked)
 4. **Phase 3 — field-scope expansion (owner, 2026-09-09; PRD v1.1).** The editable
    surface grew to the full set **except the NAP triplet** (title/address/phone —
    held, ADR 0005). Build order:
-   - **3a — Tier A, same `locations.patch`:** `websiteUri`, `labels`,
-     `specialHours`, `moreHours`, `serviceArea`, `openInfo`. Each = a pure
-     `build_*_patch` + validator + a field card, riding the *existing*
+   - **3a — Tier A, same `locations.patch` — ✅ BUILT 2026-09-09.** `website`,
+     `labels`, `special_hours`, `more_hours`, `service_area`, `open_info`. Each is a
+     pure `build_*_patch` + validator + parser + a field card, riding the *existing*
      `gbp_profile_edits` row / apply job (re-read-and-diff) / reconciler / freeze
-     gate / history unchanged. `moreHours` needs the primary category's valid
-     `moreHoursTypes`; `serviceArea` prefills from `clients.gbp.service_area_places`
-     / `clients.target_cities`. Extra-confirm gate on `serviceArea` + any
-     `openInfo=CLOSED_*`; AI never drafts a closure.
+     gate / history unchanged. `more_hours` types come from the same batchGet as the
+     services picker (`parse_more_hours_types` + `GET …/more-hours-types`);
+     `service_area` places are resolved to Google placeIds via `maps_geocode`
+     (`POST …/resolve-places`). Extra-confirm gate on `service_area` + any
+     `open_info=CLOSED_*`; the AI never drafts hours/closures (unchanged). Note:
+     `special_hours` ships as its OWN field (masks only `specialHours`), separate
+     from the `hours` field (which masks only `regularHours` in practice) — no
+     dual-write.
    - **3b — Tier B, category-gated:** `categories` (a `categories.list`/`batchGet`
      picker; **consumes the existing `gbp_audit.category_gaps` finding** → the
      loop's auto-reach grows; extra-confirm on a primary-category change; AI never

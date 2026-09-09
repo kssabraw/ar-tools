@@ -42,13 +42,26 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
-# The v1 readMask for the three editable fields + the context they need
-# (categories to attach free-form services to; metadata for editability/pending
-# state). categories is REQUIRED so the services editor can offer valid ids.
+# The v1 readMask for every editable field + the context they need (categories to
+# attach free-form services to; metadata for editability/pending state). categories
+# is REQUIRED so the services editor can offer valid ids. Phase 3a widened this to
+# also carry websiteUri / labels / moreHours / openInfo (regularHours / specialHours
+# / serviceArea were already here). storefrontAddress feeds the services-matrix
+# prefill (parse_storefront_city).
 READ_MASK = (
     "name,title,profile.description,regularHours,specialHours,serviceItems,"
-    "categories,metadata,serviceArea,storefrontAddress"
+    "categories,metadata,serviceArea,storefrontAddress,websiteUri,labels,"
+    "moreHours,openInfo"
 )
+
+# The editable open/closed states (Phase 3a). CLOSED_PERMANENTLY is drastic and the
+# UI gates it behind an extra confirm; the AI never drafts a closure.
+OPEN_STATUSES = ("OPEN", "CLOSED_TEMPORARILY", "CLOSED_PERMANENTLY")
+# The service-area business types (Phase 3a). Default keeps a storefront visible.
+SERVICE_AREA_BUSINESS_TYPES = ("CUSTOMER_AND_BUSINESS_LOCATION", "CUSTOMER_LOCATION_ONLY")
+# Google caps labels: 10 per listing, 255 chars each.
+LABELS_MAX = 10
+LABEL_MAX_CHARS = 255
 
 # Mon..Sun → the v1 DayOfWeek enum. Our internal hours rows key on 0=Monday.
 DAY_ENUM = ("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", "SUNDAY")
@@ -185,8 +198,22 @@ def build_hours_patch(
     day}, end: {...}, closed: bool, open: 'HH:MM', close: 'HH:MM'}``. ``None``
     leaves specialHours untouched (mask excludes it); ``[]`` clears them. Pure.
     """
+    periods = _weekly_periods(regular_rows)
+    body: dict = {"regularHours": {"periods": periods}}
+    mask = "regularHours"
+    if special_rows is not None:
+        body["specialHours"] = {"specialHourPeriods": _build_special_periods(special_rows)}
+        mask = "regularHours,specialHours"
+    return body, mask
+
+
+def _weekly_periods(rows: list[dict]) -> list[dict]:
+    """Weekly open-day rows → a flat list of v1 TimePeriods (openDay/openTime →
+    closeDay/closeTime). Shared by regularHours and moreHours. ``open_24`` emits a
+    single 00:00→24:00 period; a close ≤ open crosses midnight (closeDay = next
+    day). Pure."""
     periods: list[dict] = []
-    for row in regular_rows or []:
+    for row in rows or []:
         day = int(row.get("day"))
         if not (0 <= day <= 6):
             raise ValueError(f"invalid_day:{day}")
@@ -200,7 +227,6 @@ def build_hours_patch(
         for p in row.get("periods") or []:
             open_t = parse_time_of_day(p.get("open"))
             close_t = parse_time_of_day(p.get("close"))
-            # close ≤ open → the period runs past midnight into the next day.
             close_day = open_day
             if _minutes(close_t) <= _minutes(open_t):
                 close_day = DAY_ENUM[(day + 1) % 7]
@@ -208,13 +234,7 @@ def build_hours_patch(
                 "openDay": open_day, "openTime": open_t,
                 "closeDay": close_day, "closeTime": close_t,
             })
-
-    body: dict = {"regularHours": {"periods": periods}}
-    mask = "regularHours"
-    if special_rows is not None:
-        body["specialHours"] = {"specialHourPeriods": _build_special_periods(special_rows)}
-        mask = "regularHours,specialHours"
-    return body, mask
+    return periods
 
 
 def _build_special_periods(special_rows: list[dict]) -> list[dict]:
@@ -318,6 +338,147 @@ def build_services_patch(
 
 
 # ───────────────────────────────────────────────────────────────────────────
+# Phase 3a — Tier A fields (same locations.patch endpoint, one field per mask):
+# website, labels, special hours, more hours, service area, open info. Every
+# builder is pure + unit-tested and returns (body, updateMask); each raises a
+# ValueError with a deterministic code the service maps to a 400.
+# ───────────────────────────────────────────────────────────────────────────
+_SCHEME_RE = re.compile(r"^https?://", re.IGNORECASE)
+_HOST_RE = re.compile(r"^https?://[^\s/$.?#][^\s]*$", re.IGNORECASE)
+
+
+def build_website_patch(url: str) -> tuple[dict, str]:
+    """(body, updateMask) for the website URL. Empty clears it. A bare host gets
+    an ``https://`` scheme; anything that doesn't look like a URL raises
+    ``invalid_website_url``. Pure."""
+    value = (url or "").strip()
+    if value:
+        if "://" in value:
+            # A scheme is present — it MUST be http(s); a foreign scheme is junk.
+            if not _SCHEME_RE.match(value):
+                raise ValueError("invalid_website_url")
+        else:
+            value = "https://" + value
+        if not _HOST_RE.match(value) or "." not in value.split("//", 1)[-1]:
+            raise ValueError("invalid_website_url")
+    return {"websiteUri": value}, "websiteUri"
+
+
+def build_labels_patch(
+    labels: list[str], max_labels: int = LABELS_MAX, max_len: int = LABEL_MAX_CHARS
+) -> tuple[dict, str]:
+    """(body, updateMask) for the listing's labels (internal organisation tags,
+    not customer-facing). Strips + dedupes (case-insensitive) + drops empties;
+    ``too_many_labels`` / ``label_too_long`` on a breach. ``[]`` clears them. Pure."""
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for raw in labels or []:
+        value = (raw or "").strip() if isinstance(raw, str) else ""
+        if not value:
+            continue
+        if len(value) > max_len:
+            raise ValueError(f"label_too_long:{value[:40]}")
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(value)
+    if len(cleaned) > max_labels:
+        raise ValueError(f"too_many_labels:{len(cleaned)}/{max_labels}")
+    return {"labels": cleaned}, "labels"
+
+
+def build_special_hours_patch(special_rows: list[dict]) -> tuple[dict, str]:
+    """(body, updateMask) for holiday / one-off hours. ``[]`` clears them. Each row
+    is ``{start:{year,month,day}, end?, closed?, open?, close?}`` — same shape the
+    hours field's optional special rows use. Pure."""
+    return {"specialHours": {"specialHourPeriods": _build_special_periods(special_rows or [])}}, "specialHours"
+
+
+def build_more_hours_patch(
+    entries: list[dict], allowed_type_ids: Optional[set[str]] = None
+) -> tuple[dict, str]:
+    """(body, updateMask) for additional hours (kitchen / delivery / senior hours…).
+
+    Each entry is ``{hours_type_id, regular: [weekly rows]}`` — the weekly rows are
+    the same shape as regularHours (``{day, open_24, periods:[{open, close}]}``).
+    ``hours_type_id`` must be one of the primary category's valid MoreHoursType ids
+    (validated against ``allowed_type_ids`` when given → ``invalid_more_hours_type``).
+    An entry that resolves to no periods is dropped (a type with no hours = removed).
+    ``[]`` clears all more-hours. Pure."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for entry in entries or []:
+        tid = (entry.get("hours_type_id") or "").strip()
+        if not tid:
+            raise ValueError("more_hours_type_required")
+        if allowed_type_ids is not None and tid not in allowed_type_ids:
+            raise ValueError(f"invalid_more_hours_type:{tid}")
+        if tid in seen:
+            continue
+        periods = _weekly_periods(entry.get("regular") or [])
+        if not periods:
+            continue  # a more-hours type with no periods means "not set" → omit
+        seen.add(tid)
+        out.append({"hoursTypeId": tid, "periods": periods})
+    return {"moreHours": out}, "moreHours"
+
+
+def build_service_area_patch(value: dict) -> tuple[dict, str]:
+    """(body, updateMask) for a service-area business's coverage.
+
+    ``value`` = ``{business_type, places: [{name, place_id}], region_code?}``.
+    ``business_type`` defaults to CUSTOMER_AND_BUSINESS_LOCATION (keeps a storefront
+    visible). Every place must carry a Google ``place_id`` (resolved up front via
+    maps_geocode) → else ``invalid_service_area``; the display ``name`` rides along.
+    An empty places list clears the coverage. Pure.
+
+    ⚠️ The v1 serviceArea write shape (placeInfos require placeId; regionCode for a
+    CAB business) is one to re-verify live at build time per the module note — a
+    wrong shape surfaces as a ``rejected`` edit, never a silent bad write."""
+    value = value or {}
+    business_type = (value.get("business_type") or "").strip() or SERVICE_AREA_BUSINESS_TYPES[0]
+    if business_type not in SERVICE_AREA_BUSINESS_TYPES:
+        raise ValueError(f"invalid_service_area:business_type:{business_type}")
+    infos: list[dict] = []
+    seen: set[str] = set()
+    for place in value.get("places") or []:
+        pid = (place.get("place_id") or "").strip()
+        name = (place.get("name") or "").strip()
+        if not pid:
+            raise ValueError(f"invalid_service_area:unresolved:{name or '?'}")
+        if pid in seen:
+            continue
+        seen.add(pid)
+        info: dict = {"placeId": pid}
+        if name:
+            info["placeName"] = name
+        infos.append(info)
+    area: dict = {"businessType": business_type, "places": {"placeInfos": infos}}
+    region = (value.get("region_code") or "").strip()
+    if region:
+        area["regionCode"] = region
+    return {"serviceArea": area}, "serviceArea"
+
+
+def build_open_info_patch(value: dict) -> tuple[dict, str]:
+    """(body, updateMask) for the open/closed status. ``value`` =
+    ``{status, opening_date?}``. ``status`` ∈ OPEN_STATUSES (``invalid_open_status``
+    otherwise). ``opening_date`` (a future open date) is optional and only carried
+    when present. Pure. The AI never drafts a closure; the UI gates any CLOSED_*
+    behind an extra confirm."""
+    value = value or {}
+    status = (value.get("status") or "").strip().upper()
+    if status not in OPEN_STATUSES:
+        raise ValueError(f"invalid_open_status:{status or '?'}")
+    open_info: dict = {"status": status}
+    od = value.get("opening_date")
+    if isinstance(od, dict) and od.get("year"):
+        open_info["openingDate"] = _as_date(od)
+    return {"openInfo": open_info}, "openInfo"
+
+
+# ───────────────────────────────────────────────────────────────────────────
 # Read a location's fields into our internal shape. Pure, unit-tested.
 # ───────────────────────────────────────────────────────────────────────────
 def parse_categories(loc: dict) -> list[dict]:
@@ -365,13 +526,12 @@ def parse_storefront_city(loc: dict) -> str:
     return city or state or ""
 
 
-def parse_hours(loc: dict) -> dict:
-    """v1 regularHours/specialHours → our internal ``{regular: [rows], special:
-    [rows]}``. Groups periods by open day into per-day rows (open_24 detected).
-    Pure."""
-    periods = ((loc or {}).get("regularHours") or {}).get("periods") or []
+def _group_periods(periods: list[dict]) -> list[dict]:
+    """A flat v1 TimePeriod list → our internal weekly rows (``{day, open_24,
+    periods:[{open, close}]}``), grouped by open day, open_24 detected. Shared by
+    regularHours and moreHours. Pure."""
     by_day: dict[int, dict] = {}
-    for p in periods:
+    for p in periods or []:
         day = _DAY_INDEX.get(p.get("openDay"))
         if day is None:
             continue
@@ -385,7 +545,14 @@ def parse_hours(loc: dict) -> dict:
             "open": format_time_of_day(open_t),
             "close": format_time_of_day(close_t),
         })
-    regular = [by_day[d] for d in sorted(by_day)]
+    return [by_day[d] for d in sorted(by_day)]
+
+
+def parse_hours(loc: dict) -> dict:
+    """v1 regularHours/specialHours → our internal ``{regular: [rows], special:
+    [rows]}``. Groups periods by open day into per-day rows (open_24 detected).
+    Pure."""
+    regular = _group_periods(((loc or {}).get("regularHours") or {}).get("periods") or [])
     special = []
     for sp in ((loc or {}).get("specialHours") or {}).get("specialHourPeriods") or []:
         entry = {"start": sp.get("startDate"), "end": sp.get("endDate"), "closed": bool(sp.get("closed"))}
@@ -424,6 +591,108 @@ def parse_services(loc: dict) -> list[dict]:
                 "description": structured.get("description") or "",
                 "raw": item,
             })
+    return out
+
+
+# ───────────────────────────────────────────────────────────────────────────
+# Phase 3a — parse the new editable fields into our internal shapes. Pure.
+# ───────────────────────────────────────────────────────────────────────────
+def parse_website(loc: dict) -> str:
+    return ((loc or {}).get("websiteUri") or "").strip()
+
+
+def parse_labels(loc: dict) -> list[str]:
+    return [l.strip() for l in ((loc or {}).get("labels") or []) if isinstance(l, str) and l.strip()]
+
+
+def parse_special_hours(loc: dict) -> list[dict]:
+    """Just the special-hours rows (holiday hours) — the special_hours field's
+    value. Pure."""
+    return parse_hours(loc)["special"]
+
+
+def parse_more_hours(loc: dict) -> list[dict]:
+    """v1 moreHours → our internal ``[{hours_type_id, regular: [weekly rows]}]``
+    (one entry per additional-hours type, its periods grouped by day). Pure."""
+    out: list[dict] = []
+    for mh in (loc or {}).get("moreHours") or []:
+        if not isinstance(mh, dict):
+            continue
+        tid = (mh.get("hoursTypeId") or "").strip()
+        if not tid:
+            continue
+        out.append({"hours_type_id": tid, "regular": _group_periods(mh.get("periods") or [])})
+    return out
+
+
+def parse_service_area_full(loc: dict) -> dict:
+    """v1 serviceArea → our internal editor shape ``{business_type, places:
+    [{name, place_id}], region_code}``. Places keep their placeId so an unedited
+    coverage re-applies unchanged (only newly-added places need resolving). Pure."""
+    area = (loc or {}).get("serviceArea") or {}
+    infos = ((area.get("places") or {}).get("placeInfos")) or []
+    places: list[dict] = []
+    seen: set[str] = set()
+    for pi in infos:
+        if not isinstance(pi, dict):
+            continue
+        pid = (pi.get("placeId") or "").strip()
+        name = (pi.get("placeName") or "").strip()
+        key = pid or name.lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        places.append({"name": name, "place_id": pid})
+    return {
+        "business_type": (area.get("businessType") or "").strip(),
+        "places": places,
+        "region_code": (area.get("regionCode") or "").strip(),
+    }
+
+
+def parse_open_info(loc: dict) -> dict:
+    """v1 openInfo → our internal ``{status, opening_date}`` (opening_date =
+    ``{year, month, day}`` or None). ``can_reopen`` is output-only context. Pure."""
+    info = (loc or {}).get("openInfo") or {}
+    od = info.get("openingDate")
+    return {
+        "status": (info.get("status") or "").strip(),
+        "opening_date": od if isinstance(od, dict) and od.get("year") else None,
+    }
+
+
+def parse_more_hours_types(response: dict, categories: Optional[list[dict]] = None) -> list[dict]:
+    """A v1 ``categories.batchGet`` (view=FULL) response → the more-hours-type
+    picker shape: ``[{id, name, more_hours_types: [{hours_type_id, display_name}]}]``,
+    ordered to match the listing's own category order. Mirrors
+    ``parse_service_types`` (moreHoursTypes ride the SAME batchGet). Pure."""
+    name_by_id = {c["id"]: c["name"] for c in (categories or []) if c.get("id")}
+    order = [c["id"] for c in (categories or []) if c.get("id")]
+    out: list[dict] = []
+    for cat in (response or {}).get("categories") or []:
+        cid = cat.get("name")
+        if not cid:
+            continue
+        types: list[dict] = []
+        seen: set[str] = set()
+        for mt in cat.get("moreHoursTypes") or []:
+            if not isinstance(mt, dict):
+                continue
+            tid = mt.get("hoursTypeId")
+            if not tid or tid in seen:
+                continue
+            seen.add(tid)
+            types.append({
+                "hours_type_id": tid,
+                "display_name": mt.get("displayName") or mt.get("localizedDisplayName") or tid,
+            })
+        if types:
+            out.append({
+                "id": cid,
+                "name": cat.get("displayName") or name_by_id.get(cid) or cid,
+                "more_hours_types": types,
+            })
+    out.sort(key=lambda c: order.index(c["id"]) if c["id"] in order else len(order))
     return out
 
 
@@ -519,14 +788,22 @@ def parse_metadata(loc: dict) -> dict:
 def parse_location_fields(loc: dict) -> dict:
     """Read a v1 Location into everything the editor + drafters need. Pure."""
     loc = loc or {}
+    hours = parse_hours(loc)
     return {
         "name": loc.get("name"),
         "title": loc.get("title"),
         "description": (loc.get("profile") or {}).get("description") or "",
-        "hours": parse_hours(loc),
+        "hours": hours,
         "services": parse_services(loc),
         "categories": parse_categories(loc),
         "metadata": parse_metadata(loc),
+        # Phase 3a — Tier A fields.
+        "website": parse_website(loc),
+        "labels": parse_labels(loc),
+        "special_hours": hours["special"],
+        "more_hours": parse_more_hours(loc),
+        "service_area": parse_service_area_full(loc),
+        "open_info": parse_open_info(loc),
     }
 
 
@@ -660,7 +937,24 @@ def diff_field(field: str, snapshot, live) -> bool:
         # Compare only the editable identity of each service (label + category +
         # description), order-insensitive — a structured passthrough never drifts.
         return _services_key(snapshot) != _services_key(live)
+    if field == "service_area":
+        # Coverage is a SET of places (Google may re-order them on read-back), so
+        # compare business type + region + the place-id set, order-insensitive.
+        return _service_area_key(snapshot) != _service_area_key(live)
     return _norm(snapshot) != _norm(live)
+
+
+def _service_area_key(value) -> tuple:
+    value = value or {}
+    pids = frozenset(
+        (p.get("place_id") or p.get("name") or "").strip().lower()
+        for p in (value.get("places") or [])
+    )
+    return (
+        (value.get("business_type") or "").strip(),
+        (value.get("region_code") or "").strip(),
+        pids,
+    )
 
 
 def _services_key(services) -> set:
@@ -732,6 +1026,16 @@ def classify_profile_error(status_code: Optional[int], message: str = "", field:
                 return "description_contains_phone"
             if "750" in msg or "too long" in msg or "length" in msg:
                 return "description_too_long"
+        if field == "website" or "websiteuri" in msg or "website" in msg:
+            return "invalid_website_url"
+        if field == "labels" or "label" in msg:
+            return "invalid_labels"
+        if field == "more_hours" or "morehours" in msg or "hourstype" in msg:
+            return "invalid_more_hours_type"
+        if field == "service_area" or "servicearea" in msg or "place" in msg:
+            return "invalid_service_area"
+        if field == "open_info" or "openinfo" in msg or "openstatus" in msg:
+            return "invalid_open_status"
         if "category" in msg or "service" in msg:
             return "invalid_service_category"
         return "invalid_edit_content"
