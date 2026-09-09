@@ -1968,8 +1968,25 @@ class Settings(BaseSettings):
     # into the working column). The rework subtasks are work items, so ticking
     # them all re-enters In QA (self-closing loop) — For Revision is in
     # _AUTO_ADVANCE_FROM for that reason.
-    qa_fail_status: str = "for_revision"         # bounce target on a failed review
-    qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks
+    qa_fail_status: str = "for_revision"         # bounce target on a REVISIONS review
+    qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks (revisions only)
+    # Graduated verdicts (owner ruling 2026-09-08): a blocking failure splits by
+    # severity — a CRITICAL check (qa_signals.CRITICAL_CHECK_KEYS: wrong/missing
+    # business name, NAP mismatch, no link-back, no map embed, keyword missing
+    # from the URL) OR ≥ qa_fail_count_threshold blocking fails → "fail"
+    # (escalate to a human; NO self-looping Rework subtasks); any other blocking
+    # failure → "revisions" (the pre-2026-09-08 fail behaviour: Rework subtasks +
+    # self-re-QA loop). The count net (0 disables) catches a mostly-broken
+    # deliverable no single critical check would; the critical set is the primary
+    # signal. "advisory" is a clean pass that only tripped non-blocking
+    # recommendations — ships like pass, badged + logged.
+    qa_fail_count_threshold: int = 4
+    # Where an escalated "fail" lands. Empty = the same lane as revisions
+    # (qa_fail_status); the critical-severity notification + the distinct verdict
+    # badge already set it apart. Point it at another status to give critical
+    # fails their own board lane. Fails never get self-looping Rework subtasks
+    # regardless — that's the "skip the auto-loop" half of the escalation.
+    qa_fail_escalation_status: str = ""
     qa_notify_on_pass: bool = False              # silent clean passes
     qa_citation_sample: int = 3                  # QA_Checklists §Citations sample size
     qa_fetch_timeout_seconds: float = 20.0

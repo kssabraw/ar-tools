@@ -32,9 +32,42 @@ from bs4 import BeautifulSoup
 # Verdicts + rubric routing
 # ---------------------------------------------------------------------------
 PASS = "pass"
+ADVISORY = "advisory"
+REVISIONS = "revisions"
 FAIL = "fail"
 NEEDS_HUMAN = "needs_human"
 SKIPPED = "skipped"
+
+# Graduated verdicts (owner ruling 2026-09-08): instead of a binary
+# pass/fail, blocking failures split by the NATURE of the failure, not the
+# count. A failure of a CRITICAL check — the deliverable is wrong, does harm,
+# or omitted its whole purpose — escalates (``fail``); everything else is a
+# fixable ``revisions`` bounce. ``advisory`` surfaces a shippable deliverable
+# that only tripped non-blocking recommendations (previously folded into
+# ``pass``). Best → worst: pass · advisory · needs_human · revisions · fail.
+#
+# The critical set is static + code-defined (the LLM never sets severity — same
+# discipline as ``blocking``): a wrong/missing business NAME (it's for the wrong
+# client), a NAP mismatch (an inconsistent citation actively hurts local SEO),
+# no LINK-BACK on a link-building deliverable (its one job), no MAP EMBED on a
+# map-embed task, the target keyword MISSING FROM THE URL (fixing a slug is a
+# near-republish, not a tweak), and a high-confidence broken VISUAL RENDER (raw
+# unstyled HTML / a dead stylesheet — the page isn't shippable and needs a human
+# to find out WHY it broke, not a VA ticking a checklist item). Keyed by check
+# ``key`` (see the check builders); a key not in this set is a "standard"
+# blocking check → revisions.
+CRITICAL_CHECK_KEYS: frozenset[str] = frozenset({
+    "client_name", "nap", "link_back", "map_embed", "keyword_in_url",
+    "visual_render",
+})
+
+# Count safety net: even when no single failed check is CRITICAL, a deliverable
+# failing this many blocking checks is almost certainly broken/empty (only the
+# website-page rubric has enough blocking checks to reach it on standard checks
+# alone), so it escalates to ``fail`` too. The nominated critical set is the
+# primary signal; this catches the degenerate "most of the page is missing"
+# case the per-check severity can't. ``0`` disables the net.
+DEFAULT_FAIL_COUNT_THRESHOLD = 4
 
 # Rubric keys. 'skip' = owner ruled QA must not check; 'handoff_sermastr' =
 # out of QA's scope, points at the strategist; 'generic' = no checklist —
@@ -866,19 +899,38 @@ def _name_present(text: Optional[str], name: Optional[str]) -> Optional[bool]:
 # ---------------------------------------------------------------------------
 # Verdict assembly — the deterministic decision (never the LLM's)
 # ---------------------------------------------------------------------------
-def build_verdict(checks: list[dict]) -> dict[str, Any]:
-    """Fold a check list into the review verdict:
-    - any blocking check ok=False        → FAIL (bounce with those items)
-    - else any blocking check ok=None    → NEEDS_HUMAN (fail-open, never guess)
-    - else                               → PASS
-    Advisory checks never change the verdict; failed ones ride along as notes."""
+def build_verdict(
+    checks: list[dict],
+    fail_count_threshold: int = DEFAULT_FAIL_COUNT_THRESHOLD,
+) -> dict[str, Any]:
+    """Fold a check list into a GRADUATED review verdict (owner ruling
+    2026-09-08). Precedence, worst signal first:
+
+    - a CRITICAL blocking check failed, OR ≥ ``fail_count_threshold`` blocking
+      checks failed                        → FAIL (escalate; the deliverable is
+      wrong / broken, a human decides)
+    - else any blocking check failed        → REVISIONS (fixable; VA reworks,
+      the bot re-checks)
+    - else any blocking check ok=None       → NEEDS_HUMAN (fail-open, never guess)
+    - else any advisory (non-blocking) failed → ADVISORY (shippable; recorded)
+    - else                                  → PASS
+
+    Severity is the primary signal; the count net (``fail_count_threshold``,
+    ``0`` disables) only catches a mostly-broken deliverable. Advisory checks
+    never turn a clean deliverable into revisions/fail; they only distinguish
+    ADVISORY from PASS. The ``failed``/``unverified``/``advisories`` lists are
+    always populated (a REVISIONS still has its rework list). Pure."""
     failed = [c for c in checks if c.get("blocking") and c.get("ok") is False]
     unknown = [c for c in checks if c.get("blocking") and c.get("ok") is None]
     advisories = [c for c in checks if not c.get("blocking") and c.get("ok") is False]
+    critical_failed = [c for c in failed if c.get("key") in CRITICAL_CHECK_KEYS]
+    over_count = fail_count_threshold > 0 and len(failed) >= fail_count_threshold
     if failed:
-        verdict = FAIL
+        verdict = FAIL if (critical_failed or over_count) else REVISIONS
     elif unknown:
         verdict = NEEDS_HUMAN
+    elif advisories:
+        verdict = ADVISORY
     else:
         verdict = PASS
     return {
@@ -886,6 +938,10 @@ def build_verdict(checks: list[dict]) -> dict[str, Any]:
         "failed": [c["label"] + (f" — {c['note']}" if c.get("note") else "") for c in failed],
         "unverified": [c["label"] + (f" — {c['note']}" if c.get("note") else "") for c in unknown],
         "advisories": [c["label"] + (f" — {c['note']}" if c.get("note") else "") for c in advisories],
+        # Which failed blocking checks were CRITICAL — lets qa_service explain
+        # WHY a review escalated (vs a count-net fail) without re-deriving it.
+        "critical": [c["label"] + (f" — {c['note']}" if c.get("note") else "") for c in critical_failed],
+        "escalated_by_count": bool(over_count and not critical_failed),
     }
 
 
@@ -1113,11 +1169,19 @@ def narrative_of(rubric: str, verdict: dict[str, Any], urls: list[str]) -> str:
     v = verdict["verdict"]
     if v == PASS:
         head = "QA passed — all blocking checks clear."
+    elif v == ADVISORY:
+        head = (f"QA passed — shippable, with {len(verdict['advisories'])} "
+                "recommendation(s) to consider.")
     elif v == FAIL:
-        head = f"QA failed — {len(verdict['failed'])} blocking issue(s): " + "; ".join(verdict["failed"])
+        why = ("critical: " + "; ".join(verdict["critical"])) if verdict.get("critical") \
+            else f"{len(verdict['failed'])} blocking issue(s)"
+        head = f"QA failed — needs a human ({why}): " + "; ".join(verdict["failed"])
+    elif v == REVISIONS:
+        head = (f"QA needs minor revisions — {len(verdict['failed'])} fixable "
+                "issue(s): " + "; ".join(verdict["failed"]))
     else:
         head = "QA needs a human — could not verify: " + "; ".join(verdict["unverified"])
-    if verdict.get("advisories"):
+    if verdict.get("advisories") and v != ADVISORY:
         head += " Advisory: " + "; ".join(verdict["advisories"])
     if urls:
         head += f" (checked {len(urls)} URL(s))"

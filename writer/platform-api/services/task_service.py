@@ -636,9 +636,17 @@ def _clear_placement_blocker(task_id: str) -> None:
         logger.warning("agent_bus_blocker_resolve_failed", extra={"task_id": task_id, "error": str(exc)})
 
 
-def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) -> dict:
+def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None,
+                bump_revision_count: bool = True) -> dict:
     """Partial-update a task; every meaningful field change writes an activity
-    row; an assignee change notifies. Returns the updated row."""
+    row; an assignee change notifies. Returns the updated row.
+
+    ``bump_revision_count=False`` suppresses the revision-count increment that a
+    transition into the revision status normally makes — used by the QA agent's
+    critical-``fail`` escalation, which lands in For Revision but is a
+    QA-internal escalation, not a client-facing "keeps missing expectations"
+    revision (owner ruling 2026-09-08). A routine ``revisions`` bounce still
+    bumps (default True)."""
     supabase = get_supabase()
     before_rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
     if not before_rows:
@@ -665,7 +673,8 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None) 
     from config import settings
     revision_key = settings.revision_status_key
     if (
-        revision_key
+        bump_revision_count
+        and revision_key
         and changes.get("status_key") == revision_key
         and before.get("status_key") != revision_key
     ):

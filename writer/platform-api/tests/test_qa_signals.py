@@ -115,10 +115,12 @@ def test_gbp_post_all_present_passes():
     assert sig.build_verdict(checks)["verdict"] == sig.PASS
 
 
-def test_gbp_post_missing_emoji_fails():
+def test_gbp_post_missing_emoji_is_revisions():
+    # A missing emoji is a fixable, non-critical blocking failure (1 of 3) →
+    # revisions, not an escalated fail (graduated verdicts 2026-09-08).
     text = "Need roof repair? Call us today for a free estimate!"
     v = sig.build_verdict(sig.check_gbp_post(text, "roof repair"))
-    assert v["verdict"] == sig.FAIL
+    assert v["verdict"] == sig.REVISIONS
     assert any("emoji" in f.lower() for f in v["failed"])
 
 
@@ -183,7 +185,8 @@ def test_press_release_exact_match_anchor_only_fails():
         "123 Main Street Springfield", "555 010 2000", client_domain="acme.com",
     )
     v = sig.build_verdict(checks)
-    assert v["verdict"] == sig.FAIL
+    # An exact-match anchor is a fixable, non-critical failure → revisions.
+    assert v["verdict"] == sig.REVISIONS
     assert any("anchor" in f.lower() for f in v["failed"])
 
 
@@ -229,7 +232,7 @@ def test_map_embed_page_checks_fold_assertion():
 # Blog article markdown checks
 # ---------------------------------------------------------------------------
 _GOOD_BLOG = """
-Intro paragraph answering the question directly.
+Intro paragraph answering the roof repair question directly.
 
 ## Key Takeaways
 
@@ -237,7 +240,7 @@ Intro paragraph answering the question directly.
 
 ## How it works
 
-Some body copy with an [external source](https://example.org/study).
+Some roof repair body copy with an [external source](https://example.org/study).
 
 ## Get started
 
@@ -250,19 +253,22 @@ def test_blog_markdown_good_passes():
     assert v["verdict"] == sig.PASS
 
 
-def test_blog_markdown_missing_takeaways_and_dup_headings_fail():
+def test_blog_markdown_missing_takeaways_and_dup_headings_is_revisions():
+    # Two fixable, non-critical structural misses (2 < the count net) → revisions.
     bad = _GOOD_BLOG.replace("## Key Takeaways", "## How it works")
     v = sig.build_verdict(sig.check_blog_markdown(bad))
-    assert v["verdict"] == sig.FAIL
+    assert v["verdict"] == sig.REVISIONS
     labels = " ".join(v["failed"]).lower()
     assert "key takeaways" in labels and "duplicate" in labels
 
 
-def test_blog_markdown_long_paragraph_is_advisory_not_blocking():
+def test_blog_markdown_long_paragraph_is_advisory_verdict():
+    # All blocking checks clear; only the non-blocking paragraph-length
+    # recommendation trips → the shippable ADVISORY verdict, not a bounce.
     long_para = "word " * 200
     md = _GOOD_BLOG + "\n\n" + long_para
     v = sig.build_verdict(sig.check_blog_markdown(md))
-    assert v["verdict"] == sig.PASS
+    assert v["verdict"] == sig.ADVISORY
     assert any("length" in a.lower() for a in v["advisories"])
 
 
@@ -366,7 +372,10 @@ def test_website_page_missing_meta_title_fails_but_description_is_advisory():
 
 
 def test_website_page_meta_description_optional():
-    # Everything present except the meta description → still passes (advisory).
+    # Everything present except the meta description → the meta description is
+    # advisory (non-blocking), so the page never BOUNCES. With graduated
+    # verdicts (2026-09-08) that surfaces as the shippable ADVISORY verdict
+    # (recommendation logged), not a silent PASS — but it still advances.
     html = """<html><head><title>Practice Management Coral Springs</title></head>
     <body><h1>Practice Management Coral Springs</h1>
     <img src="x.jpg" alt="x"><a href="https://myihbs.com/contact">contact</a>
@@ -376,11 +385,15 @@ def test_website_page_meta_description_optional():
         keyword="practice management coral springs",
         url="https://www.myihbs.com/coral-springs/practice-management-coral-springs/",
     )
-    assert sig.build_verdict(checks)["verdict"] == sig.PASS
+    v = sig.build_verdict(checks)
+    assert v["verdict"] == sig.ADVISORY
+    assert v["verdict"] not in (sig.REVISIONS, sig.FAIL)  # advisory never bounces
+    assert any("meta description" in a.lower() for a in v["advisories"])
 
 
 def test_website_page_client_name_blocking_and_exact():
-    base = ("<html><head><title>Practice Management Coral Springs</title></head>"
+    base = ("<html><head><title>Practice Management Coral Springs</title>"
+            "<meta name='description' content='Practice management in Coral Springs.'></head>"
             "<body><h1>Practice Management Coral Springs</h1>"
             "<img src='x.jpg' alt='x'><a href='https://myihbs.com/contact'>contact</a>"
             "{body}</body></html>")
@@ -450,7 +463,8 @@ def test_website_page_keyword_token_coverage_tolerates_reordered_title():
     # A separator/reordered title + H1 (the keyword's words are all present but
     # not as one verbatim phrase) must PASS — the exact-substring form used to
     # false-fail these. Root-relative internal link + business name present.
-    html = """<html><head><title>Practice Management Services | Coral Springs FL</title></head>
+    html = """<html><head><title>Practice Management Services | Coral Springs FL</title>
+    <meta name="description" content="Practice management in Coral Springs."></head>
     <body><h1>Practice Management Services | Coral Springs</h1>
     <p>Client Co serves Coral Springs.</p>
     <a href="/contact">Contact</a><img src="a.jpg" alt="a"></body></html>"""
@@ -648,13 +662,15 @@ def test_deliverable_subtask_name_matches_and_is_not_work_item():
 # ---------------------------------------------------------------------------
 # Verdict fold
 # ---------------------------------------------------------------------------
-def test_build_verdict_precedence_fail_over_unknown():
+def test_build_verdict_blocking_failure_outranks_unknown():
+    # A blocking failure (here non-critical → revisions) is reported over an
+    # unknown blocking check — the fail/revisions tier always outranks unknown.
     checks = [
         sig._check("a", "A", False),
         sig._check("b", "B", None),
         sig._check("c", "C", True),
     ]
-    assert sig.build_verdict(checks)["verdict"] == sig.FAIL
+    assert sig.build_verdict(checks)["verdict"] == sig.REVISIONS
 
 
 def test_build_verdict_unknown_blocking_is_needs_human():
@@ -662,10 +678,69 @@ def test_build_verdict_unknown_blocking_is_needs_human():
     assert sig.build_verdict(checks)["verdict"] == sig.NEEDS_HUMAN
 
 
-def test_build_verdict_advisory_failures_still_pass():
+# ---------------------------------------------------------------------------
+# Graduated verdicts (owner ruling 2026-09-08): advisory / revisions / fail
+# ---------------------------------------------------------------------------
+def test_build_verdict_advisory_only_is_advisory():
+    # Clean on every blocking check; a non-blocking recommendation tripped.
     checks = [sig._check("a", "A", True), sig._check("b", "B", False, blocking=False)]
     v = sig.build_verdict(checks)
-    assert v["verdict"] == sig.PASS and v["advisories"]
+    assert v["verdict"] == sig.ADVISORY and v["advisories"]
+
+
+def test_build_verdict_all_clean_is_pass():
+    checks = [sig._check("a", "A", True), sig._check("b", "B", True, blocking=False)]
+    assert sig.build_verdict(checks)["verdict"] == sig.PASS
+
+
+def test_build_verdict_noncritical_blocking_failure_is_revisions():
+    checks = [sig._check("cta", "A CTA is present", False), sig._check("emoji", "Emoji", False)]
+    v = sig.build_verdict(checks)
+    assert v["verdict"] == sig.REVISIONS
+    assert not v["critical"] and v["escalated_by_count"] is False
+
+
+def test_build_verdict_critical_check_failure_is_fail():
+    # A single CRITICAL failure escalates even though it's only one check.
+    for key in ("client_name", "nap", "link_back", "map_embed", "keyword_in_url", "visual_render"):
+        checks = [sig._check(key, key.replace("_", " ").title(), False),
+                  sig._check("meta_title", "Meta title present", True)]
+        v = sig.build_verdict(checks)
+        assert v["verdict"] == sig.FAIL, key
+        assert v["critical"] and v["escalated_by_count"] is False
+
+
+def test_build_verdict_count_net_escalates_many_noncritical_fails():
+    # No single check is critical, but 4 blocking fails (>= threshold) → fail.
+    checks = [sig._check(f"k{i}", f"Check {i}", False) for i in range(4)]
+    v = sig.build_verdict(checks)
+    assert v["verdict"] == sig.FAIL and v["escalated_by_count"] is True and not v["critical"]
+    # Below the threshold stays revisions.
+    fewer = [sig._check(f"k{i}", f"Check {i}", False) for i in range(3)]
+    assert sig.build_verdict(fewer)["verdict"] == sig.REVISIONS
+
+
+def test_build_verdict_count_net_can_be_disabled():
+    # threshold=0 disables the count net → many non-critical fails stay revisions.
+    checks = [sig._check(f"k{i}", f"Check {i}", False) for i in range(6)]
+    assert sig.build_verdict(checks, 0)["verdict"] == sig.REVISIONS
+
+
+def test_build_verdict_critical_beats_count_disabled():
+    # A critical failure escalates regardless of the count net being off.
+    checks = [sig._check("nap", "NAP included", False)]
+    assert sig.build_verdict(checks, 0)["verdict"] == sig.FAIL
+
+
+def test_narrative_of_labels_graduated_verdicts():
+    rev = sig.build_verdict([sig._check("cta", "A CTA is present", False)])
+    assert "minor revision" in sig.narrative_of("gbp_posts", rev, []).lower()
+    adv = sig.build_verdict([sig._check("a", "A", True),
+                             sig._check("b", "B", False, blocking=False)])
+    assert "recommendation" in sig.narrative_of("blog_article", adv, []).lower()
+    crit = sig.build_verdict([sig._check("nap", "NAP included", False)])
+    n = sig.narrative_of("citations", crit, []).lower()
+    assert "needs a human" in n and "critical" in n
 
 
 # ---------------------------------------------------------------------------

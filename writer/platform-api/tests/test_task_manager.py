@@ -875,6 +875,50 @@ def test_update_task_assignment_clears_placement_blocker(monkeypatch):
     assert resolved == ["t1"]
 
 
+def _capture_update_task(monkeypatch, before):
+    """Wire update_task onto a fake Supabase that captures the update payload.
+    Returns a one-element list that will hold the payload dict."""
+    captured: list[dict] = []
+
+    class _Q:
+        def __init__(self): self._mode = "select"
+        def select(self, *a, **k): self._mode = "select"; return self
+        def update(self, payload, *a, **k):
+            self._mode = "update"; captured.append(payload); return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def execute(self):
+            return type("R", (), {"data": [dict(before)] if self._mode == "select" else [dict(before)]})()
+
+    monkeypatch.setattr(task_service, "get_supabase",
+                        lambda: type("SB", (), {"table": lambda self, n: _Q()})())
+    monkeypatch.setattr(task_service, "record_activity", lambda *a, **k: None)
+    # The status-change branch fires several board hooks we don't exercise here;
+    # neutralize them so the test isolates the revision_count payload.
+    monkeypatch.setattr(task_service, "get_statuses", lambda *a, **k: [])
+    monkeypatch.setattr(task_service, "auto_tick_subtasks", lambda *a, **k: None)
+    monkeypatch.setattr(task_service, "_clear_placement_blocker", lambda *a, **k: None)
+    return captured
+
+
+def test_update_task_bumps_revision_count_into_for_revision(monkeypatch):
+    """A transition into the revision status bumps revision_count by default
+    (a routine QA `revisions` bounce / a client revision)."""
+    before = {"id": "t1", "status_key": "in_qa", "revision_count": 2, "parent_task_id": None}
+    captured = _capture_update_task(monkeypatch, before)
+    task_service.update_task("t1", {"status_key": "for_revision"})
+    assert captured and captured[0].get("revision_count") == 3
+
+
+def test_update_task_suppresses_revision_count_when_flag_false(monkeypatch):
+    """A critical QA `fail` escalation lands in For Revision but must NOT inflate
+    revision_count (owner ruling 2026-09-08): bump_revision_count=False."""
+    before = {"id": "t1", "status_key": "in_qa", "revision_count": 2, "parent_task_id": None}
+    captured = _capture_update_task(monkeypatch, before)
+    task_service.update_task("t1", {"status_key": "for_revision"}, bump_revision_count=False)
+    assert captured and "revision_count" not in captured[0]
+
+
 def test_complete_task_clears_placement_blocker(monkeypatch):
     """Completing a task closes any open PACE→DORA capacity blocker for it."""
     from services import agent_bus

@@ -339,3 +339,81 @@ lane for rework so the reports (and the team) can see every deliverable being re
   in-app-task-manager PRD, the QA agent manual + plan, and `CLAUDE.md`.
 - **Future Inbox Agent (deferred):** when built, a client "revisions requested" reply routes
   into For Revision (not In Review) with the feedback + a due date.
+
+---
+
+## QA Agent — graduated verdicts (pass / advisory / revisions / fail)
+
+**Status: DECIDED (owner, 2026-09-08). Built same day.**
+
+The QA verdict was effectively binary (`pass` / `fail`, plus `needs_human` fail-open
+and `skipped`). Owner asked for graduating degrees. The axis is **severity (the
+nature of the failure), not count** — count was rejected because it inverts priority
+(three trivial misses would escalate while one catastrophic miss — a wrong client
+name — would look minor).
+
+**The five tiers (best → worst): pass · advisory · needs_human · revisions · fail.**
+
+- **advisory** — clean on every blocking check; only a non-blocking recommendation
+  tripped. **Ships exactly like `pass`** (owner ruling: "ship it, just labeled") —
+  advances when `qa_pass_status` is set, recommendations logged + badged, never a hold.
+  (This surfaces what used to fold silently into `pass`.)
+- **revisions** — a fixable, non-critical blocking failure. The pre-ruling `fail`
+  behaviour: bounce to For Revision + `Rework:` subtasks + the self-closing re-QA loop.
+- **fail** — a **critical** blocking failure OR the count safety net. **Escalates to a
+  human and SKIPS the self-re-QA auto-loop** (owner ruling: "fail escalates / skips
+  auto-loop") — no `Rework:` subtasks, a critical-severity notification; a person
+  decides rather than the bot churning on a broken deliverable.
+
+**Critical check set (owner: "keep as is"):** `client_name`, `nap`, `link_back`,
+`map_embed`, `keyword_in_url` — the deliverable is for the wrong client / carries an
+inconsistent NAP / lacks its backlink / lacks its map embed / needs a slug change
+(a near-republish). Static + code-defined in `qa_signals.CRITICAL_CHECK_KEYS`; the
+LLM never sets severity (same discipline as `blocking`).
+
+**Count safety net (owner: "add the count net"):** even with no critical check, ≥
+`qa_fail_count_threshold` (default 4) blocking fails → `fail`. Severity is the primary
+signal; the net only catches a mostly-broken deliverable (in practice only the
+website-page rubric has enough blocking checks to reach it on standard checks alone).
+`0` disables it.
+
+**Build:** `qa_signals.build_verdict` (verdict logic + `critical`/`escalated_by_count`
+on the result) · `qa_service._apply_outcome` (revisions vs fail routing; critical-
+severity notification for fail) · config `qa_fail_count_threshold` (4) +
+`qa_fail_escalation_status` ("" = the revisions lane) · migration
+`20260908120000_qa_reviews_graduated_verdicts.sql` widens the `qa_reviews.verdict`
+CHECK (applied live) · frontend `QaPanel` badges + `QaReview.verdict` union · SerMaStr
+`_ctx_qa` + the `qa_agent` chat persona include `revisions` in "needs attention".
+Additive + backward-compatible: existing rows still satisfy the constraint; no data
+migration.
+
+**~~OPEN~~ RESOLVED follow-up (owner, 2026-09-08):** `visual_render` (a high-confidence
+broken render — raw unstyled HTML / dead stylesheet) was **added to the critical set** —
+a broken render needs a human to find out WHY it broke, not a VA ticking a rework item, so
+it escalates (`fail`) rather than self-looping (`revisions`). `CRITICAL_CHECK_KEYS` is now
+`client_name`, `nap`, `link_back`, `map_embed`, `keyword_in_url`, `visual_render`. The
+high-confidence gate is unchanged (the qa_visual judge only bounces on high confidence; low
+confidence / capture failure stays fail-open `needs_human`), so only a *confirmed* broken
+render escalates.
+
+
+---
+
+## QA Agent — critical `fail` excluded from revision_count
+
+**Status: DECIDED (owner, 2026-09-08). Built 2026-09-09.**
+
+Follow-up to the graduated-verdicts entry above (which flagged this as an open,
+discretionary behavior note). A critical `fail` lands in the For Revision lane by
+default, and `task_service.update_task` bumps `tasks.revision_count` on any
+transition into the revision status — so a QA-internal critical escalation was
+inflating the client-facing "keeps missing expectations" counter the same as a
+routine `revisions` bounce. Owner: exclude critical fails.
+
+**Build:** `update_task` gained `bump_revision_count: bool = True` (default =
+prior behavior); `qa_service._apply_outcome`'s `fail` branch passes
+`bump_revision_count=False` when moving the task to the escalation status. A
+routine `revisions` bounce still bumps (it's a real redo). Behavior change is
+scoped to the QA critical-fail path only; every other `update_task` caller is
+unchanged. Tests: `test_task_manager.py` (bump fires by default into
+for_revision; suppressed with the flag). No migration, no API change.
