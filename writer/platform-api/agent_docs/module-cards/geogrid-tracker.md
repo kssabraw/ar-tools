@@ -29,6 +29,74 @@ rank fine outside it; SABs (hidden address) have dampened proximity signals by
 design; rankings vary by keyword — one keyword's grid says nothing about
 another's.
 
+**Keyword hygiene — never bake a city into a geo-grid keyword (query-artifact
+trap):** a geo-grid already supplies the geography by *moving the search pin*
+across the grid — that is the entire mechanism. Putting an explicit city in the
+tracked keyword ("Manufactured Home **Navarre OH**" instead of "Manufactured
+Home") double-specifies location and can distort Google's Maps response: Google
+starts **entity-matching on the city token** and, near a competitor whose name
+contains that token, collapses the result to a single best-name-match business —
+so the client drops out of a one-slot pack and the grid paints **false
+"not-ranking" pins, often right at the center** (the business's own location).
+This is NOT a scan failure and NOT a real visibility gap; every pin returned
+data. It is a bad-keyword artifact. It is also **unpredictable** — the same city
+qualifier is harmless on a query with no like-named competitor — which is exactly
+why the rule is "don't do it," not "watch for it."
+
+**Why it happens (the mechanism):** Google Maps ranks on relevance × distance ×
+prominence, and the search **pin's coordinate already supplies the "distance"
+input** — that's how a grid measures geography. A bare category query
+("manufactured home") is *categorical*: Google returns the whole nearby pack
+ranked by those three factors, so the client places on distance + prominence
+like everyone else. Adding a city token changes the **relevance** calculation in
+two compounding ways: (1) it reads as a more *navigational/specific* query than a
+broad category, shrinking the result set Google considers relevant; and (2) the
+token is matched against business **names**, so a competitor whose name contains
+it ("Navarre Village" ⊃ "Navarre") becomes a near-exact **name match** and is
+surfaced as the dominant — sometimes the only — result near its own location.
+That name match *pre-empts the categorical pack*: the client, which would have
+placed on distance + prominence, is never ranked because Google already
+"answered" the query with the name-matching entity. The distortion is anchored to
+that competitor's physical location, so the holes cluster **around it** (here:
+center + west, where "Navarre Village" sits), not uniformly — and because it
+depends on a competitor happening to share the city name, it's keyword-specific.
+Net: the city token adds **zero** locational information the grid doesn't already
+provide (the pin does that), and only the downside risk of this name-match
+collapse.
+
+- **Tell:** "not ranking" pins clustered at/near the center for a *city-in-name*
+  keyword, while the client ranks fine elsewhere and where it does appear it's
+  top-1–3.
+- **Diagnose (before calling it a real gap):** compare the same scan's bare /
+  "near me" sibling keyword at the same pins; if that sibling shows the client
+  in a full pack there, the city qualifier is the cause. (At the pin level the
+  distorted keyword returns a 1-business pack that is the like-named competitor.)
+- **Fix — and *why swap* rather than just discount the bad pins:** remove the
+  city and track the bare service term ("Manufactured Home", "Housing
+  Development", optionally "… Near Me"). Two reasons the fix is a keyword change,
+  not a reading caveat: (1) the pin coordinate already supplies the geography, so
+  dropping the city costs **no** locational precision while removing the exact
+  token that name-matches the competitor and pre-empts the pack — pure upside;
+  and (2) left in place, a city-in-name keyword re-paints the same false center
+  gap on **every future scan** and silently contaminates that keyword's trend
+  line, its SoLV, and its `maps_alerts` (a `coverage_drop` / `area_decline` that
+  is really a query artifact, not lost visibility) — so it must be corrected at
+  the source. The corrected keyword starts a clean series that measures the real
+  category demand the grid exists to capture. (Caveat: the swap begins a fresh
+  history for that keyword, but the old city-qualified series was measuring a
+  distorted signal, so that is a correction, not a loss.)
+
+**Worked example (Lake Sherman Village, Navarre OH, 2026-09-10):** a completed,
+fully-successful scan (all 388 pins returned data, 0 failures). Keyword
+"Manufactured Home Navarre OH" showed the client not-ranking at the center and
+to the west; at those pins DataForSEO returned a single-business pack containing
+only "Navarre Village" (a competitor community physically west of center whose
+name matches "Navarre"). The sibling "Manufactured Home Near Me" — *same scan,
+same center coordinates* — returned full 4–5-business packs with the client at
+**#1** at the exact same center pins. Same run, same place ID, opposite reading:
+the city-in-keyword collapsed the pack. Correct interpretation: the center
+gap was a query artifact, not lost visibility.
+
 **GBP levers — what actually moves the local pack:** relevance (categories,
 business name), distance/proximity, and prominence (review count / velocity /
 quality, links). The GBP **business description is NOT a local-pack ranking
