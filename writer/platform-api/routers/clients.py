@@ -667,8 +667,12 @@ async def update_client(
     repo_changed = body.github_repo is not None and updates.get("github_repo") != existing.get("github_repo")
     if repo_changed or (website_changed and (updates.get("github_repo") or existing.get("github_repo"))):
         github_infer.enqueue_github_infer(str(client_id))
-    # Register a newly-set/changed Search Console property in the live registry.
-    if body.gsc_property is not None and updates.get("gsc_property") != existing.get("gsc_property"):
+    # Register the Search Console property in the live registry whenever the
+    # client form carries one. The helper is idempotent (no-ops when a row
+    # already exists) and cheap (one indexed lookup), so we DON'T change-gate it:
+    # running on every save also self-heals a client whose property was set
+    # before this wiring existed but never got a registry row.
+    if body.gsc_property is not None:
         _ensure_gsc_property_registered(str(client_id), body.gsc_property, auth["user_id"])
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(str(client_id), page_type, url)
