@@ -408,3 +408,66 @@ class TestGateFrontmatter:
         page = {"content": {"frontmatter": {"title": "Pinned"}}, "plan": {"frontmatter": {}}}
         fm = wp.gate_frontmatter(page, self._source())
         assert fm["title"] == "Pinned"
+
+
+@pytest.mark.asyncio
+class TestSectionAndHubPublish:
+    """Section-content pages (FAQ, the Writer-#6 hubs) ship their `sections`
+    frontmatter with an empty markdown body — the body gate must look at sections
+    — and a hub with no narrative yet publishes as a data page rather than being
+    held."""
+
+    SITE = {"id": "w1", "client_id": "c1", "name": "Acme", "github_repo": "kssabraw/site-acme"}
+
+    def _page(self, **over):
+        base = {
+            "id": "p1", "website_id": "w1", "content_source": "composed",
+            "plan": {"frontmatter": {}}, "commit_sha": None, "content_hash": None,
+        }
+        base.update(over)
+        return base
+
+    async def test_a_faq_with_sections_but_no_body_commits(self):
+        page = self._page(
+            route="/faq/", page_type="faq",
+            content={"title": "FAQ", "description": "Ask away.", "body": "",
+                     "frontmatter": {"sections": {"faqItems": [{"q": "Q", "a": "A"}]}}},
+        )
+        client, _ = _supabase_for(page, self.SITE)
+        commit = AsyncMock(return_value={"commit_sha": "sha1", "tree_sha": "t"})
+        with patch.object(wp, "get_supabase", return_value=client), patch.object(
+            wp, "commit_files_to_github", new=commit
+        ), patch.object(wp.website_deploy, "record_deploy"):
+            result = await wp.publish_page(page_id="p1")
+        assert result["published"] is True and result.get("commit_sha") == "sha1"
+        assert "src/content/pages/faq.md" in commit.call_args.kwargs["files"]
+
+    async def test_a_hub_with_no_narrative_publishes_as_a_data_page(self):
+        page = self._page(
+            route="/services/", page_type="services_index",
+            content={"title": "", "body": "", "frontmatter": {}},
+        )
+        client, tables = _supabase_for(page, self.SITE)
+        commit = AsyncMock()
+        with patch.object(wp, "get_supabase", return_value=client), patch.object(
+            wp, "commit_files_to_github", new=commit
+        ):
+            result = await wp.publish_page(page_id="p1")
+        assert result == {"page_id": "p1", "published": True, "data_only": True}
+        commit.assert_not_called()
+        assert tables["website_pages"].update.call_args[0][0]["status"] == "published"
+
+    async def test_a_hub_with_a_narrative_commits_its_file(self):
+        page = self._page(
+            route="/services/", page_type="services_index",
+            content={"title": "Services", "description": "d", "body": "",
+                     "frontmatter": {"sections": {"lede": "All we do."}}},
+        )
+        client, _ = _supabase_for(page, self.SITE)
+        commit = AsyncMock(return_value={"commit_sha": "sha2", "tree_sha": "t"})
+        with patch.object(wp, "get_supabase", return_value=client), patch.object(
+            wp, "commit_files_to_github", new=commit
+        ), patch.object(wp.website_deploy, "record_deploy"):
+            result = await wp.publish_page(page_id="p1")
+        assert result.get("commit_sha") == "sha2"
+        assert "src/content/pages/services.md" in commit.call_args.kwargs["files"]

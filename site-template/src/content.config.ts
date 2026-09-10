@@ -47,6 +47,9 @@ const routed = {
     'service',
     'sub_service',
     'brand_service',
+    // A cost page lives in the services collection at /{service}/cost/ — a
+    // service-shaped document a segment deeper, not a different content shape.
+    'cost',
     'location',
     'neighborhood',
     'local_landing',
@@ -139,6 +142,39 @@ const pillars = defineCollection({
 });
 
 /**
+ * Commercial comparison pages (reference §1.2 / Comparison catalog entry): a
+ * verdict-first "X vs Y" at /compare/{option-a}-vs-{option-b}/. Its own
+ * collection + /compare/ route because it renders as an article, not a service
+ * card page, and its two-segment path is distinct from every other namespace.
+ * The body is a blog Writer run's markdown (content_source="run").
+ */
+const comparisons = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/comparisons' }),
+  schema: z.object({
+    ...common,
+    path: z.string().regex(/^\/compare\/[a-z0-9-]+\/$/, 'comparison path must be /compare/{a}-vs-{b}/'),
+    pageType: z.literal('comparison'),
+  }),
+});
+
+/**
+ * Project / case-study pages (reference §ratified /projects/{slug}/). Real-job
+ * facts only: the structured stats/photos/testimonial/links live in `sections`
+ * (like the FAQ page), the narrative body renders via <Content />, and the
+ * archive at /projects/ lists them. Its own collection + route because it
+ * renders a structured layout unlike a service or a post.
+ */
+const projects = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/projects' }),
+  schema: z.object({
+    ...common,
+    path: z.string().regex(/^\/projects\/[a-z0-9-]+\/$/, 'project path must be /projects/{slug}/'),
+    pageType: z.literal('project'),
+    sections: z.record(z.any()).default({}),
+  }),
+});
+
+/**
  * Core pages (home/about/contact/privacy). Optional: the template renders
  * defaults from site.config.json when an entry is absent, so a site is never
  * broken because the core-pages generator has not run. Entry ids are the
@@ -152,4 +188,4 @@ const pages = defineCollection({
   }),
 });
 
-export const collections = { services, locations, localLanding, posts, pages, pillars };
+export const collections = { services, locations, localLanding, posts, pages, pillars, comparisons, projects };

@@ -61,6 +61,16 @@ RESERVED_ROOT_SLUGS = frozenset(
 # `cost` is reserved at the SECOND level under a service, not at root.
 RESERVED_SECOND_LEVEL = frozenset({"cost"})
 
+# The page types that legitimately OWN an extension reserved slug, so their own
+# page sitting at that slug is not a collision. This mirrors UTILITY_PAGE_TYPES
+# (which owns the utility root slugs) for the ⭐ extension types: the standalone
+# FAQ owns /faq/, and a Cost page owns the second-level /{service}/cost/. A
+# Comparison lives at /compare/{a}-vs-{b}/ (two segments), so the reserved *root*
+# slug "compare" is never claimed by the comparison page itself and needs no
+# exemption here — kept in sync with the template's src/lib/routes.ts.
+RESERVED_ROOT_OWNER = {"faq": "faq"}
+RESERVED_SECOND_LEVEL_OWNER = {"cost": "cost"}
+
 # Root precedence when slugs collide (reference §1.2).
 PRECEDENCE = ("utility", "service", "city", "pillar")
 
@@ -157,6 +167,15 @@ PageType = Literal[
     "local_landing",
     "post",
     "pillar",
+    # ⭐ extension types (reference §1.2 / catalog): a Cost page under a service, a
+    # standalone FAQ hub, and a commercial X-vs-Y Comparison. See NLP_PAGE_TYPES /
+    # RUN_PAGE_TYPES / COMPOSED_PAGE_TYPES for which engine writes each.
+    "cost",
+    "faq",
+    "comparison",
+    # A project / case-study page at /projects/{slug}/ — all real-job facts,
+    # human-supplied, narrated (never invented) by the `project` engine.
+    "project",
 ]
 
 GEO_SITE_TYPES = frozenset({"local_business", "lead_gen"})
@@ -750,6 +769,41 @@ def compose_pillar_notes(pillar: PillarEntry) -> str:
     return "\n".join(lines)
 
 
+def compose_comparison_notes(
+    title: str, option_a: str = "", option_b: str = ""
+) -> str:
+    """The editorial brief for a commercial X-vs-Y comparison page (reference §5.3
+    / the Comparison catalog entry, Writer #1).
+
+    The angle is the ranking asset: a neutral advisor who has installed both,
+    verdict up front, honest trade-offs, and a "choose A if / choose B if" mapped
+    to real reader situations. Steering toward the profitable option loses the
+    trust the page ranks on. The blog brief is keyword-driven and cannot carry
+    this, so it rides on writer notes like every other run page.
+    """
+    a, b = (option_a or "").strip(), (option_b or "").strip()
+    lines = [
+        f"Commercial comparison page: {title}.",
+        "Write as the neutral advisor who has actually worked with both options — "
+        "lead with the verdict in the first two sentences, then give honest "
+        "trade-offs for each side.",
+    ]
+    if a and b:
+        lines.append(f"The two options being compared are: {a} vs {b}.")
+    lines.append(
+        "Must cover: a criteria comparison (as a Markdown table), the real "
+        "pros and cons of each side, a cost comparison, and a clear "
+        "\"choose A if… / choose B if…\" mapped to the reader's situation. "
+        "1,000–1,800 words."
+    )
+    lines.append(
+        "Never steer so hard toward the more profitable option that the page "
+        "loses trust — even-handedness is what makes it rank. The client brand "
+        "guide governs voice."
+    )
+    return "\n".join(lines)
+
+
 def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     """Reserved-slug collisions and two entries claiming one path.
 
@@ -766,12 +820,29 @@ def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
 
         # A utility page legitimately occupies its reserved slug; a
         # service/city/pillar claiming one is an error (precedence: utility wins).
+        # An ⭐ extension type that OWNS a reserved slug (FAQ → /faq/) is exempt too.
         if page.page_type not in UTILITY_PAGE_TYPES:
-            if len(segs) == 1 and segs[0] in RESERVED_ROOT_SLUGS:
+            if (
+                len(segs) == 1
+                and segs[0] in RESERVED_ROOT_SLUGS
+                and RESERVED_ROOT_OWNER.get(segs[0]) != page.page_type
+            ):
                 issues.append(
                     PlanIssue("reserved_slug", True, f'"{page.title}" claims reserved root slug "{segs[0]}"')
                 )
-        if len(segs) == 2 and segs[1] in RESERVED_SECOND_LEVEL:
+        # The second-level reservation protects the SERVICE namespace's
+        # /{service}/cost/. Under a reserved-ROOT namespace (/projects/{slug}/,
+        # /compare/{a}-vs-{b}/) the second segment is that page's own slug, never a
+        # service-cost slot — so a case study or comparison whose slug happens to
+        # be "cost" is not a collision. (A first segment that is itself reserved is
+        # caught by the root check above when a page sits AT it.) The owner (a cost
+        # page) stays exempt.
+        if (
+            len(segs) == 2
+            and segs[1] in RESERVED_SECOND_LEVEL
+            and segs[0] not in RESERVED_ROOT_SLUGS
+            and RESERVED_SECOND_LEVEL_OWNER.get(segs[1]) != page.page_type
+        ):
             issues.append(
                 PlanIssue("reserved_slug", True, f'"{page.title}" claims reserved second-level slug "{segs[1]}"')
             )
@@ -1039,28 +1110,48 @@ def build_plan(
 # else is planned but not generable, and says so rather than being promised.
 # `brand_service` (brand × service) and `hyper_local` (subservice × geo) are
 # service/local-landing variants — the same nlp writer, a different keyword vector.
+#
+# `cost` is a service-page variant on a different keyword vector ("<service>
+# cost") — geo-agnostic like a service page, the city only scopes SERP analysis.
 NLP_PAGE_TYPES = frozenset(
-    {"service", "sub_service", "brand_service", "location", "neighborhood", "local_landing", "hyper_local"}
+    {"service", "sub_service", "brand_service", "location", "neighborhood",
+     "local_landing", "hyper_local", "cost"}
 )
 
-# Written by the core-pages generator (plan §4.6), which is Phase 3 and unbuilt.
+# Written by the core-pages generator (plan §4.6).
 CORE_PAGE_TYPES = frozenset({"home", "about", "contact", "privacy"})
+
+# Everything the core-pages generator writes: the core pages PLUS the standalone
+# FAQ and the two Writer-#6 hubs (Services index, Areas We Serve). All four share
+# the same shape — a national, non-SERP page whose content is `sections`
+# frontmatter written in one LLM call, never a keyword-targeted body — so they go
+# through the same engine (`_generate_core_page` → website_core_pages). The hubs
+# were template-only until Writer #6; they still render their auto-list from data
+# when no narrative has been generated (see website_content.HUB_PAGE_TYPES).
+COMPOSED_PAGE_TYPES = CORE_PAGE_TYPES | {"faq", "services_index", "areas_we_serve"}
 
 # Written by starting a suite blog Writer run and linking it back
 # (content_source="run") — the publish side already assembles the body from the
 # run's `module_outputs` markdown. A post is one cluster child; a pillar is the
 # comprehensive hub. Both are blog_post runs; the editorial angle rides on the
 # run's writer notes, since the blog brief is keyword-driven and globally cached.
-RUN_PAGE_TYPES = frozenset({"post", "pillar"})
+# `comparison` is a run too (see RUN_PAGE_TYPES rationale above).
+RUN_PAGE_TYPES = frozenset({"post", "pillar", "comparison"})
 
 # The page types a human may add one at a time via the "add a page" flow
 # (`build_manual_page`), on top of the deterministic plan. Everything with a
-# real writer: the geo/service NLP types plus one-off blog posts and pillars.
+# real writer: the geo/service NLP types plus one-off blog posts and pillars, and
+# the ⭐ extension types whose reference triggers are human judgements (a Cost
+# page needs price sign-off, a Comparison needs a recognised either/or, a FAQ
+# needs a real question inventory) — so they are added deliberately, not
+# auto-planned in bulk. `cost` and `comparison` are already in NLP/RUN; the
+# standalone FAQ is added explicitly.
 # Deliberately excludes core pages (home/about/contact/privacy — one per site,
-# emitted by the planner) and template-only hubs (rendered from data, nothing to
-# write). A manual page and its auto-generated twin share a URL and merge on the
-# next rebuild, so this set is exactly "writable, not core, not template".
-MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES
+# emitted by the planner) and the Writer-#6 hubs (auto-planned CORE-conditional,
+# one per site — a human never adds a second). A manual page and its
+# auto-generated twin share a URL and merge on the next rebuild, so this set is
+# exactly "writable, not core, not an auto-planned singleton".
+MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES | {"faq", "project"}
 
 # Sort tier for a manually added page, mirroring the planner's own tiers for the
 # same type so a manual page sits where its auto twin would in the Pages list.
@@ -1074,6 +1165,12 @@ _MANUAL_TIERS = {
     "hyper_local": 3,
     "post": 2,
     "pillar": 1,
+    # Extension types: a cost page rides just below its service; comparison,
+    # FAQ and project pages are supporting pages that sit late in the list.
+    "cost": 2,
+    "comparison": 4,
+    "faq": 4,
+    "project": 4,
 }
 
 
@@ -1110,10 +1207,11 @@ def frontmatter_extra(
         if page.page_type == "sub_service" and len(segs) >= 2:
             out["parentService"] = segs[0]
 
-    elif page.page_type == "brand_service":
-        # /{service-slug}/{brand-slug}/ — the SERVICE is the first segment (the
-        # brand is segs[-1]), so teaser/order and the breadcrumb parent come from
-        # segs[0], not segs[-1] as the sibling service branch assumes.
+    elif page.page_type in {"brand_service", "cost"}:
+        # /{service-slug}/{brand-slug}/ and /{service-slug}/cost/ — the SERVICE is
+        # the first segment (the brand / "cost" is segs[-1]), so teaser/order and
+        # the breadcrumb parent come from segs[0], not segs[-1] as the sibling
+        # service branch assumes.
         svc = services.get(segs[0]) if segs else None
         if svc:
             out["teaser"] = svc.teaser
@@ -1190,8 +1288,27 @@ def generation_inputs(
     """
     if page.page_type in TEMPLATE_ONLY_PAGE_TYPES:
         return {"engine": "template", "keyword": None, "location": None}
-    if page.page_type in CORE_PAGE_TYPES:
+    if page.page_type in COMPOSED_PAGE_TYPES:
+        # Core pages, the standalone FAQ, and the two Writer-#6 hubs — all written
+        # by the light core-pages generator (no keyword, no SERP).
         return {"engine": "core_pages", "keyword": None, "location": None}
+
+    if page.page_type == "comparison":
+        # Commercial X-vs-Y: a blog Writer run whose verdict-first, honest-tradeoffs
+        # angle rides on writer notes. Keyword defaults to the "A vs B" title; the
+        # manual-add flow overrides notes with option-aware guidance.
+        return {
+            "engine": "run",
+            "content_type": "blog_post",
+            "keyword": page.title,
+            "location": None,
+            "notes": compose_comparison_notes(page.title),
+        }
+
+    if page.page_type == "project":
+        # A case study: no keyword, no SERP. The human-supplied job facts ride on
+        # the plan row (`plan.project`) and the `project` engine narrates them.
+        return {"engine": "project", "keyword": None, "location": None}
 
     if page.page_type == "post":
         post = (posts or {}).get(page.path)
@@ -1220,6 +1337,14 @@ def generation_inputs(
         return {"engine": None, "keyword": None, "location": None}
 
     segs = _segments(page.path)
+
+    if page.page_type == "cost":
+        # /{service-slug}/cost/ — the service is the FIRST segment (segs[-1] is the
+        # reserved "cost"). Geo-agnostic by SOP service-page logic, so the city
+        # only scopes SERP analysis; the keyword is the cost query "<service> cost".
+        svc = services.get(segs[0]) if segs else None
+        svc_name = svc.name if svc else (_deslug(segs[0]) if segs else "")
+        return {"engine": "nlp", "keyword": f"{svc_name} cost".strip(), "location": primary_city}
 
     if page.page_type in {"service", "sub_service"}:
         svc = services.get(segs[-1]) if segs else None
@@ -1378,6 +1503,7 @@ def build_manual_page(
     post_format: Optional[str] = None,
     angle: Optional[str] = None,
     target_keywords: Optional[Iterable[str]] = None,
+    project: Optional[dict] = None,
     catalog: Optional[Iterable[ServiceEntry]] = None,
     cities: Optional[Iterable[CityEntry]] = None,
     primary_service: Optional[str] = None,
@@ -1412,6 +1538,21 @@ def build_manual_page(
             raise ValueError(code)
         return cleaned
 
+    def _slug(value: Optional[str], code: str) -> str:
+        """Slugify a required free-text value, guaranteeing a non-empty slug.
+
+        A value that is non-empty but carries no ASCII alphanumerics (an emoji or
+        all-punctuation / non-Latin headline like "★★★" or "日本語") slugifies to
+        "", and `_path` then drops the empty segment — yielding a segment-less
+        path ("/projects/", "/") that the collection schema rejects, which fails
+        the WHOLE site build rather than this one page. Reject it here as the same
+        clean 400 a missing value gets, so a bad title can never break a build.
+        """
+        slug = slugify(_need(value, code))
+        if not slug:
+            raise ValueError(code)
+        return slug
+
     def _ensure_service(slug: str, name: str) -> None:
         # A real catalog entry (with teaser/order) wins; a synthetic one only
         # fills a gap so name resolution works for an off-catalog axis.
@@ -1429,14 +1570,14 @@ def build_manual_page(
 
     if page_type == "service":
         name = _need(service, "missing_service")
-        s_slug = slugify(name)
+        s_slug = _slug(name, "missing_service")
         path, page_title = _path(s_slug), title or name
         _ensure_service(s_slug, name)
 
     elif page_type == "sub_service":
         name = _need(service, "missing_service")
         sub = _need(subservice, "missing_subservice")
-        s_slug, sub_slug = slugify(name), slugify(sub)
+        s_slug, sub_slug = _slug(name, "missing_service"), _slug(sub, "missing_subservice")
         path, page_title = _path(s_slug, sub_slug), title or sub
         # Register only the PARENT: a synthetic sub-service (no catalog entry) is
         # deliberately routed through generation_inputs' parent-scoping branch,
@@ -1446,28 +1587,28 @@ def build_manual_page(
     elif page_type == "brand_service":
         name = _need(service, "missing_service")
         brand = _need(subservice, "missing_subservice")
-        s_slug, b_slug = slugify(name), slugify(brand)
+        s_slug, b_slug = _slug(name, "missing_service"), _slug(brand, "missing_subservice")
         path = _path(s_slug, b_slug)
         page_title = title or f"{brand} {name}"
         _ensure_service(s_slug, name)
 
     elif page_type == "location":
         name = _need(city, "missing_city")
-        c_slug = slugify(name)
+        c_slug = _slug(name, "missing_city")
         path, page_title = _path(c_slug), title or name
         _ensure_city(c_slug, name)
 
     elif page_type == "neighborhood":
         city_name = _need(city, "missing_city")
         hood = _need(subservice, "missing_subservice")
-        c_slug, h_slug = slugify(city_name), slugify(hood)
+        c_slug, h_slug = _slug(city_name, "missing_city"), _slug(hood, "missing_subservice")
         path, page_title = _path(c_slug, h_slug), title or hood
         _ensure_city(c_slug, city_name)
 
     elif page_type == "local_landing":
         city_name = _need(city, "missing_city")
         svc_name = _need(service, "missing_service")
-        c_slug, s_slug = slugify(city_name), slugify(svc_name)
+        c_slug, s_slug = _slug(city_name, "missing_city"), _slug(svc_name, "missing_service")
         path = _path(c_slug, s_slug)
         page_title = title or f"{svc_name} in {city_name}"
         _ensure_city(c_slug, city_name)
@@ -1477,7 +1618,7 @@ def build_manual_page(
         city_name = _need(city, "missing_city")
         svc_name = _need(service, "missing_service")
         sub = _need(subservice, "missing_subservice")
-        c_slug, s_slug, sub_slug = slugify(city_name), slugify(svc_name), slugify(sub)
+        c_slug, s_slug, sub_slug = _slug(city_name, "missing_city"), _slug(svc_name, "missing_service"), _slug(sub, "missing_subservice")
         path = _path(c_slug, s_slug, sub_slug)
         # The title carries the keyword vector (generation_inputs reads it), so a
         # composed default names all three axes; the user edits it in the form.
@@ -1490,7 +1631,7 @@ def build_manual_page(
         fmt = (post_format or DEFAULT_POST_FORMAT).strip() or DEFAULT_POST_FORMAT
         if fmt not in POST_FORMATS:
             raise ValueError("invalid_format")
-        slug = slugify(name)
+        slug = _slug(name, "missing_title")
         path, page_title = _path("blog", slug), name
         posts = {
             path: PostEntry(
@@ -1506,9 +1647,42 @@ def build_manual_page(
             )
         }
 
+    elif page_type == "cost":
+        # /{service-slug}/cost/ — a cost page under a service. Needs the service
+        # only; the keyword ("<service> cost") is derived in generation_inputs.
+        name = _need(service, "missing_service")
+        s_slug = _slug(name, "missing_service")
+        path = _path(s_slug, "cost")
+        page_title = title or f"{name} Cost"
+        _ensure_service(s_slug, name)
+
+    elif page_type == "comparison":
+        # /compare/{a}-vs-{b}/ — a commercial X-vs-Y page. Option A is `service`,
+        # option B is `subservice` (the form relabels both). The page is a run, so
+        # no catalog registration is needed; the "A vs B" title carries the topic.
+        cmp_a = _need(service, "missing_service")
+        cmp_b = _need(subservice, "missing_subservice")
+        path = _path("compare", f"{_slug(cmp_a, 'missing_service')}-vs-{_slug(cmp_b, 'missing_subservice')}")
+        page_title = title or f"{cmp_a} vs {cmp_b}"
+
+    elif page_type == "faq":
+        # /faq/ — the standalone FAQ hub, a singleton. No axis required; the title
+        # defaults, and the answers are written by the core-pages generator.
+        path = _path("faq")
+        page_title = title or "Frequently Asked Questions"
+
+    elif page_type == "project":
+        # /projects/{slug}/ — a case study. The headline is the job headline and
+        # the slug; the structured job facts ride on `project` and are stored on
+        # the payload for the `project` engine to narrate (inventing nothing).
+        project = project or {}
+        headline = _need(title or project.get("headline"), "missing_title")
+        slug = _slug(headline, "missing_title")
+        path, page_title = _path("projects", slug), headline
+
     else:  # pillar
         name = _need(title, "missing_title")
-        slug = slugify(name)
+        slug = _slug(name, "missing_title")
         path, page_title = _path(slug), name
         pillars = {path: PillarEntry(slug=slug, title=name)}
 
@@ -1541,6 +1715,19 @@ def build_manual_page(
         payload["notes"] = _manual_post_notes(page_title, fmt, angle, target_keywords)
     elif page_type == "pillar" and (angle or "").strip():
         payload["notes"] = (payload.get("notes") or "") + f"\nEditorial angle: {angle.strip()}"
+    elif page_type == "comparison":
+        # Feed the run the two named options so the brief is option-aware, and fold
+        # in any editorial angle the user added.
+        notes = compose_comparison_notes(
+            page_title, (service or "").strip(), (subservice or "").strip()
+        )
+        if (angle or "").strip():
+            notes += f"\nEditorial angle: {angle.strip()}"
+        payload["notes"] = notes
+    elif page_type == "project":
+        # The structured job facts ride on the plan row so the `project` engine
+        # can narrate them; the headline is normalised onto it.
+        payload["project"] = {**(project or {}), "headline": page_title}
 
     return page, payload
 

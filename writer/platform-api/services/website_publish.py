@@ -423,12 +423,29 @@ async def publish_page(
     if not repo:
         raise PublishError("website_not_provisioned")
 
+    page_type = page.get("page_type") or ""
     source = resolve_source(page)
-    if not (source.body or "").strip():
-        # A planned page nobody has written yet, or one whose page type has no
-        # engine at all (Areas We Serve, a Services index). Committing an empty
-        # file would ship a real URL with nothing on it, which is worse than a
-        # page that is visibly still a draft.
+    fm = gate_frontmatter(page, source)
+    has_body = bool((source.body or "").strip())
+    # A section-content page (home / FAQ / a hub with a Writer-#6 narrative) has an
+    # empty markdown body by design — its content is the `sections` frontmatter, so
+    # that is what "has content to ship" means for it.
+    has_sections = bool(fm.get("sections"))
+
+    if not has_body and not has_sections:
+        if page_type in website_content.HUB_PAGE_TYPES:
+            # A hub whose narrative has not been written yet still renders its
+            # auto-list from data (its route reads the collections directly), so
+            # publish it as a data page — no file committed — rather than holding
+            # it. This preserves the pre-Writer-#6 behaviour when no narrative
+            # exists; a generated narrative takes the normal commit path below.
+            supabase.table("website_pages").update(
+                {"status": "published", "error": None, "published_at": "now()", "updated_at": "now()"}
+            ).eq("id", page_id).execute()
+            return {"page_id": page_id, "published": True, "data_only": True}
+        # A planned page nobody has written yet. Committing an empty file would
+        # ship a real URL with nothing on it, which is worse than a page that is
+        # visibly still a draft.
         return _hold(page, website, "body_not_generated")
 
     # Regulatory guardrail: the website builder auto-publishes with no human in
@@ -442,7 +459,6 @@ async def publish_page(
         client_mode = (supabase.table("clients").select("content_compliance_mode")
                        .eq("id", website["client_id"]).single().execute().data) or {}
         if content_compliance.is_enabled(client_mode):
-            fm = gate_frontmatter(page, source) or {}
             cres = content_compliance.scan_content(
                 fm.get("title") or "", source.body or "",
                 mode=content_compliance.resolve_mode(client_mode))
@@ -450,12 +466,12 @@ async def publish_page(
                 return _hold(page, website, "content_compliance_violation")
 
     verdict = website_content.publish_verdict(
-        page_type=page.get("page_type") or "",
+        page_type=page_type,
         composite=source.composite,
         voice=source.voice,
         facts_consistent=source.facts_consistent,
         writer_schema_version=source.writer_schema_version,
-        frontmatter=gate_frontmatter(page, source),
+        frontmatter=fm,
     )
     forced = False
     if not verdict.allowed:

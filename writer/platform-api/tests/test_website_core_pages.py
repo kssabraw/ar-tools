@@ -189,3 +189,44 @@ class TestPublishRoundTrip:
         assert "We fix roofs fast." in text
         # Core pages are addressed by entry id, so they carry no path/pageType.
         assert "pageType:" not in text
+
+
+class TestExtensionSpecs:
+    """FAQ + the two Writer-#6 hubs are core-pages kinds now: one LLM call,
+    `sections` frontmatter, no SERP. Their content builders are what the hub /
+    FAQ routes read, so a key mismatch ships a page on template defaults."""
+
+    def test_the_new_kinds_are_generated(self):
+        for k in ("faq", "services_index", "areas_we_serve"):
+            assert k in cp.GENERATED_KINDS
+
+    def test_faq_builds_qa_items_the_route_reads(self):
+        content = cp._faq_content({
+            "title": "FAQ", "description": "d", "intro": "Ask away.",
+            "faqs": [{"question": "Do you haul debris?", "answer": "Yes, all of it."}],
+        })
+        assert content["body"] == ""
+        sections = content["frontmatter"]["sections"]
+        assert sections["intro"] == "Ask away."
+        assert sections["faqItems"] == [{"q": "Do you haul debris?", "a": "Yes, all of it."}]
+
+    def test_faq_with_no_items_is_an_error_not_a_bare_page(self):
+        with pytest.raises(cp.CorePageError, match="faq_items_empty"):
+            cp._faq_content({"title": "FAQ", "faqs": []})
+
+    def test_services_index_sections_match_the_hub_route(self):
+        content = cp._SPECS["services_index"].to_content(
+            {"title": "Services", "description": "d", "lede": "All we do.", "authority": "We're good."}
+        )
+        assert content["body"] == ""
+        assert content["frontmatter"]["sections"] == {"lede": "All we do.", "authority": "We're good."}
+
+    def test_areas_we_serve_sections_match_the_hub_route(self):
+        content = cp._SPECS["areas_we_serve"].to_content(
+            {"title": "Areas", "description": "d", "lede": "Where we work.", "coverageNotes": "50 miles."}
+        )
+        assert content["frontmatter"]["sections"] == {"lede": "Where we work.", "coverageNotes": "50 miles."}
+
+    def test_a_hub_with_no_usable_sections_is_an_error(self):
+        with pytest.raises(cp.CorePageError, match="hub_sections_empty"):
+            cp._SPECS["services_index"].to_content({"title": "Services", "description": "d"})

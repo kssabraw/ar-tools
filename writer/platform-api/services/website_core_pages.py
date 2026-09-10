@@ -51,7 +51,13 @@ class CorePageError(Exception):
 
 # The kinds this writer produces. `privacy` is intentionally absent — the
 # template renders it deterministically, so it never reaches here.
-GENERATED_KINDS = frozenset({"home", "about", "contact"})
+#
+# Beyond the core pages this also writes three national, non-SERP pages that
+# share the same shape (one LLM call, `sections` frontmatter, no keyword target):
+# the standalone FAQ and the two Writer-#6 hubs (Services index, Areas We Serve).
+GENERATED_KINDS = frozenset(
+    {"home", "about", "contact", "faq", "services_index", "areas_we_serve"}
+)
 
 
 # --------------------------------------------------------------------------
@@ -251,6 +257,74 @@ def _contact_user(facts: dict, brand_text: str, icp_text: str) -> str:
     )
 
 
+# --- ⭐ extension + Writer-#6 pages --------------------------------------------
+
+_FAQ_SYSTEM = (
+    "You write the standalone FAQ page for a business's website — the canonical "
+    "Q&A source. Return real questions a customer would actually ask this "
+    "business, each with a direct answer whose FIRST sentence resolves the "
+    "question; any reassurance or positioning comes only after. Answers are "
+    "40–80 words, self-contained, and could be lifted onto another page and still "
+    "make sense. Voice: a helpful desk expert. Ground the questions in the real "
+    "services and areas given.\n\n" + _NO_FACTS
+)
+
+_SERVICES_INDEX_SYSTEM = (
+    "You write the copy for a business's Services index — the capability "
+    "overview. Frame it as 'everything we do and why we're good at it': breadth "
+    "and mastery, authoritative and confident. You return a short lede and a "
+    "company-level authority paragraph; the list of services is rendered "
+    "separately from real data, so do NOT list the services yourself.\n\n"
+    + _NO_FACTS
+)
+
+_AREAS_WE_SERVE_SYSTEM = (
+    "You write the copy for a business's Areas We Serve page — the coverage "
+    "narrative, 'where you'll find us and how far we'll come.' You return a short "
+    "lede and a coverage-notes paragraph (travel/coverage rules, how far out they "
+    "go). The list of areas is rendered separately from real data, so do NOT list "
+    "the cities yourself; this is an archive/coverage page, not a ranking play.\n\n"
+    + _NO_FACTS
+)
+
+
+def _faq_user(facts: dict, brand_text: str, icp_text: str) -> str:
+    ctx = _context_block(brand_text, icp_text)
+    return (
+        f"BUSINESS FACTS:\n{_facts_block(facts)}\n\n"
+        + (ctx + "\n\n" if ctx else "")
+        + "Write the FAQ page. Return an SEO title, a meta description, a one- to "
+        "two-sentence intro line, and 8–15 question/answer pairs a real customer "
+        "of THIS business would ask (about the services, areas, process, "
+        "scheduling, what to expect). Each answer 40–80 words, first sentence "
+        "resolving the question."
+    )
+
+
+def _services_index_user(facts: dict, brand_text: str, icp_text: str) -> str:
+    ctx = _context_block(brand_text, icp_text)
+    return (
+        f"BUSINESS FACTS:\n{_facts_block(facts)}\n\n"
+        + (ctx + "\n\n" if ctx else "")
+        + "Write the Services index copy. Return an SEO title, a meta description, "
+        "a lede (what the company does, framed as breadth + expertise), and an "
+        "authority paragraph (why they're good at this range of work). ~150–250 "
+        "words across the two. Do not enumerate the services — they list below."
+    )
+
+
+def _areas_we_serve_user(facts: dict, brand_text: str, icp_text: str) -> str:
+    ctx = _context_block(brand_text, icp_text)
+    return (
+        f"BUSINESS FACTS:\n{_facts_block(facts)}\n\n"
+        + (ctx + "\n\n" if ctx else "")
+        + "Write the Areas We Serve copy. Return an SEO title, a meta description, "
+        "a lede (a brand-framed coverage statement), and a coverage-notes "
+        "paragraph (how far they travel, any coverage rules). Keep it short — this "
+        "is a coverage/archive page. Do not list the cities — they list below."
+    )
+
+
 # --------------------------------------------------------------------------
 # Tool schemas
 # --------------------------------------------------------------------------
@@ -301,6 +375,54 @@ _CONTACT_SCHEMA = {
         "description": {"type": "string", "description": "The intro line, one to two sentences."},
     },
     "required": ["title", "description"],
+    "additionalProperties": False,
+}
+
+_FAQ_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "SEO <title>, ≤60 chars."},
+        "description": {"type": "string", "description": "Meta description, ≤160 chars."},
+        "intro": {"type": "string", "description": "One- to two-sentence intro line above the FAQs."},
+        "faqs": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "answer": {"type": "string", "description": "40–80 words, first sentence resolves it."},
+                },
+                "required": ["question", "answer"],
+                "additionalProperties": False,
+            },
+            "description": "8–15 question/answer pairs.",
+        },
+    },
+    "required": ["title", "description", "faqs"],
+    "additionalProperties": False,
+}
+
+_SERVICES_INDEX_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "SEO <title>, ≤60 chars."},
+        "description": {"type": "string", "description": "Meta description, ≤160 chars."},
+        "lede": {"type": "string", "description": "What the company does — breadth + expertise framing."},
+        "authority": {"type": "string", "description": "Why they're good across this range of work."},
+    },
+    "required": ["title", "description", "lede"],
+    "additionalProperties": False,
+}
+
+_AREAS_WE_SERVE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string", "description": "SEO <title>, ≤60 chars."},
+        "description": {"type": "string", "description": "Meta description, ≤160 chars."},
+        "lede": {"type": "string", "description": "A brand-framed coverage statement."},
+        "coverageNotes": {"type": "string", "description": "Travel / coverage rules, how far out they go."},
+    },
+    "required": ["title", "description", "lede"],
     "additionalProperties": False,
 }
 
@@ -358,10 +480,64 @@ def _contact_content(out: dict) -> dict:
     }
 
 
+def _faq_content(out: dict) -> dict:
+    items = []
+    for raw in out.get("faqs") or []:
+        q = (raw.get("question") or "").strip()
+        a = (raw.get("answer") or "").strip()
+        if q and a:
+            items.append({"q": q, "a": a})
+    if not items:
+        # The FAQ page's whole reason to exist is its Q&A; an empty list means the
+        # call produced nothing usable, and shipping it would leave a bare /faq/.
+        raise CorePageError("faq_items_empty")
+    intro = (out.get("intro") or "").strip()
+    sections: dict[str, Any] = {"faqItems": items}
+    if intro:
+        sections["intro"] = intro
+    return {
+        "title": (out.get("title") or "").strip(),
+        "description": (out.get("description") or "").strip(),
+        "body": "",
+        "frontmatter": {"sections": sections},
+    }
+
+
+def _sections_content(*keys: str):
+    """Build a `to_content` for a hub page whose content is a few `sections`
+    string fields (lede + one other), rendered by the hub's own route."""
+
+    def _build(out: dict) -> dict:
+        sections = {
+            k: (out.get(k) or "").strip()
+            for k in keys
+            if isinstance(out.get(k), str) and (out.get(k) or "").strip()
+        }
+        if not sections:
+            raise CorePageError("hub_sections_empty")
+        return {
+            "title": (out.get("title") or "").strip(),
+            "description": (out.get("description") or "").strip(),
+            "body": "",
+            "frontmatter": {"sections": sections},
+        }
+
+    return _build
+
+
 _SPECS: dict[str, _Spec] = {
     "home": _Spec(_HOME_SYSTEM, _home_user, _HOME_SCHEMA, _home_content),
     "about": _Spec(_ABOUT_SYSTEM, _about_user, _ABOUT_SCHEMA, _about_content),
     "contact": _Spec(_CONTACT_SYSTEM, _contact_user, _CONTACT_SCHEMA, _contact_content),
+    "faq": _Spec(_FAQ_SYSTEM, _faq_user, _FAQ_SCHEMA, _faq_content),
+    "services_index": _Spec(
+        _SERVICES_INDEX_SYSTEM, _services_index_user, _SERVICES_INDEX_SCHEMA,
+        _sections_content("lede", "authority"),
+    ),
+    "areas_we_serve": _Spec(
+        _AREAS_WE_SERVE_SYSTEM, _areas_we_serve_user, _AREAS_WE_SERVE_SCHEMA,
+        _sections_content("lede", "coverageNotes"),
+    ),
 }
 
 

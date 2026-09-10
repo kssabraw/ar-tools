@@ -274,3 +274,94 @@ class TestPillarContent:
             writer_schema_version="1.9-degraded",
         )
         assert not v.allowed and not v.overridable
+
+
+class TestExtensionContentLayer:
+    """Where the ⭐ extension types + Writer-#6 hubs live in the repo, how they're
+    addressed, and how the publish gate judges them."""
+
+    def test_collections(self):
+        assert wc.collection_of("cost") == "services"
+        assert wc.collection_of("comparison") == "comparisons"
+        assert wc.collection_of("faq") == "pages"
+        assert wc.collection_of("services_index") == "pages"
+        assert wc.collection_of("areas_we_serve") == "pages"
+
+    def test_id_addressed_entries_use_stable_ids(self):
+        assert wc.entry_id("/faq/", "faq") == "faq"
+        assert wc.entry_id("/services/", "services_index") == "services"
+        assert wc.entry_id("/areas-we-serve/", "areas_we_serve") == "areas-we-serve"
+
+    def test_id_addressed_entries_omit_path_and_page_type(self):
+        # A `pages`-collection entry has neither field in its schema.
+        for pt in ("faq", "services_index", "areas_we_serve"):
+            fm = wc.frontmatter_for(path="/faq/", page_type=pt, title="X")
+            assert "path" not in fm and "pageType" not in fm
+
+    def test_a_cost_page_is_a_routed_entry_with_path_and_type(self):
+        fm = wc.frontmatter_for(path="/tree-removal/cost/", page_type="cost", title="Cost")
+        assert fm["path"] == "/tree-removal/cost/"
+        assert fm["pageType"] == "cost"
+
+    def test_a_comparison_is_a_routed_entry(self):
+        fm = wc.frontmatter_for(path="/compare/a-vs-b/", page_type="comparison", title="A vs B")
+        assert fm["pageType"] == "comparison"
+
+    def test_a_cost_page_is_serp_scored_like_a_service(self):
+        assert wc.publish_verdict(page_type="cost", composite=None).reason == "seo_composite_missing"
+        assert not wc.publish_verdict(page_type="cost", composite=71.0).allowed
+        assert wc.publish_verdict(page_type="cost", composite=80.0).allowed
+
+    def test_a_comparison_gates_like_a_pillar(self):
+        assert wc.publish_verdict(
+            page_type="comparison", frontmatter={"title": "A vs B", "description": "d"}
+        ).allowed
+        # A degraded run and a critical voice finding are both non-overridable.
+        assert wc.publish_verdict(
+            page_type="comparison", writer_schema_version="1.9-degraded",
+            frontmatter={"title": "t", "description": "d"},
+        ).reason == "writer_run_degraded"
+        v = wc.publish_verdict(
+            page_type="comparison",
+            voice={"violations": [{"severity": "critical"}]},
+            frontmatter={"title": "t", "description": "d"},
+        )
+        assert v.reason == "voice_violation" and not v.overridable
+        assert not wc.publish_verdict(page_type="comparison", frontmatter={"title": "t"}).allowed
+
+    def test_hubs_left_template_only_and_joined_the_section_set(self):
+        assert "services_index" not in wc.TEMPLATE_ONLY_PAGE_TYPES
+        assert "areas_we_serve" not in wc.TEMPLATE_ONLY_PAGE_TYPES
+        assert wc.HUB_PAGE_TYPES == {"services_index", "areas_we_serve"}
+        for pt in ("home", "faq", "services_index", "areas_we_serve"):
+            assert pt in wc.SECTION_CONTENT_PAGE_TYPES
+
+    def test_a_hub_with_a_body_now_produces_a_file(self):
+        # Writer #6: the hubs are no longer skipped by files_for_pages.
+        files = wc.files_for_pages(
+            [{"route": "/services/", "page_type": "services_index", "title": "Services",
+              "body": "", "extra": {"sections": {"lede": "All we do."}}}]
+        )
+        [(path, data)] = files.items()
+        assert path == "src/content/pages/services.md"
+        assert "All we do." in data.decode("utf-8")
+
+
+class TestProjectContentLayer:
+    def test_project_collection_and_routing(self):
+        assert wc.collection_of("project") == "projects"
+        assert "project" in wc.SECTION_CONTENT_PAGE_TYPES
+
+    def test_a_project_is_a_routed_entry(self):
+        fm = wc.frontmatter_for(path="/projects/oak-removal/", page_type="project", title="Oak")
+        assert fm["path"] == "/projects/oak-removal/"
+        assert fm["pageType"] == "project"
+
+    def test_a_project_gate_is_advisory_not_serp_scored(self):
+        # Not in the geo composite set — a project ships without a score; a
+        # critical voice finding is overridable (like a core page).
+        assert wc.publish_verdict(page_type="project").allowed
+        v = wc.publish_verdict(page_type="project", voice={"violations": [{"severity": "critical"}]})
+        assert v.reason == "voice_violation" and v.overridable is True
+        # Facts inconsistency is never overridable, anywhere.
+        assert not wc.publish_verdict(page_type="project", facts_consistent=False).overridable

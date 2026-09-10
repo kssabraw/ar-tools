@@ -162,6 +162,9 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
             page=page, website=website, supabase=supabase, inputs=inputs, user_id=user_id
         )
 
+    if engine == "project":
+        return await _generate_project_page(page=page, website=website, supabase=supabase)
+
     if engine != "nlp":
         # A page type whose engine name we recognise but haven't built. None is
         # left today, but saying so is the point: a page sitting at draft forever
@@ -413,6 +416,49 @@ async def _generate_run_page(
         extra={"page_id": page_id, "run_id": run_id, "page_type": page.get("page_type")},
     )
     return {"page_id": page_id, "generated": True, "run_id": run_id}
+
+
+async def _generate_project_page(*, page: dict, website: dict, supabase) -> dict:
+    """A case-study / project page: structured human-supplied job facts, with the
+    challenge/work/outcome prose narrated (never invented) by one LLM call.
+
+    No brand-context gate — a case study is real facts the operator entered, so it
+    must ship even for a client with no voice guide; the narration simply matches
+    the guide when one is present and is best-effort besides.
+    """
+    from services import website_projects
+
+    page_id = page["id"]
+    project = (page.get("plan") or {}).get("project") or {}
+
+    client = (
+        supabase.table("clients").select("*").eq("id", website["client_id"]).limit(1).execute()
+    ).data
+    client_row = client[0] if client else None
+
+    narrated = await website_projects.narrate_project(project, client_row)
+    content = website_projects.build_project_content(project, narrated)
+
+    supabase.table("website_pages").update(
+        {
+            "content_source": "composed",
+            "source_id": None,
+            "content": content,
+            "title": content.get("title") or page.get("title") or "",
+            "status": "draft",
+            "error": None,
+            # A fresh body invalidates any prior commit, so the next publish must
+            # not short-circuit on an unchanged hash.
+            "content_hash": None,
+            "updated_at": "now()",
+        }
+    ).eq("id", page_id).execute()
+
+    logger.info(
+        "website_generate.project_written",
+        extra={"page_id": page_id, "narrated": bool(narrated)},
+    )
+    return {"page_id": page_id, "generated": True}
 
 
 async def run_generate_job(job: dict) -> None:

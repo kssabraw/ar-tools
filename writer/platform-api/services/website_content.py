@@ -34,6 +34,9 @@ _COLLECTION_BY_PAGE_TYPE: dict[str, str] = {
     "service": "services",
     "sub_service": "services",
     "brand_service": "services",
+    # A cost page is a service-shaped document at /{service}/cost/ — same
+    # collection as its parent service, a deeper path.
+    "cost": "services",
     "location": "locations",
     "neighborhood": "locations",
     "local_landing": "local-landing",
@@ -43,10 +46,22 @@ _COLLECTION_BY_PAGE_TYPE: dict[str, str] = {
     # (/{topic-slug}/) and render differently from a flat blog post, so the
     # template needs to tell them apart by collection, not just page type.
     "pillar": "pillars",
+    # Commercial X-vs-Y comparison — its own collection + /compare/ route, since
+    # it renders as a verdict-first article, unlike a service or a post.
+    "comparison": "comparisons",
+    # A project / case study — its own collection + /projects/ route; renders
+    # structured job facts (stats/photos/testimonial) around the narrative body.
+    "project": "projects",
     "home": "pages",
     "about": "pages",
     "contact": "pages",
     "privacy": "pages",
+    # The standalone FAQ and the two Writer-#6 hubs are id-addressed `pages`
+    # entries (like the core pages) — their content is `sections` frontmatter the
+    # template's own route renders, not a routed markdown body.
+    "faq": "pages",
+    "services_index": "pages",
+    "areas_we_serve": "pages",
 }
 
 # Core pages are addressed by a fixed entry id, because the template looks them
@@ -58,17 +73,43 @@ _CORE_ENTRY_ID = {
     "privacy": "privacy-policy",
 }
 
+# The full set of `pages`-collection entries addressed by id rather than by a
+# routed path: the core pages, plus the standalone FAQ and the two Writer-#6 hubs.
+# The template renders each from its own static route via `corePage(<id>)`, so
+# these entries carry no `path`/`pageType` frontmatter (the `pages` collection
+# schema has neither). The ids match what those routes look up:
+# `corePage('faq')`, `corePage('services')`, `corePage('areas-we-serve')`.
+_ID_ADDRESSED_ENTRY_ID = {
+    **_CORE_ENTRY_ID,
+    "faq": "faq",
+    "services_index": "services",
+    "areas_we_serve": "areas-we-serve",
+}
+
 # Page types the house template renders from data alone — no generated body, so
 # nothing to gate and nothing to write.
 #
-# The two hubs joined this set once the template gained routes for them
-# (src/pages/services/ and src/pages/areas-we-serve/). Their *listing* is
-# deterministic — the same published-pages query that drives structural linking
-# — so no writer is needed for the page to exist and be correct. Writer #6 adds
-# the narrative copy that brings them up to the reference's depth band; until
-# then they ship as accurate hubs rather than as pages that cannot ship at all.
-TEMPLATE_ONLY_PAGE_TYPES = frozenset(
-    {"blog_archive", "sitemap", "services_index", "areas_we_serve"}
+# Blog archive and the HTML sitemap render entirely from the published set and
+# have no narrative at all. The two hubs used to be here too, but Writer #6 gives
+# them optional narrative copy (a `pages` entry keyed by id), so they moved out —
+# see HUB_PAGE_TYPES for how they still render from data when no narrative exists.
+TEMPLATE_ONLY_PAGE_TYPES = frozenset({"blog_archive", "sitemap"})
+
+# The Writer-#6 hubs. Their auto-list always renders from the published set (the
+# hub's own route reads the collections directly, so the URL works regardless),
+# and Writer #6 adds an optional narrative committed as a `pages` entry. Because
+# the narrative is optional, a hub with none is published as a data page (no file
+# committed) rather than held — publish handles this grace, distinct from a
+# genuinely ungenerated service page.
+HUB_PAGE_TYPES = frozenset({"services_index", "areas_we_serve"})
+
+# Page types whose content is `sections` frontmatter written by the core-pages
+# generator, with an empty markdown body. For these, an empty body is normal and
+# a populated `sections` map is the real content — so the publish body gate must
+# look at `sections`, not just the body. (home renders its hero/section copy from
+# `sections`; faq renders its Q&A; the two hubs render their lede/authority.)
+SECTION_CONTENT_PAGE_TYPES = frozenset(
+    {"home", "faq", "services_index", "areas_we_serve", "project"}
 )
 
 # Planned page types the house template cannot render at all — no route, no
@@ -118,8 +159,8 @@ def entry_id(path: str, page_type: str) -> str:
     unique site-wide by construction (the blog is flat and its slugs are checked
     against the reserved list), so the last segment is safe.
     """
-    if page_type in _CORE_ENTRY_ID:
-        return _CORE_ENTRY_ID[page_type]
+    if page_type in _ID_ADDRESSED_ENTRY_ID:
+        return _ID_ADDRESSED_ENTRY_ID[page_type]
     segs = [s for s in (path or "").split("/") if s]
     if not segs:
         return "index"
@@ -224,7 +265,7 @@ def frontmatter_for(
     Core pages are exempt — they are addressed by entry id, not by path.
     """
     fields: dict[str, Any] = {"title": title, "description": description}
-    if page_type not in _CORE_ENTRY_ID:
+    if page_type not in _ID_ADDRESSED_ENTRY_ID:
         if not path.startswith("/") or not path.endswith("/"):
             raise ContentError("path_must_have_leading_and_trailing_slash")
         fields["path"] = path
@@ -256,7 +297,7 @@ def publish_verdict(
     voice = voice or {}
     critical = [v for v in (voice.get("violations") or []) if v.get("severity") == "critical"]
 
-    if page_type in {"service", "sub_service", "location", "neighborhood", "local_landing", "hyper_local"}:
+    if page_type in {"service", "sub_service", "cost", "location", "neighborhood", "local_landing", "hyper_local"}:
         if composite is None:
             # Scoring failed or never ran. "Unscored" and "scored 81" must not
             # mean the same thing at the gate — the rest of this module holds
@@ -293,11 +334,12 @@ def publish_verdict(
             return PublishVerdict(False, "news_post_missing_review_date", overridable=False)
         return PublishVerdict(True)
 
-    if page_type == "pillar":
-        # A pillar is the same class of thing as a post — informational content
-        # that auto-publishes with no human in the loop — so it carries the same
-        # non-overridable machine gate. It has no `format`/`reviewBy` (a pillar
-        # is never a news reaction); it must carry title + description.
+    if page_type in {"pillar", "comparison"}:
+        # A pillar and a commercial comparison are both blog Writer runs —
+        # informational content that ships with no human reading it first — so
+        # they carry the same non-overridable machine gate as a post. Neither has
+        # a `format`/`reviewBy` (never a news reaction); both must carry
+        # title + description.
         if critical:
             return PublishVerdict(False, "voice_violation", overridable=False)
         if writer_schema_version and "-degraded" in writer_schema_version:
