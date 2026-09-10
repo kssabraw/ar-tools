@@ -71,6 +71,18 @@ export async function allLocalLandings(): Promise<CollectionEntry<'localLanding'
   return live(await getCollection('localLanding')).sort((a, b) => a.id.localeCompare(b.id));
 }
 
+/**
+ * Commercial X-vs-Y comparison pages. NOT gated on `isLocal`: a comparison is a
+ * cross-family page (a content property can compare options too), and on a site
+ * with none the collection is simply empty. Sorted by path for deterministic
+ * routes.
+ */
+export async function allComparisons(): Promise<CollectionEntry<'comparisons'>[]> {
+  return live(await getCollection('comparisons')).sort((a, b) =>
+    a.data.path.localeCompare(b.data.path),
+  );
+}
+
 /** One page in the root namespace, flattened across the three collections. */
 export interface RoutedPage {
   path: string;
@@ -146,7 +158,9 @@ export async function routedPages(): Promise<RoutedPage[]> {
     })),
   ];
 
-  const conflicts = findPathConflicts(pages.map((p) => ({ path: p.path, label: p.title })));
+  const conflicts = findPathConflicts(
+    pages.map((p) => ({ path: p.path, label: p.title, pageType: p.pageType })),
+  );
   if (conflicts.length > 0) {
     const detail = conflicts.map((c) => `  · [${c.kind}] ${c.detail}`).join('\n');
     throw new Error(`URL namespace conflicts — the site cannot build:\n${detail}`);

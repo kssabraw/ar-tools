@@ -1,0 +1,60 @@
+---
+import type { GetStaticPaths } from 'astro';
+import type { CollectionEntry } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import HeroAnswer from '../../theme/components/HeroAnswer.astro';
+import FAQAccordion from '../../theme/components/FAQAccordion.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import LeadForm from '../../theme/components/LeadForm.astro';
+import { corePage } from '../../lib/content';
+import { site } from '../../lib/site';
+import { faqPage, breadcrumbList } from '../../lib/schema';
+
+/**
+ * Standalone FAQ page (reference §1.2 / FAQ catalog entry) — the canonical Q&A
+ * source, schema-heavy. A singleton at /faq/, id-addressed like the core pages:
+ * the FAQ writer (website_core_pages) commits a `pages` entry with id `faq`
+ * carrying `sections.faqItems`. A rest route with an empty `getStaticPaths` is
+ * how the page declines to exist when no FAQ has been generated — nothing else
+ * claims /faq/, so an ungenerated site simply has no FAQ page rather than an
+ * empty one.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const entry = await corePage('faq');
+  if (!entry) return [];
+  return [{ params: { index: undefined }, props: { entry } }];
+};
+
+const { entry } = Astro.props as { entry: CollectionEntry<'pages'> };
+const s = (entry.data.sections ?? {}) as Record<string, unknown>;
+const rawItems = Array.isArray(s.faqItems) ? (s.faqItems as { q: string; a: string }[]) : [];
+const items = rawItems
+  .filter((i) => i && i.q && i.a)
+  .map((i) => ({ question: i.q, answer: i.a }));
+
+const title = entry.data.title || `${site.siteName} — Frequently Asked Questions`;
+const intro =
+  (typeof s.intro === 'string' && s.intro) ||
+  entry.data.description ||
+  `Answers to the questions we hear most.`;
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'FAQ', href: '/faq/' },
+];
+
+const ld = [
+  faqPage(items),
+  breadcrumbList(crumbs, site.url),
+].filter(Boolean) as Record<string, unknown>[];
+---
+
+<Layout title={title} description={entry.data.description || intro} jsonld={ld}>
+  <HeroAnswer eyebrow="FAQ" title={title} answer={intro} />
+
+  <FAQAccordion title="" items={items} />
+
+  <CTABand title="Still have a question?" ctaLabel="Ask us" ctaHref="/contact-us/" />
+
+  <LeadForm />
+</Layout>

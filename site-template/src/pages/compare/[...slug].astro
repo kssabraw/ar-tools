@@ -1,0 +1,81 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render, type CollectionEntry } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import BreadcrumbBar from '../../theme/components/BreadcrumbBar.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import { allComparisons } from '../../lib/content';
+import { article, breadcrumbList } from '../../lib/schema';
+import { site } from '../../lib/site';
+
+/**
+ * Commercial comparison pages (reference §1.2 / Comparison catalog entry) — a
+ * verdict-first "X vs Y" at /compare/{option-a}-vs-{option-b}/. The two-segment
+ * /compare/ namespace is its own, so these live in a dedicated route rather than
+ * the root catch-all. The body is a blog Writer run's markdown (rendered via
+ * <Content />, so the criteria table and pros/cons come through as the run wrote
+ * them), and the page is told apart from a post by its own collection.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const comparisons = await allComparisons();
+  return comparisons.map((entry) => ({
+    params: { slug: entry.data.path.replace(/^\/compare\/|\/$/g, '') },
+    props: { entry },
+  }));
+};
+
+const { entry } = Astro.props as { entry: CollectionEntry<'comparisons'> };
+const { Content } = await render(entry);
+const d = entry.data as Record<string, any>;
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'Compare', href: '/compare/' },
+  { label: d.title, href: d.path },
+];
+
+const ld = [
+  d.jsonld ??
+    article({
+      title: d.title,
+      description: d.description,
+      url: Astro.url.href,
+      published: d.publishDate,
+      updated: d.updatedDate,
+      image: d.heroImage,
+    }),
+  breadcrumbList(crumbs, site.url),
+].filter(Boolean) as Record<string, unknown>[];
+---
+
+<Layout title={d.title} description={d.description} image={d.heroImage} jsonld={ld}>
+  <BreadcrumbBar crumbs={crumbs} />
+  <PageHeader eyebrow="Comparison" title={d.title} lede={d.description} />
+
+  {d.heroImage && (
+    <div class="wrap media">
+      <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
+    </div>
+  )}
+
+  <div class="prose-wrap richtext body">
+    <Content />
+  </div>
+
+  <CTABand title="Not sure which is right for you?" ctaLabel="Talk to us" ctaHref="/contact-us/" />
+</Layout>
+
+<style>
+  .media {
+    padding-block: var(--space-4);
+  }
+  .media img {
+    width: 100%;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+  }
+  .body {
+    padding-bottom: var(--space-7);
+  }
+</style>

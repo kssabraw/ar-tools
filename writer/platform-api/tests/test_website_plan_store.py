@@ -317,6 +317,35 @@ class TestAddManualPage:
         assert ei.value.code == "missing_city"
         assert ei.value.status == 400
 
+    def _insert_and_get_row(self, **kw):
+        supabase = MagicMock()
+        chain = supabase.table.return_value
+        chain.insert.return_value = chain
+        chain.execute.return_value = MagicMock(data=[{"id": "new"}])
+        with patch.object(store, "get_supabase", return_value=supabase), patch.object(
+            store, "stored", return_value=[]
+        ):
+            store.add_manual_page(self._site(), **kw)
+        return chain.insert.call_args[0][0]
+
+    def test_a_cost_page_adds_despite_the_reserved_second_level(self):
+        # The exemption has to flow through add_manual_page's own check_paths call,
+        # or a legitimate /{service}/cost/ would be refused as a reserved slug.
+        row = self._insert_and_get_row(page_type="cost", service="Tree Removal")
+        assert row["route"] == "/tree-removal/cost/"
+        assert row["plan"]["engine"] == "nlp"
+        assert row["plan"]["keyword"] == "Tree Removal cost"
+
+    def test_a_faq_page_adds_despite_the_reserved_root_slug(self):
+        row = self._insert_and_get_row(page_type="faq")
+        assert row["route"] == "/faq/"
+        assert row["plan"]["engine"] == "core_pages"
+
+    def test_a_comparison_page_adds(self):
+        row = self._insert_and_get_row(page_type="comparison", service="Tankless", subservice="Tank")
+        assert row["route"] == "/compare/tankless-vs-tank/"
+        assert row["plan"]["engine"] == "run"
+
 
 class _BuildFakeSupabase:
     """Enough of the supabase client for `build()` to run, recording what it

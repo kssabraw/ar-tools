@@ -93,6 +93,26 @@ export function service(input: { title: string; description?: string; url: strin
 }
 
 /**
+ * FAQPage structured data (reference: the standalone FAQ and the Cost/Comparison
+ * pages bind FAQPage). Built from the generated Q&A pairs; an empty set returns
+ * undefined so the caller emits no dangling node.
+ */
+export function faqPage(
+  items: { question: string; answer: string }[],
+): Json | undefined {
+  const entities = (items ?? []).filter((i) => i.question && i.answer);
+  if (entities.length === 0) return undefined;
+  return {
+    '@type': 'FAQPage',
+    mainEntity: entities.map((i) => ({
+      '@type': 'Question',
+      name: i.question,
+      acceptedAnswer: { '@type': 'Answer', text: i.answer },
+    })),
+  };
+}
+
+/**
  * BreadcrumbList built from the URL path, so it can never disagree with the
  * canonical (reference §1.2). Callers pass the crumbs derived by
  * content.breadcrumbsFor; this only shapes them.

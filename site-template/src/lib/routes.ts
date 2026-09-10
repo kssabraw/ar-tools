@@ -84,7 +84,7 @@ export interface PathConflict {
  * build rather than shipping one page that quietly won a contested path.
  */
 export function findPathConflicts(
-  entries: { path: string; label: string }[],
+  entries: { path: string; label: string; pageType?: string }[],
 ): PathConflict[] {
   const conflicts: PathConflict[] = [];
   const seen = new Map<string, string>();
@@ -100,7 +100,14 @@ export function findPathConflicts(
         detail: `"${entry.label}" claims reserved root slug "${segs[0]}"`,
       });
     }
-    if (segs.length === 2 && RESERVED_SECOND_LEVEL.has(segs[1])) {
+    // A Cost page legitimately OWNS the reserved second-level "cost"
+    // (/{service}/cost/), mirroring the planner's RESERVED_SECOND_LEVEL_OWNER —
+    // so it is not a collision, but any other page claiming /{x}/cost/ is.
+    if (
+      segs.length === 2 &&
+      RESERVED_SECOND_LEVEL.has(segs[1]) &&
+      entry.pageType !== 'cost'
+    ) {
       conflicts.push({
         kind: 'reserved',
         path,

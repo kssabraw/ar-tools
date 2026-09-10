@@ -836,3 +836,112 @@ class TestBuildManualPage:
         )
         assert page.path == "/tacoma/gutter-cleaning/copper-gutters/"
         assert payload["frontmatter"]["serviceName"] == "Gutter Cleaning"
+
+
+class TestExtensionPageTypes:
+    """The ⭐ extension types added by the future-page-type work: a Cost page
+    under a service, a standalone FAQ hub, and a commercial X-vs-Y Comparison.
+
+    Two things carry the weight: each routes to the right engine (Cost → nlp,
+    FAQ → core-pages, Comparison → run), and each owns its reserved slug so its
+    own page is not a planning-error collision while any other page claiming the
+    same slug still is.
+    """
+
+    def test_cost_generation_targets_the_cost_query_geo_agnostically(self):
+        page = wp.PlannedPage("/tree-removal/cost/", "cost", "Tree Removal Cost", "manual", tier=2)
+        inputs = wp.generation_inputs(
+            page, services={"tree-removal": svc("Tree Removal")}, cities={}, primary_city="Seattle"
+        )
+        assert inputs["engine"] == "nlp"
+        assert inputs["keyword"] == "Tree Removal cost"
+        # Geo-agnostic like a service page: the city only scopes SERP analysis.
+        assert inputs["location"] == "Seattle"
+
+    def test_cost_frontmatter_parents_to_its_service(self):
+        page = wp.PlannedPage("/tree-removal/cost/", "cost", "Tree Removal Cost", "manual", tier=2)
+        fm = wp.frontmatter_extra(page, services={"tree-removal": svc("Tree Removal", teaser="Fast")}, cities={})
+        assert fm["parentService"] == "tree-removal"
+        assert fm["teaser"] == "Fast"
+
+    def test_faq_is_written_by_the_core_pages_engine(self):
+        page = wp.PlannedPage("/faq/", "faq", "FAQ", "manual", tier=4)
+        inputs = wp.generation_inputs(page, services={}, cities={})
+        assert inputs["engine"] == "core_pages"
+        assert inputs["keyword"] is None
+        assert "faq" in wp.COMPOSED_PAGE_TYPES
+
+    def test_comparison_is_a_run_with_an_option_aware_brief(self):
+        page = wp.PlannedPage("/compare/tankless-vs-tank/", "comparison", "Tankless vs Tank", "manual", tier=4)
+        inputs = wp.generation_inputs(page, services={}, cities={})
+        assert inputs["engine"] == "run"
+        assert inputs["content_type"] == "blog_post"
+        assert inputs["notes"]  # a comparison brief is threaded on
+        assert "comparison" in wp.RUN_PAGE_TYPES
+
+    def test_the_hubs_are_composed_pages_now_not_template_only(self):
+        # Writer #6: the two hubs gain narrative via the core-pages engine.
+        for hub in ("services_index", "areas_we_serve"):
+            page = wp.PlannedPage("/services/", hub, "Services", "CORE-conditional", tier=4)
+            assert wp.generation_inputs(page, services={}, cities={})["engine"] == "core_pages"
+
+    def test_faq_owns_its_reserved_root_slug_but_a_service_does_not(self):
+        assert not wp.check_paths([wp.PlannedPage("/faq/", "faq", "FAQ", "manual")])
+        # A service named "FAQ" still collides — precedence is not the FAQ page's.
+        clash = wp.check_paths([wp.PlannedPage("/faq/", "service", "Faq", "CORE")])
+        assert clash and clash[0].kind == "reserved_slug"
+
+    def test_cost_owns_the_reserved_second_level_but_others_do_not(self):
+        assert not wp.check_paths([wp.PlannedPage("/tree-removal/cost/", "cost", "Cost", "manual", tier=2)])
+        clash = wp.check_paths([wp.PlannedPage("/tree-removal/cost/", "sub_service", "Cost", "x", tier=2)])
+        assert clash and clash[0].kind == "reserved_slug"
+
+    def test_comparison_lives_two_segments_deep_so_compare_root_is_never_claimed(self):
+        # /compare/{a}-vs-{b}/ is two segments; the reserved ROOT "compare" is only
+        # a collision when a page sits AT /compare/, which a comparison never does.
+        assert not wp.check_paths(
+            [wp.PlannedPage("/compare/tankless-vs-tank/", "comparison", "Tankless vs Tank", "manual")]
+        )
+
+    def test_all_three_are_manually_addable(self):
+        for t in ("cost", "faq", "comparison"):
+            assert t in wp.MANUAL_PAGE_TYPES
+
+
+class TestBuildManualExtensionPages:
+    CAT = [svc("Tree Removal", order=10)]
+    CIT = [city("Seattle")]
+
+    def _build(self, **kw):
+        return wp.build_manual_page(
+            catalog=self.CAT, cities=self.CIT,
+            primary_service="Tree Removal", primary_city="Seattle", **kw,
+        )
+
+    def test_a_cost_page_sits_under_its_service(self):
+        page, payload = self._build(page_type="cost", service="Tree Removal")
+        assert page.path == "/tree-removal/cost/"
+        assert page.page_type == "cost"
+        assert payload["engine"] == "nlp"
+        assert payload["keyword"] == "Tree Removal cost"
+
+    def test_a_comparison_composes_the_vs_url_and_names_both_options(self):
+        page, payload = self._build(page_type="comparison", service="Tankless", subservice="Tank")
+        assert page.path == "/compare/tankless-vs-tank/"
+        assert page.title == "Tankless vs Tank"
+        assert payload["engine"] == "run"
+        assert "Tankless" in payload["notes"] and "Tank" in payload["notes"]
+
+    def test_a_comparison_needs_both_options(self):
+        with pytest.raises(ValueError, match="missing_subservice"):
+            self._build(page_type="comparison", service="Tankless")
+
+    def test_a_faq_is_a_singleton_needing_no_axis(self):
+        page, payload = self._build(page_type="faq")
+        assert page.path == "/faq/"
+        assert page.title == "Frequently Asked Questions"
+        assert payload["engine"] == "core_pages"
+
+    def test_a_faq_keeps_a_supplied_title(self):
+        page, _ = self._build(page_type="faq", title="Your Questions Answered")
+        assert page.title == "Your Questions Answered"

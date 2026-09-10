@@ -79,7 +79,9 @@ const eyebrow =
       ? 'Areas we serve'
       : isPillar
         ? 'Guide'
-        : 'Service';
+        : page.pageType === 'cost'
+          ? 'Pricing'
+          : 'Service';
 ---
 
 {isPillar ? (

@@ -278,28 +278,33 @@ interface TypeDef {
   group: string
   fields: FieldKey[]
   subLabel?: string
+  serviceLabel?: string
   hint: string
 }
 
-// The writable page types, grouped. `fields` are the required axes; `subLabel`
-// renames the shared "subservice" axis to what it means for that type.
+// The writable page types, grouped. `fields` are the required axes; `subLabel` /
+// `serviceLabel` rename the shared "subservice" / "service" axes to what they
+// mean for that type.
 const TYPE_DEFS: TypeDef[] = [
   { value: 'service', label: 'Service page', group: 'Service', fields: ['service'], hint: '/{service}/' },
   { value: 'sub_service', label: 'Sub-service page', group: 'Service', fields: ['service', 'subservice'], subLabel: 'Sub-service', hint: '/{service}/{sub-service}/ — e.g. Oak Tree Removal under Tree Removal' },
   { value: 'brand_service', label: 'Brand × service page', group: 'Service', fields: ['service', 'subservice'], subLabel: 'Brand', hint: '/{service}/{brand}/ — e.g. Carrier under AC Repair' },
+  { value: 'cost', label: 'Cost / pricing page', group: 'Service', fields: ['service'], hint: '/{service}/cost/ — real ranges + cost factors (needs price sign-off)' },
   { value: 'location', label: 'City page', group: 'Geo', fields: ['city'], hint: '/{city}/' },
   { value: 'neighborhood', label: 'Neighborhood page', group: 'Geo', fields: ['city', 'subservice'], subLabel: 'Neighborhood', hint: '/{city}/{neighborhood}/' },
   { value: 'local_landing', label: 'Service × city page', group: 'Geo', fields: ['city', 'service'], hint: '/{city}/{service}/' },
   { value: 'hyper_local', label: 'Hyper-local page', group: 'Geo', fields: ['city', 'service', 'subservice'], subLabel: 'Sub-service', hint: '/{city}/{service}/{sub-service}/ — the granular escalation page' },
   { value: 'post', label: 'Blog post', group: 'Blog', fields: ['title'], hint: '/blog/{slug}/ — a one-off post, not tied to a pillar' },
   { value: 'pillar', label: 'Pillar / hub page', group: 'Blog', fields: ['title'], hint: '/{slug}/ — a topic hub at the site root' },
+  { value: 'comparison', label: 'Comparison page', group: 'Other', fields: ['service', 'subservice'], serviceLabel: 'Option A', subLabel: 'Option B', hint: '/compare/{a}-vs-{b}/ — verdict-first X vs Y' },
+  { value: 'faq', label: 'Standalone FAQ page', group: 'Other', fields: [], hint: '/faq/ — one Q&A hub for the site (title optional)' },
 ]
 
 const ADD_ERRORS: Record<string, string> = {
   unsupported_page_type: 'That page type can’t be added here.',
   missing_service: 'Enter the service name.',
   missing_city: 'Enter the city name.',
-  missing_subservice: 'Enter the sub-service, brand, or neighborhood.',
+  missing_subservice: 'Enter the sub-service, brand, neighborhood, or comparison option.',
   missing_title: 'Enter a title.',
   invalid_format: 'Pick a valid blog format.',
   reserved_slug: 'That URL collides with a reserved page. Pick a different name.',
@@ -347,7 +352,7 @@ function AddPageModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
     ? (ADD_ERRORS[(add.error as Error).message] ?? (add.error as Error).message)
     : null
 
-  const grouped = ['Service', 'Geo', 'Blog'].map((g) => ({ g, defs: TYPE_DEFS.filter((d) => d.group === g) }))
+  const grouped = ['Service', 'Geo', 'Blog', 'Other'].map((g) => ({ g, defs: TYPE_DEFS.filter((d) => d.group === g) }))
 
   return (
     <div onClick={onClose} style={overlay}>
@@ -373,14 +378,16 @@ function AddPageModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
           <Field label="City" value={city} onChange={setCity} placeholder="Seattle" />
         )}
         {def.fields.includes('service') && (
-          <Field label="Service" value={service} onChange={setService} placeholder="Tree Removal" />
+          <Field label={def.serviceLabel ?? 'Service'} value={service} onChange={setService}
+                 placeholder={def.value === 'comparison' ? 'Tankless water heater' : 'Tree Removal'} />
         )}
         {def.fields.includes('subservice') && (
           <Field label={def.subLabel ?? 'Sub-service'} value={subservice} onChange={setSubservice}
-                 placeholder={def.value === 'brand_service' ? 'Carrier' : def.value === 'neighborhood' ? 'Ballard' : 'Oak Trees'} />
+                 placeholder={def.value === 'brand_service' ? 'Carrier' : def.value === 'neighborhood' ? 'Ballard' : def.value === 'comparison' ? 'Tank water heater' : 'Oak Trees'} />
         )}
-        {def.fields.includes('title') && (
-          <Field label="Title" value={title} onChange={setTitle} placeholder={type === 'pillar' ? 'Roof Maintenance Guide' : 'How to spot storm roof damage'} />
+        {(def.fields.includes('title') || type === 'faq') && (
+          <Field label={type === 'faq' ? 'Title (optional)' : 'Title'} value={title} onChange={setTitle}
+                 placeholder={type === 'pillar' ? 'Roof Maintenance Guide' : type === 'faq' ? 'Frequently Asked Questions' : 'How to spot storm roof damage'} />
         )}
         {type === 'post' && (
           <div>

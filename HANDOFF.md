@@ -1430,6 +1430,50 @@ the entry below.
 
 ---
 
+## ⏩ Update — 2026-09-10 · **Website Builder — Comparison / Cost / standalone FAQ engines + Writer #6 hub narratives BUILT**
+
+Four of the "future page-type" gaps below are now **built end-to-end** (planner
+→ engine → content layer → `site-template` route → tests; a real Astro build of
+`site-template` renders all four). The one Tier-B type still deferred is
+**projects / case studies** (bespoke structured job data — its own follow-up).
+
+- **Comparison** (`comparison`, `/compare/{a}-vs-{b}/`) — the `run` engine (a
+  blog Writer run with a verdict-first, honest-tradeoffs brief on writer notes,
+  `compose_comparison_notes`). New `comparisons` collection + `src/pages/compare/[...slug].astro`.
+- **Cost / pricing** (`cost`, `/{service}/cost/`) — the `nlp` service-writer
+  variant, keyword `"<service> cost"`, geo-agnostic (city scopes SERP only).
+  Stored in the `services` collection, renders through the root catch-all
+  (eyebrow "Pricing"). SERP-scored at the 75 composite gate like any service page.
+- **Standalone FAQ** (`faq`, `/faq/`) — the `core_pages` engine (one LLM call,
+  `sections.faqItems` frontmatter, no SERP), FAQPage schema. New
+  `src/pages/faq/[...index].astro`.
+- **Writer #6 hub narratives** (`services_index` / `areas_we_serve`) — the two
+  hubs moved out of `TEMPLATE_ONLY_PAGE_TYPES` into the `core_pages` engine (they
+  now write a `sections` narrative — lede + authority / lede + coverageNotes —
+  that the *existing* hub routes already read via `corePage(...)`). A hub with no
+  narrative still publishes as a data page (renders its auto-list from data);
+  `website_content.HUB_PAGE_TYPES` carries that grace, and the publish body gate
+  is now sections-aware (`SECTION_CONTENT_PAGE_TYPES`) so a section-only page
+  (home / FAQ / hub) ships its `sections` with an empty markdown body. This also
+  fixes the latent gap where a generated home-page `sections` narrative was held
+  (`body_not_generated`) instead of committed.
+
+**How they reach users (owner decision 2026-09-10): manual "add a page" only**
+for cost / comparison / FAQ — the reference triggers are human judgements (price
+sign-off, a recognised either/or, a real question inventory), so they are NOT
+auto-emitted in bulk; `MANUAL_PAGE_TYPES` gained all three (FAQ is a singleton,
+comparison maps Option A→`service` / Option B→`subservice`, cost needs its
+service). The Writer #6 hubs stay auto-planned (CORE-conditional). Reserved-slug
+ownership is exempted on both sides: `website_plan.RESERVED_ROOT_OWNER` /
+`RESERVED_SECOND_LEVEL_OWNER` (FAQ owns `/faq/`, cost owns `/{svc}/cost/`;
+comparison is two segments so `compare` root is never claimed) and the
+template's `findPathConflicts(pageType)`. Frontend: `PagesTab` add-page form has
+an "Other" group + the three types. Tests across
+`test_website_{plan,content,core_pages,plan_store,publish}.py` (587 website tests
+green). **Still deferred:** projects/case-studies (Tier B), and the Tier-B
+`UNRENDERABLE_PAGE_TYPES` set stays empty. The section below is the original
+roadmap; the four above supersede its "no engine yet" status for those types.
+
 ## ⏩ Update — 2026-08-27 · **Website Builder — future page-type engines (ROADMAP; Tier A now built above)**
 
 **Why this entry exists.** The generation layer routes every planned page to
