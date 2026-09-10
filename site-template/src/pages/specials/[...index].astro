@@ -1,0 +1,91 @@
+---
+import type { GetStaticPaths } from 'astro';
+import type { CollectionEntry } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import HeroStandard from '../../theme/components/HeroStandard.astro';
+import OfferCardGrid from '../../theme/components/OfferCardGrid.astro';
+import AlertNote from '../../theme/components/AlertNote.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import { corePage } from '../../lib/content';
+import { site } from '../../lib/site';
+import { offer, breadcrumbList } from '../../lib/schema';
+
+/**
+ * Offers / Specials page (reference §5.1 — ⭐ SOP extension). A singleton at
+ * /specials/, id-addressed like the FAQ: the offers engine (website_offers)
+ * commits a `pages` entry with id `specials` carrying `sections.{intro, offers,
+ * financing, finePrint}`. Facts only — every offer's value/terms/expiry is what
+ * the operator entered, never generated. A rest route with an empty
+ * getStaticPaths declines to exist until an offers page has been generated;
+ * nothing else claims /specials/, so an ungenerated site simply has none.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const entry = await corePage('specials');
+  if (!entry) return [];
+  return [{ params: { index: undefined }, props: { entry } }];
+};
+
+const { entry } = Astro.props as { entry: CollectionEntry<'pages'> };
+const s = (entry.data.sections ?? {}) as Record<string, any>;
+const offers = Array.isArray(s.offers) ? s.offers.filter((o: any) => o && o.title) : [];
+const financing = typeof s.financing === 'string' ? s.financing : '';
+const finePrint = typeof s.finePrint === 'string' ? s.finePrint : '';
+
+const title = entry.data.title || `${site.siteName} — Offers & Specials`;
+const intro =
+  (typeof s.intro === 'string' && s.intro) ||
+  entry.data.description ||
+  'Current offers, promotions and financing.';
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'Specials', href: '/specials/' },
+];
+
+const base = Astro.site ?? site.url;
+const ld = [
+  ...offers.map((o: any) =>
+    offer({
+      name: o.title,
+      description: [o.value, o.terms].filter(Boolean).join(' — ') || undefined,
+      url: o.ctaHref || undefined,
+    }),
+  ),
+  breadcrumbList(crumbs, base.toString()),
+].filter(Boolean) as Record<string, unknown>[];
+---
+
+<Layout title={title} description={entry.data.description || intro} jsonld={ld}>
+  <HeroStandard eyebrow="Specials" title={title} lede={intro} />
+
+  <OfferCardGrid title="" items={offers} />
+
+  {financing && (
+    <section class="wrap financing">
+      <h2 class="financing__title">Financing</h2>
+      <p class="financing__body">{financing}</p>
+    </section>
+  )}
+
+  {finePrint && (
+    <section class="wrap">
+      <AlertNote tone="warning" label="The fine print">{finePrint}</AlertNote>
+    </section>
+  )}
+
+  <CTABand title="Ready to get started?" ctaLabel="Get in touch" ctaHref="/contact-us/" />
+</Layout>
+
+<style>
+  .financing {
+    padding-block: var(--space-5);
+  }
+  .financing__title {
+    font-size: var(--text-xl);
+    margin-bottom: var(--space-3);
+  }
+  .financing__body {
+    color: var(--color-text-muted);
+    max-width: 60ch;
+  }
+</style>

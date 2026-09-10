@@ -1,0 +1,85 @@
+---
+/**
+ * Shared Component Library: a coverage / specification table (reference §5.1
+ * Warranty — Coverage SpecTable; also reusable for pricing/plan comparisons).
+ * Facts only — the operator enters every row. Renders nothing when empty.
+ * Mobile: the table scrolls horizontally inside its own container so the page
+ * body never scrolls sideways.
+ */
+interface Row {
+  item: string;
+  detail?: string;
+  duration?: string;
+}
+interface Props {
+  title?: string;
+  rows: Row[];
+  /** Column header for the third column; the warranty page calls it "Coverage". */
+  durationLabel?: string;
+}
+const { title, rows, durationLabel = 'Coverage' } = Astro.props;
+const clean = (rows ?? []).filter((r) => r && r.item);
+const hasDetail = clean.some((r) => r.detail);
+const hasDuration = clean.some((r) => r.duration);
+---
+
+{clean.length > 0 && (
+  <section class="spec">
+    <div class="wrap">
+      {title && <h2 class="spec__title">{title}</h2>}
+      <div class="spec__scroll">
+        <table class="spec__table">
+          <thead>
+            <tr>
+              <th>Item</th>
+              {hasDetail && <th>Details</th>}
+              {hasDuration && <th>{durationLabel}</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {clean.map((r) => (
+              <tr>
+                <th scope="row">{r.item}</th>
+                {hasDetail && <td>{r.detail}</td>}
+                {hasDuration && <td>{r.duration}</td>}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+)}
+
+<style>
+  .spec {
+    padding-block: var(--space-6);
+  }
+  .spec__title {
+    font-size: var(--text-2xl);
+    margin-bottom: var(--space-5);
+  }
+  .spec__scroll {
+    overflow-x: auto;
+  }
+  .spec__table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--text-base);
+  }
+  .spec__table th,
+  .spec__table td {
+    text-align: left;
+    padding: var(--space-3) var(--space-4);
+    border-bottom: 1px solid var(--color-border);
+    vertical-align: top;
+  }
+  .spec__table thead th {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    border-bottom: 2px solid var(--color-border-strong);
+  }
+  .spec__table tbody th {
+    font-weight: 600;
+  }
+</style>

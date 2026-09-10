@@ -5,20 +5,38 @@ import Layout from '../../layouts/Layout.astro';
 import RelatedPagesBlock from '../../theme/components/RelatedPagesBlock.astro';
 import AuthorByline from '../../theme/components/AuthorByline.astro';
 import PageHeader from '../../theme/components/PageHeader.astro';
-import { allPosts, relatedTo } from '../../lib/content';
+import HeroStandard from '../../theme/components/HeroStandard.astro';
+import HeroBackground from '../../theme/components/HeroBackground.astro';
+import { allPosts, allPillars, relatedTo } from '../../lib/content';
 import { article } from '../../lib/schema';
 import { has } from '../../lib/site';
+import { heroImagePosition, heroLayout } from '../../lib/layouts';
 
 export const getStaticPaths: GetStaticPaths = async () => {
   const posts = await allPosts();
   if (posts.length === 0) return [];
+  // A post links UP to its silo's pillar/hub when one exists (a silo earns a
+  // pillar only at >= 5 evergreen posts, so a smaller silo has none and the
+  // up-link is simply absent). Keyed by silo → {path, title}; passing just the
+  // two fields the breadcrumb needs keeps the static props small.
+  const pillars = await allPillars();
+  const pillarBySilo = new Map(
+    pillars.filter((p) => p.data.silo).map((p) => [p.data.silo as string, { path: p.data.path, title: p.data.title }]),
+  );
+  const upFor = (post: (typeof posts)[number]) =>
+    (post.data.silo && pillarBySilo.get(post.data.silo)) || undefined;
   return [
-    { params: { slug: undefined }, props: { post: undefined, posts } },
-    ...posts.map((post) => ({ params: { slug: post.id }, props: { post, posts } })),
+    { params: { slug: undefined }, props: { post: undefined, posts, pillar: undefined } },
+    ...posts.map((post) => ({ params: { slug: post.id }, props: { post, posts, pillar: upFor(post) } })),
   ];
 };
 
-const { post, posts } = Astro.props;
+type PostList = Awaited<ReturnType<typeof allPosts>>;
+const { post, posts, pillar } = Astro.props as {
+  post: PostList[number] | undefined;
+  posts: PostList;
+  pillar?: { path: string; title: string };
+};
 const Content = post ? (await render(post)).Content : null;
 const d = post?.data;
 const related = post ? relatedTo(post, posts) : [];
@@ -28,6 +46,13 @@ const meta = d
       .filter(has)
       .join(' · ')
   : '';
+
+// The hero layout the design's manifest selects for the blog screen, defaulting
+// to `band` — the current article header (breadcrumb + title + meta) above a
+// full-width image band, so an unmeasured theme is byte-identical. `split` /
+// `background` swap in a side-by-side or full-bleed cover, with the breadcrumb
+// kept above it and the meta line moved below.
+const postHeroLayout = heroLayout('blog_post', 'band');
 
 // A generated page may carry its own JSON-LD; otherwise we build Article
 // structured data from the frontmatter.
@@ -62,20 +87,38 @@ const ld = d
 ) : (
 <Layout title={d.title} description={d.description} image={d.heroImage} jsonld={ld}>
   <article>
-    <header class="prose-wrap post-head">
-      <nav class="post-breadcrumb" aria-label="Breadcrumb">
-        <a href="/">Home</a> · <a href="/blog/">Blog</a>
-      </nav>
-      {has(d.category) && <p class="eyebrow">{d.category}</p>}
-      <h1 class="post-title">{d.title}</h1>
-      {has(d.description) && <p class="lede post-lede">{d.description}</p>}
-      {has(meta) && <p class="post-meta">{meta}</p>}
-    </header>
+    {postHeroLayout === 'band' ? (
+      <Fragment>
+        <header class="prose-wrap post-head">
+          <nav class="post-breadcrumb" aria-label="Breadcrumb">
+            <a href="/">Home</a> · <a href="/blog/">Blog</a>
+            {pillar && <span> · <a href={pillar.path}>{pillar.title}</a></span>}
+          </nav>
+          {has(d.category) && <p class="eyebrow">{d.category}</p>}
+          <h1 class="post-title">{d.title}</h1>
+          {has(d.description) && <p class="lede post-lede">{d.description}</p>}
+          {has(meta) && <p class="post-meta">{meta}</p>}
+        </header>
 
-    {has(d.heroImage) && (
-      <div class="wrap post-hero">
-        <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="540" loading="eager" />
-      </div>
+        {has(d.heroImage) && (
+          <div class="wrap post-hero">
+            <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="540" loading="eager" />
+          </div>
+        )}
+      </Fragment>
+    ) : (
+      <Fragment>
+        <nav class="prose-wrap post-breadcrumb" aria-label="Breadcrumb">
+          <a href="/">Home</a> · <a href="/blog/">Blog</a>
+          {pillar && <span> · <a href={pillar.path}>{pillar.title}</a></span>}
+        </nav>
+        {postHeroLayout === 'split' ? (
+          <HeroStandard eyebrow={d.category} title={d.title} lede={d.description} image={d.heroImage} imageAlt={d.heroImageAlt} imagePosition={heroImagePosition('blog_post')} />
+        ) : (
+          <HeroBackground eyebrow={d.category} title={d.title} lede={d.description} image={d.heroImage} imageAlt={d.heroImageAlt} />
+        )}
+        {has(meta) && <p class="prose-wrap post-meta">{meta}</p>}
+      </Fragment>
     )}
 
     <div class="prose-wrap richtext post-body">

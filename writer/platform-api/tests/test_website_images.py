@@ -11,6 +11,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 from services import website_images as wi
 from services import website_content
@@ -183,3 +184,98 @@ class TestPublishRoundTrip:
         text = data.decode("utf-8")
         assert 'heroImage: "https://cdn/x.png"' in text
         assert 'heroImageAlt: "Roof Repair in Anaheim"' in text
+
+
+class TestPhotoRejection:
+    """The pure validator — a real web image, not a tracking pixel or a RAW dump."""
+
+    def test_accepts_a_reasonable_jpeg(self):
+        assert wi.photo_rejection_reason("image/jpeg", 800, 600, 200_000) is None
+
+    def test_rejects_an_unsupported_type(self):
+        assert wi.photo_rejection_reason("image/gif", 800, 600, 200_000) == "unsupported_image_type"
+
+    def test_rejects_empty(self):
+        assert wi.photo_rejection_reason("image/png", 800, 600, 0) == "empty_image"
+
+    def test_rejects_oversized(self):
+        assert wi.photo_rejection_reason("image/png", 800, 600, wi.PHOTO_MAX_BYTES + 1) == "image_too_large"
+
+    def test_rejects_tiny_dimensions(self):
+        assert wi.photo_rejection_reason("image/jpeg", 100, 100, 50_000) == "image_dimensions_too_small"
+
+    def test_webp_is_supported(self):
+        assert wi.photo_rejection_reason("image/webp", 400, 400, 50_000) is None
+
+
+def _storage_mock(url: str = "https://cdn/website-projects/w1/x.jpg"):
+    storage = MagicMock()
+    storage.storage.from_.return_value.get_public_url.return_value = url
+    return storage
+
+
+class TestUploadProjectPhoto:
+    def test_a_valid_upload_is_hosted_under_the_site_prefix(self):
+        storage = _storage_mock("https://cdn/website-projects/w1/x.jpg?")
+        with patch.object(wi, "_decode_image", return_value=("image/jpeg", 800, 600)), \
+             patch("db.supabase_client.get_supabase", return_value=storage):
+            url = wi.upload_project_photo("w1", b"realbytes", "image/jpeg")
+        # The trailing '?' get_public_url can return is stripped.
+        assert url == "https://cdn/website-projects/w1/x.jpg"
+        path = storage.storage.from_.return_value.upload.call_args[0][0]
+        assert path.startswith("website-projects/w1/") and path.endswith(".jpg")
+
+    def test_the_real_format_is_sniffed_not_the_declared_type(self):
+        # A file mislabeled image/png that is really a jpeg is stored as .jpg.
+        storage = _storage_mock()
+        with patch.object(wi, "_decode_image", return_value=("image/jpeg", 800, 600)), \
+             patch("db.supabase_client.get_supabase", return_value=storage):
+            wi.upload_project_photo("w1", b"bytes", "image/png")
+        assert storage.storage.from_.return_value.upload.call_args[0][0].endswith(".jpg")
+
+    def test_empty_upload_is_rejected(self):
+        with pytest.raises(HTTPException) as e:
+            wi.upload_project_photo("w1", b"", "image/jpeg")
+        assert e.value.detail == "empty_image"
+
+    def test_oversized_is_rejected_413(self):
+        with patch.object(wi, "_decode_image", return_value=("image/png", 800, 600)):
+            with pytest.raises(HTTPException) as e:
+                wi.upload_project_photo("w1", b"x" * (wi.PHOTO_MAX_BYTES + 1), "image/png")
+        assert e.value.status_code == 413 and e.value.detail == "image_too_large"
+
+    def test_tiny_dimensions_rejected(self):
+        with patch.object(wi, "_decode_image", return_value=("image/jpeg", 50, 50)):
+            with pytest.raises(HTTPException) as e:
+                wi.upload_project_photo("w1", b"bytes", "image/jpeg")
+        assert e.value.detail == "image_dimensions_too_small"
+
+
+@pytest.mark.asyncio
+class TestImportProjectPhotoFromUrl:
+    async def test_a_non_http_url_is_rejected_without_fetching(self):
+        with pytest.raises(HTTPException) as e:
+            await wi.import_project_photo_from_url("w1", "ftp://x/y.jpg")
+        assert e.value.detail == "invalid_image_url"
+
+    async def test_a_public_url_is_fetched_and_rehosted(self):
+        resp = MagicMock(status_code=200, content=b"imgbytes", headers={"content-type": "image/jpeg"})
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=resp)))
+        client.__aexit__ = AsyncMock(return_value=False)
+        storage = _storage_mock("https://cdn/website-projects/w1/y.jpg")
+        with patch("httpx.AsyncClient", return_value=client), \
+             patch.object(wi, "_decode_image", return_value=("image/jpeg", 800, 600)), \
+             patch("db.supabase_client.get_supabase", return_value=storage):
+            url = await wi.import_project_photo_from_url("w1", "https://ex.com/y.jpg")
+        assert url == "https://cdn/website-projects/w1/y.jpg"
+
+    async def test_a_failed_fetch_raises_502(self):
+        resp = MagicMock(status_code=404, content=b"")
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=MagicMock(get=AsyncMock(return_value=resp)))
+        client.__aexit__ = AsyncMock(return_value=False)
+        with patch("httpx.AsyncClient", return_value=client):
+            with pytest.raises(HTTPException) as e:
+                await wi.import_project_photo_from_url("w1", "https://ex.com/missing.jpg")
+        assert e.value.status_code == 502 and e.value.detail == "image_fetch_failed"

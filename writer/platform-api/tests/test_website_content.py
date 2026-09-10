@@ -356,7 +356,7 @@ class TestExtensionContentLayer:
         assert "services_index" not in wc.TEMPLATE_ONLY_PAGE_TYPES
         assert "areas_we_serve" not in wc.TEMPLATE_ONLY_PAGE_TYPES
         assert wc.HUB_PAGE_TYPES == {"services_index", "areas_we_serve"}
-        for pt in ("home", "faq", "services_index", "areas_we_serve"):
+        for pt in ("home", "faq", "services_index", "areas_we_serve", "offers", "warranty"):
             assert pt in wc.SECTION_CONTENT_PAGE_TYPES
 
     def test_a_hub_with_a_body_now_produces_a_file(self):
@@ -388,3 +388,44 @@ class TestProjectContentLayer:
         assert v.reason == "voice_violation" and v.overridable is True
         # Facts inconsistency is never overridable, anywhere.
         assert not wc.publish_verdict(page_type="project", facts_consistent=False).overridable
+
+
+class TestOffersWarrantyContentLayer:
+    """Offers/specials and warranty/guarantee are id-addressed `pages` singletons
+    at their reserved slug (like the FAQ) — their structured facts ride in
+    `sections`, and they gate like a core page (facts-first, voice overridable)."""
+
+    def test_collections_and_id_addressing(self):
+        for pt in ("offers", "warranty"):
+            assert wc.collection_of(pt) == "pages"
+            assert pt in wc.SECTION_CONTENT_PAGE_TYPES
+        # id-addressed at the reserved slug — /specials/ → `specials`, /warranty/ → `warranty`.
+        assert wc.entry_id("/specials/", "offers") == "specials"
+        assert wc.entry_id("/warranty/", "warranty") == "warranty"
+        assert wc.repo_path("/specials/", "offers") == "src/content/pages/specials.md"
+        assert wc.repo_path("/warranty/", "warranty") == "src/content/pages/warranty.md"
+
+    def test_id_addressed_entry_carries_no_path_or_pagetype(self):
+        # Like the FAQ/core pages, the route looks these up by id, so the file
+        # carries neither `path` nor `pageType`.
+        for pt in ("offers", "warranty"):
+            fm = wc.frontmatter_for(path="/specials/", page_type=pt, title="X")
+            assert "path" not in fm and "pageType" not in fm
+
+    def test_a_sections_only_page_commits_a_file(self):
+        # An offers page has an empty body — its content is `sections` — and must
+        # still produce a committable file (the id-addressed pages path).
+        files = wc.files_for_pages(
+            [{"route": "/specials/", "page_type": "offers", "title": "Offers", "body": "",
+              "extra": {"sections": {"offers": [{"title": "$50 off", "value": "Save $50"}]}}}]
+        )
+        [(path, data)] = files.items()
+        assert path == "src/content/pages/specials.md"
+        assert "$50 off" in data.decode("utf-8")
+
+    def test_gate_is_facts_first_voice_overridable(self):
+        for pt in ("offers", "warranty"):
+            assert wc.publish_verdict(page_type=pt).allowed
+            v = wc.publish_verdict(page_type=pt, voice={"violations": [{"severity": "critical"}]})
+            assert v.reason == "voice_violation" and v.overridable is True
+            assert not wc.publish_verdict(page_type=pt, facts_consistent=False).overridable

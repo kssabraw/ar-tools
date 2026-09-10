@@ -38,6 +38,14 @@ class GenerateError(Exception):
     """Stable error code, not prose."""
 
 
+# The engines whose writers require a brand voice on file (they generate prose in
+# the client's voice, so a -degraded run written with none must never ship). The
+# structured engines (project / offers / warranty) are the exception: their
+# content is operator-entered facts, so they generate for a brand-less client too
+# — the batch gate in the generate route reads this set to avoid blocking them.
+BRAND_CONTEXT_ENGINES = frozenset({"nlp", "core_pages", "run"})
+
+
 def has_brand_context(client: dict) -> bool:
     """Whether this client has a brand voice on file.
 
@@ -164,6 +172,12 @@ async def generate_page(*, page_id: str, user_id: str) -> dict:
 
     if engine == "project":
         return await _generate_project_page(page=page, website=website, supabase=supabase)
+
+    if engine == "offers":
+        return _generate_offers_page(page=page, supabase=supabase)
+
+    if engine == "warranty":
+        return await _generate_warranty_page(page=page, website=website, supabase=supabase)
 
     if engine != "nlp":
         # A page type whose engine name we recognise but haven't built. None is
@@ -456,6 +470,77 @@ async def _generate_project_page(*, page: dict, website: dict, supabase) -> dict
 
     logger.info(
         "website_generate.project_written",
+        extra={"page_id": page_id, "narrated": bool(narrated)},
+    )
+    return {"page_id": page_id, "generated": True}
+
+
+def _generate_offers_page(*, page: dict, supabase) -> dict:
+    """The offers / specials singleton: pure deterministic assembly, no LLM.
+
+    Offer value/terms/expiry are legal facts the operator entered, so nothing here
+    is narrated or invented — there is no brand-context gate and no model call.
+    """
+    from services import website_offers
+
+    page_id = page["id"]
+    offers = (page.get("plan") or {}).get("offers") or {}
+    content = website_offers.build_offers_content(offers)
+
+    supabase.table("website_pages").update(
+        {
+            "content_source": "composed",
+            "source_id": None,
+            "content": content,
+            "title": content.get("title") or page.get("title") or "",
+            "status": "draft",
+            "error": None,
+            "content_hash": None,
+            "updated_at": "now()",
+        }
+    ).eq("id", page_id).execute()
+
+    logger.info("website_generate.offers_written", extra={"page_id": page_id})
+    return {"page_id": page_id, "generated": True}
+
+
+async def _generate_warranty_page(*, page: dict, website: dict, supabase) -> dict:
+    """The warranty / guarantee singleton: operator-supplied coverage/claim/FAQ
+    facts assembled deterministically, with only the promise + explainer PROSE
+    narrated (never the terms) by one best-effort LLM call.
+
+    No brand-context gate — the coverage terms are real facts the operator entered,
+    so the page must ship even for a client with no voice guide; the narration
+    simply matches the guide when one is present and is best-effort besides.
+    """
+    from services import website_warranty
+
+    page_id = page["id"]
+    warranty = (page.get("plan") or {}).get("warranty") or {}
+
+    client = (
+        supabase.table("clients").select("*").eq("id", website["client_id"]).limit(1).execute()
+    ).data
+    client_row = client[0] if client else None
+
+    narrated = await website_warranty.narrate_warranty(warranty, client_row)
+    content = website_warranty.build_warranty_content(warranty, narrated)
+
+    supabase.table("website_pages").update(
+        {
+            "content_source": "composed",
+            "source_id": None,
+            "content": content,
+            "title": content.get("title") or page.get("title") or "",
+            "status": "draft",
+            "error": None,
+            "content_hash": None,
+            "updated_at": "now()",
+        }
+    ).eq("id", page_id).execute()
+
+    logger.info(
+        "website_generate.warranty_written",
         extra={"page_id": page_id, "narrated": bool(narrated)},
     )
     return {"page_id": page_id, "generated": True}

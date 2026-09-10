@@ -1458,8 +1458,27 @@ built next (2026-09-10)** — a blog Writer run (Writer #8) reusing the posts
 collection + `/blog/[...slug]` route entirely (no new route/collection), a calm
 diagnostic-triage brief (`compose_problem_notes`, never geo-targeted), manual-add
 only + release-excluded, with an optional "Known causes / SME notes" field the
-writer uses rather than inventing causes. Remaining Tier-B with no template AND no
-engine: offers, warranty.
+writer uses rather than inventing causes. **Offers / warranty pages built last
+(2026-09-10)** — the final two ⭐ extension singletons, both structured,
+operator-supplied and invent-nothing: **Offers/specials** (`offers`, `/specials/`,
+pure assembly, no LLM — `website_offers.py`) and **Warranty/guarantee**
+(`warranty`, `/warranty/`, coverage/claim/FAQ facts assembled deterministically +
+promise/explainer prose narrated invent-nothing — `website_warranty.py`). Both are
+one-per-site id-addressed `pages` entries at their reserved slug (like the FAQ),
+with their own static routes that decline until generated, new engines
+`offers`/`warranty`, `AddPageRequest.offers`/`.warranty` + PagesTab modals, and new
+template components `OfferCardGrid`/`SpecTable`/`StepList` + `schema.offer()`.
+Folded-in fix: the Generate button's `generable` filter and the `/generate` route's
+brand-context gate were both too narrow (excluded run/project/offers/warranty) —
+widened + made per-page-aware (`website_generate.BRAND_CONTEXT_ENGINES`). **This
+completes the Tier-B page-type set** — every catalog type with a ratified URL now
+has a route + engine, so `UNRENDERABLE_PAGE_TYPES` has no real gap left. **Project-photo
+uploader built (2026-09-10)** — the Add-project form now uploads a file (or re-hosts a
+pasted URL) into the site's own public bucket via `POST /websites/{id}/photo` +
+`/photo-from-url` (`website_images.upload_project_photo`/`import_project_photo_from_url`,
+validated + real-format-sniffed), so a case study's imagery is a stable self-hosted URL,
+never an external link that can rot. Remaining Website-Builder work: custom domains,
+GSC auto-verify.
 
 - **Comparison** (`comparison`, `/compare/{a}-vs-{b}/`) — the `run` engine (a
   blog Writer run with a verdict-first, honest-tradeoffs brief on writer notes,

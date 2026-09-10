@@ -1,0 +1,126 @@
+---
+import { has } from '../../lib/site';
+
+/**
+ * Shared Component Library: a full-bleed hero — the image sits BEHIND the copy,
+ * under a dark overlay so the text stays readable over any photo. The layout
+ * variant a screen selects when the design's hero is a background/cover image
+ * (manifest `hero.layout: "background"`), as opposed to the side-by-side
+ * HeroStandard (`split`) or the PageHeader + band (`band`).
+ *
+ * Props mirror HeroStandard so a route can swap between them on one value.
+ * Content-agnostic and robust: with no image it falls back to a solid accent
+ * ground (still a finished hero, never a broken frame), and the copy is always
+ * legible because the overlay is on a gradient, not the photo's luck.
+ */
+interface Props {
+  eyebrow?: string;
+  title: string;
+  lede?: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+  secondaryLabel?: string;
+  secondaryHref?: string;
+  image?: string;
+  imageAlt?: string;
+}
+
+const {
+  eyebrow,
+  title,
+  lede,
+  ctaLabel,
+  ctaHref,
+  secondaryLabel,
+  secondaryHref,
+  image,
+  imageAlt = '',
+} = Astro.props;
+
+const showMedia = has(image);
+---
+
+<section class:list={['hero-bg', { 'hero-bg--solid': !showMedia }]}>
+  {showMedia && <img class="hero-bg__img" src={image} alt={imageAlt} width="1600" height="720" loading="eager" />}
+  <div class="hero-bg__overlay" aria-hidden="true"></div>
+  <div class="wrap hero-bg__inner">
+    {has(eyebrow) && <p class="eyebrow hero-bg__eyebrow">{eyebrow}</p>}
+    <h1 class="hero-bg__title">{title}</h1>
+    {has(lede) && <p class="lede hero-bg__lede">{lede}</p>}
+    {(has(ctaHref) || has(secondaryHref)) && (
+      <div class="hero-bg__actions">
+        {has(ctaHref) && <a class="button" href={ctaHref}>{ctaLabel}</a>}
+        {has(secondaryHref) && (
+          <a class="button button--ghost hero-bg__ghost" href={secondaryHref}>{secondaryLabel}</a>
+        )}
+      </div>
+    )}
+  </div>
+</section>
+
+<style>
+  .hero-bg {
+    position: relative;
+    isolation: isolate;
+    display: flex;
+    align-items: center;
+    min-height: 22rem;
+    border-bottom: 1px solid var(--color-border);
+    overflow: hidden;
+  }
+  /* No image sourced yet → a solid brand ground, still a finished hero. */
+  .hero-bg--solid {
+    background: var(--color-accent);
+  }
+  .hero-bg__img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: -2;
+  }
+  /* A dark gradient, not the photo's luck, is what keeps the copy legible. */
+  .hero-bg__overlay {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background: linear-gradient(
+      100deg,
+      rgba(15, 23, 42, 0.78) 0%,
+      rgba(15, 23, 42, 0.58) 55%,
+      rgba(15, 23, 42, 0.42) 100%
+    );
+  }
+  .hero-bg__inner {
+    padding-block: var(--space-8) var(--space-7);
+    color: #fff;
+    max-width: 46rem;
+  }
+  .hero-bg__eyebrow {
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .hero-bg__title {
+    font-size: var(--text-4xl);
+    font-weight: 700;
+    max-width: 22ch;
+    color: #fff;
+  }
+  .hero-bg__lede {
+    margin: var(--space-5) 0 0;
+    max-width: 58ch;
+    color: rgba(255, 255, 255, 0.92);
+  }
+  .hero-bg__actions {
+    display: flex;
+    gap: var(--space-3);
+    margin-top: var(--space-6);
+    flex-wrap: wrap;
+  }
+  /* The ghost button's default border is the ink colour; on the dark hero it
+     needs to read against the photo, so it borrows white here. */
+  .hero-bg__ghost {
+    border-color: rgba(255, 255, 255, 0.7);
+    color: #fff;
+  }
+</style>

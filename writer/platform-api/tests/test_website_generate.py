@@ -264,6 +264,53 @@ class TestGeneratePage:
         assert result["generated"] is True
         assert tables["website_pages"].update.call_args[0][0]["content_source"] == "composed"
 
+    async def test_an_offers_page_is_written_by_the_offers_engine(self):
+        # Pure assembly — no LLM, no brand gate. The offer cards ride on plan.offers.
+        page = {"id": "p1", "website_id": "w1", "page_type": "offers", "title": "Current Offers",
+                "plan": {"engine": "offers",
+                         "offers": {"offers": [{"title": "$50 off", "value": "Save $50"}],
+                                    "fine_print": "One per household"}}}
+        sb, tables = _supabase(page, SITE, {"id": "c1"})  # no brand_voice — still writes
+        with patch.object(wg, "get_supabase", return_value=sb):
+            result = await wg.generate_page(page_id="p1", user_id="u1")
+
+        assert result == {"page_id": "p1", "generated": True}
+        written = tables["website_pages"].update.call_args[0][0]
+        assert written["content_source"] == "composed" and written["source_id"] is None
+        assert written["content_hash"] is None
+        s = written["content"]["frontmatter"]["sections"]
+        assert s["offers"][0]["title"] == "$50 off"
+        assert s["finePrint"] == "One per household"
+
+    async def test_a_warranty_page_is_written_by_the_warranty_engine(self):
+        page = {"id": "p1", "website_id": "w1", "page_type": "warranty", "title": "Our Guarantee",
+                "plan": {"engine": "warranty",
+                         "warranty": {"promise": "We fix it free.",
+                                      "coverage": [{"item": "Workmanship", "duration": "10 years"}],
+                                      "manufacturer_vs_workmanship": "Parts vs. labor."}}}
+        sb, tables = _supabase(page, SITE, {"id": "c1"})  # no brand_voice — still writes
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_warranty.narrate_warranty", new=AsyncMock(return_value=None)
+        ) as narrate:
+            result = await wg.generate_page(page_id="p1", user_id="u1")
+
+        assert result == {"page_id": "p1", "generated": True}
+        narrate.assert_awaited_once()
+        written = tables["website_pages"].update.call_args[0][0]
+        assert written["content_source"] == "composed" and written["source_id"] is None
+        s = written["content"]["frontmatter"]["sections"]
+        assert s["promise"] == "We fix it free."
+        assert s["coverage"][0]["item"] == "Workmanship"
+        # The explainer (raw, since narration returned None) is the body.
+        assert "## Manufacturer vs. workmanship" in written["content"]["body"]
+
+    async def test_brand_context_engines_excludes_the_structured_singletons(self):
+        # The route's batch brand-context gate reads this set; project/offers/
+        # warranty are operator-facts engines and must NOT require a voice guide.
+        assert wg.BRAND_CONTEXT_ENGINES == {"nlp", "core_pages", "run"}
+        for engine in ("project", "offers", "warranty", "template"):
+            assert engine not in wg.BRAND_CONTEXT_ENGINES
+
     async def test_a_plan_row_with_no_keyword_fails_loudly(self):
         page = {"id": "p1", "website_id": "w1", "page_type": "service",
                 "plan": {"engine": "nlp", "keyword": ""}}

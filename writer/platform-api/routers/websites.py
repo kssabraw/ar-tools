@@ -24,6 +24,7 @@ from services import (
     website_content_plan,
     website_deploy,
     website_generate,
+    website_images,
     website_owner,
     website_plan_store,
     website_provision,
@@ -159,6 +160,16 @@ class AddPageRequest(BaseModel):
     # (headline, location, stats, challenge/work/outcome notes, testimonial,
     # photo URLs, linked service/location) rather than the axis fields.
     project: Optional[dict] = None
+    # The offers/specials and warranty/guarantee singletons carry structured,
+    # operator-supplied facts (offer cards; coverage/claim/FAQ) rather than axes.
+    offers: Optional[dict] = None
+    warranty: Optional[dict] = None
+
+
+class PhotoUrlRequest(BaseModel):
+    """Re-host a project photo from a public URL into the site's own bucket."""
+
+    url: str
 
 
 class FactsUpdateRequest(BaseModel):
@@ -804,10 +815,44 @@ async def add_page(
             angle=body.angle,
             target_keywords=body.target_keywords,
             project=body.project,
+            offers=body.offers,
+            warranty=body.warranty,
         )
     except website_plan_store.ManualPageError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.code)
     return {"page": page, "pages": website_plan_store.stored(website_id)}
+
+
+@router.post("/websites/{website_id}/photo")
+async def upload_project_photo(
+    website_id: str, file: UploadFile = File(...), auth: dict = Depends(require_staff)
+) -> dict:
+    """Store a project / case-study photo in the site's public bucket, returning
+    its durable URL for the Add-project form.
+
+    staff+ like the rest of the page-composition flow. The image is validated and
+    re-hosted here (not committed into the repo) so a case study references a
+    stable self-hosted URL rather than an external link that can rot.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    data = await file.read()
+    url = website_images.upload_project_photo(website_id, data, file.content_type or "")
+    return {"url": url}
+
+
+@router.post("/websites/{website_id}/photo-from-url")
+async def import_project_photo(
+    website_id: str, body: PhotoUrlRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Re-host a project photo from a public URL into the site's own bucket, so a
+    pasted URL becomes a stable self-hosted asset like an upload."""
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    url = await website_images.import_project_photo_from_url(website_id, body.url)
+    return {"url": url}
 
 
 @router.post("/websites/{website_id}/plan/approve")
@@ -879,16 +924,28 @@ async def generate_pages(
     ).data
     if not client:
         raise HTTPException(status_code=404, detail="client_not_found")
-    if not website_generate.has_brand_context(client[0]):
-        # Upstream of the -degraded run rather than downstream of it: the same
-        # rule §5.4 applies at publish, moved to where it prevents the spend.
-        raise HTTPException(status_code=409, detail="content_no_brand_context")
 
-    page_ids = website_plan_store.coerce_ids(
-        website_plan_store.stored(website_id), body.page_ids
-    )
+    stored_pages = website_plan_store.stored(website_id)
+    page_ids = website_plan_store.coerce_ids(stored_pages, body.page_ids)
     if not page_ids:
         raise HTTPException(status_code=400, detail="no_pages_selected")
+
+    # The brand-context gate is upstream of the -degraded run rather than
+    # downstream of it: §5.4 applies at publish, moved here to prevent the spend.
+    # But it applies ONLY to the engines that write prose in the client's voice —
+    # the structured engines (project/offers/warranty) are operator-entered facts
+    # and generate for a brand-less client, so a batch of only those is never
+    # blocked. If any selected page needs a voice and none is on file, hold the
+    # whole batch (the brand-requiring pages would otherwise burn spend on a
+    # -degraded run).
+    selected = {p_id for p_id in page_ids}
+    needs_brand = any(
+        (row.get("plan") or {}).get("engine") in website_generate.BRAND_CONTEXT_ENGINES
+        for row in stored_pages
+        if row.get("id") in selected
+    )
+    if needs_brand and not website_generate.has_brand_context(client[0]):
+        raise HTTPException(status_code=409, detail="content_no_brand_context")
 
     job_ids = website_generate.enqueue_generation(
         website_id=website_id,

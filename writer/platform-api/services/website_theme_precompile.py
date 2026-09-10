@@ -425,6 +425,56 @@ def _clamp_hero_image(value: Optional[str]) -> Optional[str]:
     return value if value in HERO_IMAGE_POSITIONS else None
 
 
+# The hero LAYOUT lever (image side is the first). In lockstep with
+# src/lib/layouts.ts HERO_LAYOUTS. `band` (PageHeader + full-width image band) is
+# the template's inner-page default and is never emitted by the measurement below
+# — it is the resolver's fallback when a screen declares no layout — but it stays
+# a valid whitelist value, reserved for a later, more confident band signal (the
+# same way `none` is reserved on the image-position axis).
+HERO_LAYOUTS = ("band", "split", "background")
+
+# A full-bleed cue on the hero image's own label. `banner`/`cover` are already
+# generic hero hints, so promoting to `background` needs a stronger word that
+# specifically means "image behind the copy".
+_HERO_FULLBLEED_RE = re.compile(r"\b(background|full[- ]?bleed|overlay|backdrop)\b", re.I)
+
+
+def hero_layout(screen_html: str) -> Optional[str]:
+    """The hero LAYOUT a screen declares, by the same DOM read the position uses.
+
+    Returns ``'background'`` when the screen's hero image slot reads as a
+    full-bleed backdrop (an explicit cue on its label), ``'split'`` when it
+    carries a hero image beside the copy, or ``None`` when it carries no hero
+    image at all — which the resolver renders as the ``'band'`` default, so a
+    screen the design never drew a hero for keeps the house header + band.
+
+    Conservative on purpose: a plain hero image is ``'split'`` (the side-by-side
+    hero the design showed), and only an explicit full-bleed cue promotes it to
+    ``'background'`` — an ambiguous screen never guesses full-bleed. The
+    band-vs-split ambiguity a flat prototype can't resolve (a full-width banner
+    reads the same as a side-by-side hero in DOM order) is resolved toward
+    ``'split'``, since enabling the side-by-side inner-page hero is the point;
+    ``'band'`` stays reachable as the whitelist value for a future band signal.
+    """
+    html = screen_html or ""
+    hero_label: Optional[str] = None
+    for match in _PLACEHOLDER_RE.finditer(html):
+        label = match.group(1)
+        if _IMAGE_HINT_RE.search(label) and _HERO_HINT_RE.search(label):
+            hero_label = label
+            break
+    if hero_label is None:
+        return None
+    if _HERO_FULLBLEED_RE.search(hero_label):
+        return "background"
+    return "split"
+
+
+def _clamp_hero_layout(value: Optional[str]) -> Optional[str]:
+    """Whitelist guard: a layout the template can't render is dropped (→ default)."""
+    return value if value in HERO_LAYOUTS else None
+
+
 # Card-grid density — how many columns the design's own card grids use. The
 # template's CardGridBase otherwise derives columns from a fixed min width and
 # so never honours a design that is, say, deliberately 2-up and spacious. This
@@ -485,9 +535,15 @@ def build_layout_manifest(pre: "Precompiled") -> dict:
     """
     screens: dict[str, dict] = {}
     for screen in pre.screens:
+        hero: dict = {}
         position = _clamp_hero_image(hero_image_position(screen.html))
         if position:
-            screens[screen.key] = {"hero": {"image": position}}
+            hero["image"] = position
+        layout = _clamp_hero_layout(hero_layout(screen.html))
+        if layout:
+            hero["layout"] = layout
+        if hero:
+            screens[screen.key] = {"hero": hero}
 
     manifest: dict = {"version": LAYOUT_MANIFEST_VERSION, "screens": screens}
 
