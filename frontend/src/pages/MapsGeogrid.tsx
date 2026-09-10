@@ -70,6 +70,12 @@ export function MapsGeogrid() {
 
   const inFlight = (scans ?? []).some(s => s.status === 'polling' || s.status === 'pending')
   const scanning = inFlight || recentlyRan
+  // Live pin progress for the in-flight scan (DataForSEO grids report it), so the
+  // in-progress banner shows a real, advancing "N / M pins" bar instead of a fake
+  // indeterminate one — the missing signal that led users to cancel + re-run.
+  const active = (scans ?? []).find(s => s.status === 'polling' || s.status === 'pending')
+  const progress: ScanProgress | null =
+    active && active.pins_total ? { done: active.pins_done ?? 0, total: active.pins_total } : null
 
   // Badge the "What changed" tab with the unread geo-grid alert count.
   const { data: alerts } = useQuery<MapsAlertsResponse>({
@@ -116,18 +122,18 @@ export function MapsGeogrid() {
       ) : tab === 'history' ? (
         <History clientId={clientId} scans={scans ?? []} onOpen={() => setTab('heatmap')} />
       ) : tab === 'oneoffs' ? (
-        <OneOffs clientId={clientId} scans={scans ?? []} scanning={scanning} onRan={markRun} onStopped={stopRun} />
+        <OneOffs clientId={clientId} scans={scans ?? []} scanning={scanning} progress={progress} onRan={markRun} onStopped={stopRun} />
       ) : tab === 'changes' ? (
         <WhatChanged clientId={clientId} />
       ) : (
-        <Heatmap clientId={clientId} scanning={scanning} onRan={markRun} onStopped={stopRun} />
+        <Heatmap clientId={clientId} scanning={scanning} progress={progress} onRan={markRun} onStopped={stopRun} />
       )}
     </div>
   )
 }
 
 // ── Heatmap (latest completed scan) ─────────────────────────────────────────
-function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; scanning: boolean; onRan: () => void; onStopped: () => void }) {
+function Heatmap({ clientId, scanning, progress, onRan, onStopped }: { clientId: string; scanning: boolean; progress: ScanProgress | null; onRan: () => void; onStopped: () => void }) {
   // When we FIRST observed a report in 'pending' (null = none pending). Bounds
   // the report polling below: a row stuck at pending (report job dead, worker
   // down) must not poll every 8s for the life of the tab. Keyed on observation
@@ -176,7 +182,7 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
   if (error || !latest) {
     return (
       <div>
-        {busy && <InProgressBanner />}
+        {busy && <InProgressBanner progress={progress} />}
         <div style={card}>
           {!busy && (
             <p style={{ ...muted, marginTop: 0 }}>
@@ -220,7 +226,7 @@ function Heatmap({ clientId, scanning, onRan, onStopped }: { clientId: string; s
           endpoint={`/clients/${clientId}/authority/maps`}
           onClose={() => setAuthorityOpen(false)} />
       )}
-      {busy && <InProgressBanner />}
+      {busy && <InProgressBanner progress={progress} />}
 
       {latest.results.length === 0 ? (
         <div style={card}><p style={muted}>This scan returned no keyword results.</p></div>
@@ -653,7 +659,17 @@ function RunScanControls({ runner, scanning }: { runner: ScanRunner; scanning: b
   return (
     <>
       {busy && (
-        <button style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }} onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}>
+        <button
+          style={{ ...outlineBtn, color: '#dc2626', borderColor: '#fecaca' }}
+          onClick={() => {
+            // Stopping discards the in-progress grid and saves no heatmap — a
+            // full grid takes several minutes, so guard against a reflex click.
+            if (window.confirm('Stop this scan? Progress so far is discarded and no heatmap is saved. A full grid can take 10–15 minutes to finish on its own.')) {
+              cancelMut.mutate()
+            }
+          }}
+          disabled={cancelMut.isPending}
+        >
           <Square size={13} /> {cancelMut.isPending ? 'Stopping…' : 'Stop scan'}
         </button>
       )}
@@ -675,7 +691,10 @@ function RunScanControls({ runner, scanning }: { runner: ScanRunner; scanning: b
   )
 }
 
-function InProgressBanner() {
+/** Live pin progress for an in-flight geo-grid scan. */
+type ScanProgress = { done: number; total: number }
+
+function InProgressBanner({ progress }: { progress?: ScanProgress | null }) {
   const [secs, setSecs] = useState(0)
   useEffect(() => {
     const t = setInterval(() => setSecs(s => s + 1), 1000)
@@ -683,19 +702,27 @@ function InProgressBanner() {
   }, [])
   const mm = Math.floor(secs / 60)
   const ss = String(secs % 60).padStart(2, '0')
+  // A determinate bar once the backend reports pin counts (DataForSEO grids);
+  // otherwise the old indeterminate sweep while the first pins are still posting.
+  const hasPct = !!(progress && progress.total > 0)
+  const pct = hasPct ? Math.min(99, Math.round(100 * progress!.done / progress!.total)) : null
   return (
     <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, background: '#fffbeb', border: '1px solid #fde68a', marginBottom: 16 }}>
       <span className="ld-spin" style={{ width: 24, height: 24, borderRadius: 999, border: '3px solid #fcd34d', borderTopColor: '#d97706', flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e', display: 'flex', justifyContent: 'space-between' }}>
-          <span>Scan in progress…</span>
+          <span>Scan in progress…{hasPct ? ` ${progress!.done} / ${progress!.total} points (${pct}%)` : ''}</span>
           <span style={{ fontVariantNumeric: 'tabular-nums', color: '#b45309' }}>{mm}:{ss}</span>
         </div>
         <div style={{ fontSize: 13, color: '#b45309', margin: '2px 0 8px' }}>
-          Scanning the grid across Google Maps — usually a couple of minutes. The heatmap appears here automatically when it’s done; you can leave this page.
+          Checking your Maps rank at every point on the grid — a large grid can take 10–15 minutes. The heatmap appears here automatically when it’s done; you can leave this page and it keeps running.
         </div>
         <div style={{ height: 6, borderRadius: 999, background: '#fde68a', overflow: 'hidden' }}>
-          <div className="ld-bar" style={{ height: '100%', width: '35%', borderRadius: 999, background: '#d97706' }} />
+          {hasPct ? (
+            <div style={{ height: '100%', width: `${pct}%`, borderRadius: 999, background: '#d97706', transition: 'width .4s ease' }} />
+          ) : (
+            <div className="ld-bar" style={{ height: '100%', width: '35%', borderRadius: 999, background: '#d97706' }} />
+          )}
         </div>
       </div>
       <style>{'@keyframes ld-spin{to{transform:rotate(360deg)}}.ld-spin{animation:ld-spin .9s linear infinite}@keyframes ld-bar{0%{margin-left:-35%}100%{margin-left:100%}}.ld-bar{animation:ld-bar 1.4s ease-in-out infinite}'}</style>
@@ -1117,10 +1144,11 @@ function History({ clientId, scans }: { clientId: string; scans: MapsScanSummary
 
 // Manual spot checks: run one now, and see the ones already run. Kept apart from
 // the scheduled record so ad-hoc runs never read as campaign history.
-function OneOffs({ clientId, scans, scanning, onRan, onStopped }: {
+function OneOffs({ clientId, scans, scanning, progress, onRan, onStopped }: {
   clientId: string
   scans: MapsScanSummary[]
   scanning: boolean
+  progress: ScanProgress | null
   onRan: () => void
   onStopped: () => void
 }) {
@@ -1131,7 +1159,7 @@ function OneOffs({ clientId, scans, scanning, onRan, onStopped }: {
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end', marginBottom: 14 }}>
         <RunScanControls runner={runner} scanning={scanning} />
       </div>
-      {scanning && <InProgressBanner />}
+      {scanning && <InProgressBanner progress={progress} />}
       {runner.runMut.error && <div style={{ ...errorBox, marginBottom: 12 }}>{(runner.runMut.error as Error).message}</div>}
       <ScanList
         clientId={clientId}
