@@ -69,6 +69,22 @@ function emptyPsRecord<T>(value: T): Record<PageStructureType, T> {
   ) as Record<PageStructureType, T>
 }
 
+// Whether a Search Console property string is in a shape the backend can register
+// into the rank tracker. Mirrors the server's gsc_service.normalize_site_url:
+// a domain property is `sc-domain:host` (host has no slash/space); a url-prefix
+// property is a full http(s):// URL. An empty value is fine (nothing to register).
+// Anything else saves on the client row but is skipped by the auto-register step,
+// so we surface that inline rather than leaving it a silent server-side no-op.
+function gscPropertyRegisterable(raw: string): boolean {
+  const v = raw.trim()
+  if (!v) return true
+  if (v.startsWith('sc-domain:')) {
+    const host = v.slice('sc-domain:'.length).trim()
+    return host.length > 0 && !host.includes('/') && !host.includes(' ')
+  }
+  return v.startsWith('http://') || v.startsWith('https://')
+}
+
 const empty: FormData = {
   name: '', website_url: '', brand_guide_text: '', icp_text: '', google_drive_folder_id: '',
   df_blog_post: '', df_service_page: '', df_location_page: '', df_local_seo_page: '', df_ecom_page: '', df_use_case: '',
@@ -611,6 +627,11 @@ export function ClientForm() {
             <p style={hintStyle}>
               The property exactly as it appears in Search Console. Saving registers it for the rank tracker. To finish connecting, open the client's workspace → Rankings → Settings, add the agency service account as a user on that property in Google, and verify — then we pull clicks &amp; impressions.
             </p>
+            {!gscPropertyRegisterable(form.gsc_property) && (
+              <p style={{ ...hintStyle, color: '#b45309' }}>
+                This isn't a format Search Console accepts, so it will save but won't register for the rank tracker. Use <code>sc-domain:example.com</code> (a Domain property) or <code>https://example.com/</code> (a URL-prefix property).
+              </p>
+            )}
           </div>
           <div>
             <label style={labelStyle}>Primary Business Location</label>

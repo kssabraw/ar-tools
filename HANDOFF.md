@@ -1,6 +1,22 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-04 · **GBP Profile Editor module — ✅ BUILT + MERGED ([#1011](https://github.com/kssabraw/ar-tools/pull/1011), squash `07e1038`), shipped dark** (latest)
+## ⏩ Update — 2026-09-10 · **Client-form "Roadmap" badges resolved: Search Console field now auto-registers (live); stale GitHub badge dropped** (latest)
+
+The client form's **"Roadmap"** (`ParkedBadge`) tag marked fields saved-but-not-yet-read. Two were stale, both fixed in **PR [#1055](https://github.com/kssabraw/ar-tools/pull/1055) (merged + auto-deployed to PLATFORM)** plus same-day follow-ups (this branch):
+
+- **GitHub Publishing — badge removed.** Its fields (`github_repo`/`github_branch`/`github_content_path` + overrides) are read by the live publish path (`routers/publish.py` → `services/github_publish.py`) and `GITHUB_PUBLISH_TOKEN` is set on PLATFORM, so the badge + "Dormant until a GitHub token is configured" clause were untrue. Removed both.
+- **Search Console Property — now actually live.** The `clients.gsc_property` column was written but **never read** (the rank tracker uses the separate `gsc_properties` registry, registered via `routers/gsc.py`, resolved by `rank_materialize._verified_property`). New best-effort, idempotent helper **`routers/clients._ensure_gsc_property_registered`** seeds a `pending` `gsc_properties` row on save, reusing `gsc_service.infer_property_type`/`normalize_site_url` (same normalization as the manual connect flow). The external "add the service-account email as a user + verify access" step still happens in **Rankings → Settings** (`RankSettings.tsx`) — a text field can't grant GSC access — so the field's helper text points there.
+- **Cleanup:** removed the now-dead badge legend + the unused `ParkedBadge` component/style.
+
+**Follow-up fixes (adversarial review, this branch):**
+- **Self-healing (was change-gated).** The update path now calls the helper on **every** save that carries a property (`if body.gsc_property is not None:`), not only when the value changed. The helper is idempotent (one indexed lookup, no-ops if a row exists) and cheap, so any client-form save reconciles a missing registry row — no more manual backfills. (`routers/clients.py`)
+- **Inline format feedback.** A pure `gscPropertyRegisterable()` on the client form mirrors the server normalization and shows an amber, non-blocking hint when the entry isn't a shape GSC accepts (`sc-domain:example.com` or `https://example.com/`) — so a bad value no longer fails registration as a silent server-side no-op. (`ClientForm.tsx`)
+
+**Deliberately NOT changed (design note):** the helper never updates/deletes registrations. Changing a client's property to a new value adds a *second* `gsc_properties` row (each distinct `site_url` is its own registration) and clearing the field leaves the old registration intact — this avoids dropping ingested GSC rank data, and the Rankings → Settings panel is where multiples are managed/deleted. Consistent with the existing module.
+
+**Live verification + backfill (2026-09-10):** confirmed the deployed PLATFORM commit contains the helper at both call sites and booted healthy; the `gsc_properties` schema/unique-constraint/FKs match what the helper writes; **every** GSC consumer gates on `access_status='ok'`, so a `pending` row is inert until verified. One pre-change gap client (**First Class Roofing**, `gsc_property` set but no registry row) was **backfilled live** — seeded `https://firstclassroofing.com.au/` / `url_prefix` / `pending` (0 → the row; registry rows 8 → 9; gap count → 0). That row is `pending`; someone still needs to add the service account + verify in Rankings → Settings before data flows.
+
+## ⏩ Update — 2026-09-04 · **GBP Profile Editor module — ✅ BUILT + MERGED ([#1011](https://github.com/kssabraw/ar-tools/pull/1011), squash `07e1038`), shipped dark**
 
 The suite's **second GBP write integration** (after Posts): a per-client tool to read + edit a client's Google Business Profile **description, services, and operating hours** via the Business Information API v1 `locations.patch`, every edit **AI-drafted → operator-reviewed → applied on an explicit click**. **Nothing is auto-applied** — the deliberate divergence from GBP Posts, recorded in `docs/adr/0004-gbp-profile-edits-never-auto-applied.md`. Scope was **Phases 0–2** per `docs/modules/gbp-profile-editor-prd-v1_0.md`; Phase 3 (structured services, a real `service_gap` `gbp_audit` check, categories/attributes, periodic drift) is deferred. `platform-api` + frontend only.
 
