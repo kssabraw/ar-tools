@@ -4,6 +4,8 @@ import { render } from 'astro:content';
 import Layout from '../layouts/Layout.astro';
 import BreadcrumbBar from '../theme/components/BreadcrumbBar.astro';
 import PageHeader from '../theme/components/PageHeader.astro';
+import HeroStandard from '../theme/components/HeroStandard.astro';
+import HeroBackground from '../theme/components/HeroBackground.astro';
 import ServiceCardGrid from '../theme/components/ServiceCardGrid.astro';
 import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
 import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
@@ -22,6 +24,7 @@ import {
 import { service, article } from '../lib/schema';
 import { breadcrumbList } from '../lib/schema';
 import { site } from '../lib/site';
+import { heroImagePosition, heroLayout, heroScreenKey } from '../lib/layouts';
 
 /**
  * The root namespace: services, cities, the service × city matrix, and their
@@ -82,17 +85,32 @@ const eyebrow =
         : page.pageType === 'cost'
           ? 'Pricing'
           : 'Service';
+
+// The hero layout the design's manifest selects for this page family, defaulting
+// to `band` (a PageHeader + full-width image band) — the house behaviour, so an
+// unmeasured theme renders exactly as before this seam. `split` / `background`
+// swap in a side-by-side or full-bleed hero in place of the header + band.
+const screenKey = heroScreenKey(page.pageType);
+const heroLayoutValue = heroLayout(screenKey, 'band');
+const heroLede = page.pageType === 'pillar' ? page.description : page.teaser || page.description;
 ---
 
 {isPillar ? (
 <Layout title={page.title} description={page.description} image={d.heroImage} jsonld={ld}>
   <BreadcrumbBar crumbs={crumbs} />
-  <PageHeader eyebrow={eyebrow} title={page.title} lede={page.description} />
-
-  {d.heroImage && (
-    <div class="wrap media">
-      <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
-    </div>
+  {heroLayoutValue === 'split' ? (
+    <HeroStandard eyebrow={eyebrow} title={page.title} lede={heroLede} image={d.heroImage} imageAlt={d.heroImageAlt} imagePosition={heroImagePosition(screenKey)} />
+  ) : heroLayoutValue === 'background' ? (
+    <HeroBackground eyebrow={eyebrow} title={page.title} lede={heroLede} image={d.heroImage} imageAlt={d.heroImageAlt} />
+  ) : (
+    <Fragment>
+      <PageHeader eyebrow={eyebrow} title={page.title} lede={heroLede} />
+      {d.heroImage && (
+        <div class="wrap media">
+          <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
+        </div>
+      )}
+    </Fragment>
   )}
 
   <div class="prose-wrap richtext body">
@@ -116,12 +134,19 @@ const eyebrow =
 ) : (
 <Layout title={page.title} description={page.description} image={d.heroImage} jsonld={ld}>
   <BreadcrumbBar crumbs={crumbs} />
-  <PageHeader eyebrow={eyebrow} title={page.title} lede={page.teaser || page.description} />
-
-  {d.heroImage && (
-    <div class="wrap media">
-      <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
-    </div>
+  {heroLayoutValue === 'split' ? (
+    <HeroStandard eyebrow={eyebrow} title={page.title} lede={heroLede} image={d.heroImage} imageAlt={d.heroImageAlt} imagePosition={heroImagePosition(screenKey)} />
+  ) : heroLayoutValue === 'background' ? (
+    <HeroBackground eyebrow={eyebrow} title={page.title} lede={heroLede} image={d.heroImage} imageAlt={d.heroImageAlt} />
+  ) : (
+    <Fragment>
+      <PageHeader eyebrow={eyebrow} title={page.title} lede={heroLede} />
+      {d.heroImage && (
+        <div class="wrap media">
+          <img src={d.heroImage} alt={d.heroImageAlt} width="960" height="480" loading="eager" />
+        </div>
+      )}
+    </Fragment>
   )}
 
   <div class="prose-wrap richtext body">

@@ -27,6 +27,27 @@ const HERO_IMAGE_POSITIONS = new Set<HeroImagePosition>(['right', 'left', 'none'
 // theme) renders exactly as before this seam existed.
 const HERO_IMAGE_DEFAULT: HeroImagePosition = 'right';
 
+/**
+ * Which *hero layout* a screen renders — the second layout lever (image side is
+ * the first). Orthogonal to position:
+ *
+ *  - `band`  — a full-width image band below a PageHeader. The house default for
+ *    every inner page (service / location / pillar / post).
+ *  - `split` — image beside the copy (HeroStandard), the side chosen by
+ *    `heroImagePosition`. The house default for the home hero.
+ *  - `background` — a full-bleed hero: the image behind overlaid copy
+ *    (HeroBackground).
+ *
+ * The DEFAULT is caller-supplied rather than fixed here, because it differs by
+ * page: the home hero is `split` today, every inner page is `band`. So an absent
+ * manifest (the house theme) resolves to each caller's current behaviour — the
+ * same byte-identical guarantee `heroImagePosition`'s default gives.
+ */
+export type HeroLayout = 'band' | 'split' | 'background';
+
+// In lockstep with the compiler's HERO_LAYOUTS whitelist (cross-language test).
+const HERO_LAYOUTS = new Set<HeroLayout>(['band', 'split', 'background']);
+
 /** How many columns the card grids use. A theme-wide trait, not per-screen. */
 export type CardColumns = 2 | 3 | 4;
 
@@ -34,7 +55,7 @@ const CARD_COLUMNS = new Set<CardColumns>([2, 3, 4]);
 
 interface LayoutManifest {
   version?: number;
-  screens?: Record<string, { hero?: { image?: string } }>;
+  screens?: Record<string, { hero?: { image?: string; layout?: string } }>;
   components?: { cardColumns?: number };
 }
 
@@ -46,6 +67,47 @@ export function heroImagePosition(screen: string): HeroImagePosition {
   return HERO_IMAGE_POSITIONS.has(value as HeroImagePosition)
     ? (value as HeroImagePosition)
     : HERO_IMAGE_DEFAULT;
+}
+
+/**
+ * The hero layout a screen renders, or the caller's `fallback` when the design
+ * didn't declare one (or declared one this template version can't render). The
+ * fallback is how each page keeps its current default — pass `'split'` for the
+ * home hero, `'band'` for an inner page.
+ */
+export function heroLayout(screen: string, fallback: HeroLayout): HeroLayout {
+  const value = manifest.screens?.[screen]?.hero?.layout;
+  return HERO_LAYOUTS.has(value as HeroLayout) ? (value as HeroLayout) : fallback;
+}
+
+/**
+ * The manifest screen key an inner page's hero reads. A design names its screens
+ * by page family (home / service / location / …), while a routed page carries a
+ * finer `pageType`; this folds the family together so a sub-service reads the
+ * `service` screen's hero layout, a neighborhood the `location` screen's, and so
+ * on. A page family the design never drew simply misses the manifest and falls
+ * back to the caller's default — safe, never a broken layout.
+ */
+export function heroScreenKey(pageType: string): string {
+  switch (pageType) {
+    case 'service':
+    case 'sub_service':
+    case 'brand_service':
+    case 'cost':
+      return 'service';
+    case 'location':
+    case 'neighborhood':
+    case 'local_landing':
+    case 'hyper_local':
+      return 'location';
+    case 'pillar':
+      return 'pillar';
+    case 'post':
+    case 'problem':
+      return 'blog_post';
+    default:
+      return pageType;
+  }
 }
 
 /**

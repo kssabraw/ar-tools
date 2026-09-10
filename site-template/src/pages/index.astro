@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import HeroStandard from '../theme/components/HeroStandard.astro';
+import HeroBackground from '../theme/components/HeroBackground.astro';
 import ServiceCardGrid from '../theme/components/ServiceCardGrid.astro';
 import LocationCardGrid from '../theme/components/LocationCardGrid.astro';
 import RelatedPagesBlock from '../theme/components/RelatedPagesBlock.astro';
@@ -8,7 +9,7 @@ import TrustBadgeRow from '../theme/components/TrustBadgeRow.astro';
 import CTABand from '../theme/components/CTABand.astro';
 import ReviewStrip from '../theme/components/ReviewStrip.astro';
 import { site, isLocal, has } from '../lib/site';
-import { heroImagePosition } from '../lib/layouts';
+import { heroImagePosition, heroLayout } from '../lib/layouts';
 import { allPosts, routedPages, pillarRoutedPages, corePage } from '../lib/content';
 
 const home = await corePage('home');
@@ -30,21 +31,30 @@ const locations = pages.filter((p) => p.pageType === 'location');
 // can have topic hubs too, reference §5.3). Empty -> the grid hides itself.
 const pillars = await pillarRoutedPages();
 const latest = posts.slice(0, isLocal ? 3 : 6);
+
+// The home hero's props are shared across the two layouts it can take; the
+// design's manifest picks which. Default `split` (HeroStandard) keeps the home
+// hero byte-identical to before this seam when the design declared no layout.
+const heroProps = {
+  eyebrow: heroEyebrow,
+  title: heroTitle,
+  lede: heroLede,
+  ctaLabel: isLocal ? s.ctaLabel || 'Get a free quote' : undefined,
+  ctaHref: isLocal ? '/contact-us/' : undefined,
+  secondaryLabel: isLocal && services.length > 0 ? 'Browse the site' : undefined,
+  secondaryHref: isLocal && services.length > 0 ? '/sitemap/' : undefined,
+  image: home?.data.heroImage,
+  imageAlt: home?.data.heroImageAlt,
+};
+const homeHeroLayout = heroLayout('home', 'split');
 ---
 
 <Layout title={site.siteName} description={site.description}>
-  <HeroStandard
-    eyebrow={heroEyebrow}
-    title={heroTitle}
-    lede={heroLede}
-    ctaLabel={isLocal ? s.ctaLabel || 'Get a free quote' : undefined}
-    ctaHref={isLocal ? '/contact-us/' : undefined}
-    secondaryLabel={isLocal && services.length > 0 ? 'Browse the site' : undefined}
-    secondaryHref={isLocal && services.length > 0 ? '/sitemap/' : undefined}
-    image={home?.data.heroImage}
-    imageAlt={home?.data.heroImageAlt}
-    imagePosition={heroImagePosition('home')}
-  />
+  {homeHeroLayout === 'background' ? (
+    <HeroBackground {...heroProps} />
+  ) : (
+    <HeroStandard {...heroProps} imagePosition={heroImagePosition('home')} />
+  )}
 
   <ServiceCardGrid
     title={s.servicesTitle || 'What we do'}

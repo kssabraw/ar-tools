@@ -313,6 +313,51 @@ class TestLayoutSelection:
         manifest = pc.build_layout_manifest(result)
         for sel in manifest["screens"].values():
             assert sel["hero"]["image"] in pc.HERO_IMAGE_POSITIONS
+            if "layout" in sel["hero"]:
+                assert sel["hero"]["layout"] in pc.HERO_LAYOUTS
+
+
+class TestHeroLayoutSelection:
+    """The hero LAYOUT lever — band (default) vs split (side-by-side) vs
+    background (full-bleed). Conservative: a plain hero image is split, and only
+    an explicit full-bleed cue promotes it to background; a screen with no hero
+    image declares nothing (→ the resolver's band default)."""
+
+    def test_a_plain_hero_image_is_split(self):
+        html = '<section><h1>We fix roofs</h1><div>[hero photo: a roof]</div></section>'
+        assert pc.hero_layout(html) == "split"
+
+    def test_a_full_bleed_cue_is_background(self):
+        for cue in ("hero background photo: a roof", "hero image, full-bleed: a roof",
+                    "hero overlay photo: a roof", "hero backdrop image: a roof"):
+            html = f'<section><h1>We fix roofs</h1><div>[{cue}]</div></section>'
+            assert pc.hero_layout(html) == "background", cue
+
+    def test_no_hero_image_declares_nothing(self):
+        # → the resolver renders the house `band` default.
+        assert pc.hero_layout('<section><h1>About</h1><p>Prose.</p></section>') is None
+
+    def test_a_thumbnail_is_not_a_hero(self):
+        html = '<section><div>[photo: a small card thumbnail]</div><h1>Topics</h1></section>'
+        assert pc.hero_layout(html) is None
+
+    def test_clamp_rejects_off_whitelist(self):
+        assert pc._clamp_hero_layout("carousel") is None
+        assert pc._clamp_hero_layout(None) is None
+        for good in pc.HERO_LAYOUTS:
+            assert pc._clamp_hero_layout(good) == good
+
+    def test_band_is_a_valid_value_but_never_emitted_by_measurement(self):
+        # `band` is the resolver default, reachable as a whitelist value for a
+        # future signal, but the measurement itself only returns split/background/None.
+        assert "band" in pc.HERO_LAYOUTS
+        assert pc.hero_layout('<section><h1>x</h1><div>[hero photo: y]</div></section>') != "band"
+
+    def test_manifest_carries_the_layout_alongside_the_position(self, result):
+        manifest = pc.build_layout_manifest(result)
+        # The reference export's home/article heroes are plain (no full-bleed cue).
+        assert manifest["screens"]["home"]["hero"]["layout"] == "split"
+        assert manifest["screens"]["article"]["hero"]["layout"] == "split"
 
 
 class TestCardGridDensity:
@@ -397,3 +442,10 @@ class TestWhitelistContractWithTemplate:
         assert m, "could not find CARD_COLUMNS in layouts.ts"
         ts_values = tuple(int(n) for n in re.findall(r"\d+", m.group(1)))
         assert set(ts_values) == set(pc.CARD_COLUMN_CHOICES)
+
+    def test_hero_layouts_match(self):
+        src = self._ts_source()
+        m = re.search(r"HERO_LAYOUTS\s*=\s*new Set<[^>]+>\(\[([^\]]*)\]\)", src)
+        assert m, "could not find HERO_LAYOUTS in layouts.ts"
+        ts_values = tuple(re.findall(r"'([^']+)'", m.group(1)))
+        assert set(ts_values) == set(pc.HERO_LAYOUTS)
