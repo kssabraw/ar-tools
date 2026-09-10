@@ -261,11 +261,33 @@ async def cancel_client_scan(client_id: UUID, auth: dict = Depends(require_auth)
 
 @router.get("/clients/{client_id}/maps/scans", response_model=list[MapsScanSummary])
 async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> list[MapsScanSummary]:
+    supabase = get_supabase()
     rows = (
-        get_supabase().table("maps_scans")
-        .select("id, scan_uuid, status, trigger, radius_miles, grid_size, search_terms, requested_at, completed_at, error")
+        supabase.table("maps_scans")
+        .select("id, scan_uuid, status, trigger, provider, radius_miles, grid_size, search_terms, requested_at, completed_at, error")
         .eq("client_id", str(client_id)).order("created_at", desc=True).limit(50).execute()
     ).data or []
+    # Attach live pin progress to in-flight DataForSEO scans so the UI can show a
+    # real "N / M pins" bar. Only 'polling' dataforseo scans have per-pin rows,
+    # and there is at most one at a time, so this is one small extra query.
+    polling_dfs = [r["id"] for r in rows if r.get("status") == "polling" and r.get("provider") == "dataforseo"]
+    if polling_dfs:
+        pins = (
+            supabase.table("maps_scan_pins").select("scan_id, status")
+            .in_("scan_id", polling_dfs).execute()
+        ).data or []
+        progress: dict[str, dict[str, int]] = {sid: {"done": 0, "total": 0} for sid in polling_dfs}
+        for p in pins:
+            g = progress.get(p.get("scan_id"))
+            if g is None:
+                continue
+            g["total"] += 1
+            if p.get("status") == "done":
+                g["done"] += 1
+        for r in rows:
+            g = progress.get(r["id"])
+            if g and g["total"]:
+                r["pins_done"], r["pins_total"] = g["done"], g["total"]
     return [MapsScanSummary(**r) for r in rows]
 
 

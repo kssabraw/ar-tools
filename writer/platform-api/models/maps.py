@@ -99,12 +99,19 @@ class MapsScanSummary(BaseModel):
     scan_uuid: Optional[str] = None
     status: str
     trigger: str
+    provider: Optional[str] = None
     radius_miles: Optional[int] = None
     grid_size: Optional[int] = None
     search_terms: Optional[list] = None  # keywords scanned (for the history list)
     requested_at: Optional[str] = None
     completed_at: Optional[str] = None
     error: Optional[str] = None
+    # Live progress for an in-flight DataForSEO scan (per-pin task collection).
+    # Populated only for 'polling' dataforseo scans; None otherwise. Lets the UI
+    # show a real "N / M pins" bar so a multi-minute grid scan visibly advances
+    # instead of looking stuck (which drove users to cancel + re-run it).
+    pins_done: Optional[int] = None
+    pins_total: Optional[int] = None
 
 
 class MapsScanDetail(MapsScanSummary):

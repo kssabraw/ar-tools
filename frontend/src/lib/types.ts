@@ -848,12 +848,16 @@ export interface MapsScanSummary {
   scan_uuid: string | null
   status: 'pending' | 'polling' | 'complete' | 'failed' | 'cancelled'
   trigger: 'scheduled' | 'manual'
+  provider?: string | null
   radius_miles: number | null
   grid_size: number | null
   search_terms: string[] | null
   requested_at: string | null
   completed_at: string | null
   error: string | null
+  /** Live pin progress for an in-flight DataForSEO scan (null otherwise). */
+  pins_done?: number | null
+  pins_total?: number | null
 }
 
 export interface MapsScanDetail extends MapsScanSummary {
