@@ -96,9 +96,11 @@ def ensure_scannable(client_id: str, force: bool) -> None:
 
 
 async def scan(client_id: str, force: bool, user_id: str) -> dict:
-    """Run the app ICP analysis and persist detected_icp (source:'app') +
-    differentiators. Refuses to overwrite a user-authored structured ICP unless
-    `force`. GBP-independent: identity falls back to the client row."""
+    """Run the app ICP analysis and persist detected_icp + differentiators.
+    A fresh scan (no user text on file) is source:'app'; a scan that merely
+    enriches a user's freeform ICP write-up (raw_text) keeps source:'user' so
+    the text stays protected. Refuses to overwrite a user-authored structured
+    ICP unless `force`. GBP-independent: identity falls back to the client row."""
     client = _get_client(client_id)
     existing = client.get("detected_icp") or {}
 
@@ -120,11 +122,16 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
 
     # Preserve any user freeform ICP (raw_text) — it still supersedes in
     # rendering — while the scan fills the structured segments around it.
+    # raw_text only ever originates from the user (merge_raw_text / update); the
+    # nlp analysis never returns it. So when we carry it forward the record stays
+    # user-authored: keep source:'user' so the supersede guard and future
+    # re-scans protect the segments we just added around their text. Only a scan
+    # with no user text on file is app-authored.
     preserved_raw = existing.get("raw_text")
     blob = _empty_icp()
     blob.update(
         {
-            "source": "app",
+            "source": "user" if preserved_raw else "app",
             "raw_text": preserved_raw,
             "segments": icp.get("segments"),
             "reasoning": icp.get("reasoning"),

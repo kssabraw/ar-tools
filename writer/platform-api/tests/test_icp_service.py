@@ -144,6 +144,9 @@ def test_scan_allows_raw_text_only_icp_and_preserves_it():
         result = asyncio.run(icp_service.scan("client-1", force=False, user_id="u1"))
     assert result["detected_icp"]["raw_text"] == "We serve panicked homeowners."  # preserved
     assert result["detected_icp"]["segments"][0]["label"] == "Y"                   # enriched
+    # Enriching a user's freeform write-up keeps it user-authored (protects it
+    # from a later auto re-scan); only a scan with no user text on file is 'app'.
+    assert result["detected_icp"]["source"] == "user"
 
 
 def test_scan_forwards_user_id():
