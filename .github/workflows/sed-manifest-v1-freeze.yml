@@ -1,0 +1,29 @@
+name: SED Manifest v1 Geography Freeze
+on:
+  push:
+    branches: [sed-manifest-v1-freeze]
+    paths:
+      - 'tools/sed_manifest_v1/**'
+      - '.github/workflows/sed-manifest-v1-freeze.yml'
+  workflow_dispatch:
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install geospatial dependencies
+        run: pip install --disable-pip-version-check geopandas pyogrio pyproj shapely pandas
+      - name: Run frozen Census 2025 geography classifier
+        run: python tools/sed_manifest_v1/classify_sed_manifest_v1.py
+      - name: Upload deterministic results
+        uses: actions/upload-artifact@v4
+        with:
+          name: sed-manifest-v1-geography
+          path: sed_manifest_output/
+          if-no-files-found: error
+          retention-days: 30
