@@ -96,9 +96,16 @@ def ensure_scannable(client_id: str, force: bool) -> None:
 
 
 async def scan(client_id: str, force: bool, user_id: str) -> dict:
-    """Run the app ICP analysis and persist detected_icp (source:'app') +
-    differentiators. Refuses to overwrite a user-authored structured ICP unless
-    `force`. GBP-independent: identity falls back to the client row."""
+    """Run the app ICP analysis and persist detected_icp + differentiators.
+
+    When the client already has a user-authored freeform write-up (raw_text),
+    the scan *enriches* it — adding structured segments around the preserved
+    text — and keeps ``source:'user'`` so it reads in the UI as the client's own
+    ICP (and, once it carries segments, is protected from later non-force
+    auto-scans by the supersede guard). Only a client with no user text is
+    stored ``source:'app'``. Refuses to overwrite a user-authored *structured*
+    ICP unless ``force``. GBP-independent: identity falls back to the client row.
+    """
     client = _get_client(client_id)
     existing = client.get("detected_icp") or {}
 
@@ -124,7 +131,10 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
     blob = _empty_icp()
     blob.update(
         {
-            "source": "app",
+            # A pasted write-up is the user's content: keep it attributed to them
+            # even as we enrich it with auto-generated segments. Only a scan with
+            # nothing to preserve is genuinely app-sourced.
+            "source": "user" if preserved_raw else "app",
             "raw_text": preserved_raw,
             "segments": icp.get("segments"),
             "reasoning": icp.get("reasoning"),

@@ -144,6 +144,11 @@ def test_scan_allows_raw_text_only_icp_and_preserves_it():
         result = asyncio.run(icp_service.scan("client-1", force=False, user_id="u1"))
     assert result["detected_icp"]["raw_text"] == "We serve panicked homeowners."  # preserved
     assert result["detected_icp"]["segments"][0]["label"] == "Y"                   # enriched
+    # A pasted write-up stays attributed to the user (not relabeled "app") so the
+    # UI shows it as theirs; now carrying segments, it's protected from later
+    # non-force auto-scans by the supersede guard.
+    assert result["detected_icp"]["source"] == "user"
+    assert icp_service._scan_blocked(result["detected_icp"], force=False) is True
 
 
 def test_scan_forwards_user_id():
