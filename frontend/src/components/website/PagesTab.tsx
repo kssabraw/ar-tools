@@ -48,6 +48,7 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [force, setForce] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [addingProject, setAddingProject] = useState(false)
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['website', website.id] })
@@ -144,6 +145,15 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
           style={{ ...btn(addDeny ? '#e2e8f0' : '#fff', addDeny ? '#94a3b8' : ACCENT) }}
         >
           <Plus size={14} /> Add page
+        </button>
+
+        <button
+          onClick={() => setAddingProject(true)}
+          disabled={Boolean(addDeny)}
+          title={addDeny ?? 'Add a case study — real completed-job facts you enter (stats, photos, testimonial). Nothing is invented.'}
+          style={{ ...btn(addDeny ? '#e2e8f0' : '#fff', addDeny ? '#94a3b8' : ACCENT) }}
+        >
+          <Plus size={14} /> Add project
         </button>
 
         <div style={{ width: 1, height: 22, background: '#e2e8f0' }} />
@@ -259,6 +269,14 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
           websiteId={website.id}
           onClose={() => setAdding(false)}
           onDone={() => { setAdding(false); refresh() }}
+        />
+      )}
+
+      {addingProject && (
+        <ProjectModal
+          websiteId={website.id}
+          onClose={() => setAddingProject(false)}
+          onDone={() => { setAddingProject(false); refresh() }}
         />
       )}
     </div>
@@ -439,6 +457,145 @@ function AddPageModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
             style={{ ...btn(missing ? '#e2e8f0' : ACCENT, missing ? '#94a3b8' : '#fff') }}
           >
             {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add page
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Add project (case study) --------------------------------------------
+
+interface StatRow { label: string; value: string }
+interface PhotoRow { url: string; alt: string; caption: string }
+
+const PROJECT_ADD_ERRORS: Record<string, string> = {
+  missing_title: 'Enter a project headline.',
+  reserved_slug: 'That URL collides with a reserved page. Pick a different headline.',
+  page_route_exists: 'A project already exists at that URL.',
+}
+
+function ProjectModal({ websiteId, onClose, onDone }: { websiteId: string; onClose: () => void; onDone: () => void }) {
+  const [headline, setHeadline] = useState('')
+  const [location, setLocation] = useState('')
+  const [challenge, setChallenge] = useState('')
+  const [work, setWork] = useState('')
+  const [outcome, setOutcome] = useState('')
+  const [tQuote, setTQuote] = useState('')
+  const [tAuthor, setTAuthor] = useState('')
+  const [serviceSlug, setServiceSlug] = useState('')
+  const [locationSlug, setLocationSlug] = useState('')
+  const [stats, setStats] = useState<StatRow[]>([{ label: '', value: '' }])
+  const [photos, setPhotos] = useState<PhotoRow[]>([{ url: '', alt: '', caption: '' }])
+
+  const add = useMutation({
+    mutationFn: () => api.post(`/websites/${websiteId}/pages`, {
+      page_type: 'project',
+      title: headline,
+      project: {
+        headline,
+        location: location || undefined,
+        stats: stats.filter((s) => s.label.trim() && s.value.trim()),
+        challenge: challenge || undefined,
+        work: work || undefined,
+        outcome: outcome || undefined,
+        testimonial_quote: tQuote || undefined,
+        testimonial_author: tAuthor || undefined,
+        photos: photos.filter((p) => p.url.trim()),
+        service_slug: serviceSlug || undefined,
+        location_slug: locationSlug || undefined,
+      },
+    }),
+    onSuccess: onDone,
+  })
+
+  const errMsg = add.error
+    ? (PROJECT_ADD_ERRORS[(add.error as Error).message] ?? (add.error as Error).message)
+    : null
+  const ta: React.CSSProperties = { ...input, resize: 'vertical', minHeight: 60 }
+  const rowStyle: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center' }
+
+  return (
+    <div onClick={onClose} style={overlay}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: 560, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto', display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ fontSize: 15 }}>Add a project / case study</strong>
+          <button onClick={onClose} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={15} /></button>
+        </div>
+        <div style={{ fontSize: 11, color: '#64748b' }}>
+          Real completed-job facts only — everything here is what you enter. The writer narrates your
+          challenge/work/result notes into prose and never invents a number, name, or result.
+        </div>
+
+        <Field label="Job headline" value={headline} onChange={setHeadline} placeholder="Emergency oak removal in Anaheim" />
+        <Field label="Location (optional)" value={location} onChange={setLocation} placeholder="Anaheim, CA" />
+
+        <div>
+          <label style={label}>Job facts (stats)</label>
+          {stats.map((s, i) => (
+            <div key={i} style={{ ...rowStyle, marginBottom: 6 }}>
+              <input value={s.label} placeholder="Label — e.g. Completed in"
+                     onChange={(e) => setStats(stats.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} style={input} />
+              <input value={s.value} placeholder="Value — e.g. 1 day"
+                     onChange={(e) => setStats(stats.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} style={input} />
+              <button onClick={() => setStats(stats.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+            </div>
+          ))}
+          {stats.length < 4 && (
+            <button onClick={() => setStats([...stats, { label: '', value: '' }])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
+              <Plus size={12} /> Add stat
+            </button>
+          )}
+        </div>
+
+        <div>
+          <label style={label}>The challenge</label>
+          <textarea value={challenge} onChange={(e) => setChallenge(e.target.value)} rows={2} placeholder="The situation and what made it hard." style={ta} />
+        </div>
+        <div>
+          <label style={label}>What we did</label>
+          <textarea value={work} onChange={(e) => setWork(e.target.value)} rows={2} placeholder="Exactly what was done." style={ta} />
+        </div>
+        <div>
+          <label style={label}>The result</label>
+          <textarea value={outcome} onChange={(e) => setOutcome(e.target.value)} rows={2} placeholder="The measurable outcome." style={ta} />
+        </div>
+
+        <div>
+          <label style={label}>Photos (paste image URLs)</label>
+          {photos.map((p, i) => (
+            <div key={i} style={{ display: 'grid', gap: 4, marginBottom: 8, padding: 8, background: '#f8fafc', borderRadius: 8 }}>
+              <div style={rowStyle}>
+                <input value={p.url} placeholder="https://…/photo.jpg"
+                       onChange={(e) => setPhotos(photos.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} style={input} />
+                <button onClick={() => setPhotos(photos.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+              </div>
+              <div style={rowStyle}>
+                <input value={p.alt} placeholder="Alt text" onChange={(e) => setPhotos(photos.map((x, j) => j === i ? { ...x, alt: e.target.value } : x))} style={input} />
+                <input value={p.caption} placeholder="Caption (optional)" onChange={(e) => setPhotos(photos.map((x, j) => j === i ? { ...x, caption: e.target.value } : x))} style={input} />
+              </div>
+            </div>
+          ))}
+          <button onClick={() => setPhotos([...photos, { url: '', alt: '', caption: '' }])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
+            <Plus size={12} /> Add photo
+          </button>
+        </div>
+
+        <Field label="Testimonial quote (optional)" value={tQuote} onChange={setTQuote} placeholder="They saved our garage." />
+        <Field label="Testimonial author (optional)" value={tAuthor} onChange={setTAuthor} placeholder="M. Reyes" />
+
+        <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ flex: 1 }}><Field label="Link to service slug (optional)" value={serviceSlug} onChange={setServiceSlug} placeholder="tree-removal" /></div>
+          <div style={{ flex: 1 }}><Field label="Link to city slug (optional)" value={locationSlug} onChange={setLocationSlug} placeholder="anaheim" /></div>
+        </div>
+
+        {errMsg && <div style={{ fontSize: 12, color: '#b91c1c' }}>{errMsg}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={btn('#fff', '#64748b')}>Cancel</button>
+          <button onClick={() => add.mutate()} disabled={!headline.trim() || add.isPending}
+                  style={btn(!headline.trim() ? '#e2e8f0' : ACCENT, !headline.trim() ? '#94a3b8' : '#fff')}>
+            {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add project
           </button>
         </div>
       </div>

@@ -345,3 +345,23 @@ class TestExtensionContentLayer:
         [(path, data)] = files.items()
         assert path == "src/content/pages/services.md"
         assert "All we do." in data.decode("utf-8")
+
+
+class TestProjectContentLayer:
+    def test_project_collection_and_routing(self):
+        assert wc.collection_of("project") == "projects"
+        assert "project" in wc.SECTION_CONTENT_PAGE_TYPES
+
+    def test_a_project_is_a_routed_entry(self):
+        fm = wc.frontmatter_for(path="/projects/oak-removal/", page_type="project", title="Oak")
+        assert fm["path"] == "/projects/oak-removal/"
+        assert fm["pageType"] == "project"
+
+    def test_a_project_gate_is_advisory_not_serp_scored(self):
+        # Not in the geo composite set — a project ships without a score; a
+        # critical voice finding is overridable (like a core page).
+        assert wc.publish_verdict(page_type="project").allowed
+        v = wc.publish_verdict(page_type="project", voice={"violations": [{"severity": "critical"}]})
+        assert v.reason == "voice_violation" and v.overridable is True
+        # Facts inconsistency is never overridable, anywhere.
+        assert not wc.publish_verdict(page_type="project", facts_consistent=False).overridable

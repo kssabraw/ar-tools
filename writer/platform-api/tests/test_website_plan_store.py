@@ -346,6 +346,16 @@ class TestAddManualPage:
         assert row["route"] == "/compare/tankless-vs-tank/"
         assert row["plan"]["engine"] == "run"
 
+    def test_a_project_adds_with_its_structured_facts_on_the_row(self):
+        row = self._insert_and_get_row(
+            page_type="project", title="Emergency Oak Removal",
+            project={"location": "Anaheim, CA", "stats": [{"label": "Done in", "value": "1 day"}]},
+        )
+        assert row["route"] == "/projects/emergency-oak-removal/"
+        assert row["plan"]["engine"] == "project"
+        assert row["plan"]["project"]["headline"] == "Emergency Oak Removal"
+        assert row["plan"]["project"]["location"] == "Anaheim, CA"
+
 
 class _BuildFakeSupabase:
     """Enough of the supabase client for `build()` to run, recording what it

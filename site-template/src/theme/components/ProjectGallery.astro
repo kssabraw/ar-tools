@@ -1,0 +1,59 @@
+---
+/**
+ * Shared Component Library: a grid of real job photos for a case study. Photos
+ * are operator-supplied URLs (hosted anywhere) — "real persons/jobs only, no
+ * stock" is the library rule, so nothing here is generated. An optional caption
+ * sits under each image; a photo with no URL is skipped by the caller.
+ * Renders nothing when empty. Mobile: single column.
+ */
+interface Props {
+  title?: string;
+  photos: { url: string; alt?: string; caption?: string }[];
+}
+const { title = 'The work', photos } = Astro.props;
+---
+
+{photos.length > 0 && (
+  <section class="gallery">
+    <div class="wrap">
+      {title && <h2 class="gallery__title">{title}</h2>}
+      <div class="gallery__grid">
+        {photos.map((p) => (
+          <figure class="gallery__item">
+            <img src={p.url} alt={p.alt || ''} loading="lazy" />
+            {p.caption && <figcaption>{p.caption}</figcaption>}
+          </figure>
+        ))}
+      </div>
+    </div>
+  </section>
+)}
+
+<style>
+  .gallery {
+    padding-block: var(--space-6);
+  }
+  .gallery__title {
+    font-size: var(--text-2xl);
+    margin-bottom: var(--space-5);
+  }
+  .gallery__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-4);
+  }
+  .gallery__item {
+    margin: 0;
+  }
+  .gallery__item img {
+    width: 100%;
+    height: auto;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--color-border);
+  }
+  .gallery__item figcaption {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+</style>

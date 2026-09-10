@@ -158,6 +158,23 @@ const comparisons = defineCollection({
 });
 
 /**
+ * Project / case-study pages (reference §ratified /projects/{slug}/). Real-job
+ * facts only: the structured stats/photos/testimonial/links live in `sections`
+ * (like the FAQ page), the narrative body renders via <Content />, and the
+ * archive at /projects/ lists them. Its own collection + route because it
+ * renders a structured layout unlike a service or a post.
+ */
+const projects = defineCollection({
+  loader: glob({ pattern: '**/*.md', base: './src/content/projects' }),
+  schema: z.object({
+    ...common,
+    path: z.string().regex(/^\/projects\/[a-z0-9-]+\/$/, 'project path must be /projects/{slug}/'),
+    pageType: z.literal('project'),
+    sections: z.record(z.any()).default({}),
+  }),
+});
+
+/**
  * Core pages (home/about/contact/privacy). Optional: the template renders
  * defaults from site.config.json when an entry is absent, so a site is never
  * broken because the core-pages generator has not run. Entry ids are the
@@ -171,4 +188,4 @@ const pages = defineCollection({
   }),
 });
 
-export const collections = { services, locations, localLanding, posts, pages, pillars, comparisons };
+export const collections = { services, locations, localLanding, posts, pages, pillars, comparisons, projects };

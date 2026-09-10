@@ -1432,10 +1432,13 @@ the entry below.
 
 ## ⏩ Update — 2026-09-10 · **Website Builder — Comparison / Cost / standalone FAQ engines + Writer #6 hub narratives BUILT**
 
-Four of the "future page-type" gaps below are now **built end-to-end** (planner
+**Five** of the "future page-type" gaps below are now **built end-to-end** (planner
 → engine → content layer → `site-template` route → tests; a real Astro build of
-`site-template` renders all four). The one Tier-B type still deferred is
-**projects / case studies** (bespoke structured job data — its own follow-up).
+`site-template` renders each). The four immediate ones (comparison / cost / FAQ /
+Writer-#6 hubs) plus **projects / case studies** — the bespoke structured type,
+added in the same PR (see the "Projects / case studies built" note in CLAUDE.md's
+Website Builder bullet). Remaining Tier-B with no template AND no engine:
+problem/symptom, offers, warranty.
 
 - **Comparison** (`comparison`, `/compare/{a}-vs-{b}/`) — the `run` engine (a
   blog Writer run with a verdict-first, honest-tradeoffs brief on writer notes,

@@ -49,6 +49,9 @@ _COLLECTION_BY_PAGE_TYPE: dict[str, str] = {
     # Commercial X-vs-Y comparison — its own collection + /compare/ route, since
     # it renders as a verdict-first article, unlike a service or a post.
     "comparison": "comparisons",
+    # A project / case study — its own collection + /projects/ route; renders
+    # structured job facts (stats/photos/testimonial) around the narrative body.
+    "project": "projects",
     "home": "pages",
     "about": "pages",
     "contact": "pages",
@@ -106,7 +109,7 @@ HUB_PAGE_TYPES = frozenset({"services_index", "areas_we_serve"})
 # look at `sections`, not just the body. (home renders its hero/section copy from
 # `sections`; faq renders its Q&A; the two hubs render their lede/authority.)
 SECTION_CONTENT_PAGE_TYPES = frozenset(
-    {"home", "faq", "services_index", "areas_we_serve"}
+    {"home", "faq", "services_index", "areas_we_serve", "project"}
 )
 
 # Planned page types the house template cannot render at all — no route, no

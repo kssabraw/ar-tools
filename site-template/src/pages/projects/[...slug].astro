@@ -1,0 +1,126 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render, type CollectionEntry } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import BreadcrumbBar from '../../theme/components/BreadcrumbBar.astro';
+import PageHeader from '../../theme/components/PageHeader.astro';
+import HeroStandard from '../../theme/components/HeroStandard.astro';
+import StatCallout from '../../theme/components/StatCallout.astro';
+import ProjectGallery from '../../theme/components/ProjectGallery.astro';
+import TestimonialCard from '../../theme/components/TestimonialCard.astro';
+import RelatedPagesBlock from '../../theme/components/RelatedPagesBlock.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import { allProjects } from '../../lib/content';
+import { article, breadcrumbList } from '../../lib/schema';
+import { site } from '../../lib/site';
+
+/**
+ * Project / case-study pages (reference §ratified). One route handles both the
+ * archive at /projects/ (slug undefined → a card grid) and each individual case
+ * study at /projects/{slug}/, mirroring the blog route. The route declines to
+ * exist (empty getStaticPaths) until at least one project is published, so a
+ * site with no case studies has no /projects/ page rather than an empty one.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const projects = await allProjects();
+  if (projects.length === 0) return [];
+  return [
+    { params: { slug: undefined }, props: { entry: undefined, projects } },
+    ...projects.map((entry) => ({
+      params: { slug: entry.data.path.replace(/^\/projects\/|\/$/g, '') },
+      props: { entry, projects },
+    })),
+  ];
+};
+
+const { entry, projects } = Astro.props as {
+  entry?: CollectionEntry<'projects'>;
+  projects: CollectionEntry<'projects'>[];
+};
+
+const Content = entry ? (await render(entry)).Content : null;
+const d = (entry?.data ?? {}) as Record<string, any>;
+const s = (d.sections ?? {}) as Record<string, any>;
+const stats = Array.isArray(s.stats) ? s.stats : [];
+const photos = Array.isArray(s.photos) ? s.photos : [];
+const links = Array.isArray(s.links) ? s.links : [];
+const testimonial = s.testimonial && s.testimonial.quote ? s.testimonial : null;
+
+const base = Astro.site ?? site.url;
+const crumbs = entry
+  ? [
+      { label: 'Home', href: '/' },
+      { label: 'Projects', href: '/projects/' },
+      { label: d.title, href: d.path },
+    ]
+  : [];
+const ld = entry
+  ? ([
+      d.jsonld ??
+        article({
+          title: d.title,
+          description: d.description,
+          url: Astro.url.href,
+          published: d.publishDate,
+          updated: d.updatedDate,
+          image: d.heroImage,
+        }),
+      breadcrumbList(crumbs, base.toString()),
+    ].filter(Boolean) as Record<string, unknown>[])
+  : [{ '@type': 'CollectionPage', name: `${site.siteName} projects`, url: Astro.url.href }];
+---
+
+{!entry || !Content ? (
+<Layout title={`${site.siteName} — Projects`} description="Recent completed work." jsonld={ld}>
+  <PageHeader eyebrow="Our work" title="Projects" lede="A look at jobs we've completed." />
+  <RelatedPagesBlock
+    title=""
+    limit={999}
+    items={projects.map((p) => ({
+      href: p.data.path,
+      title: p.data.title,
+      kicker: (p.data.sections as Record<string, any>)?.geo,
+      meta: p.data.description,
+    }))}
+  />
+  <CTABand title="Want results like these?" ctaLabel="Get in touch" ctaHref="/contact-us/" />
+</Layout>
+) : (
+<Layout title={d.title} description={d.description} image={d.heroImage} jsonld={ld}>
+  <BreadcrumbBar crumbs={crumbs} />
+  <HeroStandard
+    eyebrow={s.geo || 'Case study'}
+    title={d.title}
+    lede={d.description}
+    image={d.heroImage}
+    imageAlt={d.heroImageAlt}
+  />
+
+  <StatCallout items={stats} />
+
+  <div class="prose-wrap richtext body">
+    <Content />
+  </div>
+
+  <ProjectGallery photos={photos} />
+
+  {testimonial && (
+    <div class="wrap testimonial-wrap">
+      <TestimonialCard quote={testimonial.quote} author={testimonial.author} />
+    </div>
+  )}
+
+  <RelatedPagesBlock title="Related" items={links.map((l: any) => ({ href: l.href, title: l.title }))} />
+
+  <CTABand title="Talk to us about your project" ctaLabel="Get in touch" ctaHref="/contact-us/" />
+</Layout>
+)}
+
+<style>
+  .body {
+    padding-block: var(--space-6);
+  }
+  .testimonial-wrap {
+    padding-block: var(--space-4);
+  }
+</style>

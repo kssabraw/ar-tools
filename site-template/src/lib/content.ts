@@ -83,6 +83,20 @@ export async function allComparisons(): Promise<CollectionEntry<'comparisons'>[]
   );
 }
 
+/**
+ * Project / case-study pages. NOT gated on `isLocal` — a case study is a
+ * cross-family page and the collection is simply empty when a site has none.
+ * Newest first (publishDate, then path) so the archive leads with recent work.
+ */
+export async function allProjects(): Promise<CollectionEntry<'projects'>[]> {
+  return live(await getCollection('projects')).sort((a, b) => {
+    const at = a.data.publishDate?.getTime() ?? 0;
+    const bt = b.data.publishDate?.getTime() ?? 0;
+    if (at !== bt) return bt - at;
+    return a.data.path.localeCompare(b.data.path);
+  });
+}
+
 /** One page in the root namespace, flattened across the three collections. */
 export interface RoutedPage {
   path: string;

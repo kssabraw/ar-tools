@@ -155,6 +155,10 @@ class AddPageRequest(BaseModel):
     format: Optional[str] = None
     angle: Optional[str] = None
     target_keywords: list[str] = Field(default_factory=list)
+    # A project / case study carries structured human-supplied job facts
+    # (headline, location, stats, challenge/work/outcome notes, testimonial,
+    # photo URLs, linked service/location) rather than the axis fields.
+    project: Optional[dict] = None
 
 
 class FactsUpdateRequest(BaseModel):
@@ -799,6 +803,7 @@ async def add_page(
             post_format=body.format,
             angle=body.angle,
             target_keywords=body.target_keywords,
+            project=body.project,
         )
     except website_plan_store.ManualPageError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.code)

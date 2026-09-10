@@ -173,6 +173,9 @@ PageType = Literal[
     "cost",
     "faq",
     "comparison",
+    # A project / case-study page at /projects/{slug}/ — all real-job facts,
+    # human-supplied, narrated (never invented) by the `project` engine.
+    "project",
 ]
 
 GEO_SITE_TYPES = frozenset({"local_business", "lead_gen"})
@@ -1140,7 +1143,7 @@ RUN_PAGE_TYPES = frozenset({"post", "pillar", "comparison"})
 # one per site — a human never adds a second). A manual page and its
 # auto-generated twin share a URL and merge on the next rebuild, so this set is
 # exactly "writable, not core, not an auto-planned singleton".
-MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES | {"faq"}
+MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES | {"faq", "project"}
 
 # Sort tier for a manually added page, mirroring the planner's own tiers for the
 # same type so a manual page sits where its auto twin would in the Pages list.
@@ -1154,11 +1157,12 @@ _MANUAL_TIERS = {
     "hyper_local": 3,
     "post": 2,
     "pillar": 1,
-    # Extension types: a cost page rides just below its service; comparison and
-    # FAQ are supporting pages that sit late in the list.
+    # Extension types: a cost page rides just below its service; comparison,
+    # FAQ and project pages are supporting pages that sit late in the list.
     "cost": 2,
     "comparison": 4,
     "faq": 4,
+    "project": 4,
 }
 
 
@@ -1292,6 +1296,11 @@ def generation_inputs(
             "location": None,
             "notes": compose_comparison_notes(page.title),
         }
+
+    if page.page_type == "project":
+        # A case study: no keyword, no SERP. The human-supplied job facts ride on
+        # the plan row (`plan.project`) and the `project` engine narrates them.
+        return {"engine": "project", "keyword": None, "location": None}
 
     if page.page_type == "post":
         post = (posts or {}).get(page.path)
@@ -1486,6 +1495,7 @@ def build_manual_page(
     post_format: Optional[str] = None,
     angle: Optional[str] = None,
     target_keywords: Optional[Iterable[str]] = None,
+    project: Optional[dict] = None,
     catalog: Optional[Iterable[ServiceEntry]] = None,
     cities: Optional[Iterable[CityEntry]] = None,
     primary_service: Optional[str] = None,
@@ -1638,6 +1648,15 @@ def build_manual_page(
         path = _path("faq")
         page_title = title or "Frequently Asked Questions"
 
+    elif page_type == "project":
+        # /projects/{slug}/ — a case study. The headline is the job headline and
+        # the slug; the structured job facts ride on `project` and are stored on
+        # the payload for the `project` engine to narrate (inventing nothing).
+        project = project or {}
+        headline = _need(title or project.get("headline"), "missing_title")
+        slug = slugify(headline)
+        path, page_title = _path("projects", slug), headline
+
     else:  # pillar
         name = _need(title, "missing_title")
         slug = slugify(name)
@@ -1682,6 +1701,10 @@ def build_manual_page(
         if (angle or "").strip():
             notes += f"\nEditorial angle: {angle.strip()}"
         payload["notes"] = notes
+    elif page_type == "project":
+        # The structured job facts ride on the plan row so the `project` engine
+        # can narrate them; the headline is normalised onto it.
+        payload["project"] = {**(project or {}), "headline": page_title}
 
     return page, payload
 

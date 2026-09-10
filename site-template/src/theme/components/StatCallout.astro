@@ -1,0 +1,52 @@
+---
+/**
+ * Shared Component Library: a row of headline job facts (label + value) for a
+ * case study. Facts only — never generated, never invented; the operator enters
+ * them. Renders nothing when empty. Mobile: wraps to fewer columns.
+ */
+interface Props {
+  items: { label: string; value: string }[];
+}
+const { items } = Astro.props;
+---
+
+{items.length > 0 && (
+  <section class="stats">
+    <div class="wrap stats__grid">
+      {items.map((s) => (
+        <div class="stat">
+          <div class="stat__value">{s.value}</div>
+          <div class="stat__label">{s.label}</div>
+        </div>
+      ))}
+    </div>
+  </section>
+)}
+
+<style>
+  .stats {
+    padding-block: var(--space-6);
+  }
+  .stats__grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: var(--space-4);
+  }
+  .stat {
+    padding: var(--space-5);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-lg);
+    text-align: center;
+  }
+  .stat__value {
+    font-size: var(--text-3xl);
+    font-weight: 700;
+    color: var(--color-accent);
+    line-height: 1.1;
+  }
+  .stat__label {
+    margin-top: var(--space-2);
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+  }
+</style>

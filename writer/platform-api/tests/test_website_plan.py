@@ -945,3 +945,50 @@ class TestBuildManualExtensionPages:
     def test_a_faq_keeps_a_supplied_title(self):
         page, _ = self._build(page_type="faq", title="Your Questions Answered")
         assert page.title == "Your Questions Answered"
+
+
+class TestProjectPageType:
+    """Project / case-study pages: /projects/{slug}/, the `project` engine, and
+    the structured job facts riding on the plan row."""
+
+    def test_project_routes_to_its_own_engine(self):
+        page = wp.PlannedPage("/projects/oak-removal/", "project", "Oak Removal", "manual", tier=4)
+        inputs = wp.generation_inputs(page, services={}, cities={})
+        assert inputs["engine"] == "project"
+        assert inputs["keyword"] is None
+
+    def test_project_is_manually_addable(self):
+        assert "project" in wp.MANUAL_PAGE_TYPES
+
+    def test_project_two_segments_deep_never_claims_projects_root(self):
+        # /projects/{slug}/ is two segments; the reserved ROOT "projects" is only
+        # a collision at 1 segment, which a case study never occupies.
+        assert not wp.check_paths(
+            [wp.PlannedPage("/projects/oak-removal/", "project", "Oak Removal", "manual")]
+        )
+
+    def test_build_manual_project_stores_the_structured_input(self):
+        project = {
+            "location": "Anaheim, CA",
+            "stats": [{"label": "Done in", "value": "1 day"}],
+            "challenge": "Storm oak over the garage.",
+        }
+        page, payload = wp.build_manual_page(
+            page_type="project", title="Emergency Oak Removal", project=project
+        )
+        assert page.path == "/projects/emergency-oak-removal/"
+        assert page.page_type == "project"
+        assert payload["engine"] == "project"
+        # The structured facts ride on the plan row, headline normalised on.
+        assert payload["project"]["headline"] == "Emergency Oak Removal"
+        assert payload["project"]["challenge"] == "Storm oak over the garage."
+        assert payload["project"]["stats"] == [{"label": "Done in", "value": "1 day"}]
+
+    def test_a_project_needs_a_headline(self):
+        with pytest.raises(ValueError, match="missing_title"):
+            wp.build_manual_page(page_type="project", project={"location": "x"})
+
+    def test_headline_can_come_from_the_project_dict(self):
+        page, _ = wp.build_manual_page(page_type="project", project={"headline": "Deck Rebuild"})
+        assert page.path == "/projects/deck-rebuild/"
+        assert page.title == "Deck Rebuild"
