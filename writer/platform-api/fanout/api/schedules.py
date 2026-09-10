@@ -78,6 +78,10 @@ class ScheduleBody(BaseModel):
     # service_page run (service_brief -> service_writer). Both produce
     # first-class suite artifacts instead of the Fanout blog writer's output.
     content_type: str = "blog_post"             # blog_post | local_seo_page | service_page
+    # Which LLM writes the DRAFT prose for this schedule's runs. 'anthropic' =
+    # Claude/Sonnet (default), 'openai' = GPT (Luna). None ⇒ the client/global
+    # default. Passed through verbatim; the writer resolves the fallback.
+    content_writer_provider: str | None = None  # anthropic | openai
     location: str | None = None                 # local_seo_page: target area
     location_code: int | None = None            # local_seo_page: optional DataForSEO city code
     # Opt-in: publish each finished piece to the linked client's Google Drive
@@ -343,6 +347,7 @@ def create_schedule(
         wp_publish=wp_publish, wp_status=body.wp_status if wp_publish else "draft",
         weekday=body.weekday, weekdays=body.weekdays,
         day_of_month=body.day_of_month, week_of_month=body.week_of_month,
+        content_writer_provider=body.content_writer_provider,
     )
     logger.info("schedule_created", extra={"event": "schedule_created", "session_id": session_id,
                                            "mode": body.mode, "runs": len(runs),

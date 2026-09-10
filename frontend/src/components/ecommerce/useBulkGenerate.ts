@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ecommerceApi } from './api'
 import type { EcommercePageType } from './types'
+import type { ContentWriterProvider } from '../ContentWriterSelect'
 
 // Bulk page creation as background jobs: enqueue one generate job per keyword,
 // then poll their status. The user can leave at any time (even switch clients)
@@ -15,6 +16,8 @@ export function useBulkGenerate(clientId: string, onCreated?: () => void) {
   const [failed, setFailed] = useState(0)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState('') // enqueue failed
+  // Whole-batch content-writer override. null = inherit the client default (Sonnet).
+  const [contentWriterProvider, setContentWriterProvider] = useState<ContentWriterProvider | null>(null)
 
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -51,7 +54,10 @@ export function useBulkGenerate(clientId: string, onCreated?: () => void) {
 
     let jobIds: string[] = []
     try {
-      const res = await ecommerceApi.generateBulk(clientId, { keywords: queue, page_type: pageType, notes: notes?.trim() || null })
+      const res = await ecommerceApi.generateBulk(clientId, {
+        keywords: queue, page_type: pageType, notes: notes?.trim() || null,
+        content_writer_provider: contentWriterProvider ?? undefined,
+      })
       jobIds = res.job_ids ?? []
     } catch (e) {
       stopTimers()
@@ -114,5 +120,5 @@ export function useBulkGenerate(clientId: string, onCreated?: () => void) {
     onCreated?.()
   }
 
-  return { creating, detached, total, done, failed, elapsed, error, start, leave, stop, reset }
+  return { creating, detached, total, done, failed, elapsed, error, start, leave, stop, reset, contentWriterProvider, setContentWriterProvider }
 }

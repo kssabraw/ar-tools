@@ -457,7 +457,7 @@ function BulkGenerateForm({ keywords, setKeywords, notes, setNotes, pageType, bu
   onStart: () => void
   onViewSaved: () => void
 }) {
-  const { creating, detached, total, done, failed, error, leave, stop } = bulk
+  const { creating, detached, total, done, failed, error, leave, stop, contentWriterProvider, setContentWriterProvider } = bulk
 
   const handleStop = () => {
     if (!window.confirm('Stop all queued ecommerce jobs for this client? Jobs already running will finish.')) return
@@ -505,6 +505,16 @@ function BulkGenerateForm({ keywords, setKeywords, notes, setNotes, pageType, bu
           placeholder={'e.g. emphasize fast shipping; write for clinics not individuals'}
         />
       </div>
+
+      {/* Draft-prose model for the whole batch (Sonnet default | Luna); overrides the client default. */}
+      {!creating && (
+        <ContentWriterSelect
+          value={contentWriterProvider}
+          onChange={setContentWriterProvider}
+          allowInherit
+          label="Content writing model (whole batch)"
+        />
+      )}
 
       {error && <ErrorDetails message={error} />}
 

@@ -77,6 +77,8 @@ class LocalSeoBulkGenerateRequest(BaseModel):
     force_refresh: bool = False
     # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
     entity_provider: Optional[str] = None
+    # Whole-batch content-writer override ("anthropic"|"openai"); None → client default.
+    content_writer_provider: Optional[Literal["anthropic", "openai"]] = None
 
 
 class LocalSeoBulkGenerateJob(BaseModel):

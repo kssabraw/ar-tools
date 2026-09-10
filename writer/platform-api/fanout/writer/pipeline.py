@@ -59,16 +59,30 @@ class WriterDeps:
     voice_block: str = ""
 
 
-def build_writer_deps() -> WriterDeps:
-    """Construct the real clients (lazy imports keep the pure modules import-light)."""
+def build_writer_deps(content_writer_provider: str | None = None) -> WriterDeps:
+    """Construct the real clients (lazy imports keep the pure modules import-light).
+
+    `content_writer_provider` selects who writes the DRAFT prose: "openai" (Luna)
+    routes section + short prose through the OpenAI writer adapter; anything else
+    (default) keeps Claude (Sonnet + Haiku). An "openai" selection with no OpenAI
+    key configured degrades to Claude, so a run never fails to write."""
     from fanout.config import get_settings
     from fanout.llm import get_llm
     from fanout.llm.anthropic_client import AnthropicLLM
 
     s = get_settings()
+    use_openai = (content_writer_provider or "").strip().lower() == "openai" and bool(s.openai_api_key)
+    if use_openai:
+        from fanout.llm.openai_writer_client import OpenAIWriterLLM
+
+        section_llm: object = OpenAIWriterLLM(api_key=s.openai_api_key, model=s.content_writer_openai_model)
+        short_llm: object = OpenAIWriterLLM(api_key=s.openai_api_key, model=s.content_writer_openai_model)
+    else:
+        section_llm = AnthropicLLM(api_key=s.anthropic_api_key, model=s.writer_section_model)
+        short_llm = AnthropicLLM(api_key=s.anthropic_api_key, model=s.writer_short_model)
     return WriterDeps(
-        section_llm=AnthropicLLM(api_key=s.anthropic_api_key, model=s.writer_section_model),
-        short_llm=AnthropicLLM(api_key=s.anthropic_api_key, model=s.writer_short_model),
+        section_llm=section_llm,
+        short_llm=short_llm,
         embed_fn=get_llm().embed,
     )
 

@@ -1153,7 +1153,7 @@ def _bulk_scheduled_at(index: int) -> str:
 async def enqueue_generate_bulk(
     client_id: str, keywords: list[str], location: str, location_code: Optional[int],
     user_id: str, page_template_url: Optional[str] = None, force_refresh: bool = False,
-    entity_provider: Optional[str] = None,
+    entity_provider: Optional[str] = None, content_writer_provider: Optional[str] = None,
 ) -> list[str]:
     """Enqueue one `local_seo_generate` job per keyword (area validated once up
     front). Returns the job ids in input order."""
@@ -1179,6 +1179,7 @@ async def enqueue_generate_bulk(
                     "page_template_url": template,
                     "force_refresh": bool(force_refresh),
                     "entity_provider": entity_provider,
+                    "content_writer_provider": content_writer_provider,
                 },
             }
         )

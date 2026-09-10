@@ -232,6 +232,7 @@ def _process_run(row: dict) -> None:
         # or service page).
         schedule = schedule_store.get_schedule(schedule_id) if schedule_id else None
         content_type = (schedule or {}).get("content_type", "blog_post")
+        writer_provider = (schedule or {}).get("content_writer_provider")
         location_code = store.session_location_code(session)
         # The generators append the human-readable failure reason here (the
         # WriterAbort code / exception repr) so a miss carries the ACTUAL cause
@@ -243,16 +244,19 @@ def _process_run(row: dict) -> None:
                     session=session, keyword=keyword,
                     location=(schedule or {}).get("location") or "",
                     location_code=(schedule or {}).get("location_code"),
-                    user_id=row.get("user_id"), error_sink=gen_errors)
+                    user_id=row.get("user_id"), error_sink=gen_errors,
+                    content_writer_provider=writer_provider)
             elif content_type == "service_page":
                 ok = jobs.generate_service_page_core(
                     session=session, keyword=keyword,
                     user_id=row.get("user_id"), error_sink=gen_errors,
-                    scheduled_run_id=run_id)
+                    scheduled_run_id=run_id,
+                    content_writer_provider=writer_provider)
             else:
                 ok = jobs.generate_article_core(
                     session_id, cluster_id, keyword, location_code,
-                    scheduled_article_run_id=run_id, error_sink=gen_errors)
+                    scheduled_article_run_id=run_id, error_sink=gen_errors,
+                    content_writer_provider=writer_provider)
         # local_seo_page / service_page return the artifact id (truthy) on success;
         # blog returns True. `bool(ok)` is the success signal for both.
         success = bool(ok)

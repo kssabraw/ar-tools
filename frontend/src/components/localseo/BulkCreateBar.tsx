@@ -3,6 +3,7 @@ import type { RelatedPageItem } from './types'
 import type { useBulkCreate } from './useBulkCreate'
 import { Spinner } from './Spinner'
 import { ErrorDetails } from '../ErrorDetails'
+import { ContentWriterSelect } from '../ContentWriterSelect'
 import { card, primaryBtn } from './shared'
 
 interface Props {
@@ -18,7 +19,7 @@ interface Props {
 // with a <RelatedPagesList selection={...}> (which renders the per-row
 // checkboxes). Shared by the Plan Silo and per-page Related Pages flows.
 export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved }: Props) {
-  const { selected, creating, detached, total, done, failed, error, start, leave, setSelection, clear } = bulk
+  const { selected, creating, detached, total, done, failed, error, start, leave, setSelection, clear, contentWriterProvider, setContentWriterProvider } = bulk
   const missingKws = items.filter(r => r.status === 'missing').map(r => r.keyword)
   const allMissingSelected = missingKws.length > 0 && missingKws.every(kw => selected.has(kw))
   const selectedCount = selected.size
@@ -101,6 +102,12 @@ export function BulkCreateBar({ items, bulk, location, locationCode, onViewSaved
               <p style={{ fontSize: 13, color: '#64748b', margin: 0 }}>
                 Competitor SERP analysis runs for every page so each one targets the right terms and entities.
               </p>
+              <ContentWriterSelect
+                value={contentWriterProvider}
+                onChange={setContentWriterProvider}
+                allowInherit
+                label="Content writing model (whole batch)"
+              />
               <button style={{ ...primaryBtn, width: '100%' }} onClick={handleCreate}>
                 <Sparkles size={16} /> Create {selectedCount} selected page{selectedCount === 1 ? '' : 's'}
               </button>

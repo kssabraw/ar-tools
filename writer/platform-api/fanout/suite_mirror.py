@@ -58,6 +58,7 @@ def mirror_blog_article_to_suite(
     article_json: dict,
     cost_usd: float | None = None,
     user_id: str | None = None,
+    content_writer_provider: str | None = None,
 ) -> str | None:
     """Create a completed suite ``blog_post`` run mirroring a Fan-out article.
 
@@ -83,6 +84,8 @@ def mirror_blog_article_to_suite(
     }
     if user_id:
         run_row["created_by"] = user_id
+    if content_writer_provider:
+        run_row["content_writer_provider"] = content_writer_provider
 
     inserted = supabase.table("runs").insert(run_row).execute()
     run_id = inserted.data[0]["id"]

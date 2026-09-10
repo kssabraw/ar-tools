@@ -1,21 +1,24 @@
 import type { CSSProperties } from 'react'
 
-// A compact "Content writing model" selector — chooses which LLM provider writes
-// the DRAFT prose for the content writers (blog, service/location, Local SEO,
-// Ecommerce). "Claude" is the default; "OpenAI GPT-5.6 Luna" routes the draft to
-// OpenAI. The post-draft quality gates (voice scoring, ICP/banned-term/QA judges)
-// always stay on Claude, so grading is unaffected.
+// A compact "Content writing model" selector — chooses which LLM writes the DRAFT
+// prose for the content writers (blog, service/location, Local SEO, Ecommerce,
+// Fanout mass posts). "Sonnet" (Claude Sonnet) is the default; "Luna" routes the
+// draft to OpenAI (gpt-5.6-luna). The post-draft quality gates (voice scoring,
+// ICP/banned-term/QA judges) always stay on Claude, so grading is unaffected.
+//
+// The user-facing labels are MODEL names (Sonnet / Luna); the stored value is the
+// PROVIDER ('anthropic' | 'openai') — the concrete OpenAI model id lives in config.
 //
 // Two modes:
 //   - Client Setup default: value is a concrete provider, no inherit option.
-//   - Per-run / per-page override: pass `allowInherit` to add a "Use client
-//     default" choice (value null = inherit the client's default).
+//   - Per-run / per-page / per-batch override: pass `allowInherit` to add a "Use
+//     client default" choice (value null = inherit the client's default).
 
 export type ContentWriterProvider = 'anthropic' | 'openai'
 
 const PROVIDER_OPTIONS: Array<{ id: ContentWriterProvider; label: string }> = [
-  { id: 'anthropic', label: 'Claude' },
-  { id: 'openai', label: 'OpenAI GPT-5.6 Luna' },
+  { id: 'anthropic', label: 'Sonnet' },
+  { id: 'openai', label: 'Luna' },
 ]
 
 interface Props {

@@ -1079,7 +1079,9 @@ export interface ArticleResponse {
 export const startArticle = (
   sessionId: string,
   clusterId: string,
-  body?: { force_refresh?: boolean },
+  // content_writer_provider: draft-prose model ("anthropic" = Sonnet default |
+  // "openai" = Luna); omit to inherit the client default.
+  body?: { force_refresh?: boolean; content_writer_provider?: "anthropic" | "openai" },
 ) =>
   request<ArticleResponse>(
     `/sessions/${sessionId}/clusters/${clusterId}/generate-article`,
@@ -1160,10 +1162,19 @@ export interface BulkGenerateResponse {
   skipped: string[];
   count: number;
 }
-export const generateArticles = (sessionId: string, clusterIds: string[]) =>
+export const generateArticles = (
+  sessionId: string,
+  clusterIds: string[],
+  // Draft-prose model for every article in this batch ("anthropic" = Sonnet
+  // default | "openai" = Luna); omit to inherit the client default.
+  contentWriterProvider?: "anthropic" | "openai",
+) =>
   request<BulkGenerateResponse>(`/sessions/${sessionId}/generate-articles`, {
     method: "POST",
-    body: JSON.stringify({ cluster_ids: clusterIds }),
+    body: JSON.stringify({
+      cluster_ids: clusterIds,
+      ...(contentWriterProvider ? { content_writer_provider: contentWriterProvider } : {}),
+    }),
   });
 
 export interface SplitUncoveredResponse {
@@ -1218,6 +1229,9 @@ export interface ScheduleRequest {
   // client's WordPress site at the slug its internal links point at.
   wp_publish?: boolean;
   wp_status?: "draft" | "publish";
+  // Draft-prose model for every piece in this schedule ("anthropic" = Sonnet,
+  // the default | "openai" = Luna). Quality checks always run on Claude.
+  content_writer_provider?: "anthropic" | "openai";
 }
 export interface ScheduleEstimate {
   count: number;

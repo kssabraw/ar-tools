@@ -102,6 +102,9 @@ export function ClusterView() {
 
   // M15 — multi-select articles (clusters) for bulk "Generate selected".
   const [genSel, setGenSel] = useState<Set<string>>(new Set());
+  // Draft-prose model for the immediate "Generate now" batch. "anthropic" =
+  // Sonnet (default) | "openai" = Luna. Quality checks always run on Claude.
+  const [bulkWriterProvider, setBulkWriterProvider] = useState<"anthropic" | "openai">("anthropic");
   const toggleGen = (id: string) =>
     setGenSel((prev) => {
       const next = new Set(prev);
@@ -115,7 +118,7 @@ export function ClusterView() {
       return next;
     });
   const bulkGen = useMutation({
-    mutationFn: (ids: string[]) => generateArticles(sessionId, ids),
+    mutationFn: (ids: string[]) => generateArticles(sessionId, ids, bulkWriterProvider),
     onSuccess: (res) => {
       setGenSel(new Set());
       alert(
@@ -263,6 +266,17 @@ export function ClusterView() {
       {!isVA && genSel.size > 0 && (
         <div className="bulk-bar">
           <span>{genSel.size} article{genSel.size === 1 ? "" : "s"} selected</span>
+          <select
+            className="input"
+            style={{ width: "auto" }}
+            value={bulkWriterProvider}
+            disabled={bulkGen.isPending}
+            title="Which model writes the draft. Quality checks (brand voice, QA) always run on Claude."
+            onChange={(e) => setBulkWriterProvider(e.target.value as "anthropic" | "openai")}
+          >
+            <option value="anthropic">Model: Sonnet</option>
+            <option value="openai">Model: Luna</option>
+          </select>
           <button
             className="btn btn-sm"
             disabled={bulkGen.isPending}
