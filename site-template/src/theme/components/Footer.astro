@@ -1,6 +1,6 @@
 ---
 import { site, isLocal, displayPhone, has, hasAddress, formattedAddress } from '../../lib/site';
-import { routedPages, allPosts } from '../../lib/content';
+import { routedPages, pillarRoutedPages, allPosts } from '../../lib/content';
 import { globalFooterNav } from '../../lib/hubs';
 
 const phone = displayPhone();
@@ -8,7 +8,14 @@ const year = new Date().getFullYear();
 const b = site.business;
 // Derived like the header nav, so the footer's Privacy Policy and Sitemap
 // links (the SOP's mandatory footer set) cannot go missing from a config edit.
-const footerNav = globalFooterNav(isLocal ? await routedPages() : [], (await allPosts()).length > 0);
+// A local site's pillar/hub guides ride in the footer (its primary nav leads
+// with money pages); pillars are passed only for local, since an informational
+// site already lists them in its primary nav.
+const footerNav = globalFooterNav(
+  isLocal ? await routedPages() : [],
+  (await allPosts()).length > 0,
+  isLocal ? await pillarRoutedPages() : [],
+);
 ---
 
 <footer class="site-footer">

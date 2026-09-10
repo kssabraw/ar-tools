@@ -24,6 +24,16 @@ import type { NavItem } from './site';
 export const SERVICES_INDEX_TRIGGER = 8;
 
 /**
+ * How many topic-hub guides a local site lists in its footer. A local site
+ * leads its PRIMARY nav with money pages (services / Areas We Serve), so its
+ * pillar/hub guides live in the footer rather than crowding that bar — capped
+ * so a content-heavy local site doesn't grow an unbounded footer. (An
+ * informational site already surfaces its pillars in the primary nav, so it
+ * needs no footer copy of them.)
+ */
+export const PILLAR_FOOTER_CAP = 6;
+
+/**
  * Ratified at 6 by the owner (2026-08-06), settling reference note R6's open
  * threshold and superseding the ">= 2 targeted cities" in the v3.6 capture.
  *
@@ -99,7 +109,11 @@ export function globalNav(pages: RoutedPage[], hasPosts: boolean): NavItem[] {
  * The SOP global footer set. Privacy Policy is mandatory in it; the HTML
  * sitemap joins it because it is the one page that lists everything (§4.8c).
  */
-export function globalFooterNav(pages: RoutedPage[], hasPosts: boolean): NavItem[] {
+export function globalFooterNav(
+  pages: RoutedPage[],
+  hasPosts: boolean,
+  pillars: RoutedPage[] = [],
+): NavItem[] {
   if (site.footerNav.length > 0) return site.footerNav;
 
   const items: NavItem[] = [{ label: 'About Us', href: '/about-us/' }];
@@ -107,6 +121,14 @@ export function globalFooterNav(pages: RoutedPage[], hasPosts: boolean): NavItem
     items.push({ label: 'Areas We Serve', href: '/areas-we-serve/' });
   }
   if (hasPosts) items.push({ label: 'Blog', href: '/blog/' });
+  // A local site's topic-hub guides go in the footer, right after Blog (they
+  // are blog guides), rather than in the money-page-led primary nav. Absent on
+  // an informational site, whose pillars are already the primary nav.
+  if (isLocal) {
+    for (const p of pillars.filter((p) => p.pageType === 'pillar').slice(0, PILLAR_FOOTER_CAP)) {
+      items.push({ label: p.title, href: p.path });
+    }
+  }
   items.push({ label: 'Contact Us', href: '/contact-us/' });
   items.push({ label: 'Privacy Policy', href: '/privacy-policy/' });
   items.push({ label: 'Sitemap', href: '/sitemap/' });
