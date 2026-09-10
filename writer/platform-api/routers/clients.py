@@ -21,7 +21,7 @@ from models.clients import (
     PageStructureGuidelines,
     PageStructureUrls,
 )
-from services import brand_voice_service, github_infer, icp_service, rank_location
+from services import brand_voice_service, github_infer, gsc_service, icp_service, rank_location
 from services.file_parser import detect_format
 from services.gbp_service import get_business_details, resolve_business, search_businesses
 from services.page_structure_scraper import PAGE_TYPES
@@ -48,6 +48,64 @@ def _enqueue_website_scrape(client_id: str, website_url: str) -> None:
             "payload": {"website_url": website_url, "client_id": client_id},
         }
     ).execute()
+
+
+def _ensure_gsc_property_registered(
+    client_id: str, gsc_property: Optional[str], user_id: str
+) -> None:
+    """Register the client's Search Console property in the ``gsc_properties``
+    registry the rank tracker actually reads, so setting it on the client form
+    feeds the live connection flow instead of sitting inert.
+
+    Best-effort + idempotent: an existing registration (verified or not) is left
+    untouched — this only seeds a new ``pending`` row. The property still needs
+    the external "add the service-account email as a user + verify access" step
+    from the Rankings → Settings panel before GSC data flows.
+    """
+    value = (gsc_property or "").strip()
+    if not value:
+        return
+    try:
+        property_type = gsc_service.infer_property_type(value)
+        site_url = gsc_service.normalize_site_url(value, property_type)
+    except ValueError as exc:
+        logger.warning(
+            "client_gsc_autoregister_invalid",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+        return
+    supabase = get_supabase()
+    try:
+        existing = (
+            supabase.table("gsc_properties")
+            .select("id")
+            .eq("client_id", client_id)
+            .eq("site_url", site_url)
+            .limit(1)
+            .execute()
+        )
+        if existing.data:
+            return
+        supabase.table("gsc_properties").insert(
+            {
+                "client_id": client_id,
+                "site_url": site_url,
+                "property_type": property_type,
+                "access_status": "pending",
+                "created_by": user_id,
+            }
+        ).execute()
+        logger.info(
+            "client_gsc_autoregistered",
+            extra={"client_id": client_id, "site_url": site_url},
+        )
+    except Exception as exc:
+        # A concurrent insert can race the (client_id, site_url) unique
+        # constraint; that's fine — the row exists either way.
+        logger.warning(
+            "client_gsc_autoregister_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
 
 
 def _enqueue_auto_brand_voice_icp(client: dict, user_id: str) -> None:
@@ -430,6 +488,9 @@ async def create_client(
     # (SOP "site always wins" — populates github_inferred_patterns).
     if body.github_repo:
         github_infer.enqueue_github_infer(client["id"])
+    # Seed the GSC registry so the Search Console property feeds the live rank
+    # tracker (still needs the external verify step in Rankings → Settings).
+    _ensure_gsc_property_registered(client["id"], body.gsc_property, auth["user_id"])
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(client["id"], page_type, url)
     for page_type, text, filename in ps_guides_to_enqueue:
@@ -606,6 +667,9 @@ async def update_client(
     repo_changed = body.github_repo is not None and updates.get("github_repo") != existing.get("github_repo")
     if repo_changed or (website_changed and (updates.get("github_repo") or existing.get("github_repo"))):
         github_infer.enqueue_github_infer(str(client_id))
+    # Register a newly-set/changed Search Console property in the live registry.
+    if body.gsc_property is not None and updates.get("gsc_property") != existing.get("gsc_property"):
+        _ensure_gsc_property_registered(str(client_id), body.gsc_property, auth["user_id"])
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(str(client_id), page_type, url)
     for page_type, text, filename in ps_guides_to_enqueue:

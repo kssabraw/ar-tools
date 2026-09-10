@@ -466,13 +466,10 @@ export function ClientForm() {
       <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: '0 0 8px' }}>
         {isEdit ? `Edit ${existing?.name ?? 'Client'}` : 'New Client'}
       </h1>
-      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 10px' }}>
+      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 32px' }}>
         {isEdit
           ? "Update the client's details. Changes apply to future runs — existing runs keep the snapshot that was taken when they started."
           : "Fill in the client's details. The brand guide and ICP are used by the AI to match the client's voice and audience on every content run."}
-      </p>
-      <p style={{ fontSize: 12, color: '#94a3b8', margin: '0 0 32px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <ParkedBadge /> marks a field that's saved now but not read by any module yet — it activates when that feature ships. Everything else is used as soon as you save.
       </p>
 
       <form onSubmit={handleSubmit}>
@@ -604,10 +601,7 @@ export function ClientForm() {
         <div style={sectionStyle}>
           <h2 style={sectionTitle}>Search Console &amp; Local Rankings</h2>
           <div style={{ marginBottom: 16 }}>
-            <div style={titleRow}>
-              <label style={{ ...labelStyle, margin: 0 }}>Search Console Property</label>
-              <ParkedBadge />
-            </div>
+            <label style={labelStyle}>Search Console Property</label>
             <input
               value={form.gsc_property}
               onChange={set('gsc_property')}
@@ -615,7 +609,7 @@ export function ClientForm() {
               style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', marginTop: 6 }}
             />
             <p style={hintStyle}>
-              The property exactly as it appears in Search Console. Not read yet — the rank tracker registers GSC properties separately from each client's workspace. Make sure the agency service account is added as a user on that property so we can pull clicks &amp; impressions.
+              The property exactly as it appears in Search Console. Saving registers it for the rank tracker. To finish connecting, open the client's workspace → Rankings → Settings, add the agency service account as a user on that property in Google, and verify — then we pull clicks &amp; impressions.
             </p>
           </div>
           <div>
@@ -1004,12 +998,9 @@ export function ClientForm() {
         </div>
 
         <div style={sectionStyle}>
-          <div style={titleRow}>
-            <h2 style={{ ...sectionTitle, margin: 0 }}>GitHub Publishing</h2>
-            <ParkedBadge />
-          </div>
+          <h2 style={sectionTitle}>GitHub Publishing</h2>
           <p style={descStyle}>
-            Optional. Where this client's published content is committed in the repo (Astro content). The content path is the default for every type; the per-type overrides below route each content type into its own collection. Dormant until a GitHub token is configured on the platform.
+            Optional. Where this client's published content is committed in the repo (Astro content). The content path is the default for every type; the per-type overrides below route each content type into its own collection.
           </p>
           <label style={labelStyle}>Repository</label>
           <input
@@ -1113,20 +1104,8 @@ function PageStructureStatus(
   )
 }
 
-function ParkedBadge() {
-  return (
-    <span
-      style={parkedBadge}
-      title="Saved now — activated when the module that uses it ships."
-    >
-      Roadmap
-    </span>
-  )
-}
-
 const sectionStyle: React.CSSProperties = { background: '#fff', border: '1px solid #e2e8f0', borderRadius: 12, padding: 24, marginBottom: 20 }
 const titleRow: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }
-const parkedBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', border: '1px solid #fde68a', borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const psBadge: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', fontSize: 11, fontWeight: 600, borderRadius: 999, padding: '2px 9px', lineHeight: 1.4, whiteSpace: 'nowrap' }
 const reanalyzeBtnStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', background: '#fff', color: '#4f46e5', border: '1px solid #c7d2fe', borderRadius: 999, fontSize: 11, fontWeight: 600, cursor: 'pointer' }
 const psToggleStyle: React.CSSProperties = { padding: '4px 12px', background: '#fff', color: '#64748b', border: '1px solid #e2e8f0', borderRadius: 999, fontSize: 12, fontWeight: 600, cursor: 'pointer' }
