@@ -285,5 +285,12 @@ const PRINT_CSS = `
   .no-print { display: none !important; }
   .avoid-break { break-inside: avoid; }
   @page { margin: 14mm; }
+  /* Browsers strip background colors when printing by default, which turned the
+     rank pins (colored div + white text) into blank white dots. Force the whole
+     report to honor backgrounds so pins, legend swatches, and chart dots print. */
+  #maps-report, #maps-report * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
 }
 `
