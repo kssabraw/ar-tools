@@ -1453,8 +1453,13 @@ the entry below.
 `site-template` renders each). The four immediate ones (comparison / cost / FAQ /
 Writer-#6 hubs) plus **projects / case studies** — the bespoke structured type,
 added in the same PR (see the "Projects / case studies built" note in CLAUDE.md's
-Website Builder bullet). Remaining Tier-B with no template AND no engine:
-problem/symptom, offers, warranty.
+Website Builder bullet). **Problem / symptom pages (`problem`, /blog/{symptom-slug}/)
+built next (2026-09-10)** — a blog Writer run (Writer #8) reusing the posts
+collection + `/blog/[...slug]` route entirely (no new route/collection), a calm
+diagnostic-triage brief (`compose_problem_notes`, never geo-targeted), manual-add
+only + release-excluded, with an optional "Known causes / SME notes" field the
+writer uses rather than inventing causes. Remaining Tier-B with no template AND no
+engine: offers, warranty.
 
 - **Comparison** (`comparison`, `/compare/{a}-vs-{b}/`) — the `run` engine (a
   blog Writer run with a verdict-first, honest-tradeoffs brief on writer notes,

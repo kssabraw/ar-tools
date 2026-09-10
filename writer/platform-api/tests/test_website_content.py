@@ -312,6 +312,29 @@ class TestExtensionContentLayer:
         assert not wc.publish_verdict(page_type="cost", composite=71.0).allowed
         assert wc.publish_verdict(page_type="cost", composite=80.0).allowed
 
+    def test_a_problem_page_lives_in_the_blog_silo(self):
+        # Same collection + flat-slug id as a post, so it renders through the
+        # existing /blog/[...slug] route with no new route or collection.
+        assert wc.collection_of("problem") == "posts"
+        assert wc.entry_id("/blog/ac-blowing-warm-air/", "problem") == "ac-blowing-warm-air"
+        assert (
+            wc.repo_path("/blog/ac-blowing-warm-air/", "problem")
+            == "src/content/posts/ac-blowing-warm-air.md"
+        )
+
+    def test_a_problem_page_gates_like_a_pillar_no_format_needed(self):
+        # Informational blog run: title + description, no format/reviewBy.
+        assert wc.publish_verdict(
+            page_type="problem", frontmatter={"title": "AC blowing warm air", "description": "d"}
+        ).allowed
+        v = wc.publish_verdict(
+            page_type="problem",
+            voice={"violations": [{"severity": "critical"}]},
+            frontmatter={"title": "t", "description": "d"},
+        )
+        assert v.reason == "voice_violation" and not v.overridable
+        assert not wc.publish_verdict(page_type="problem", frontmatter={"title": "t"}).allowed
+
     def test_a_comparison_gates_like_a_pillar(self):
         assert wc.publish_verdict(
             page_type="comparison", frontmatter={"title": "A vs B", "description": "d"}

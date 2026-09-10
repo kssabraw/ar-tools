@@ -316,6 +316,7 @@ const TYPE_DEFS: TypeDef[] = [
   { value: 'pillar', label: 'Pillar / hub page', group: 'Blog', fields: ['title'], hint: '/{slug}/ — a topic hub at the site root' },
   { value: 'comparison', label: 'Comparison page', group: 'Other', fields: ['service', 'subservice'], serviceLabel: 'Option A', subLabel: 'Option B', hint: '/compare/{a}-vs-{b}/ — verdict-first X vs Y' },
   { value: 'faq', label: 'Standalone FAQ page', group: 'Other', fields: [], hint: '/faq/ — one Q&A hub for the site (title optional)' },
+  { value: 'problem', label: 'Problem / symptom page', group: 'Other', fields: ['title'], hint: '/blog/{symptom-slug}/ — diagnostic triage; never geo-targeted (add SME cause notes under optional)' },
 ]
 
 const ADD_ERRORS: Record<string, string> = {
@@ -342,7 +343,10 @@ function AddPageModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
   const [showAdvanced, setShowAdvanced] = useState(false)
 
   const def = TYPE_DEFS.find((d) => d.value === type) as TypeDef
-  const isBlog = type === 'post' || type === 'pillar'
+  // A problem/symptom page is a blog run too, so it takes the blog affordances:
+  // the editorial-angle textarea (where SME cause notes go), a keyword override,
+  // and no location field (it is never geo-targeted).
+  const isBlog = type === 'post' || type === 'pillar' || type === 'problem'
 
   const add = useMutation({
     mutationFn: () => api.post(`/websites/${websiteId}/pages`, {
@@ -404,8 +408,8 @@ function AddPageModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
                  placeholder={def.value === 'brand_service' ? 'Carrier' : def.value === 'neighborhood' ? 'Ballard' : def.value === 'comparison' ? 'Tank water heater' : 'Oak Trees'} />
         )}
         {(def.fields.includes('title') || type === 'faq') && (
-          <Field label={type === 'faq' ? 'Title (optional)' : 'Title'} value={title} onChange={setTitle}
-                 placeholder={type === 'pillar' ? 'Roof Maintenance Guide' : type === 'faq' ? 'Frequently Asked Questions' : 'How to spot storm roof damage'} />
+          <Field label={type === 'faq' ? 'Title (optional)' : type === 'problem' ? 'Symptom' : 'Title'} value={title} onChange={setTitle}
+                 placeholder={type === 'pillar' ? 'Roof Maintenance Guide' : type === 'faq' ? 'Frequently Asked Questions' : type === 'problem' ? 'AC blowing warm air' : 'How to spot storm roof damage'} />
         )}
         {type === 'post' && (
           <div>
@@ -423,9 +427,11 @@ function AddPageModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
           <div style={{ display: 'grid', gap: 10, padding: 12, background: '#f8fafc', borderRadius: 8 }}>
             {isBlog && (
               <div>
-                <label style={label}>Editorial angle</label>
+                <label style={label}>{type === 'problem' ? 'Known causes / SME notes' : 'Editorial angle'}</label>
                 <textarea value={angle} onChange={(e) => setAngle(e.target.value)} rows={2}
-                          placeholder="The angle / who it's for — threaded into the writer brief."
+                          placeholder={type === 'problem'
+                            ? 'SME-verified causes, severity, and fixes — the writer uses only these, never invents causes.'
+                            : "The angle / who it's for — threaded into the writer brief."}
                           style={{ ...input, resize: 'vertical' }} />
               </div>
             )}

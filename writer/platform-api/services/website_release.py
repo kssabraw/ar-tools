@@ -54,15 +54,16 @@ logger = logging.getLogger(__name__)
 # A site only ever has one family present (a local site has no posts, an
 # informational site has no service pages), so one unified set serves both.
 #
-# Also EXCLUDED: the ⭐ extension types (cost, comparison) — even though they ride
-# the NLP / run engines, they are manual-add-only, each a deliberate human
-# judgement with its own trigger (a cost page needs price sign-off, a comparison
-# a recognised either/or). The owner's ruling is that these are added one at a
-# time, never auto-emitted in bulk; auto-publishing a hand-added one on a drip
-# cadence contradicts that. This keeps all four extension types uniform — faq and
-# project are not in NLP/RUN so were never releasable; cost and comparison are
+# Also EXCLUDED: the ⭐ extension types (cost, comparison, problem) — even though
+# they ride the NLP / run engines, they are manual-add-only, each a deliberate
+# human judgement with its own trigger (a cost page needs price sign-off, a
+# comparison a recognised either/or, a problem/symptom page needs SME-verified
+# cause data). The owner's ruling is that these are added one at a time, never
+# auto-emitted in bulk; auto-publishing a hand-added one on a drip cadence
+# contradicts that. This keeps all the extension types uniform — faq and project
+# are not in NLP/RUN so were never releasable; cost, comparison and problem are
 # subtracted here so they behave the same.
-_MANUAL_ONLY_EXTENSION_TYPES = frozenset({"cost", "comparison"})
+_MANUAL_ONLY_EXTENSION_TYPES = frozenset({"cost", "comparison", "problem"})
 RELEASE_PAGE_TYPES = (
     website_plan.NLP_PAGE_TYPES | website_plan.RUN_PAGE_TYPES
 ) - _MANUAL_ONLY_EXTENSION_TYPES

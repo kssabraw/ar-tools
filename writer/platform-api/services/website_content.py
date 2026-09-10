@@ -52,6 +52,10 @@ _COLLECTION_BY_PAGE_TYPE: dict[str, str] = {
     # A project / case study — its own collection + /projects/ route; renders
     # structured job facts (stats/photos/testimonial) around the narrative body.
     "project": "projects",
+    # A problem / symptom page — a blog post in the flat blog silo
+    # (/blog/{symptom-slug}/), so it shares the posts collection + blog route; only
+    # its diagnostic-triage brief differs from an ordinary post.
+    "problem": "posts",
     "home": "pages",
     "about": "pages",
     "contact": "pages",
@@ -164,7 +168,10 @@ def entry_id(path: str, page_type: str) -> str:
     segs = [s for s in (path or "").split("/") if s]
     if not segs:
         return "index"
-    if page_type == "post":
+    if page_type in ("post", "problem"):
+        # Both live in the flat blog silo at /blog/{slug}/, and the blog route
+        # uses the entry id AS the slug, so a full-path id would publish
+        # /blog/blog-{slug}/. Blog slugs are unique site-wide by construction.
         segs = segs[-1:]
     return _SLUG_RE.sub("-", "-".join(segs).lower()).strip("-")
 
@@ -334,12 +341,12 @@ def publish_verdict(
             return PublishVerdict(False, "news_post_missing_review_date", overridable=False)
         return PublishVerdict(True)
 
-    if page_type in {"pillar", "comparison"}:
-        # A pillar and a commercial comparison are both blog Writer runs —
-        # informational content that ships with no human reading it first — so
-        # they carry the same non-overridable machine gate as a post. Neither has
-        # a `format`/`reviewBy` (never a news reaction); both must carry
-        # title + description.
+    if page_type in {"pillar", "comparison", "problem"}:
+        # A pillar, a commercial comparison and a diagnostic problem/symptom page
+        # are all blog Writer runs — informational content that ships with no
+        # human reading it first — so they carry the same non-overridable machine
+        # gate as a post. None has a `format`/`reviewBy` (never a news reaction);
+        # all must carry title + description.
         if critical:
             return PublishVerdict(False, "voice_violation", overridable=False)
         if writer_schema_version and "-degraded" in writer_schema_version:

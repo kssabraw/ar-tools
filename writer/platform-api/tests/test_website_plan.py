@@ -1050,13 +1050,11 @@ class TestReleaseExclusion:
     deliberate human-triggered one-off, never bulk auto-emitted. faq and project
     were never in NLP/RUN, so all four extension types behave uniformly."""
 
-    def test_cost_and_comparison_are_not_drip_released(self):
+    def test_extension_types_are_not_drip_released(self):
         from services import website_release
 
-        assert "cost" not in website_release.RELEASE_PAGE_TYPES
-        assert "comparison" not in website_release.RELEASE_PAGE_TYPES
-        assert "faq" not in website_release.RELEASE_PAGE_TYPES
-        assert "project" not in website_release.RELEASE_PAGE_TYPES
+        for pt in ("cost", "comparison", "faq", "project", "problem"):
+            assert pt not in website_release.RELEASE_PAGE_TYPES
 
     def test_ordinary_content_pages_are_still_drip_released(self):
         from services import website_release
@@ -1064,3 +1062,46 @@ class TestReleaseExclusion:
         assert "service" in website_release.RELEASE_PAGE_TYPES
         assert "post" in website_release.RELEASE_PAGE_TYPES
         assert "local_landing" in website_release.RELEASE_PAGE_TYPES
+
+
+class TestProblemPageType:
+    """Problem / symptom pages: a blog Writer run at /blog/{symptom-slug}/ with a
+    diagnostic-triage brief — informational, never geo-targeted, manual-add."""
+
+    def test_problem_routes_to_a_blog_run_never_geo(self):
+        page = wp.PlannedPage("/blog/ac-blowing-warm-air/", "problem", "AC blowing warm air", "manual", tier=2)
+        inputs = wp.generation_inputs(page, services={}, cities={})
+        assert inputs["engine"] == "run"
+        assert inputs["content_type"] == "blog_post"
+        assert inputs["keyword"] == "AC blowing warm air"
+        assert inputs["location"] is None  # informational, never geo-targeted
+        assert inputs["notes"]  # a diagnostic-triage brief is threaded on
+
+    def test_problem_is_manually_addable_but_not_auto_planned(self):
+        assert "problem" in wp.MANUAL_PAGE_TYPES
+        assert "problem" in wp.RUN_PAGE_TYPES
+
+    def test_build_manual_problem_composes_the_blog_url_and_brief(self):
+        page, payload = wp.build_manual_page(page_type="problem", title="AC blowing warm air")
+        assert page.path == "/blog/ac-blowing-warm-air/"
+        assert page.page_type == "problem"
+        assert payload["engine"] == "run"
+        # The brief carries the triage angle + the never-geo rule.
+        assert "diagnostic triage" in payload["notes"].lower() or "triage" in payload["notes"].lower()
+        assert "never" in payload["notes"].lower()
+
+    def test_sme_cause_notes_ride_into_the_brief(self):
+        page, payload = wp.build_manual_page(
+            page_type="problem", title="AC blowing warm air",
+            angle="Most likely: dirty filter (DIY). Then: low refrigerant (call a pro).",
+        )
+        assert "dirty filter" in payload["notes"]
+        assert "SME-verified" in payload["notes"] or "do not invent" in payload["notes"]
+
+    def test_a_problem_needs_a_symptom(self):
+        with pytest.raises(ValueError, match="missing_title"):
+            wp.build_manual_page(page_type="problem")
+
+    def test_a_symptom_that_slugs_empty_is_rejected(self):
+        with pytest.raises(ValueError, match="missing_title"):
+            wp.build_manual_page(page_type="problem", title="???")
