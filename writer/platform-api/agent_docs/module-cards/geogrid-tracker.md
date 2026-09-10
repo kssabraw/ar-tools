@@ -71,8 +71,20 @@ collapse.
   "near me" sibling keyword at the same pins; if that sibling shows the client
   in a full pack there, the city qualifier is the cause. (At the pin level the
   distorted keyword returns a 1-business pack that is the like-named competitor.)
-- **Fix:** track the bare service term ("Manufactured Home", "Housing
-  Development", optionally "… Near Me"); the pins carry the geography.
+- **Fix — and *why swap* rather than just discount the bad pins:** remove the
+  city and track the bare service term ("Manufactured Home", "Housing
+  Development", optionally "… Near Me"). Two reasons the fix is a keyword change,
+  not a reading caveat: (1) the pin coordinate already supplies the geography, so
+  dropping the city costs **no** locational precision while removing the exact
+  token that name-matches the competitor and pre-empts the pack — pure upside;
+  and (2) left in place, a city-in-name keyword re-paints the same false center
+  gap on **every future scan** and silently contaminates that keyword's trend
+  line, its SoLV, and its `maps_alerts` (a `coverage_drop` / `area_decline` that
+  is really a query artifact, not lost visibility) — so it must be corrected at
+  the source. The corrected keyword starts a clean series that measures the real
+  category demand the grid exists to capture. (Caveat: the swap begins a fresh
+  history for that keyword, but the old city-qualified series was measuring a
+  distorted signal, so that is a correction, not a loss.)
 
 **Worked example (Lake Sherman Village, Navarre OH, 2026-09-10):** a completed,
 fully-successful scan (all 388 pins returned data, 0 failures). Keyword
