@@ -7,6 +7,10 @@ assert the SHAPE and the pass-through, not any generated content.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
+import pytest
+
 from services import website_projects as wp
 
 
@@ -83,3 +87,40 @@ class TestBuildProjectContent:
         assert c["title"] == "Project"
         assert c["body"] == ""
         assert c["frontmatter"]["sections"] == {}
+
+
+@pytest.mark.asyncio
+class TestNarrateProject:
+    """Narration is a best-effort enhancement, never a gate: no prose → no call;
+    any failure → None so the caller uses the operator's raw text verbatim."""
+
+    async def test_no_prose_skips_the_call_entirely(self, monkeypatch):
+        called = AsyncMock()
+        monkeypatch.setattr(wp.report_llm, "run_forced_tool", called)
+        out = await wp.narrate_project(
+            {"headline": "Job", "stats": [{"label": "x", "value": "1"}]}, client={}
+        )
+        assert out is None
+        called.assert_not_called()
+
+    async def test_llm_failure_degrades_to_none(self, monkeypatch):
+        monkeypatch.setattr(
+            wp.report_llm, "run_forced_tool",
+            AsyncMock(side_effect=RuntimeError("report_no_tool_use")),
+        )
+        out = await wp.narrate_project({"challenge": "It leaked."}, client={})
+        assert out is None  # caller falls back to the raw supplied text
+
+    async def test_success_returns_cleaned_three_sections(self, monkeypatch):
+        monkeypatch.setattr(
+            wp.report_llm, "run_forced_tool",
+            AsyncMock(return_value={"challenge": "  A storm. ", "work": "We fixed it.",
+                                    "outcome": "No leaks.", "stray": "ignored"}),
+        )
+        out = await wp.narrate_project({"challenge": "storm", "work": "fix", "outcome": "ok"}, client={})
+        assert out == {"challenge": "A storm.", "work": "We fixed it.", "outcome": "No leaks."}
+
+    async def test_non_dict_tool_output_degrades_to_none(self, monkeypatch):
+        monkeypatch.setattr(wp.report_llm, "run_forced_tool", AsyncMock(return_value="oops"))
+        out = await wp.narrate_project({"work": "did a thing"}, client={})
+        assert out is None

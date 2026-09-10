@@ -100,12 +100,15 @@ export function findPathConflicts(
         detail: `"${entry.label}" claims reserved root slug "${segs[0]}"`,
       });
     }
-    // A Cost page legitimately OWNS the reserved second-level "cost"
-    // (/{service}/cost/), mirroring the planner's RESERVED_SECOND_LEVEL_OWNER —
-    // so it is not a collision, but any other page claiming /{x}/cost/ is.
+    // The second-level reservation protects the SERVICE namespace's
+    // /{service}/cost/, mirroring the planner's check_paths. A Cost page OWNS it;
+    // and under a reserved-ROOT namespace (/projects/{slug}/, /compare/{a}-vs-{b}/)
+    // the second segment is that page's own slug, never a service-cost slot, so a
+    // slug that happens to be "cost" there is not a collision.
     if (
       segs.length === 2 &&
       RESERVED_SECOND_LEVEL.has(segs[1]) &&
+      !RESERVED_ROOT_SLUGS.has(segs[0]) &&
       entry.pageType !== 'cost'
     ) {
       conflicts.push({

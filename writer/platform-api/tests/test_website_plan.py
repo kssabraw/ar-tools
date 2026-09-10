@@ -988,7 +988,79 @@ class TestProjectPageType:
         with pytest.raises(ValueError, match="missing_title"):
             wp.build_manual_page(page_type="project", project={"location": "x"})
 
+    def test_a_project_titled_cost_is_not_a_reserved_collision(self):
+        # /projects/cost/ — the second-level "cost" reservation protects the
+        # SERVICE namespace, not a case study whose slug happens to be "cost".
+        assert not wp.check_paths(
+            [wp.PlannedPage("/projects/cost/", "project", "Cost", "manual", tier=4)]
+        )
+
+    def test_a_symbol_only_headline_is_rejected_not_a_broken_slug(self):
+        # A headline with no ASCII alphanumerics slugifies to "" and would yield
+        # a segment-less "/projects/" that breaks the whole Astro build — reject
+        # it as a clean missing_title instead.
+        with pytest.raises(ValueError, match="missing_title"):
+            wp.build_manual_page(page_type="project", title="★★★", project={})
+
     def test_headline_can_come_from_the_project_dict(self):
         page, _ = wp.build_manual_page(page_type="project", project={"headline": "Deck Rebuild"})
         assert page.path == "/projects/deck-rebuild/"
         assert page.title == "Deck Rebuild"
+
+
+class TestSlugGuard:
+    """Every free-text axis that becomes a URL segment must slugify to a
+    non-empty slug — a value that is all punctuation / non-ASCII collapses to a
+    segment-less path the collection schema rejects, which fails the WHOLE site
+    build. build_manual_page rejects it as a clean 400 instead, uniformly across
+    every manual page type (not just the project one the bug was found on)."""
+
+    CAT = [svc("Tree Removal")]
+    CIT = [city("Seattle")]
+
+    def _build(self, **kw):
+        return wp.build_manual_page(catalog=self.CAT, cities=self.CIT, **kw)
+
+    def test_symbol_only_title_rejected_for_every_title_derived_type(self):
+        for pt, code in (("pillar", "missing_title"), ("post", "missing_title")):
+            with pytest.raises(ValueError, match=code):
+                self._build(page_type=pt, title="★★★")
+
+    def test_symbol_only_service_name_rejected(self):
+        with pytest.raises(ValueError, match="missing_service"):
+            self._build(page_type="service", service="!!!")
+
+    def test_symbol_only_city_name_rejected(self):
+        with pytest.raises(ValueError, match="missing_city"):
+            self._build(page_type="location", city="—")
+
+    def test_comparison_option_that_slugs_empty_is_rejected(self):
+        with pytest.raises(ValueError, match="missing_subservice"):
+            self._build(page_type="comparison", service="Tankless", subservice="＊")
+
+    def test_a_normal_title_still_builds(self):
+        # The guard must not reject a legitimate title — a regression sentinel.
+        page, _ = self._build(page_type="pillar", title="Roof Maintenance Guide")
+        assert page.path == "/roof-maintenance-guide/"
+
+
+class TestReleaseExclusion:
+    """The manual-only extension types (cost, comparison) are excluded from the
+    auto drip-release set even though they ride the NLP / run engines: each is a
+    deliberate human-triggered one-off, never bulk auto-emitted. faq and project
+    were never in NLP/RUN, so all four extension types behave uniformly."""
+
+    def test_cost_and_comparison_are_not_drip_released(self):
+        from services import website_release
+
+        assert "cost" not in website_release.RELEASE_PAGE_TYPES
+        assert "comparison" not in website_release.RELEASE_PAGE_TYPES
+        assert "faq" not in website_release.RELEASE_PAGE_TYPES
+        assert "project" not in website_release.RELEASE_PAGE_TYPES
+
+    def test_ordinary_content_pages_are_still_drip_released(self):
+        from services import website_release
+
+        assert "service" in website_release.RELEASE_PAGE_TYPES
+        assert "post" in website_release.RELEASE_PAGE_TYPES
+        assert "local_landing" in website_release.RELEASE_PAGE_TYPES

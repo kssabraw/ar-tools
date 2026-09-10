@@ -830,9 +830,17 @@ def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
                 issues.append(
                     PlanIssue("reserved_slug", True, f'"{page.title}" claims reserved root slug "{segs[0]}"')
                 )
+        # The second-level reservation protects the SERVICE namespace's
+        # /{service}/cost/. Under a reserved-ROOT namespace (/projects/{slug}/,
+        # /compare/{a}-vs-{b}/) the second segment is that page's own slug, never a
+        # service-cost slot — so a case study or comparison whose slug happens to
+        # be "cost" is not a collision. (A first segment that is itself reserved is
+        # caught by the root check above when a page sits AT it.) The owner (a cost
+        # page) stays exempt.
         if (
             len(segs) == 2
             and segs[1] in RESERVED_SECOND_LEVEL
+            and segs[0] not in RESERVED_ROOT_SLUGS
             and RESERVED_SECOND_LEVEL_OWNER.get(segs[1]) != page.page_type
         ):
             issues.append(
@@ -1530,6 +1538,21 @@ def build_manual_page(
             raise ValueError(code)
         return cleaned
 
+    def _slug(value: Optional[str], code: str) -> str:
+        """Slugify a required free-text value, guaranteeing a non-empty slug.
+
+        A value that is non-empty but carries no ASCII alphanumerics (an emoji or
+        all-punctuation / non-Latin headline like "★★★" or "日本語") slugifies to
+        "", and `_path` then drops the empty segment — yielding a segment-less
+        path ("/projects/", "/") that the collection schema rejects, which fails
+        the WHOLE site build rather than this one page. Reject it here as the same
+        clean 400 a missing value gets, so a bad title can never break a build.
+        """
+        slug = slugify(_need(value, code))
+        if not slug:
+            raise ValueError(code)
+        return slug
+
     def _ensure_service(slug: str, name: str) -> None:
         # A real catalog entry (with teaser/order) wins; a synthetic one only
         # fills a gap so name resolution works for an off-catalog axis.
@@ -1547,14 +1570,14 @@ def build_manual_page(
 
     if page_type == "service":
         name = _need(service, "missing_service")
-        s_slug = slugify(name)
+        s_slug = _slug(name, "missing_service")
         path, page_title = _path(s_slug), title or name
         _ensure_service(s_slug, name)
 
     elif page_type == "sub_service":
         name = _need(service, "missing_service")
         sub = _need(subservice, "missing_subservice")
-        s_slug, sub_slug = slugify(name), slugify(sub)
+        s_slug, sub_slug = _slug(name, "missing_service"), _slug(sub, "missing_subservice")
         path, page_title = _path(s_slug, sub_slug), title or sub
         # Register only the PARENT: a synthetic sub-service (no catalog entry) is
         # deliberately routed through generation_inputs' parent-scoping branch,
@@ -1564,28 +1587,28 @@ def build_manual_page(
     elif page_type == "brand_service":
         name = _need(service, "missing_service")
         brand = _need(subservice, "missing_subservice")
-        s_slug, b_slug = slugify(name), slugify(brand)
+        s_slug, b_slug = _slug(name, "missing_service"), _slug(brand, "missing_subservice")
         path = _path(s_slug, b_slug)
         page_title = title or f"{brand} {name}"
         _ensure_service(s_slug, name)
 
     elif page_type == "location":
         name = _need(city, "missing_city")
-        c_slug = slugify(name)
+        c_slug = _slug(name, "missing_city")
         path, page_title = _path(c_slug), title or name
         _ensure_city(c_slug, name)
 
     elif page_type == "neighborhood":
         city_name = _need(city, "missing_city")
         hood = _need(subservice, "missing_subservice")
-        c_slug, h_slug = slugify(city_name), slugify(hood)
+        c_slug, h_slug = _slug(city_name, "missing_city"), _slug(hood, "missing_subservice")
         path, page_title = _path(c_slug, h_slug), title or hood
         _ensure_city(c_slug, city_name)
 
     elif page_type == "local_landing":
         city_name = _need(city, "missing_city")
         svc_name = _need(service, "missing_service")
-        c_slug, s_slug = slugify(city_name), slugify(svc_name)
+        c_slug, s_slug = _slug(city_name, "missing_city"), _slug(svc_name, "missing_service")
         path = _path(c_slug, s_slug)
         page_title = title or f"{svc_name} in {city_name}"
         _ensure_city(c_slug, city_name)
@@ -1595,7 +1618,7 @@ def build_manual_page(
         city_name = _need(city, "missing_city")
         svc_name = _need(service, "missing_service")
         sub = _need(subservice, "missing_subservice")
-        c_slug, s_slug, sub_slug = slugify(city_name), slugify(svc_name), slugify(sub)
+        c_slug, s_slug, sub_slug = _slug(city_name, "missing_city"), _slug(svc_name, "missing_service"), _slug(sub, "missing_subservice")
         path = _path(c_slug, s_slug, sub_slug)
         # The title carries the keyword vector (generation_inputs reads it), so a
         # composed default names all three axes; the user edits it in the form.
@@ -1608,7 +1631,7 @@ def build_manual_page(
         fmt = (post_format or DEFAULT_POST_FORMAT).strip() or DEFAULT_POST_FORMAT
         if fmt not in POST_FORMATS:
             raise ValueError("invalid_format")
-        slug = slugify(name)
+        slug = _slug(name, "missing_title")
         path, page_title = _path("blog", slug), name
         posts = {
             path: PostEntry(
@@ -1628,7 +1651,7 @@ def build_manual_page(
         # /{service-slug}/cost/ — a cost page under a service. Needs the service
         # only; the keyword ("<service> cost") is derived in generation_inputs.
         name = _need(service, "missing_service")
-        s_slug = slugify(name)
+        s_slug = _slug(name, "missing_service")
         path = _path(s_slug, "cost")
         page_title = title or f"{name} Cost"
         _ensure_service(s_slug, name)
@@ -1639,7 +1662,7 @@ def build_manual_page(
         # no catalog registration is needed; the "A vs B" title carries the topic.
         cmp_a = _need(service, "missing_service")
         cmp_b = _need(subservice, "missing_subservice")
-        path = _path("compare", f"{slugify(cmp_a)}-vs-{slugify(cmp_b)}")
+        path = _path("compare", f"{_slug(cmp_a, 'missing_service')}-vs-{_slug(cmp_b, 'missing_subservice')}")
         page_title = title or f"{cmp_a} vs {cmp_b}"
 
     elif page_type == "faq":
@@ -1654,12 +1677,12 @@ def build_manual_page(
         # the payload for the `project` engine to narrate (inventing nothing).
         project = project or {}
         headline = _need(title or project.get("headline"), "missing_title")
-        slug = slugify(headline)
+        slug = _slug(headline, "missing_title")
         path, page_title = _path("projects", slug), headline
 
     else:  # pillar
         name = _need(title, "missing_title")
-        slug = slugify(name)
+        slug = _slug(name, "missing_title")
         path, page_title = _path(slug), name
         pillars = {path: PillarEntry(slug=slug, title=name)}
 

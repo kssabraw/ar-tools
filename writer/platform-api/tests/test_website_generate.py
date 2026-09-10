@@ -226,6 +226,44 @@ class TestGeneratePage:
                 await wg.generate_page(page_id="p1", user_id="u1")
         engine.assert_not_called()
 
+    async def test_a_project_page_is_written_by_the_project_engine(self):
+        page = {"id": "p1", "website_id": "w1", "page_type": "project", "title": "Deck Rebuild",
+                "plan": {"engine": "project",
+                         "project": {"headline": "Deck Rebuild", "challenge": "Rotten joists.",
+                                     "stats": [{"label": "Done in", "value": "3 days"}]}}}
+        sb, tables = _supabase(page, SITE, CLIENT)
+        # narrate is best-effort; None makes build_project_content use raw text.
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_projects.narrate_project", new=AsyncMock(return_value=None)
+        ) as narrate:
+            result = await wg.generate_page(page_id="p1", user_id="u1")
+
+        assert result == {"page_id": "p1", "generated": True}
+        narrate.assert_awaited_once()
+        written = tables["website_pages"].update.call_args[0][0]
+        # A project is its own composed source — stored on the row, no upstream record.
+        assert written["content_source"] == "composed"
+        assert written["source_id"] is None
+        assert written["content_hash"] is None
+        # The structured facts + raw prose are in the stored content.
+        assert written["content"]["title"] == "Deck Rebuild"
+        assert "Rotten joists." in written["content"]["body"]
+        assert written["content"]["frontmatter"]["sections"]["stats"]
+
+    async def test_a_project_generates_even_with_no_brand_context(self):
+        # A case study is real facts the operator entered, so — unlike an nlp or
+        # core page — it must ship even for a client with no voice guide.
+        page = {"id": "p1", "website_id": "w1", "page_type": "project", "title": "Deck Rebuild",
+                "plan": {"engine": "project", "project": {"headline": "Deck Rebuild", "work": "Rebuilt it."}}}
+        sb, tables = _supabase(page, SITE, {"id": "c1"})  # no brand_voice
+        with patch.object(wg, "get_supabase", return_value=sb), patch(
+            "services.website_projects.narrate_project", new=AsyncMock(return_value=None)
+        ):
+            result = await wg.generate_page(page_id="p1", user_id="u1")
+
+        assert result["generated"] is True
+        assert tables["website_pages"].update.call_args[0][0]["content_source"] == "composed"
+
     async def test_a_plan_row_with_no_keyword_fails_loudly(self):
         page = {"id": "p1", "website_id": "w1", "page_type": "service",
                 "plan": {"engine": "nlp", "keyword": ""}}
