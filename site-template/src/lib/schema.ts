@@ -113,6 +113,30 @@ export function faqPage(
 }
 
 /**
+ * Offer structured data (reference §5.1 Offers / Specials — "Offer per card").
+ * Built from the operator-entered offer facts only; a card with no title returns
+ * undefined so the caller emits no dangling node. `validThrough` is only set when
+ * the expiry parses to a real date — freeform expiry text ("Ends this weekend")
+ * is left off rather than emitted as an invalid date.
+ */
+export function offer(input: {
+  name: string;
+  description?: string;
+  url?: string;
+  validThrough?: string;
+}): Json | undefined {
+  if (!input.name) return undefined;
+  return prune({
+    '@type': 'Offer',
+    name: input.name,
+    description: input.description,
+    url: input.url,
+    validThrough: input.validThrough,
+    seller: organization(),
+  });
+}
+
+/**
  * BreadcrumbList built from the URL path, so it can never disagree with the
  * canonical (reference §1.2). Callers pass the crumbs derived by
  * content.breadcrumbsFor; this only shapes them.

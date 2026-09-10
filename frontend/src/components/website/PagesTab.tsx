@@ -49,6 +49,14 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
   const [force, setForce] = useState(false)
   const [adding, setAdding] = useState(false)
   const [addingProject, setAddingProject] = useState(false)
+  const [addingOffers, setAddingOffers] = useState(false)
+  const [addingWarranty, setAddingWarranty] = useState(false)
+
+  // Offers and warranty are singletons (one per site at /specials/ and
+  // /warranty/), so their Add button is disabled once the page exists rather
+  // than letting the operator hit a 409.
+  const hasOffers = pages.some((p) => p.page_type === 'offers')
+  const hasWarranty = pages.some((p) => p.page_type === 'warranty')
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['website', website.id] })
@@ -70,11 +78,13 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
   // together.
   const approveDeny = approved ? null : 'Approve the plan on the Plan tab before generating or publishing.'
 
-  // Both writing engines: nlp (service/location/matrix, with SERP + scoring) and
-  // core_pages (home/about/contact, a light single call). 'template' and null
-  // are not generable — the template renders one and nothing writes the other.
+  // Every engine the backend can write a body for is generable here: nlp
+  // (service/location/matrix, with SERP + scoring), core_pages (home/about/contact
+  // + FAQ + hubs), run (blog posts/pillars/comparison/problem), and the structured
+  // singletons (project/offers/warranty). Only 'template' and null are not — the
+  // template renders one from data and nothing writes the other.
   const generable = useMemo(
-    () => pages.filter((p) => (p.plan?.engine === 'nlp' || p.plan?.engine === 'core_pages') && selected.has(p.id)),
+    () => pages.filter((p) => selected.has(p.id) && p.plan?.engine != null && p.plan?.engine !== 'template'),
     [pages, selected],
   )
   const publishable = useMemo(
@@ -156,12 +166,30 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
           <Plus size={14} /> Add project
         </button>
 
+        <button
+          onClick={() => setAddingOffers(true)}
+          disabled={Boolean(addDeny) || hasOffers}
+          title={addDeny ?? (hasOffers ? 'This site already has an offers page (/specials/).' : 'Add the offers / specials page — coupons, promos and financing you enter. Terms and expiry are never invented.')}
+          style={{ ...btn(addDeny || hasOffers ? '#e2e8f0' : '#fff', addDeny || hasOffers ? '#94a3b8' : ACCENT) }}
+        >
+          <Plus size={14} /> Add offers
+        </button>
+
+        <button
+          onClick={() => setAddingWarranty(true)}
+          disabled={Boolean(addDeny) || hasWarranty}
+          title={addDeny ?? (hasWarranty ? 'This site already has a warranty page (/warranty/).' : 'Add the warranty / guarantee page — coverage, claim steps and FAQ you enter. Terms are never invented.')}
+          style={{ ...btn(addDeny || hasWarranty ? '#e2e8f0' : '#fff', addDeny || hasWarranty ? '#94a3b8' : ACCENT) }}
+        >
+          <Plus size={14} /> Add warranty
+        </button>
+
         <div style={{ width: 1, height: 22, background: '#e2e8f0' }} />
 
         <button
           onClick={() => generate.mutate()}
           disabled={genDisabled}
-          title={generateDeny ?? approveDeny ?? (generable.length === 0 ? 'Select pages an engine can write.' : `Writes ${generable.length} page(s). Service/location pages cost a SERP analysis each; home/about/contact are a single cheap call.`)}
+          title={generateDeny ?? approveDeny ?? (generable.length === 0 ? 'Select pages an engine can write.' : `Writes ${generable.length} page(s). Service/location pages cost a SERP analysis each; blog runs a full pipeline; core, project, offers and warranty pages are cheap or free.`)}
           style={{ ...btn(genDisabled ? '#e2e8f0' : ACCENT, genDisabled ? '#94a3b8' : '#fff') }}
         >
           {generate.isPending ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
@@ -277,6 +305,22 @@ export function PagesTab({ website, pages, approved, perms }: Props) {
           websiteId={website.id}
           onClose={() => setAddingProject(false)}
           onDone={() => { setAddingProject(false); refresh() }}
+        />
+      )}
+
+      {addingOffers && (
+        <OffersModal
+          websiteId={website.id}
+          onClose={() => setAddingOffers(false)}
+          onDone={() => { setAddingOffers(false); refresh() }}
+        />
+      )}
+
+      {addingWarranty && (
+        <WarrantyModal
+          websiteId={website.id}
+          onClose={() => setAddingWarranty(false)}
+          onDone={() => { setAddingWarranty(false); refresh() }}
         />
       )}
     </div>
@@ -602,6 +646,227 @@ function ProjectModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
           <button onClick={() => add.mutate()} disabled={!headline.trim() || add.isPending}
                   style={btn(!headline.trim() ? '#e2e8f0' : ACCENT, !headline.trim() ? '#94a3b8' : '#fff')}>
             {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add project
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Add offers / specials -----------------------------------------------
+
+interface OfferRow { title: string; value: string; terms: string; expiry: string; cta_label: string; cta_href: string }
+
+const SINGLETON_ADD_ERRORS: Record<string, string> = {
+  reserved_slug: 'That URL collides with a reserved page.',
+  page_route_exists: 'This site already has that page.',
+}
+
+function OffersModal({ websiteId, onClose, onDone }: { websiteId: string; onClose: () => void; onDone: () => void }) {
+  const [intro, setIntro] = useState('')
+  const [financing, setFinancing] = useState('')
+  const [finePrint, setFinePrint] = useState('')
+  const [offers, setOffers] = useState<OfferRow[]>([{ title: '', value: '', terms: '', expiry: '', cta_label: '', cta_href: '' }])
+
+  const cleanOffers = offers.filter((o) => o.title.trim())
+
+  const add = useMutation({
+    mutationFn: () => api.post(`/websites/${websiteId}/pages`, {
+      page_type: 'offers',
+      offers: {
+        intro: intro || undefined,
+        financing: financing || undefined,
+        fine_print: finePrint || undefined,
+        offers: cleanOffers,
+      },
+    }),
+    onSuccess: onDone,
+  })
+
+  const errMsg = add.error ? (SINGLETON_ADD_ERRORS[(add.error as Error).message] ?? (add.error as Error).message) : null
+  const ta: React.CSSProperties = { ...input, resize: 'vertical', minHeight: 52 }
+  const rowStyle: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center' }
+
+  return (
+    <div onClick={onClose} style={overlay}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: 560, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto', display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ fontSize: 15 }}>Add the offers / specials page</strong>
+          <button onClick={onClose} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={15} /></button>
+        </div>
+        <div style={{ fontSize: 11, color: '#64748b' }}>
+          One offers page per site, at <code>/specials/</code>. Every offer’s value, terms and expiry is
+          what you enter — nothing is invented. Keep it current: expired offers left live are the one thing to avoid.
+        </div>
+
+        <div>
+          <label style={label}>Intro (optional)</label>
+          <textarea value={intro} onChange={(e) => setIntro(e.target.value)} rows={2} placeholder="A short lede for the page." style={ta} />
+        </div>
+
+        <div>
+          <label style={label}>Offers</label>
+          {offers.map((o, i) => (
+            <div key={i} style={{ display: 'grid', gap: 4, marginBottom: 8, padding: 8, background: '#f8fafc', borderRadius: 8 }}>
+              <div style={rowStyle}>
+                <input value={o.title} placeholder="Title — e.g. $50 off first service"
+                       onChange={(e) => setOffers(offers.map((x, j) => j === i ? { ...x, title: e.target.value } : x))} style={input} />
+                <button onClick={() => setOffers(offers.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+              </div>
+              <div style={rowStyle}>
+                <input value={o.value} placeholder="Value — e.g. Save $50" onChange={(e) => setOffers(offers.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} style={input} />
+                <input value={o.expiry} placeholder="Expiry — e.g. Dec 31, 2026" onChange={(e) => setOffers(offers.map((x, j) => j === i ? { ...x, expiry: e.target.value } : x))} style={input} />
+              </div>
+              <input value={o.terms} placeholder="Terms — e.g. New customers only, one per household" onChange={(e) => setOffers(offers.map((x, j) => j === i ? { ...x, terms: e.target.value } : x))} style={input} />
+              <div style={rowStyle}>
+                <input value={o.cta_label} placeholder="Button label (optional)" onChange={(e) => setOffers(offers.map((x, j) => j === i ? { ...x, cta_label: e.target.value } : x))} style={input} />
+                <input value={o.cta_href} placeholder="Button link (optional) — /contact-us/" onChange={(e) => setOffers(offers.map((x, j) => j === i ? { ...x, cta_href: e.target.value } : x))} style={input} />
+              </div>
+            </div>
+          ))}
+          <button onClick={() => setOffers([...offers, { title: '', value: '', terms: '', expiry: '', cta_label: '', cta_href: '' }])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
+            <Plus size={12} /> Add offer
+          </button>
+        </div>
+
+        <div>
+          <label style={label}>Financing block (optional)</label>
+          <textarea value={financing} onChange={(e) => setFinancing(e.target.value)} rows={2} placeholder="Financing options you offer." style={ta} />
+        </div>
+        <div>
+          <label style={label}>Fine print (optional)</label>
+          <textarea value={finePrint} onChange={(e) => setFinePrint(e.target.value)} rows={2} placeholder="Disclaimers and conditions." style={ta} />
+        </div>
+
+        {errMsg && <div style={{ fontSize: 12, color: '#b91c1c' }}>{errMsg}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={btn('#fff', '#64748b')}>Cancel</button>
+          <button onClick={() => add.mutate()} disabled={cleanOffers.length === 0 || add.isPending}
+                  title={cleanOffers.length === 0 ? 'Add at least one offer with a title.' : 'Adds the offers page as a draft.'}
+                  style={btn(cleanOffers.length === 0 ? '#e2e8f0' : ACCENT, cleanOffers.length === 0 ? '#94a3b8' : '#fff')}>
+            {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add offers page
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// --- Add warranty / guarantee ---------------------------------------------
+
+interface CoverageRow { item: string; detail: string; duration: string }
+interface FaqRow { q: string; a: string }
+
+function WarrantyModal({ websiteId, onClose, onDone }: { websiteId: string; onClose: () => void; onDone: () => void }) {
+  const [headline, setHeadline] = useState('')
+  const [promise, setPromise] = useState('')
+  const [explainer, setExplainer] = useState('')
+  const [coverage, setCoverage] = useState<CoverageRow[]>([{ item: '', detail: '', duration: '' }])
+  const [steps, setSteps] = useState<string[]>([''])
+  const [faq, setFaq] = useState<FaqRow[]>([{ q: '', a: '' }])
+
+  const cleanCoverage = coverage.filter((c) => c.item.trim())
+  const cleanSteps = steps.map((s) => s.trim()).filter(Boolean)
+  const cleanFaq = faq.filter((f) => f.q.trim() && f.a.trim())
+  const canAdd = Boolean(promise.trim()) || cleanCoverage.length > 0
+
+  const add = useMutation({
+    mutationFn: () => api.post(`/websites/${websiteId}/pages`, {
+      page_type: 'warranty',
+      title: headline || undefined,
+      warranty: {
+        headline: headline || undefined,
+        promise: promise || undefined,
+        manufacturer_vs_workmanship: explainer || undefined,
+        coverage: cleanCoverage,
+        claim_steps: cleanSteps,
+        faq: cleanFaq,
+      },
+    }),
+    onSuccess: onDone,
+  })
+
+  const errMsg = add.error ? (SINGLETON_ADD_ERRORS[(add.error as Error).message] ?? (add.error as Error).message) : null
+  const ta: React.CSSProperties = { ...input, resize: 'vertical', minHeight: 52 }
+  const rowStyle: React.CSSProperties = { display: 'flex', gap: 6, alignItems: 'center' }
+
+  return (
+    <div onClick={onClose} style={overlay}>
+      <div onClick={(e) => e.stopPropagation()} style={{ ...card, width: 560, maxWidth: '94vw', maxHeight: '88vh', overflowY: 'auto', display: 'grid', gap: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <strong style={{ fontSize: 15 }}>Add the warranty / guarantee page</strong>
+          <button onClick={onClose} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={15} /></button>
+        </div>
+        <div style={{ fontSize: 11, color: '#64748b' }}>
+          One warranty page per site, at <code>/warranty/</code>. Coverage terms, claim steps and FAQ answers are
+          facts you enter (get legal sign-off). Only the promise and the manufacturer-vs-workmanship explainer are
+          rewritten into plain prose — never the terms, and never overpromised.
+        </div>
+
+        <Field label="Headline" value={headline} onChange={setHeadline} placeholder="Our 100% workmanship guarantee" />
+        <div>
+          <label style={label}>The promise (plain language)</label>
+          <textarea value={promise} onChange={(e) => setPromise(e.target.value)} rows={2} placeholder="What you guarantee, stated plainly and up front." style={ta} />
+        </div>
+
+        <div>
+          <label style={label}>Coverage</label>
+          {coverage.map((c, i) => (
+            <div key={i} style={{ ...rowStyle, marginBottom: 6 }}>
+              <input value={c.item} placeholder="Item — e.g. Workmanship" onChange={(e) => setCoverage(coverage.map((x, j) => j === i ? { ...x, item: e.target.value } : x))} style={input} />
+              <input value={c.detail} placeholder="Details" onChange={(e) => setCoverage(coverage.map((x, j) => j === i ? { ...x, detail: e.target.value } : x))} style={input} />
+              <input value={c.duration} placeholder="Coverage — e.g. 10 years" onChange={(e) => setCoverage(coverage.map((x, j) => j === i ? { ...x, duration: e.target.value } : x))} style={input} />
+              <button onClick={() => setCoverage(coverage.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+            </div>
+          ))}
+          <button onClick={() => setCoverage([...coverage, { item: '', detail: '', duration: '' }])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
+            <Plus size={12} /> Add coverage row
+          </button>
+        </div>
+
+        <div>
+          <label style={label}>Claim process (steps)</label>
+          {steps.map((s, i) => (
+            <div key={i} style={{ ...rowStyle, marginBottom: 6 }}>
+              <input value={s} placeholder={`Step ${i + 1}`} onChange={(e) => setSteps(steps.map((x, j) => j === i ? e.target.value : x))} style={input} />
+              <button onClick={() => setSteps(steps.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+            </div>
+          ))}
+          <button onClick={() => setSteps([...steps, ''])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
+            <Plus size={12} /> Add step
+          </button>
+        </div>
+
+        <div>
+          <label style={label}>Manufacturer vs. workmanship (optional)</label>
+          <textarea value={explainer} onChange={(e) => setExplainer(e.target.value)} rows={2} placeholder="What the manufacturer covers vs. what your workmanship covers." style={ta} />
+        </div>
+
+        <div>
+          <label style={label}>FAQ (optional)</label>
+          {faq.map((f, i) => (
+            <div key={i} style={{ display: 'grid', gap: 4, marginBottom: 8, padding: 8, background: '#f8fafc', borderRadius: 8 }}>
+              <div style={rowStyle}>
+                <input value={f.q} placeholder="Question" onChange={(e) => setFaq(faq.map((x, j) => j === i ? { ...x, q: e.target.value } : x))} style={input} />
+                <button onClick={() => setFaq(faq.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+              </div>
+              <textarea value={f.a} placeholder="Answer" rows={2} onChange={(e) => setFaq(faq.map((x, j) => j === i ? { ...x, a: e.target.value } : x))} style={ta} />
+            </div>
+          ))}
+          <button onClick={() => setFaq([...faq, { q: '', a: '' }])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
+            <Plus size={12} /> Add question
+          </button>
+        </div>
+
+        {errMsg && <div style={{ fontSize: 12, color: '#b91c1c' }}>{errMsg}</div>}
+
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+          <button onClick={onClose} style={btn('#fff', '#64748b')}>Cancel</button>
+          <button onClick={() => add.mutate()} disabled={!canAdd || add.isPending}
+                  title={!canAdd ? 'Enter a promise or at least one coverage row.' : 'Adds the warranty page as a draft.'}
+                  style={btn(!canAdd ? '#e2e8f0' : ACCENT, !canAdd ? '#94a3b8' : '#fff')}>
+            {add.isPending ? <Loader2 size={14} className="spin" /> : <Plus size={14} />} Add warranty page
           </button>
         </div>
       </div>

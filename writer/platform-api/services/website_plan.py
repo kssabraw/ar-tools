@@ -68,7 +68,7 @@ RESERVED_SECOND_LEVEL = frozenset({"cost"})
 # Comparison lives at /compare/{a}-vs-{b}/ (two segments), so the reserved *root*
 # slug "compare" is never claimed by the comparison page itself and needs no
 # exemption here — kept in sync with the template's src/lib/routes.ts.
-RESERVED_ROOT_OWNER = {"faq": "faq"}
+RESERVED_ROOT_OWNER = {"faq": "faq", "specials": "offers", "warranty": "warranty"}
 RESERVED_SECOND_LEVEL_OWNER = {"cost": "cost"}
 
 # Root precedence when slugs collide (reference §1.2).
@@ -181,6 +181,15 @@ PageType = Literal[
     # Writer #8). Shares the posts collection + blog route; only its diagnostic-
     # triage brief differs.
     "problem",
+    # Two ⭐ extension singletons — one per site at their reserved root slug. An
+    # Offers/specials page at /specials/ (offer cards with real value/terms/expiry)
+    # and a Warranty/guarantee page at /warranty/ (coverage + claim steps + FAQ).
+    # Both are structured, operator-supplied and INVENT-NOTHING: offer terms and
+    # warranty coverage are legal facts a writer must never fabricate, so they are
+    # assembled deterministically (warranty's connective prose is narrated, never
+    # its terms). See OFFERS_WARRANTY_ENGINES / MANUAL_PAGE_TYPES.
+    "offers",
+    "warranty",
 ]
 
 GEO_SITE_TYPES = frozenset({"local_business", "lead_gen"})
@@ -1184,6 +1193,14 @@ COMPOSED_PAGE_TYPES = CORE_PAGE_TYPES | {"faq", "services_index", "areas_we_serv
 # their editorial brief (see the RUN_PAGE_TYPES rationale above).
 RUN_PAGE_TYPES = frozenset({"post", "pillar", "comparison", "problem"})
 
+# The structured, operator-supplied ⭐ extension singletons: an Offers/specials
+# page and a Warranty/guarantee page. Neither has a keyword or a SERP — their
+# facts are entered by hand and assembled by the `offers`/`warranty` engines
+# (INVENT-NOTHING: offer terms and warranty coverage are legal facts). One per
+# site, at the reserved slugs /specials/ and /warranty/, id-addressed like the
+# FAQ (see website_content._ID_ADDRESSED_ENTRY_ID).
+OFFERS_WARRANTY_PAGE_TYPES = frozenset({"offers", "warranty"})
+
 # The page types a human may add one at a time via the "add a page" flow
 # (`build_manual_page`), on top of the deterministic plan. Everything with a
 # real writer: the geo/service NLP types plus one-off blog posts and pillars, and
@@ -1198,7 +1215,7 @@ RUN_PAGE_TYPES = frozenset({"post", "pillar", "comparison", "problem"})
 # one per site — a human never adds a second). A manual page and its
 # auto-generated twin share a URL and merge on the next rebuild, so this set is
 # exactly "writable, not core, not an auto-planned singleton".
-MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES | {"faq", "project"}
+MANUAL_PAGE_TYPES = NLP_PAGE_TYPES | RUN_PAGE_TYPES | {"faq", "project"} | OFFERS_WARRANTY_PAGE_TYPES
 
 # Sort tier for a manually added page, mirroring the planner's own tiers for the
 # same type so a manual page sits where its auto twin would in the Pages list.
@@ -1220,6 +1237,9 @@ _MANUAL_TIERS = {
     "faq": 4,
     "project": 4,
     "problem": 2,
+    # Offers/warranty are bottom-of-funnel trust singletons — late in the list.
+    "offers": 4,
+    "warranty": 4,
 }
 
 
@@ -1370,6 +1390,13 @@ def generation_inputs(
         # A case study: no keyword, no SERP. The human-supplied job facts ride on
         # the plan row (`plan.project`) and the `project` engine narrates them.
         return {"engine": "project", "keyword": None, "location": None}
+
+    if page.page_type in OFFERS_WARRANTY_PAGE_TYPES:
+        # Offers/specials and warranty: no keyword, no SERP. The operator-supplied
+        # structured facts ride on the plan row (`plan.offers` / `plan.warranty`)
+        # and the matching engine assembles them — offers deterministically,
+        # warranty with its connective prose narrated (never its coverage terms).
+        return {"engine": page.page_type, "keyword": None, "location": None}
 
     if page.page_type == "post":
         post = (posts or {}).get(page.path)
@@ -1565,6 +1592,8 @@ def build_manual_page(
     angle: Optional[str] = None,
     target_keywords: Optional[Iterable[str]] = None,
     project: Optional[dict] = None,
+    offers: Optional[dict] = None,
+    warranty: Optional[dict] = None,
     catalog: Optional[Iterable[ServiceEntry]] = None,
     cities: Optional[Iterable[CityEntry]] = None,
     primary_service: Optional[str] = None,
@@ -1749,6 +1778,20 @@ def build_manual_page(
         slug = _slug(symptom, "missing_title")
         path, page_title = _path("blog", slug), symptom
 
+    elif page_type == "offers":
+        # /specials/ — the offers/specials singleton. No axis required; the
+        # operator-supplied offer cards ride on `offers` (assembled deterministically,
+        # never narrated — offer value/terms/expiry are legal facts).
+        path = _path("specials")
+        page_title = title or "Current Offers"
+
+    elif page_type == "warranty":
+        # /warranty/ — the warranty/guarantee singleton. No axis required; the
+        # operator-supplied coverage/claim/FAQ facts ride on `warranty` (its
+        # connective prose is narrated, never its coverage terms).
+        path = _path("warranty")
+        page_title = title or "Our Guarantee"
+
     else:  # pillar
         name = _need(title, "missing_title")
         slug = _slug(name, "missing_title")
@@ -1802,6 +1845,13 @@ def build_manual_page(
         # cause/severity notes the operator supplied (carried on `angle`) so the
         # writer uses real facts rather than inventing causes.
         payload["notes"] = compose_problem_notes(page_title, (angle or "").strip())
+    elif page_type == "offers":
+        # The structured offer cards ride on the plan row for the `offers` engine.
+        payload["offers"] = offers or {}
+    elif page_type == "warranty":
+        # The structured coverage/claim/FAQ facts ride on the plan row for the
+        # `warranty` engine to assemble (and narrate the connective prose).
+        payload["warranty"] = warranty or {}
 
     return page, payload
 

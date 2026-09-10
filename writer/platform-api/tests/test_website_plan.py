@@ -1053,7 +1053,7 @@ class TestReleaseExclusion:
     def test_extension_types_are_not_drip_released(self):
         from services import website_release
 
-        for pt in ("cost", "comparison", "faq", "project", "problem"):
+        for pt in ("cost", "comparison", "faq", "project", "problem", "offers", "warranty"):
             assert pt not in website_release.RELEASE_PAGE_TYPES
 
     def test_ordinary_content_pages_are_still_drip_released(self):
@@ -1105,3 +1105,66 @@ class TestProblemPageType:
     def test_a_symptom_that_slugs_empty_is_rejected(self):
         with pytest.raises(ValueError, match="missing_title"):
             wp.build_manual_page(page_type="problem", title="???")
+
+
+class TestOffersWarrantyPageTypes:
+    """The two ⭐ extension singletons: an offers page at /specials/ and a
+    warranty page at /warranty/. Both structured, operator-supplied, invent-nothing
+    — routed by their own engines, id-addressed at their reserved root slug, and
+    manual-add-only (never auto-planned)."""
+
+    def test_engines_route_to_their_own_writers(self):
+        offers = wp.PlannedPage("/specials/", "offers", "Current Offers", "manual", tier=4)
+        warranty = wp.PlannedPage("/warranty/", "warranty", "Our Guarantee", "manual", tier=4)
+        oi = wp.generation_inputs(offers, services={}, cities={})
+        wi = wp.generation_inputs(warranty, services={}, cities={})
+        assert oi["engine"] == "offers" and oi["keyword"] is None and oi["location"] is None
+        assert wi["engine"] == "warranty" and wi["keyword"] is None and wi["location"] is None
+
+    def test_manually_addable_but_not_auto_planned(self):
+        assert {"offers", "warranty"} <= wp.MANUAL_PAGE_TYPES
+        assert wp.OFFERS_WARRANTY_PAGE_TYPES == {"offers", "warranty"}
+        # Not in the deterministic geo/content plan — nothing auto-emits them.
+        plan = wp.build_plan(site_type="local_business", catalog=[svc("Tree Removal")], cities=[city("Seattle"), city("Bellevue")])
+        assert not any(p.page_type in {"offers", "warranty"} for p in plan.pages)
+
+    def test_own_reserved_slug_is_not_a_collision(self):
+        # /specials/ and /warranty/ are reserved root slugs, but the pages that
+        # OWN them are exempt (like FAQ owns /faq/).
+        offers = wp.PlannedPage("/specials/", "offers", "Current Offers", "manual")
+        warranty = wp.PlannedPage("/warranty/", "warranty", "Our Guarantee", "manual")
+        assert wp.check_paths([offers, warranty]) == []
+        # A service that tried to claim /specials/ is still a collision.
+        rogue = wp.PlannedPage("/specials/", "service", "Specials", "CORE")
+        assert any(i.kind == "reserved_slug" for i in wp.check_paths([rogue]))
+
+    def test_build_manual_offers_is_a_singleton_carrying_its_cards(self):
+        page, payload = wp.build_manual_page(
+            page_type="offers",
+            offers={"offers": [{"title": "$50 off", "value": "Save $50", "expiry": "Dec 31"}],
+                    "intro": "Deals", "fine_print": "One per household"},
+        )
+        assert page.path == "/specials/" and page.page_type == "offers"
+        assert payload["engine"] == "offers"
+        # The structured offer facts ride on the plan row for the engine.
+        assert payload["offers"]["offers"][0]["title"] == "$50 off"
+        assert payload["offers"]["fine_print"] == "One per household"
+
+    def test_build_manual_warranty_is_a_singleton_carrying_its_terms(self):
+        page, payload = wp.build_manual_page(
+            page_type="warranty",
+            title="Our 10-year guarantee",
+            warranty={"promise": "We fix it free.",
+                      "coverage": [{"item": "Workmanship", "duration": "10 years"}],
+                      "claim_steps": ["Call us"], "faq": [{"q": "Transferable?", "a": "Yes."}]},
+        )
+        assert page.path == "/warranty/" and page.page_type == "warranty"
+        assert page.title == "Our 10-year guarantee"
+        assert payload["engine"] == "warranty"
+        assert payload["warranty"]["coverage"][0]["item"] == "Workmanship"
+
+    def test_offers_and_warranty_default_their_titles(self):
+        o_page, _ = wp.build_manual_page(page_type="offers")
+        w_page, _ = wp.build_manual_page(page_type="warranty")
+        assert o_page.title == "Current Offers"
+        assert w_page.title == "Our Guarantee"

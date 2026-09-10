@@ -353,6 +353,8 @@ def add_manual_page(
     angle: Optional[str] = None,
     target_keywords: Optional[list[str]] = None,
     project: Optional[dict] = None,
+    offers: Optional[dict] = None,
+    warranty: Optional[dict] = None,
 ) -> dict:
     """Insert one hand-added page as a `trigger="manual"` draft row.
 
@@ -387,6 +389,8 @@ def add_manual_page(
             angle=angle,
             target_keywords=target_keywords,
             project=project,
+            offers=offers,
+            warranty=warranty,
             catalog=services,
             cities=city_entries,
             primary_service=primary_service,

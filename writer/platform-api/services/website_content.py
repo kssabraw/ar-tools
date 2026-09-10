@@ -66,6 +66,14 @@ _COLLECTION_BY_PAGE_TYPE: dict[str, str] = {
     "faq": "pages",
     "services_index": "pages",
     "areas_we_serve": "pages",
+    # Offers/specials and Warranty/guarantee are ⭐ extension singletons — one per
+    # site at their reserved root slug (/specials/, /warranty/). Like the FAQ they
+    # are id-addressed `pages` entries whose structured, operator-supplied facts
+    # ride in `sections` frontmatter and are rendered by their own static route;
+    # both are invent-nothing (offer terms/expiry and warranty coverage are legal
+    # facts a writer must never fabricate).
+    "offers": "pages",
+    "warranty": "pages",
 }
 
 # Core pages are addressed by a fixed entry id, because the template looks them
@@ -88,6 +96,12 @@ _ID_ADDRESSED_ENTRY_ID = {
     "faq": "faq",
     "services_index": "services",
     "areas_we_serve": "areas-we-serve",
+    # The extension singletons live at their reserved slug: /specials/ → the
+    # `specials` entry, /warranty/ → the `warranty` entry. Their routes look them
+    # up by id (`corePage('specials')` / `corePage('warranty')`), so they carry
+    # no path/pageType frontmatter — exactly like the FAQ.
+    "offers": "specials",
+    "warranty": "warranty",
 }
 
 # Page types the house template renders from data alone — no generated body, so
@@ -113,17 +127,18 @@ HUB_PAGE_TYPES = frozenset({"services_index", "areas_we_serve"})
 # look at `sections`, not just the body. (home renders its hero/section copy from
 # `sections`; faq renders its Q&A; the two hubs render their lede/authority.)
 SECTION_CONTENT_PAGE_TYPES = frozenset(
-    {"home", "faq", "services_index", "areas_we_serve", "project"}
+    {"home", "faq", "services_index", "areas_we_serve", "project", "offers", "warranty"}
 )
 
 # Planned page types the house template cannot render at all — no route, no
 # collection entry, no writer. Reported at plan review (PRD §4.4) rather than
 # discovered at publish.
 #
-# Empty today, and deliberately kept rather than deleted: the ⭐ extension types
-# (cost, problem/symptom, brand × service, standalone FAQ, projects, comparison)
-# have ratified URLs and no templates, so the first plan that proposes one needs
-# this check to already exist.
+# Empty today, and deliberately kept rather than deleted: every ⭐ extension type
+# that has a ratified URL now also has a route and an engine (cost, problem,
+# brand × service, FAQ, projects, comparison, offers, warranty), but a future
+# catalog type with a ratified URL and no template would land here, so the first
+# plan that proposes one needs this check to already exist.
 UNRENDERABLE_PAGE_TYPES: frozenset[str] = frozenset()
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -357,7 +372,11 @@ def publish_verdict(
             return PublishVerdict(False, f"frontmatter_incomplete:{','.join(missing)}", overridable=False)
         return PublishVerdict(True)
 
-    # Core pages: facts already checked above; slots and length are advisory.
+    # Core pages and the structured extension singletons (offers / warranty):
+    # their content is operator-supplied facts, not a scored body, so facts
+    # consistency (checked above) is the real gate. A critical voice finding is
+    # overridable, like a core page — there is no auto-published prose here that a
+    # human hasn't entered.
     if critical:
         return PublishVerdict(False, "voice_violation", overridable=True)
     return PublishVerdict(True)

@@ -1,0 +1,76 @@
+---
+import type { GetStaticPaths } from 'astro';
+import { render, type CollectionEntry } from 'astro:content';
+import Layout from '../../layouts/Layout.astro';
+import HeroStandard from '../../theme/components/HeroStandard.astro';
+import SpecTable from '../../theme/components/SpecTable.astro';
+import StepList from '../../theme/components/StepList.astro';
+import FAQAccordion from '../../theme/components/FAQAccordion.astro';
+import CTABand from '../../theme/components/CTABand.astro';
+import { corePage } from '../../lib/content';
+import { site } from '../../lib/site';
+import { faqPage, breadcrumbList } from '../../lib/schema';
+
+/**
+ * Warranty / Guarantee page (reference §5.1 — ⭐ SOP extension). A singleton at
+ * /warranty/, id-addressed like the FAQ: the warranty engine (website_warranty)
+ * commits a `pages` entry with id `warranty` carrying `sections.{promise,
+ * coverage, claimSteps, faqItems}` and, in the body, the manufacturer-vs-
+ * workmanship explainer. Coverage terms, claim steps and FAQ answers are facts
+ * the operator entered under legal sign-off; only the promise + explainer prose
+ * is narrated. A rest route with an empty getStaticPaths declines to exist until
+ * a warranty page has been generated.
+ */
+export const getStaticPaths: GetStaticPaths = async () => {
+  const entry = await corePage('warranty');
+  if (!entry) return [];
+  return [{ params: { index: undefined }, props: { entry } }];
+};
+
+const { entry } = Astro.props as { entry: CollectionEntry<'pages'> };
+const Content = (await render(entry)).Content;
+const s = (entry.data.sections ?? {}) as Record<string, any>;
+const promise = typeof s.promise === 'string' ? s.promise : '';
+const coverage = Array.isArray(s.coverage) ? s.coverage.filter((r: any) => r && r.item) : [];
+const claimSteps = Array.isArray(s.claimSteps) ? s.claimSteps : [];
+const rawFaq = Array.isArray(s.faqItems) ? (s.faqItems as { q: string; a: string }[]) : [];
+const faqItems = rawFaq
+  .filter((i) => i && i.q && i.a)
+  .map((i) => ({ question: i.q, answer: i.a }));
+
+const title = entry.data.title || `${site.siteName} — Our Guarantee`;
+const lede = promise || entry.data.description || 'Our workmanship guarantee, in plain language.';
+
+const crumbs = [
+  { label: 'Home', href: '/' },
+  { label: 'Warranty', href: '/warranty/' },
+];
+
+const base = Astro.site ?? site.url;
+const ld = [
+  faqPage(faqItems),
+  breadcrumbList(crumbs, base.toString()),
+].filter(Boolean) as Record<string, unknown>[];
+---
+
+<Layout title={title} description={entry.data.description || lede} jsonld={ld}>
+  <HeroStandard eyebrow="Our guarantee" title={title} lede={lede} />
+
+  <SpecTable title="What's covered" rows={coverage} durationLabel="Coverage" />
+
+  <StepList title="How to make a claim" steps={claimSteps} />
+
+  <div class="prose-wrap richtext body">
+    <Content />
+  </div>
+
+  <FAQAccordion title="Warranty questions" items={faqItems} />
+
+  <CTABand title="Questions about your coverage?" ctaLabel="Contact us" ctaHref="/contact-us/" />
+</Layout>
+
+<style>
+  .body {
+    padding-block: var(--space-6);
+  }
+</style>

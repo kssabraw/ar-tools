@@ -1,0 +1,85 @@
+---
+import CardGridBase from './CardGridBase.astro';
+
+/**
+ * Shared Component Library: a grid of offer / special cards (reference §5.1
+ * Offers / Specials — Offer cards: title, value, terms, expiry, CTA). Facts
+ * only — every field is what the operator entered; renders nothing when empty.
+ * Mobile: 1-column stack (handled by CardGridBase).
+ */
+interface Offer {
+  title: string;
+  value?: string;
+  terms?: string;
+  expiry?: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+}
+interface Props {
+  title?: string;
+  items: Offer[];
+}
+const { title, items } = Astro.props;
+const offers = (items ?? []).filter((o) => o && o.title);
+---
+
+{offers.length > 0 && (
+  <CardGridBase title={title} min="300px">
+    {offers.map((o) => (
+      <article class="offer">
+        <h3 class="offer__title">{o.title}</h3>
+        {o.value && <p class="offer__value">{o.value}</p>}
+        {o.terms && <p class="offer__terms">{o.terms}</p>}
+        {o.expiry && <p class="offer__expiry">Ends {o.expiry}</p>}
+        {o.ctaHref && (
+          <a class="offer__cta" href={o.ctaHref}>{o.ctaLabel || 'Claim offer'}</a>
+        )}
+      </article>
+    ))}
+  </CardGridBase>
+)}
+
+<style>
+  .offer {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-5);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface);
+    height: 100%;
+  }
+  .offer__title {
+    font-size: var(--text-lg);
+    margin: 0;
+  }
+  .offer__value {
+    font-size: var(--text-xl);
+    font-weight: 700;
+    color: var(--color-accent);
+    margin: 0;
+  }
+  .offer__terms {
+    font-size: var(--text-sm);
+    color: var(--color-text-muted);
+    margin: 0;
+  }
+  .offer__expiry {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    color: #b4690e;
+    margin: 0;
+  }
+  .offer__cta {
+    margin-top: auto;
+    align-self: flex-start;
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    background: var(--color-accent);
+    color: #fff;
+    font-weight: 600;
+    font-size: var(--text-sm);
+    text-decoration: none;
+  }
+</style>
