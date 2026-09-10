@@ -1472,9 +1472,13 @@ Folded-in fix: the Generate button's `generable` filter and the `/generate` rout
 brand-context gate were both too narrow (excluded run/project/offers/warranty) —
 widened + made per-page-aware (`website_generate.BRAND_CONTEXT_ENGINES`). **This
 completes the Tier-B page-type set** — every catalog type with a ratified URL now
-has a route + engine, so `UNRENDERABLE_PAGE_TYPES` has no real gap left. Remaining
-Website-Builder work: custom domains, GSC auto-verify, a real project-photo
-uploader.
+has a route + engine, so `UNRENDERABLE_PAGE_TYPES` has no real gap left. **Project-photo
+uploader built (2026-09-10)** — the Add-project form now uploads a file (or re-hosts a
+pasted URL) into the site's own public bucket via `POST /websites/{id}/photo` +
+`/photo-from-url` (`website_images.upload_project_photo`/`import_project_photo_from_url`,
+validated + real-format-sniffed), so a case study's imagery is a stable self-hosted URL,
+never an external link that can rot. Remaining Website-Builder work: custom domains,
+GSC auto-verify.
 
 - **Comparison** (`comparison`, `/compare/{a}-vs-{b}/`) — the `run` engine (a
   blog Writer run with a verdict-first, honest-tradeoffs brief on writer notes,

@@ -612,19 +612,15 @@ function ProjectModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
         </div>
 
         <div>
-          <label style={label}>Photos (paste image URLs)</label>
+          <label style={label}>Photos (upload a file or paste a URL — both are hosted on the site)</label>
           {photos.map((p, i) => (
-            <div key={i} style={{ display: 'grid', gap: 4, marginBottom: 8, padding: 8, background: '#f8fafc', borderRadius: 8 }}>
-              <div style={rowStyle}>
-                <input value={p.url} placeholder="https://…/photo.jpg"
-                       onChange={(e) => setPhotos(photos.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} style={input} />
-                <button onClick={() => setPhotos(photos.filter((_, j) => j !== i))} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
-              </div>
-              <div style={rowStyle}>
-                <input value={p.alt} placeholder="Alt text" onChange={(e) => setPhotos(photos.map((x, j) => j === i ? { ...x, alt: e.target.value } : x))} style={input} />
-                <input value={p.caption} placeholder="Caption (optional)" onChange={(e) => setPhotos(photos.map((x, j) => j === i ? { ...x, caption: e.target.value } : x))} style={input} />
-              </div>
-            </div>
+            <ProjectPhotoRow
+              key={i}
+              websiteId={websiteId}
+              photo={p}
+              onChange={(np) => setPhotos(photos.map((x, j) => (j === i ? np : x)))}
+              onRemove={() => setPhotos(photos.filter((_, j) => j !== i))}
+            />
           ))}
           <button onClick={() => setPhotos([...photos, { url: '', alt: '', caption: '' }])} style={{ ...btn('#fff', ACCENT), padding: '4px 8px', fontSize: 12 }}>
             <Plus size={12} /> Add photo
@@ -649,6 +645,76 @@ function ProjectModal({ websiteId, onClose, onDone }: { websiteId: string; onClo
           </button>
         </div>
       </div>
+    </div>
+  )
+}
+
+// One project photo: uploaded or pasted-then-rehosted, so the URL committed to
+// the site is always a stable self-hosted asset. Its own component so each row
+// owns its upload/fetch state independently.
+const PHOTO_ERRORS: Record<string, string> = {
+  unsupported_image_type: 'Use a JPG, PNG, or WebP image.',
+  image_too_large: 'That image is over 15 MB. Use a smaller file.',
+  image_dimensions_too_small: 'That image is too small — use at least 200×200px.',
+  invalid_image: 'That file isn’t a readable image.',
+  empty_image: 'That file is empty.',
+  invalid_image_url: 'Enter a valid http(s) image URL.',
+  image_fetch_failed: 'Couldn’t fetch that URL. Check it’s public and try again.',
+  image_upload_failed: 'Upload failed — try again.',
+}
+
+function ProjectPhotoRow({ websiteId, photo, onChange, onRemove }: {
+  websiteId: string
+  photo: PhotoRow
+  onChange: (p: PhotoRow) => void
+  onRemove: () => void
+}) {
+  const [urlInput, setUrlInput] = useState('')
+  const upload = useMutation({
+    mutationFn: (file: File) => { const f = new FormData(); f.append('file', file); return api.upload<{ url: string }>(`/websites/${websiteId}/photo`, f) },
+    onSuccess: (r) => onChange({ ...photo, url: r.url }),
+  })
+  const fromUrl = useMutation({
+    mutationFn: (u: string) => api.post<{ url: string }>(`/websites/${websiteId}/photo-from-url`, { url: u }),
+    onSuccess: (r) => { onChange({ ...photo, url: r.url }); setUrlInput('') },
+  })
+  const busy = upload.isPending || fromUrl.isPending
+  const err = (upload.error || fromUrl.error) as Error | undefined
+
+  return (
+    <div style={{ display: 'grid', gap: 6, marginBottom: 8, padding: 8, background: '#f8fafc', borderRadius: 8 }}>
+      {photo.url ? (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <img src={photo.url} alt="" style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 6, border: '1px solid #e2e8f0' }} />
+          <div style={{ flex: 1, fontSize: 11, color: '#16a34a' }}>Hosted on the site ✓</div>
+          <button onClick={() => onChange({ ...photo, url: '' })} style={{ ...btn('#fff', '#64748b'), padding: '4px 8px', fontSize: 12 }}>Replace</button>
+          <button onClick={onRemove} style={{ ...btn('#fff', '#64748b'), padding: 6 }}><X size={13} /></button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <label style={{ ...btn('#fff', ACCENT), cursor: busy ? 'wait' : 'pointer', padding: '6px 10px', fontSize: 12 }}>
+              <Upload size={13} /> {upload.isPending ? 'Uploading…' : 'Upload photo'}
+              <input type="file" accept="image/jpeg,image/png,image/webp" hidden
+                     onChange={(e) => { const f = e.target.files?.[0]; if (f) upload.mutate(f) }} />
+            </label>
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>or paste a URL</span>
+            <button onClick={onRemove} style={{ ...btn('#fff', '#64748b'), padding: 6, marginLeft: 'auto' }}><X size={13} /></button>
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input value={urlInput} onChange={(e) => setUrlInput(e.target.value)} placeholder="https://…/photo.jpg" style={{ ...input, flex: 1 }} />
+            <button onClick={() => { const u = urlInput.trim(); if (u) fromUrl.mutate(u) }} disabled={!urlInput.trim() || busy}
+                    style={{ ...btn(!urlInput.trim() || busy ? '#e2e8f0' : '#fff', !urlInput.trim() || busy ? '#94a3b8' : ACCENT), padding: '6px 10px', fontSize: 12 }}>
+              {fromUrl.isPending ? <Loader2 size={13} className="spin" /> : 'Fetch'}
+            </button>
+          </div>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6 }}>
+        <input value={photo.alt} placeholder="Alt text" onChange={(e) => onChange({ ...photo, alt: e.target.value })} style={input} />
+        <input value={photo.caption} placeholder="Caption (optional)" onChange={(e) => onChange({ ...photo, caption: e.target.value })} style={input} />
+      </div>
+      {err && <div style={{ fontSize: 11, color: '#b91c1c' }}>{PHOTO_ERRORS[err.message] ?? err.message}</div>}
     </div>
   )
 }

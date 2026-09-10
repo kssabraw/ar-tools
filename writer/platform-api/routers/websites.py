@@ -24,6 +24,7 @@ from services import (
     website_content_plan,
     website_deploy,
     website_generate,
+    website_images,
     website_owner,
     website_plan_store,
     website_provision,
@@ -163,6 +164,12 @@ class AddPageRequest(BaseModel):
     # operator-supplied facts (offer cards; coverage/claim/FAQ) rather than axes.
     offers: Optional[dict] = None
     warranty: Optional[dict] = None
+
+
+class PhotoUrlRequest(BaseModel):
+    """Re-host a project photo from a public URL into the site's own bucket."""
+
+    url: str
 
 
 class FactsUpdateRequest(BaseModel):
@@ -814,6 +821,38 @@ async def add_page(
     except website_plan_store.ManualPageError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.code)
     return {"page": page, "pages": website_plan_store.stored(website_id)}
+
+
+@router.post("/websites/{website_id}/photo")
+async def upload_project_photo(
+    website_id: str, file: UploadFile = File(...), auth: dict = Depends(require_staff)
+) -> dict:
+    """Store a project / case-study photo in the site's public bucket, returning
+    its durable URL for the Add-project form.
+
+    staff+ like the rest of the page-composition flow. The image is validated and
+    re-hosted here (not committed into the repo) so a case study references a
+    stable self-hosted URL rather than an external link that can rot.
+    """
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    data = await file.read()
+    url = website_images.upload_project_photo(website_id, data, file.content_type or "")
+    return {"url": url}
+
+
+@router.post("/websites/{website_id}/photo-from-url")
+async def import_project_photo(
+    website_id: str, body: PhotoUrlRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Re-host a project photo from a public URL into the site's own bucket, so a
+    pasted URL becomes a stable self-hosted asset like an upload."""
+    _enabled()
+    website = _load_site(website_id)
+    assert_not_frozen(website["client_id"])
+    url = await website_images.import_project_photo_from_url(website_id, body.url)
+    return {"url": url}
 
 
 @router.post("/websites/{website_id}/plan/approve")
