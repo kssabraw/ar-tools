@@ -176,6 +176,11 @@ PageType = Literal[
     # A project / case-study page at /projects/{slug}/ — all real-job facts,
     # human-supplied, narrated (never invented) by the `project` engine.
     "project",
+    # A problem / symptom page ("AC blowing warm air") — a blog Writer run at
+    # /blog/{symptom-slug}/, informational, NEVER geo-targeted (reference §5.1,
+    # Writer #8). Shares the posts collection + blog route; only its diagnostic-
+    # triage brief differs.
+    "problem",
 ]
 
 GEO_SITE_TYPES = frozenset({"local_business", "lead_gen"})
@@ -804,6 +809,45 @@ def compose_comparison_notes(
     return "\n".join(lines)
 
 
+def compose_problem_notes(symptom: str, sme_notes: str = "") -> str:
+    """The editorial brief for a problem / symptom page (reference §5.1, Problem /
+    Symptom Page, Writer #8).
+
+    The angle is calm diagnostic triage — a knowledgeable friend talking the
+    reader down and walking the causes from most to least likely. It is
+    informational and NEVER geo-targeted (an SOP rule the blog silo enforces),
+    and its two live pitfalls are manufactured urgency and overpromising a DIY
+    fix on something that is actually dangerous — so the brief is explicit about
+    safety and honesty. The blog brief is keyword-driven and globally cached, so
+    this rides on writer notes like every other run page. `sme_notes` carries any
+    operator-supplied cause/severity facts, which the writer must use rather than
+    inventing (the reference's required SME-verified input).
+    """
+    s = (symptom or "").strip() or "the reported symptom"
+    lines = [
+        f"Problem / symptom page: {s}.",
+        "Write as a calm, knowledgeable friend doing diagnostic triage — reassure "
+        "first, then walk the likely causes from most to least likely. Lead with "
+        "the single most likely cause in the first two sentences.",
+        "Must cover: the likely causes ranked by likelihood, each with its "
+        "severity and an honest DIY-vs-call-a-pro call; real safety warnings where "
+        "they genuinely apply; what a professional will actually do to fix it; a "
+        "brief cost-expectations teaser; and clear \"call now vs. it can wait\" "
+        "criteria. Close with a short FAQ. 800–1,500 words.",
+        "This is informational content: NEVER attach a city or region to it, and "
+        "never invent manufactured urgency or promise a DIY fix for something that "
+        "is actually dangerous. Where it helps the reader, link to the related "
+        "service page and the cost page. The client brand guide governs voice.",
+    ]
+    if (sme_notes or "").strip():
+        lines.append(
+            "Use ONLY these operator-supplied, SME-verified facts for the causes, "
+            "severities and fixes — do not invent causes beyond them:\n"
+            + sme_notes.strip()
+        )
+    return "\n".join(lines)
+
+
 def check_paths(pages: Iterable[PlannedPage]) -> list[PlanIssue]:
     """Reserved-slug collisions and two entries claiming one path.
 
@@ -1135,17 +1179,20 @@ COMPOSED_PAGE_TYPES = CORE_PAGE_TYPES | {"faq", "services_index", "areas_we_serv
 # run's `module_outputs` markdown. A post is one cluster child; a pillar is the
 # comprehensive hub. Both are blog_post runs; the editorial angle rides on the
 # run's writer notes, since the blog brief is keyword-driven and globally cached.
-# `comparison` is a run too (see RUN_PAGE_TYPES rationale above).
-RUN_PAGE_TYPES = frozenset({"post", "pillar", "comparison"})
+# `comparison` and `problem` are runs too — a commercial X-vs-Y and a
+# diagnostic problem/symptom page are both blog Writer runs, differing only in
+# their editorial brief (see the RUN_PAGE_TYPES rationale above).
+RUN_PAGE_TYPES = frozenset({"post", "pillar", "comparison", "problem"})
 
 # The page types a human may add one at a time via the "add a page" flow
 # (`build_manual_page`), on top of the deterministic plan. Everything with a
 # real writer: the geo/service NLP types plus one-off blog posts and pillars, and
 # the ⭐ extension types whose reference triggers are human judgements (a Cost
 # page needs price sign-off, a Comparison needs a recognised either/or, a FAQ
-# needs a real question inventory) — so they are added deliberately, not
-# auto-planned in bulk. `cost` and `comparison` are already in NLP/RUN; the
-# standalone FAQ is added explicitly.
+# needs a real question inventory, a Problem/symptom page needs SME-verified
+# cause/severity data) — so they are added deliberately, not auto-planned in
+# bulk. `cost`, `comparison` and `problem` are already in NLP/RUN; the standalone
+# FAQ is added explicitly.
 # Deliberately excludes core pages (home/about/contact/privacy — one per site,
 # emitted by the planner) and the Writer-#6 hubs (auto-planned CORE-conditional,
 # one per site — a human never adds a second). A manual page and its
@@ -1166,11 +1213,13 @@ _MANUAL_TIERS = {
     "post": 2,
     "pillar": 1,
     # Extension types: a cost page rides just below its service; comparison,
-    # FAQ and project pages are supporting pages that sit late in the list.
+    # FAQ, project and problem pages are supporting pages that sit late in the
+    # list (a problem page is a blog post, so it sits with the other blog tiers).
     "cost": 2,
     "comparison": 4,
     "faq": 4,
     "project": 4,
+    "problem": 2,
 }
 
 
@@ -1303,6 +1352,18 @@ def generation_inputs(
             "keyword": page.title,
             "location": None,
             "notes": compose_comparison_notes(page.title),
+        }
+
+    if page.page_type == "problem":
+        # A diagnostic problem/symptom page: a blog Writer run whose calm-triage
+        # angle rides on writer notes. Keyword defaults to the symptom title; the
+        # manual-add flow overrides notes with an SME-fact-aware brief. Never geo.
+        return {
+            "engine": "run",
+            "content_type": "blog_post",
+            "keyword": page.title,
+            "location": None,
+            "notes": compose_problem_notes(page.title),
         }
 
     if page.page_type == "project":
@@ -1680,6 +1741,14 @@ def build_manual_page(
         slug = _slug(headline, "missing_title")
         path, page_title = _path("projects", slug), headline
 
+    elif page_type == "problem":
+        # /blog/{symptom-slug}/ — a diagnostic problem/symptom page in the blog
+        # silo (same collection + route as a post). The title IS the symptom; the
+        # brief carries the triage angle + any SME cause notes (via `angle`).
+        symptom = _need(title, "missing_title")
+        slug = _slug(symptom, "missing_title")
+        path, page_title = _path("blog", slug), symptom
+
     else:  # pillar
         name = _need(title, "missing_title")
         slug = _slug(name, "missing_title")
@@ -1728,6 +1797,11 @@ def build_manual_page(
         # The structured job facts ride on the plan row so the `project` engine
         # can narrate them; the headline is normalised onto it.
         payload["project"] = {**(project or {}), "headline": page_title}
+    elif page_type == "problem":
+        # Seed the diagnostic-triage brief with the symptom, folding any SME
+        # cause/severity notes the operator supplied (carried on `angle`) so the
+        # writer uses real facts rather than inventing causes.
+        payload["notes"] = compose_problem_notes(page_title, (angle or "").strip())
 
     return page, payload
 
