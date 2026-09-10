@@ -43,6 +43,27 @@ data. It is a bad-keyword artifact. It is also **unpredictable** — the same ci
 qualifier is harmless on a query with no like-named competitor — which is exactly
 why the rule is "don't do it," not "watch for it."
 
+**Why it happens (the mechanism):** Google Maps ranks on relevance × distance ×
+prominence, and the search **pin's coordinate already supplies the "distance"
+input** — that's how a grid measures geography. A bare category query
+("manufactured home") is *categorical*: Google returns the whole nearby pack
+ranked by those three factors, so the client places on distance + prominence
+like everyone else. Adding a city token changes the **relevance** calculation in
+two compounding ways: (1) it reads as a more *navigational/specific* query than a
+broad category, shrinking the result set Google considers relevant; and (2) the
+token is matched against business **names**, so a competitor whose name contains
+it ("Navarre Village" ⊃ "Navarre") becomes a near-exact **name match** and is
+surfaced as the dominant — sometimes the only — result near its own location.
+That name match *pre-empts the categorical pack*: the client, which would have
+placed on distance + prominence, is never ranked because Google already
+"answered" the query with the name-matching entity. The distortion is anchored to
+that competitor's physical location, so the holes cluster **around it** (here:
+center + west, where "Navarre Village" sits), not uniformly — and because it
+depends on a competitor happening to share the city name, it's keyword-specific.
+Net: the city token adds **zero** locational information the grid doesn't already
+provide (the pin does that), and only the downside risk of this name-match
+collapse.
+
 - **Tell:** "not ranking" pins clustered at/near the center for a *city-in-name*
   keyword, while the client ranks fine elsewhere and where it does appear it's
   top-1–3.
