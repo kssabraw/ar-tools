@@ -1,0 +1,38 @@
+{
+  "manifest_version": "candidate-2026-09-09-v0.7",
+  "artifact_type": "collection_job_generator_contract",
+  "input_manifest": "SED_Collection_Manifest_Draft_v0_6.json",
+  "full_panel_job_count_pre_water": 280000,
+  "sentinel_job_count_pre_water_per_week": 11200,
+  "generation_order": [
+    "industry_id",
+    "market_id",
+    "surface",
+    "condition_order",
+    "point_order_or_replicate"
+  ],
+  "city_substitution": "Replace literal [CITY] token with Markets.city exactly; do not rewrite other wording.",
+  "water_gate": {
+    "maps_organic_aio": "Only rows whose coordinate is ELIGIBLE_LAND become executable.",
+    "structural_water": "Drop from execution but retain job-template + coordinate/exclusion provenance.",
+    "manual_review": "Do not execute until adjudicated.",
+    "center_configuration_failure": "Block the whole market/surface geometry until corrected."
+  },
+  "chatgpt": {
+    "geo_grid": false,
+    "provider_location_code": 2840,
+    "market_encoded_in_prompt_only": true,
+    "replicates": 3,
+    "replicate_context": "independent",
+    "replicate_submission": "co-submit in same wave batch when practical"
+  },
+  "provider_batching": {
+    "max_tasks_per_post": 100,
+    "grouping_recommendation": "Batch by surface and wave; never mix endpoint types in the same POST."
+  },
+  "raw_retention": "Persist task_post request/response and task_get advanced response immutably with provider task id, cost, timestamps, and manifest version.",
+  "files": {
+    "full_panel_matrix": "SED_Full_Panel_Job_Matrix_PreWater_v0_7.csv",
+    "sentinel_matrix": "SED_Sentinel_Job_Matrix_PreWater_v0_7.csv"
+  }
+}

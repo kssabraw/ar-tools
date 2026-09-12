@@ -1,0 +1,738 @@
+{
+  "contract": {
+    "contract_code": "SED_WAVE_QA",
+    "version_code": "2026-09-09-v0.1",
+    "status": "recommended_delegated",
+    "scope": "SED Local Search Intelligence Platform",
+    "principles": [
+      "QA thresholds are operational controls, not research findings.",
+      "Thresholds are versioned prospectively and are never loosened retroactively because observed outcomes are interesting.",
+      "Scientific absence, structural missingness, technical failure, parser failure, and measured zero are distinct.",
+      "A valid refusal, clarification, generic-guidance, no-local-recommendation, or legitimate negative result is not rerun merely to obtain a preferred outcome.",
+      "Returned/cited/linked/supportive/recommended/ranked remain distinct states.",
+      "Resolution coverage means every required observed object receives an explicit resolution state; it does not mean forcing a high resolved percentage."
+    ]
+  },
+  "denominators": {
+    "planned_jobs": "All manifest-generated jobs for the wave before structural exclusions.",
+    "structural_water_exclusions": "Only legitimate non-center structural-water exclusions frozen before outcome collection.",
+    "executable_jobs": "planned_jobs - structural_water_exclusions. Configuration failures are NOT subtracted as legitimate exclusions.",
+    "valid_scientific_observations": [
+      "returned",
+      "refusal",
+      "clarification_requested",
+      "generic_guidance_only",
+      "no_local_recommendations",
+      "other_when_explicitly_classified_valid"
+    ],
+    "technical_failure_states": [
+      "terminal_error",
+      "provider_failure",
+      "parser_failure"
+    ]
+  },
+  "status_logic": {
+    "QUARANTINED": {
+      "precedence": 1,
+      "definition": "Integrity, provenance, treatment, geometry, session, raw-evidence, or comparability trust is compromised. Retain data but exclude affected scope from analysis until remediated/reprocessed.",
+      "wave_level_when": "A critical violation is systemic or cannot be safely isolated to a smaller scope."
+    },
+    "FAILED": {
+      "precedence": 2,
+      "definition": "No critical integrity violation, but collection/normalization completeness falls below minimum partial thresholds or job accounting cannot be reconciled."
+    },
+    "PARTIAL": {
+      "precedence": 3,
+      "definition": "Integrity is intact and minimum thresholds are met, but COMPLETE thresholds are missed. Data may be analysis-eligible only where an Analysis Specification Contract explicitly accepts the missingness/comparability pattern."
+    },
+    "COMPLETE": {
+      "precedence": 4,
+      "definition": "All hard integrity gates pass and completeness/processing thresholds meet the COMPLETE standard."
+    }
+  },
+  "thresholds": {
+    "complete": {
+      "job_accounting_rate": 1.0,
+      "valid_scientific_observation_rate_overall": 0.995,
+      "valid_scientific_observation_rate_each_primary_surface": 0.99,
+      "raw_payload_integrity_rate": 1.0,
+      "critical_manifest_conformity_rate": 1.0,
+      "normalization_parity_rate_overall": 0.995,
+      "normalization_parity_rate_each_surface": 0.99,
+      "resolution_state_coverage_rate": 0.995,
+      "required_enrichment_decision_coverage_rate": 0.99
+    },
+    "partial_minimum": {
+      "job_accounting_rate": 1.0,
+      "valid_scientific_observation_rate_overall": 0.97,
+      "valid_scientific_observation_rate_each_primary_surface": 0.95,
+      "raw_payload_integrity_rate": 1.0,
+      "critical_manifest_conformity_rate": 1.0,
+      "normalization_parity_rate_overall": 0.98,
+      "normalization_parity_rate_each_surface": 0.97,
+      "resolution_state_coverage_rate": 0.97,
+      "required_enrichment_decision_coverage_rate": 0.95
+    }
+  },
+  "financial_reconciliation": {
+    "separate_from_data_acceptance": true,
+    "states": [
+      "COMPLETE",
+      "PENDING",
+      "ANOMALY"
+    ],
+    "rules": {
+      "provider_cost_event_coverage_target": 1.0,
+      "unit_price_drift_warning_pct": 10,
+      "unit_price_drift_critical_pct": 25,
+      "wave_spend_warning_vs_versioned_forecast_pct": 15,
+      "wave_spend_critical_vs_versioned_forecast_pct": 25
+    },
+    "note": "Financial PENDING does not by itself invalidate scientific data; ANOMALY blocks financial close and may pause new discretionary paid enrichment until reviewed."
+  },
+  "analysis_eligibility": {
+    "eligible": "Wave COMPLETE and analysis-specific population/timing/resolution/freshness/comparability requirements pass.",
+    "conditional": "Wave PARTIAL but the specific Analysis Specification Contract prospectively permits the observed missingness and all required inputs are sufficient.",
+    "ineligible": "Wave FAILED or QUARANTINED for the affected scope, or the analysis-specific contract fails."
+  },
+  "rules": [
+    {
+      "rule_code": "PRE001",
+      "stage": "preflight",
+      "scope": "wave",
+      "severity": "critical",
+      "condition": "methodology_version is not frozen or manifest checksum/version cannot be matched to the wave",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE / DO NOT START",
+      "rationale": "The exact treatment population must be known before outcomes are observed."
+    },
+    {
+      "rule_code": "PRE002",
+      "stage": "preflight",
+      "scope": "wave",
+      "severity": "critical",
+      "condition": "generated planned job count does not reconcile to manifest expansion before legitimate structural-water exclusions",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE / DO NOT START",
+      "rationale": "A missing or extra planned job changes the research population."
+    },
+    {
+      "rule_code": "PRE003",
+      "stage": "preflight",
+      "scope": "coordinate_scope",
+      "severity": "critical",
+      "condition": "any non-center Maps/Organic/AIO coordinate remains eligibility=pending at launch",
+      "metric": null,
+      "threshold": null,
+      "action": "BLOCK AFFECTED SCOPE",
+      "rationale": "Water eligibility must be frozen before outcome collection."
+    },
+    {
+      "rule_code": "PRE004",
+      "stage": "preflight",
+      "scope": "market_surface",
+      "severity": "critical",
+      "condition": "a center coordinate is configuration_failure or intersects auto-excluded structural water",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED MARKET/SURFACE",
+      "rationale": "Centers are configuration anchors and may not be silently relocated after outcomes."
+    },
+    {
+      "rule_code": "PRE005",
+      "stage": "preflight",
+      "scope": "job",
+      "severity": "critical",
+      "condition": "duplicate job_key exists or scientific job identity is not unique",
+      "metric": "duplicate_job_key_count",
+      "threshold": 0,
+      "action": "QUARANTINE AFFECTED WAVE",
+      "rationale": "Duplicate scientific jobs destroy denominator/idempotency integrity."
+    },
+    {
+      "rule_code": "PRE006",
+      "stage": "preflight",
+      "scope": "job",
+      "severity": "critical",
+      "condition": "rendered query/prompt differs from the frozen treatment after deterministic [CITY] substitution",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED JOB SET",
+      "rationale": "Prompt/query wording is a controlled treatment."
+    },
+    {
+      "rule_code": "PRE007",
+      "stage": "preflight",
+      "scope": "job",
+      "severity": "critical",
+      "condition": "provider profile, device, language, result depth, location mode, coordinate, or other observation-changing setting differs from the frozen surface config",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED JOB SET",
+      "rationale": "Provider configuration is part of the measurement contract."
+    },
+    {
+      "rule_code": "PRE008",
+      "stage": "preflight",
+      "scope": "chatgpt_condition_market",
+      "severity": "critical",
+      "condition": "planned ChatGPT scientific jobs are not exactly replicate 1, 2, and 3 for each approved condition \u00d7 market \u00d7 wave",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED CONDITION/MARKET",
+      "rationale": "Technical attempts must not alter the exactly-three scientific replicate design."
+    },
+    {
+      "rule_code": "PRE009",
+      "stage": "preflight",
+      "scope": "structural_exclusion",
+      "severity": "critical",
+      "condition": "a structurally excluded water point is converted into a relocated/substituted/randomized/imputed coordinate",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED METHODOLOGY/WAVE",
+      "rationale": "Structural exclusions remain intended missing points, not replacement observations."
+    },
+    {
+      "rule_code": "COL001",
+      "stage": "collection",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "not every executable job reaches an explicit terminal/accounted state",
+      "metric": "job_accounting_rate",
+      "threshold": 1.0,
+      "action": "FAILED unless unresolved jobs are reconciled",
+      "rationale": "Unknown job state prevents denominator reconciliation."
+    },
+    {
+      "rule_code": "COL002",
+      "stage": "collection",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "valid scientific observation rate falls below COMPLETE threshold but remains above PARTIAL minimum",
+      "metric": "valid_scientific_observation_rate_overall",
+      "threshold": 0.995,
+      "action": "PARTIAL",
+      "rationale": "Some technical loss is tolerable only when explicit and bounded."
+    },
+    {
+      "rule_code": "COL003",
+      "stage": "collection",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "valid scientific observation rate falls below PARTIAL minimum overall",
+      "metric": "valid_scientific_observation_rate_overall",
+      "threshold": 0.97,
+      "action": "FAILED",
+      "rationale": "Missing technical observations are too extensive for the wave to represent the planned panel."
+    },
+    {
+      "rule_code": "COL004",
+      "stage": "collection",
+      "scope": "surface",
+      "severity": "error",
+      "condition": "a primary surface scientific observation rate falls below COMPLETE per-surface threshold but remains above PARTIAL minimum",
+      "metric": "valid_scientific_observation_rate_each_primary_surface",
+      "threshold": 0.99,
+      "action": "PARTIAL",
+      "rationale": "Overall averages must not hide failure concentrated on one surface."
+    },
+    {
+      "rule_code": "COL005",
+      "stage": "collection",
+      "scope": "surface",
+      "severity": "error",
+      "condition": "a primary surface scientific observation rate falls below PARTIAL per-surface minimum",
+      "metric": "valid_scientific_observation_rate_each_primary_surface",
+      "threshold": 0.95,
+      "action": "FAILED FOR AFFECTED SURFACE; WAVE FAILED unless safely excluded by analysis contract",
+      "rationale": "Surface-specific systematic missingness can bias cross-surface comparisons."
+    },
+    {
+      "rule_code": "COL006",
+      "stage": "raw_integrity",
+      "scope": "observation",
+      "severity": "critical",
+      "condition": "a returned/valid scientific observation that requires provider raw evidence lacks its immutable raw payload/blob reference",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED OBSERVATION",
+      "rationale": "Normalized rows are not a substitute for raw provider evidence."
+    },
+    {
+      "rule_code": "COL007",
+      "stage": "raw_integrity",
+      "scope": "blob",
+      "severity": "critical",
+      "condition": "stored raw bytes do not match the recorded SHA-256",
+      "metric": "raw_payload_integrity_rate",
+      "threshold": 1.0,
+      "action": "QUARANTINE ALL DEPENDENT OBSERVATIONS",
+      "rationale": "Raw evidence integrity cannot be trusted."
+    },
+    {
+      "rule_code": "COL008",
+      "stage": "collection",
+      "scope": "structural_exclusion",
+      "severity": "critical",
+      "condition": "provider call was executed for a coordinate frozen as structural_water_exclusion",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED JOB; exclude from scientific panel",
+      "rationale": "Executing excluded points changes the precommitted geometry."
+    },
+    {
+      "rule_code": "COL009",
+      "stage": "chatgpt_collection",
+      "scope": "replicate",
+      "severity": "critical",
+      "condition": "a valid refusal/clarification/generic-guidance/no-recommendation response is retried/replaced solely to obtain recommendations",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED REPLICATE GROUP",
+      "rationale": "These outcomes are valid observations and must not be outcome-conditioned away."
+    },
+    {
+      "rule_code": "COL010",
+      "stage": "chatgpt_collection",
+      "scope": "replicate_group",
+      "severity": "critical",
+      "condition": "replicates share conversational context/session state when fresh independent contexts were required",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED REPLICATE GROUP",
+      "rationale": "Replicate dependence changes the estimand and stochastic interpretation."
+    },
+    {
+      "rule_code": "COL011",
+      "stage": "collection",
+      "scope": "attempt",
+      "severity": "warning",
+      "condition": "technical retry occurs",
+      "metric": null,
+      "threshold": null,
+      "action": "RETAIN ATTEMPT HISTORY; do not increment replicate denominator",
+      "rationale": "Technical attempts and scientific replicates are different objects."
+    },
+    {
+      "rule_code": "NOR001",
+      "stage": "normalization",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "normalization parity rate falls below COMPLETE threshold but remains above PARTIAL minimum",
+      "metric": "normalization_parity_rate_overall",
+      "threshold": 0.995,
+      "action": "PARTIAL",
+      "rationale": "Returned raw evidence exists, but normalized analytical rows are incompletely reconstructed."
+    },
+    {
+      "rule_code": "NOR002",
+      "stage": "normalization",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "normalization parity rate falls below PARTIAL minimum",
+      "metric": "normalization_parity_rate_overall",
+      "threshold": 0.98,
+      "action": "FAILED until reprocessed from immutable raw",
+      "rationale": "Parser coverage is too incomplete for analysis."
+    },
+    {
+      "rule_code": "NOR003",
+      "stage": "normalization",
+      "scope": "surface",
+      "severity": "error",
+      "condition": "surface normalization parity falls below per-surface PARTIAL minimum",
+      "metric": "normalization_parity_rate_each_surface",
+      "threshold": 0.97,
+      "action": "FAILED FOR AFFECTED SURFACE until reprocessed",
+      "rationale": "Per-surface parser failure must not be hidden by other surfaces."
+    },
+    {
+      "rule_code": "NOR004",
+      "stage": "normalization",
+      "scope": "maps_organic",
+      "severity": "critical",
+      "condition": "rank/result sequence is duplicated, non-positive, or inconsistent with raw provider ordering",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED OBSERVATION until parser correction",
+      "rationale": "Rank/order is primary raw measurement."
+    },
+    {
+      "rule_code": "NOR005",
+      "stage": "normalization",
+      "scope": "maps_organic",
+      "severity": "warning",
+      "condition": "fewer than requested Top-10 results are legitimately returned by provider",
+      "metric": null,
+      "threshold": null,
+      "action": "ACCEPT AS VALID if raw/provider success confirms it; do not fabricate missing businesses",
+      "rationale": "Requested depth is a collection setting, not a guarantee that ten legitimate results exist."
+    },
+    {
+      "rule_code": "NOR006",
+      "stage": "normalization",
+      "scope": "aio",
+      "severity": "critical",
+      "condition": "parser collapses retrieved, cited, linked, supportive, selected, or business-appearance states into one undifferentiated field",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED NORMALIZED AIO DATA",
+      "rationale": "These are distinct research concepts."
+    },
+    {
+      "rule_code": "NOR007",
+      "stage": "normalization",
+      "scope": "aio",
+      "severity": "info",
+      "condition": "AIO is not triggered or has zero business/source/citation occurrences",
+      "metric": null,
+      "threshold": null,
+      "action": "ACCEPT AS VALID OBSERVED NEGATIVE if provider response is successful",
+      "rationale": "Absence is a possible outcome, not a parser failure."
+    },
+    {
+      "rule_code": "NOR008",
+      "stage": "normalization",
+      "scope": "chatgpt",
+      "severity": "critical",
+      "condition": "parser collapses retrieved, cited, linked, supportive, mentioned, recommended, or ranked states",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED NORMALIZED CHATGPT DATA",
+      "rationale": "The outcome taxonomy requires distinct states."
+    },
+    {
+      "rule_code": "NOR009",
+      "stage": "normalization",
+      "scope": "chatgpt",
+      "severity": "critical",
+      "condition": "derived/inferred fanout is stored as origin=observed",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED FANOUT DATA",
+      "rationale": "Only directly observable fanout enters the primary observed-fanout dataset."
+    },
+    {
+      "rule_code": "NOR010",
+      "stage": "normalization",
+      "scope": "chatgpt",
+      "severity": "error",
+      "condition": "an identifiable mention lacks a recommendation assessment row after classification",
+      "metric": null,
+      "threshold": null,
+      "action": "REPROCESS; downgrade stage completeness",
+      "rationale": "Recommendation visibility must be distinguishable from entity visibility."
+    },
+    {
+      "rule_code": "NOR011",
+      "stage": "normalization",
+      "scope": "top50",
+      "severity": "warning",
+      "condition": "Top-50 query returns fewer than 50 legitimate organic results",
+      "metric": null,
+      "threshold": null,
+      "action": "ACCEPT if provider succeeded; retain exact returned set",
+      "rationale": "Top-50 is the requested depth, not permission to fabricate unreturned results."
+    },
+    {
+      "rule_code": "RES001",
+      "stage": "resolution",
+      "scope": "observed_object",
+      "severity": "error",
+      "condition": "a resolution-required observed object has no explicit resolution assertion state",
+      "metric": null,
+      "threshold": null,
+      "action": "REPROCESS RESOLUTION; affects analysis readiness",
+      "rationale": "Every object must be explicitly resolved, probable, ambiguous, unresolved, likely nonexistent, or insufficient information."
+    },
+    {
+      "rule_code": "RES002",
+      "stage": "resolution",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "resolution-state coverage falls below COMPLETE threshold but remains above PARTIAL minimum",
+      "metric": "resolution_state_coverage_rate",
+      "threshold": 0.995,
+      "action": "PARTIAL FOR RESOLUTION-DEPENDENT ANALYSES",
+      "rationale": "Unprocessed objects must not disappear from the join funnel."
+    },
+    {
+      "rule_code": "RES003",
+      "stage": "resolution",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "resolution-state coverage falls below PARTIAL minimum",
+      "metric": "resolution_state_coverage_rate",
+      "threshold": 0.97,
+      "action": "INELIGIBLE for resolution-dependent analyses until processed",
+      "rationale": "Too much unresolved processing backlog exists."
+    },
+    {
+      "rule_code": "RES004",
+      "stage": "resolution",
+      "scope": "entity_match",
+      "severity": "critical",
+      "condition": "ambiguous/unresolved/likely_nonexistent/insufficient-information object is silently assigned a confirmed canonical entity",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED RESOLUTION ASSERTIONS",
+      "rationale": "High resolved percentage is not a QA goal and forced matches bias the graph."
+    },
+    {
+      "rule_code": "RES005",
+      "stage": "resolution",
+      "scope": "entity_match",
+      "severity": "critical",
+      "condition": "brand-only identity is silently converted into a specific location/GBP branch without supporting identity evidence",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED JOINS",
+      "rationale": "Prompt market is supporting evidence only and cannot manufacture branch identity."
+    },
+    {
+      "rule_code": "RES006",
+      "stage": "resolution",
+      "scope": "entity_match",
+      "severity": "critical",
+      "condition": "later resolution correction overwrites historical raw result/mention or historical resolution assertion",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE / RESTORE APPEND-ONLY HISTORY",
+      "rationale": "Temporal resolution provenance must remain reproducible."
+    },
+    {
+      "rule_code": "RES007",
+      "stage": "resolution",
+      "scope": "wave",
+      "severity": "info",
+      "condition": "resolved percentage changes materially while resolution-state coverage remains complete",
+      "metric": null,
+      "threshold": null,
+      "action": "REPORT ONLY; investigate but do not fail automatically",
+      "rationale": "A lower true resolved rate may reflect genuine ambiguity rather than pipeline failure."
+    },
+    {
+      "rule_code": "ENR001",
+      "stage": "enrichment",
+      "scope": "eligible_entity_signal",
+      "severity": "error",
+      "condition": "a required universal explanatory-variable signal has neither a fresh reusable snapshot nor an explicit enrichment decision",
+      "metric": null,
+      "threshold": null,
+      "action": "MARK NOT ANALYSIS-READY for analyses requiring the signal",
+      "rationale": "Every eligible entity must pass the universal freshness/dedup decision gate."
+    },
+    {
+      "rule_code": "ENR002",
+      "stage": "enrichment",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "required enrichment-decision coverage falls below COMPLETE but remains above PARTIAL minimum",
+      "metric": "required_enrichment_decision_coverage_rate",
+      "threshold": 0.99,
+      "action": "PARTIAL for enrichment-dependent analyses",
+      "rationale": "Missing decisions are pipeline gaps, distinct from stale/unknown signal values."
+    },
+    {
+      "rule_code": "ENR003",
+      "stage": "enrichment",
+      "scope": "wave",
+      "severity": "error",
+      "condition": "required enrichment-decision coverage falls below PARTIAL minimum",
+      "metric": "required_enrichment_decision_coverage_rate",
+      "threshold": 0.95,
+      "action": "INELIGIBLE for affected enrichment-dependent analyses",
+      "rationale": "Too many eligible signals lack a documented decision."
+    },
+    {
+      "rule_code": "ENR004",
+      "stage": "enrichment",
+      "scope": "cache",
+      "severity": "critical",
+      "condition": "cached/reused prior snapshot is inserted as a new fresh observed_at without a new observation",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED SIGNAL HISTORY",
+      "rationale": "Cached reuse must never masquerade as fresh measurement."
+    },
+    {
+      "rule_code": "ENR005",
+      "stage": "enrichment",
+      "scope": "economic_unit",
+      "severity": "warning",
+      "condition": "same economic unit + signal type is paid for repeatedly inside a valid freshness window without versioned justification",
+      "metric": null,
+      "threshold": null,
+      "action": "COST ANOMALY; investigate dedup/cache failure",
+      "rationale": "Cost reduction should come from economic-unit reuse, not panel weakening."
+    },
+    {
+      "rule_code": "ENR006",
+      "stage": "enrichment",
+      "scope": "website_source",
+      "severity": "critical",
+      "condition": "historical page/source content version is overwritten rather than a new version/check event being recorded",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED HISTORY",
+      "rationale": "Temporal content history must remain reconstructable."
+    },
+    {
+      "rule_code": "ENR007",
+      "stage": "enrichment",
+      "scope": "embedding",
+      "severity": "critical",
+      "condition": "embedding is reused across different content_sha256 or model component version without explicit scientific equivalence",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED DERIVED SEMANTIC FEATURES",
+      "rationale": "Embeddings are keyed to exact content and model version."
+    },
+    {
+      "rule_code": "CST001",
+      "stage": "cost",
+      "scope": "provider_price",
+      "severity": "warning",
+      "condition": "realized/versioned provider unit price differs by more than 10% from active expected price",
+      "metric": "unit_price_drift_pct",
+      "threshold": 10,
+      "action": "FINANCIAL_RECONCILIATION=ANOMALY; investigate/update prospective price version",
+      "rationale": "Provider price drift should be measured, not silently absorbed."
+    },
+    {
+      "rule_code": "CST002",
+      "stage": "cost",
+      "scope": "provider_price",
+      "severity": "critical",
+      "condition": "realized provider unit price differs by more than 25% from active expected price",
+      "metric": "unit_price_drift_pct",
+      "threshold": 25,
+      "action": "PAUSE NEW DISCRETIONARY PAID WORK for affected provider/product pending review",
+      "rationale": "Large drift can invalidate the operating budget while leaving already-collected scientific data intact."
+    },
+    {
+      "rule_code": "CST003",
+      "stage": "cost",
+      "scope": "wave",
+      "severity": "warning",
+      "condition": "wave spend exceeds versioned forecast by more than 15%",
+      "metric": "wave_spend_vs_forecast_pct",
+      "threshold": 15,
+      "action": "FINANCIAL_RECONCILIATION=ANOMALY; investigate cost attribution/cache misses",
+      "rationale": "Planning assumptions should be replaced by measured telemetry."
+    },
+    {
+      "rule_code": "CST004",
+      "stage": "cost",
+      "scope": "wave",
+      "severity": "critical",
+      "condition": "wave spend exceeds versioned forecast by more than 25%",
+      "metric": "wave_spend_vs_forecast_pct",
+      "threshold": 25,
+      "action": "PAUSE discretionary enrichment/new paid expansion pending review",
+      "rationale": "Prevents runaway spend without deleting or invalidating valid observations."
+    },
+    {
+      "rule_code": "CST005",
+      "stage": "cost",
+      "scope": "financial_close",
+      "severity": "error",
+      "condition": "provider-reported billable events lack cost_event/allocation records at financial close",
+      "metric": "provider_cost_event_coverage",
+      "threshold": 1.0,
+      "action": "FINANCIAL_RECONCILIATION=PENDING until 100% reconciled",
+      "rationale": "Cost telemetry must be attributable."
+    },
+    {
+      "rule_code": "ANA001",
+      "stage": "analysis_readiness",
+      "scope": "dataset_build",
+      "severity": "critical",
+      "condition": "dataset build lacks methodology version, graph release, analysis specification, source cutoff, input manifest hash, or code/parser/resolver provenance",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE DERIVED DATASET",
+      "rationale": "Derived data must be reproducible."
+    },
+    {
+      "rule_code": "ANA002",
+      "stage": "analysis_readiness",
+      "scope": "cross_surface",
+      "severity": "critical",
+      "condition": "missing surface observation is encoded as a negative/zero outcome",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED DATASET",
+      "rationale": "Missing is not zero."
+    },
+    {
+      "rule_code": "ANA003",
+      "stage": "analysis_readiness",
+      "scope": "cross_surface",
+      "severity": "critical",
+      "condition": "surface outcomes are collapsed into an unauthorized universal visibility/authority score",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE AFFECTED DERIVATION",
+      "rationale": "No universal cross-surface visibility score is authorized."
+    },
+    {
+      "rule_code": "ANA004",
+      "stage": "analysis_readiness",
+      "scope": "cross_surface",
+      "severity": "error",
+      "condition": "same-wave join is described as exact simultaneity or causal order without timing support",
+      "metric": null,
+      "threshold": null,
+      "action": "REJECT INTERPRETATION / analysis ineligible until corrected",
+      "rationale": "Operational wave alignment does not establish causal timing."
+    },
+    {
+      "rule_code": "ANA005",
+      "stage": "analysis_readiness",
+      "scope": "finding",
+      "severity": "critical",
+      "condition": "descriptive/associational/predictive output is labeled causal without a qualifying design",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE FINDING",
+      "rationale": "Correlation and predictive importance do not establish causation."
+    },
+    {
+      "rule_code": "ANA006",
+      "stage": "analysis_readiness",
+      "scope": "finding",
+      "severity": "critical",
+      "condition": "LLM-generated numbers/effect sizes/p-values/CIs are stored without measured computational provenance",
+      "metric": null,
+      "threshold": null,
+      "action": "QUARANTINE FINDING",
+      "rationale": "LLMs may summarize/classify but may not manufacture quantitative findings."
+    },
+    {
+      "rule_code": "ANA007",
+      "stage": "analysis_readiness",
+      "scope": "dataset_build",
+      "severity": "error",
+      "condition": "join/exclusion funnel is not reported for a paired/cross-surface analytical dataset",
+      "metric": null,
+      "threshold": null,
+      "action": "ANALYSIS INELIGIBLE until funnel is materialized",
+      "rationale": "Published analytical sample must not be confused with full observed population."
+    },
+    {
+      "rule_code": "ANA008",
+      "stage": "analysis_readiness",
+      "scope": "product_regime",
+      "severity": "error",
+      "condition": "ChatGPT product event creates a known comparability break not addressed by the Analysis Specification Contract",
+      "metric": null,
+      "threshold": null,
+      "action": "ANALYSIS CONDITIONAL/INELIGIBLE depending scope",
+      "rationale": "Product changes may invalidate same-wave or longitudinal comparability."
+    }
+  ]
+}

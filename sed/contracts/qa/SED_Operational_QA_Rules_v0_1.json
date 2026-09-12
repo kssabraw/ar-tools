@@ -1,0 +1,38 @@
+{
+  "contract_code": "SED_WAVE_QA",
+  "version_code": "0.1",
+  "status": "draft",
+  "thresholds": {
+    "partial_min_overall_terminal_coverage": 0.995,
+    "partial_min_surface_terminal_coverage": 0.99,
+    "partial_min_stratum_terminal_coverage": 0.95,
+    "stratum_threshold_min_expected_jobs": 20,
+    "cost_attribution_target": 0.999,
+    "cost_unit_drift_warning": 0.10,
+    "cost_unit_drift_error": 0.25,
+    "cost_unit_drift_critical": 0.50
+  },
+  "rules": [
+    {"rule_code":"QA-MAN-001","scope":"wave/job","severity":"critical","description":"Job methodology version must equal wave methodology version."},
+    {"rule_code":"QA-MAN-002","scope":"job","severity":"critical","description":"job_key must be unique and match versioned generator hash."},
+    {"rule_code":"QA-MAN-003","scope":"wave","severity":"critical","description":"Database job membership must reconcile exactly to frozen manifest matrix."},
+    {"rule_code":"QA-MAN-004","scope":"coordinate job","severity":"critical","description":"Coordinate eligibility must be resolved before submission; pending/manual_review are not ordinary executable production states."},
+    {"rule_code":"QA-MAN-005","scope":"coordinate job","severity":"critical","description":"Structural-water exclusions must not be submitted or encoded as measured zero/nonappearance."},
+    {"rule_code":"QA-MAN-006","scope":"chatgpt","severity":"critical","description":"Expected ChatGPT prompt condition must have exactly R1/R2/R3 separate scientific jobs with fresh-context isolation."},
+    {"rule_code":"QA-OPS-001","scope":"job/observation","severity":"critical","description":"At most one scientific observation per deterministic job."},
+    {"rule_code":"QA-OPS-002","scope":"observation","severity":"critical","description":"Accepted attempt must belong to the same job as observation."},
+    {"rule_code":"QA-OPS-003","scope":"attempt","severity":"error","description":"Attempt numbering should be contiguous from 1 unless documented recovery path."},
+    {"rule_code":"QA-OPS-004","scope":"observation/payload","severity":"critical","description":"Returned observation must retain accepted-attempt and raw-response provenance under provider contract."},
+    {"rule_code":"QA-OPS-005","scope":"job","severity":"error","description":"Retry-exhausted job must terminate explicitly, not remain indefinitely retryable/submitted."},
+    {"rule_code":"QA-OPS-006","scope":"timestamps","severity":"error","description":"Event chronology must be temporally plausible."},
+    {"rule_code":"QA-RAW-001","scope":"raw_blob","severity":"critical","description":"Retained bytes SHA-256 must match ops.raw_blob.sha256."},
+    {"rule_code":"QA-RAW-002","scope":"raw_blob","severity":"critical","description":"Accepted raw payload pointer must be resolvable in private Storage."},
+    {"rule_code":"QA-RAW-003","scope":"raw_blob","severity":"critical","description":"Storage path must not mutate to bytes with different recorded hash."},
+    {"rule_code":"QA-RAW-004","scope":"provider_payload","severity":"error","description":"Provider/payload/task/capture provenance must be internally consistent."},
+    {"rule_code":"QA-RAW-005","scope":"normalized output","severity":"error","description":"Same parser version should deterministically reproduce normalized_output_sha256 when populated."},
+    {"rule_code":"QA-COST-001","scope":"cost","severity":"critical","description":"Cost events are nonnegative and append-only."},
+    {"rule_code":"QA-COST-002","scope":"cost","severity":"error","description":"At least 99.9% of nonzero paid cost events should be attributable to operational/economic-unit context."},
+    {"rule_code":"QA-COST-003","scope":"cost","severity":"error","description":"Applicable cost events reference provider price version or documented external billing exception."},
+    {"rule_code":"QA-COST-004","scope":"cost","severity":"warning","description":"Unexplained unit-cost drift is warning >10%, error >25%, critical >50%."}
+  ]
+}

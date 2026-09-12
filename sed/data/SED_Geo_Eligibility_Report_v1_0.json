@@ -1,0 +1,25 @@
+{
+  "classifier_version": "SED_GEO_ELIGIBILITY_CENSUS_2025_V1",
+  "coordinate_count": 1100,
+  "status_counts": {
+    "eligible_land": 1000,
+    "structural_water_exclusion": 91,
+    "outside_country_exclusion": 9
+  },
+  "outside_country_coordinate_ids": [
+    "MKT024_AIO_E2P5",
+    "MKT024_AIO_E5",
+    "MKT024_AIO_S2P5",
+    "MKT024_AIO_S5",
+    "MKT024_MAPORG_E3",
+    "MKT024_MAPORG_E5",
+    "MKT024_MAPORG_S1",
+    "MKT024_MAPORG_S3",
+    "MKT024_MAPORG_S5"
+  ],
+  "manual_review_coordinate_ids": [],
+  "configuration_failure_coordinate_ids": [],
+  "classification_csv_sha256": "22bb2733651064acd996fec79921f120e84fd90fb306256ecb8b7323adae161d",
+  "source_manifest_sha256": "4b06ebcbf0ac792992c06ee341167fd45193ebce1e05e354224acbe13efd4297",
+  "county_file_count": 78
+}
