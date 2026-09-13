@@ -230,7 +230,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
               transform: mobileOpen ? 'translateX(0)' : 'translateX(-100%)',
               transition: 'transform 0.2s ease', overflowY: 'auto',
             }
-          : {}),
+          : {
+              // Desktop: pin the sidebar to the viewport so a long nav scrolls
+              // inside itself (the <nav> below), not off the bottom of the page.
+              position: 'sticky', top: 0, height: '100vh',
+            }),
       }}>
         <div style={{ padding: '0 20px 24px', borderBottom: '1px solid #1e293b' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
@@ -242,7 +246,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
           <div style={{ fontSize: 11, color: '#64748b', marginTop: 4 }}>{user?.email}</div>
         </div>
-        <nav style={{ flex: 1, padding: '16px 0' }}>
+        {/* minHeight:0 lets this flex child shrink below its content height so
+            overflowY engages — a long nav gets its own scrollbar instead of
+            pushing "Sign out" off the bottom. */}
+        <nav style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '16px 0' }}>
           <div style={{ paddingBottom: 12, marginBottom: 12, borderBottom: '1px solid #1e293b' }}>
             {quickNav.map(renderLink)}
           </div>
