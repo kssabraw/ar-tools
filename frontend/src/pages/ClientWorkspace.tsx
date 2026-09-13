@@ -99,27 +99,14 @@ export function ClientWorkspace() {
         </div>
       </div>
 
+      {/* Global alerts — freeze state + this client's notification feed. */}
       {id && <FreezeBanner clientId={id} />}
-      {/* SerMaStr — strategist review as its own section, directly under the
-          Freeze Protocol banner and above Client setup. Renders nothing when
-          the strategist is off and no review exists (so quiet clients stay
-          clean). */}
-      {id && <StrategistReview clientId={id} />}
-      {/* Intervention-outcome loop — did past goal-linked link-building /
-          reoptimization work actually move the metric it targeted. Report-only;
-          renders nothing until the flag is on and something has been tracked. */}
-      {id && <InterventionOutcomes clientId={id} />}
-      {/* Everhour "Time logged" — hours tracked against this client. Renders
-          nothing until Everhour is enabled and this client has logged time. */}
-      {id && <EverhourTimeCard clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
-      {/* Weekly Pulse — the copy-paste client update staff deliver by hand. */}
-      {id && <WeeklyPulse clientId={id} />}
 
-      {/* ── Client setup ─────────────────────────────────────────────── */}
+      {/* ── Onboarding ───────────────────────────────────────────────── */}
       <Section
-        title="Client setup"
-        subtitle="The business context the content & ranking tools draw on."
+        title="Onboarding"
+        subtitle="The business context and success targets every content & ranking tool draws on."
       >
         <ActionCard
           icon={<Building2 size={22} />}
@@ -134,6 +121,14 @@ export function ClientWorkspace() {
           highlight={!client?.gbp?.business_name}
         />
         <ActionCard
+          icon={<Users size={22} />}
+          label="ICP & Differentiators"
+          description={icpCopy(client)}
+          to={id ? `/clients/${id}/icp` : undefined}
+          cta={icpHasContent(client) ? 'Edit' : 'Set up'}
+          highlight={!icpHasContent(client)}
+        />
+        <ActionCard
           icon={<Sparkles size={22} />}
           label="Brand Voice"
           description={brandVoiceCopy(client)}
@@ -142,79 +137,100 @@ export function ClientWorkspace() {
           highlight={!brandVoiceHasContent(client)}
         />
         <ActionCard
-          icon={<Users size={22} />}
-          label="ICP & Differentiators"
-          description={icpCopy(client)}
-          to={id ? `/clients/${id}/icp` : undefined}
-          cta={icpHasContent(client) ? 'Edit' : 'Set up'}
-          highlight={!icpHasContent(client)}
+          icon={<Target size={22} />}
+          label="Campaign Goals"
+          description="What success means for this client — rank, traffic, AI-visibility & local-pack targets with live on-track / behind status. SerMaStr judges every review and answer against these."
+          to={id ? `/clients/${id}/goals` : undefined}
+          cta="Open"
         />
       </Section>
 
-      {/* ── Content ──────────────────────────────────────────────────── */}
+      {/* ── Reporting ────────────────────────────────────────────────── */}
       <Section
-        title="Content"
-        subtitle="Generate publication-ready content for this client."
+        title="Reporting"
+        subtitle="Client-facing reports plus the live rank & visibility trackers behind them."
+        panel={id ? <WeeklyPulse clientId={id} /> : undefined}
       >
         <ActionCard
-          icon={<PenLine size={22} />}
-          label="Create Blog Post"
-          description="Generate an SEO + AEO-optimized article through the five-module pipeline."
-          to={id ? `/runs?client=${id}&new=1` : undefined}
-          cta="Create"
+          icon={<FileBarChart size={22} />}
+          label="Client Reports"
+          description="Generate a PDF performance report — organic rankings, local-pack geo-grids & Google Business Profile. (Analytics, Asana & a campaign-health summary land in later phases.)"
+          to={id ? `/clients/${id}/reports` : undefined}
+          cta="Open"
         />
         <ActionCard
-          icon={<MapPin size={22} />}
-          label="Create Local SEO Content"
-          description={
-            savedLocalSeoCount > 0
-              ? `Location-specific service pages. ${savedLocalSeoCount} saved page${savedLocalSeoCount === 1 ? '' : 's'} for this client.`
-              : 'Location-specific service pages and local content.'
-          }
-          to={id ? `/clients/${id}/local-seo` : undefined}
-          cta="Create"
-          footer={
-            savedLocalSeoCount > 0 && id ? (
-              <Link to={`/clients/${id}/local-seo?tab=saved`} style={footerLinkStyle}>
-                View {savedLocalSeoCount} saved page{savedLocalSeoCount === 1 ? '' : 's'} <ArrowRight size={13} />
-              </Link>
-            ) : undefined
-          }
+          icon={<Eye size={22} />}
+          label="AI Visibility"
+          description="Track whether this brand shows up in AI assistant answers — ChatGPT, Claude, Gemini, Perplexity & Google AI Overviews — across your keywords, over time."
+          to={id ? `/clients/${id}/ai-visibility` : undefined}
+          cta="Open"
         />
         <ActionCard
-          icon={<ShoppingBag size={22} />}
-          label="Ecommerce Writer"
-          description={
-            savedEcommerceCount > 0
-              ? `SEO product & collection pages, generated and reoptimized. ${savedEcommerceCount} saved page${savedEcommerceCount === 1 ? '' : 's'} for this client.`
-              : 'Generate and reoptimize SEO-optimized ecommerce product & collection pages.'
-          }
-          to={id ? `/clients/${id}/ecommerce` : undefined}
-          cta="Create"
-          footer={
-            savedEcommerceCount > 0 && id ? (
-              <Link to={`/clients/${id}/ecommerce?tab=saved`} style={footerLinkStyle}>
-                View {savedEcommerceCount} saved page{savedEcommerceCount === 1 ? '' : 's'} <ArrowRight size={13} />
-              </Link>
-            ) : undefined
-          }
+          icon={<TrendingUp size={22} />}
+          label="Organic Rank Tracker"
+          description="Connect Search Console to track organic positions, clicks & impressions. Keyword tracking comes online once a property is verified."
+          to={id ? `/clients/${id}/rankings` : undefined}
+          cta="Connect"
         />
         <ActionCard
-          icon={<Send size={22} />}
-          label="Social Media"
-          description="Compose and publish (or schedule) posts to the client's connected social accounts — text, images, carousels, and video."
-          to={id ? `/clients/${id}/social` : undefined}
-          cta="Compose"
+          icon={<Map size={22} />}
+          label="Maps Ranker"
+          description="Local-pack and Maps rankings across a geo-grid around this client's business."
+          to={id ? `/clients/${id}/maps` : undefined}
+          cta="Open"
         />
-        {client?.wheelhouse_cpt_enabled && (
-          <ActionCard
-            icon={<Server size={22} />}
-            label="WHIT Posting"
-            description="Generate & publish WheelHouse IT city, service & local SEO pages to WordPress as ACF-driven Pages under the Florida or New York silo — mass runs or a single one-off."
-            to={id ? `/clients/${id}/wheelhouse` : undefined}
-            cta="Open"
-          />
-        )}
+        <ActionCard
+          icon={<FileSearch size={22} />}
+          label="GSC Research"
+          description="Mine Search Console for opportunities — keyword cannibalization, quick wins (pos 6–10) & hidden wins (pos 11–30), enriched with CPC & volume."
+          to={id ? `/clients/${id}/gsc-research` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<TrendingUp size={22} />}
+          label="Forecast"
+          description="Where the campaign is heading at the current trend — projected positions, est. traffic & value in 90 days, the quick-win upside in clicks & dollars, and goal trajectories."
+          to={id ? `/clients/${id}/forecast` : undefined}
+          cta="Open"
+        />
+      </Section>
+
+      {/* ── Project Management ──────────────────────────────────────── */}
+      {/* Everhour "Time logged" — hours tracked against this client. Renders
+          nothing until Everhour is enabled and this client has logged time. */}
+      {id && <EverhourTimeCard clientId={id} />}
+      <Section
+        title="Project Management"
+        subtitle="Plan and dispatch this client's delivery work."
+      >
+        <ActionCard
+          icon={<KanbanSquare size={22} />}
+          label="Tasks"
+          description="The task board — this client's delivery work as a Kanban/list with subtask checklists, statuses & assignees. This is where assigned and completed tasks live."
+          to={id ? `/clients/${id}/tasks` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<ClipboardList size={22} />}
+          label="Monthly Template"
+          description="Define the recurring tasks this client gets each month — name, assignee & category. The monthly job creates them on the Tasks board under a new month section, automatically or on demand. (Not a board — edit the template here; open Tasks to see the work.)"
+          to={id ? `/clients/${id}/asana-tasks` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<ClipboardList size={22} />}
+          label="Monthly Task Plan"
+          description="The Recipe Engine: budget + diagnosis → a costed, assigned month of work — baseline stack, Diagnose-and-Fund, capacity-capped content, every line with an owner."
+          to={id ? `/clients/${id}/task-plan` : undefined}
+          cta="Open"
+        />
+      </Section>
+
+      {/* ── Content Creation ────────────────────────────────────────── */}
+      <Section
+        title="Content Creation"
+        subtitle="Generate publication-ready content for this client."
+      >
         <ActionCard
           icon={<FileText size={22} />}
           label="Create Service Pages"
@@ -252,18 +268,29 @@ export function ClientWorkspace() {
           }
         />
         <ActionCard
-          icon={<Search size={22} />}
-          label="Keyword Research"
-          description="Enter a seed keyword to discover the related keyword universe — volume, CPC, competition, difficulty & intent — auto-grouped into topic clusters, with CSV export."
-          to={id ? `/clients/${id}/keyword-research` : undefined}
-          cta="Research"
+          icon={<MapPin size={22} />}
+          label="Create Local SEO Content"
+          description={
+            savedLocalSeoCount > 0
+              ? `Location-specific service pages. ${savedLocalSeoCount} saved page${savedLocalSeoCount === 1 ? '' : 's'} for this client.`
+              : 'Location-specific service pages and local content.'
+          }
+          to={id ? `/clients/${id}/local-seo` : undefined}
+          cta="Create"
+          footer={
+            savedLocalSeoCount > 0 && id ? (
+              <Link to={`/clients/${id}/local-seo?tab=saved`} style={footerLinkStyle}>
+                View {savedLocalSeoCount} saved page{savedLocalSeoCount === 1 ? '' : 's'} <ArrowRight size={13} />
+              </Link>
+            ) : undefined
+          }
         />
         <ActionCard
-          icon={<CalendarPlus size={22} />}
-          label="Content Scheduler"
-          description="Paste or upload a keyword list, pick a page type — blog, service, location or Local SEO — and create every page now or drip them out on a schedule. Shows everything queued for this client, Fan-out included."
-          to={id ? `/clients/${id}/content-scheduler` : undefined}
-          cta="Open"
+          icon={<PenLine size={22} />}
+          label="Create Blog Post"
+          description="Generate an SEO + AEO-optimized article through the five-module pipeline."
+          to={id ? `/runs?client=${id}&new=1` : undefined}
+          cta="Create"
         />
         <ActionCard
           icon={<CalendarClock size={22} />}
@@ -273,19 +300,53 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<Send size={22} />}
+          label="Social Media"
+          description="Compose and publish (or schedule) posts to the client's connected social accounts — text, images, carousels, and video."
+          to={id ? `/clients/${id}/social` : undefined}
+          cta="Compose"
+        />
+        <ActionCard
+          icon={<CalendarPlus size={22} />}
+          label="Content Scheduler"
+          description="Paste or upload a keyword list, pick a page type — blog, service, location or Local SEO — and create every page now or drip them out on a schedule. Shows everything queued for this client, Fan-out included."
+          to={id ? `/clients/${id}/content-scheduler` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<ShoppingBag size={22} />}
+          label="Ecommerce Writer"
+          description={
+            savedEcommerceCount > 0
+              ? `SEO product & collection pages, generated and reoptimized. ${savedEcommerceCount} saved page${savedEcommerceCount === 1 ? '' : 's'} for this client.`
+              : 'Generate and reoptimize SEO-optimized ecommerce product & collection pages.'
+          }
+          to={id ? `/clients/${id}/ecommerce` : undefined}
+          cta="Create"
+          footer={
+            savedEcommerceCount > 0 && id ? (
+              <Link to={`/clients/${id}/ecommerce?tab=saved`} style={footerLinkStyle}>
+                View {savedEcommerceCount} saved page{savedEcommerceCount === 1 ? '' : 's'} <ArrowRight size={13} />
+              </Link>
+            ) : undefined
+          }
+        />
+        <ActionCard
           icon={<FileSearch size={22} />}
           label="Plan a Content Silo"
           description="Research the parent, sibling & neighbourhood pages a topic needs — and see which already exist on this client’s site."
           to={id ? `/clients/${id}/local-seo?tab=plan` : undefined}
           cta="Plan"
         />
-        <ActionCard
-          icon={<UploadCloud size={22} />}
-          label="Publish to Google Docs"
-          description="Select already-generated articles & Local SEO pages and publish them to this client's Drive folder in one batch."
-          to={id ? `/clients/${id}/content` : undefined}
-          cta="Open"
-        />
+        {client?.wheelhouse_cpt_enabled && (
+          <ActionCard
+            icon={<Server size={22} />}
+            label="WHIT Posting"
+            description="Generate & publish WheelHouse IT city, service & local SEO pages to WordPress as ACF-driven Pages under the Florida or New York silo — mass runs or a single one-off."
+            to={id ? `/clients/${id}/wheelhouse` : undefined}
+            cta="Open"
+          />
+        )}
         <ActionCard
           icon={<Share2 size={22} />}
           label="Content Syndication"
@@ -297,15 +358,20 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/syndication` : undefined}
           cta="Open"
         />
-        {websiteStatus?.enabled && (
-          <ActionCard
-            icon={<Globe2 size={22} />}
-            label="Website Builder"
-            description="Plan, generate and publish a site for this client. Publishing commits a page into the site's own GitHub repo, which builds and deploys itself."
-            to={id ? `/clients/${id}/website` : undefined}
-            cta="Open"
-          />
-        )}
+        <ActionCard
+          icon={<UploadCloud size={22} />}
+          label="Publish to Google Docs"
+          description="Select already-generated articles & Local SEO pages and publish them to this client's Drive folder in one batch."
+          to={id ? `/clients/${id}/content` : undefined}
+          cta="Open"
+        />
+      </Section>
+
+      {/* ── Google Business Profile ─────────────────────────────────── */}
+      <Section
+        title="Google Business Profile"
+        subtitle="Insights, profile editing, and posts for this client's GBP."
+      >
         <ActionCard
           icon={<MapPin size={22} />}
           label="Google Business Profile"
@@ -313,67 +379,28 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/gbp` : undefined}
           cta="Open"
         />
-        <ActionCard
-          icon={<BookOpen size={22} />}
-          label="Citations"
-          description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."
-          to={id ? `/clients/${id}/citations` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<Link2 size={22} />}
-          label="Internal Links"
-          description="Finds topical internal-link opportunities across this client's pages. WordPress sites get links written to the live page after you approve each one; others are recommend-only."
-          to={id ? `/clients/${id}/internal-links` : undefined}
-          cta="Open"
-        />
       </Section>
 
-      {/* ── Rank Trackers ───────────────────────────────────────────── */}
+      {/* ── SEO Strategist ──────────────────────────────────────────── */}
+      {/* SerMaStr's strategist review + the intervention-outcome loop render as
+          their own full-width panels directly under the section subtitle, above
+          the strategist cards; both render nothing until there's something to
+          show, so quiet clients stay clean. */}
       <Section
-        title="Rank Trackers"
-        subtitle="Track organic and local-pack positions over time."
+        title="SEO Strategist"
+        subtitle="The strategy layer — priorities, competitors, links & research."
+        panel={id ? (
+          <>
+            <StrategistReview clientId={id} />
+            <InterventionOutcomes clientId={id} />
+          </>
+        ) : undefined}
       >
         <ActionCard
-          icon={<TrendingUp size={22} />}
-          label="Organic Rank Tracker"
-          description="Connect Search Console to track organic positions, clicks & impressions. Keyword tracking comes online once a property is verified."
-          to={id ? `/clients/${id}/rankings` : undefined}
-          cta="Connect"
-        />
-        <ActionCard
-          icon={<Map size={22} />}
-          label="Maps Ranker"
-          description="Local-pack and Maps rankings across a geo-grid around this client's business."
-          to={id ? `/clients/${id}/maps` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<FileSearch size={22} />}
-          label="GSC Research"
-          description="Mine Search Console for opportunities — keyword cannibalization, quick wins (pos 6–10) & hidden wins (pos 11–30), enriched with CPC & volume."
-          to={id ? `/clients/${id}/gsc-research` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<Eye size={22} />}
-          label="AI Visibility"
-          description="Track whether this brand shows up in AI assistant answers — ChatGPT, Claude, Gemini, Perplexity & Google AI Overviews — across your keywords, over time."
-          to={id ? `/clients/${id}/ai-visibility` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<Target size={22} />}
-          label="Campaign Goals"
-          description="What success means for this client — rank, traffic, AI-visibility & local-pack targets with live on-track / behind status. SerMaStr judges every review and answer against these."
-          to={id ? `/clients/${id}/goals` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<TrendingUp size={22} />}
-          label="Forecast"
-          description="Where the campaign is heading at the current trend — projected positions, est. traffic & value in 90 days, the quick-win upside in clicks & dollars, and goal trajectories."
-          to={id ? `/clients/${id}/forecast` : undefined}
+          icon={<ListChecks size={22} />}
+          label="Action Plan"
+          description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
+          to={id ? `/clients/${id}/action-plan` : undefined}
           cta="Open"
         />
         <ActionCard
@@ -391,69 +418,50 @@ export function ClientWorkspace() {
           cta="Open"
         />
         <ActionCard
+          icon={<Link2 size={22} />}
+          label="Internal Links"
+          description="Finds topical internal-link opportunities across this client's pages. WordPress sites get links written to the live page after you approve each one; others are recommend-only."
+          to={id ? `/clients/${id}/internal-links` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<BookOpen size={22} />}
+          label="Citations"
+          description="Liveness tracking for ordered citations — paste the URLs from vendor deliverables; a weekly sweep flags listings that stop resolving."
+          to={id ? `/clients/${id}/citations` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Search size={22} />}
+          label="Keyword Research"
+          description="Enter a seed keyword to discover the related keyword universe — volume, CPC, competition, difficulty & intent — auto-grouped into topic clusters, with CSV export."
+          to={id ? `/clients/${id}/keyword-research` : undefined}
+          cta="Research"
+        />
+        <ActionCard
           icon={<Radar size={22} />}
           label="Domain Intelligence"
           description="Point at any domain — a competitor, a prospect, the client's own site — and see its estimated organic traffic, authority, and every keyword it ranks for with volume, position & value. The SEMrush-style research view."
           to={id ? `/clients/${id}/domain-intel` : undefined}
           cta="Open"
         />
-        <ActionCard
-          icon={<ListChecks size={22} />}
-          label="Action Plan"
-          description="A prioritized reoptimization to-do list built from this client's rank signals — drops to fix, winnable quick wins & Search Console opportunities, each linked to the tool that does it."
-          to={id ? `/clients/${id}/action-plan` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<ClipboardList size={22} />}
-          label="Monthly Task Plan"
-          description="The Recipe Engine: budget + diagnosis → a costed, assigned month of work — baseline stack, Diagnose-and-Fund, capacity-capped content, every line with an owner."
-          to={id ? `/clients/${id}/task-plan` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<BookOpen size={22} />}
-          label="SOPs & Playbook"
-          description="This client's SOPs plus the agency-wide playbook & theories. Loaded SOPs ground the Action Plan's recommendations in your own methodology and voice."
-          to={id ? `/clients/${id}/sops` : undefined}
-          cta="Open"
-        />
       </Section>
 
-      {/* ── Project Management ──────────────────────────────────────── */}
-      <Section
-        title="Project Management"
-        subtitle="Plan and dispatch this client's delivery work."
-      >
-        <ActionCard
-          icon={<KanbanSquare size={22} />}
-          label="Tasks"
-          description="The task board — this client's delivery work as a Kanban/list with subtask checklists, statuses & assignees. This is where assigned and completed tasks live."
-          to={id ? `/clients/${id}/tasks` : undefined}
-          cta="Open"
-        />
-        <ActionCard
-          icon={<ClipboardList size={22} />}
-          label="Monthly Template"
-          description="Define the recurring tasks this client gets each month — name, assignee & category. The monthly job creates them on the Tasks board under a new month section, automatically or on demand. (Not a board — edit the template here; open Tasks to see the work.)"
-          to={id ? `/clients/${id}/asana-tasks` : undefined}
-          cta="Open"
-        />
-      </Section>
-
-      {/* ── Reporting ────────────────────────────────────────────────── */}
-      <Section
-        title="Reporting"
-        subtitle="Generate client-facing performance reports."
-      >
-        <ActionCard
-          icon={<FileBarChart size={22} />}
-          label="Client Reports"
-          description="Generate a PDF performance report — organic rankings, local-pack geo-grids & Google Business Profile. (Analytics, Asana & a campaign-health summary land in later phases.)"
-          to={id ? `/clients/${id}/reports` : undefined}
-          cta="Open"
-        />
-      </Section>
+      {/* ── Website Builder ─────────────────────────────────────────── */}
+      {websiteStatus?.enabled && (
+        <Section
+          title="Website Builder"
+          subtitle="Plan, generate and publish a full site for this client."
+        >
+          <ActionCard
+            icon={<Globe2 size={22} />}
+            label="Website Builder"
+            description="Plan, generate and publish a site for this client. Publishing commits a page into the site's own GitHub repo, which builds and deploys itself."
+            to={id ? `/clients/${id}/website` : undefined}
+            cta="Open"
+          />
+        </Section>
+      )}
 
     </div>
   )
@@ -489,13 +497,16 @@ function icpCopy(client?: Client): string {
     : 'AI-detected — review, edit, or replace it with your own.'
 }
 
-function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Section({ title, subtitle, panel, children }: { title: string; subtitle?: string; panel?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section style={{ marginBottom: 32 }}>
       <h2 style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', margin: '0 0 2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </h2>
       {subtitle && <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 14px' }}>{subtitle}</p>}
+      {/* Full-width panel rendered directly under the subtitle, above the card
+          grid (e.g. Weekly Pulse, Strategist Review). */}
+      {panel}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
         {children}
       </div>
