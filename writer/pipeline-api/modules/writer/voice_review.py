@@ -420,3 +420,121 @@ async def _default_judge(system: str, user: str, **kwargs):
     from modules.brief.llm import claude_json
 
     return await claude_json(system=system, user=user, **kwargs)
+
+
+# ── mid-page voice-drift localizer (mirrors nlp-api _localize_voice_drift) ─────
+# The service reopt REGENERATES sections against the scorer's deficiencies, but a
+# page-level "voice scored low" deficiency doesn't tell the writer WHERE the voice
+# drifts — and the characteristic failure (proven on the Local SEO path, PR #792)
+# is that the intro + FAQ hold the brand voice while the MID-PAGE service sections
+# slip into a flat, generic register. One cheap Haiku call audits each prior
+# section against the guide and names the ones that drift + on which dimensions, so
+# the corrective regeneration re-voices exactly those instead of sweeping blind.
+# Best-effort: a disabled / failed / empty audit returns "" and the reopt behaves
+# exactly as before.
+
+_DRIFT_SYSTEM = """You are a brand-voice auditor. You are given a client's BRAND VOICE & AUDIENCE guide and the body sections of a commercial service / location page, each shown as `[key] heading: <text>`.
+
+Judge EACH section against the guide and report ONLY the sections that DRIFT from it — where the register, sentence rhythm, word choice, tone, or distinctiveness no longer matches the guide. Typical drifts, and where they hide:
+- REGISTER: a flat, clipped, catalogue register (often a bare heading-then-bullet-list) instead of the guide's flowing paragraph prose. Mid-page service-description sections are the usual offenders.
+- RHYTHM: uniform sentence length/cadence that doesn't match the guide's pattern.
+- DISTINCTIVENESS: generic, swappable copy that could sit on a competitor's site by changing the business name — no proof, credential, or specific only this client can say.
+- TONE / VOCABULARY / PERSON: wording, formality, or grammatical person that departs from the guide.
+The intro and FAQ usually hold the voice; the MIDDLE service sections are where it slips — scrutinise those hardest. A section that already reads distinctly like this client in the guide's voice is NOT a drift — omit it.
+
+Return ONLY a JSON object: {"drift": [{"key": "<section key>", "dimensions": ["register"|"rhythm"|"distinctiveness"|"tone"|"vocabulary"|"person", ...], "note": "<one concrete phrase naming what drifts>"}, ...]}. Report at most the 6 worst-drifting sections, worst first. Do NOT report sections that are fine. No markdown fences, no commentary."""
+
+# Cap on how much of a section's body reaches the audit — enough to judge register
+# + rhythm without paying for the whole page.
+_DRIFT_SECTION_CHARS = 1400
+
+
+def section_digest(sections: list[dict], max_inner_chars: int = _DRIFT_SECTION_CHARS) -> str:
+    """Render `[{key, heading, text}]` sections into the `[key] heading: <text>`
+    digest the drift audit reads. Pure. Section bodies are truncated so a long page
+    stays a cheap single call."""
+    parts: list[str] = []
+    for s in sections or []:
+        if not isinstance(s, dict):
+            continue
+        key = str(s.get("key") or "").strip()
+        if not key:
+            continue
+        heading = str(s.get("heading") or "").strip()
+        text = str(s.get("text") or "").strip()
+        if len(text) > max_inner_chars:
+            text = text[:max_inner_chars] + "…"
+        parts.append(f"[{key}] {heading}: {text}")
+    return "\n\n".join(parts)
+
+
+def build_drift_block(drift_map: Any, section_keys) -> str:
+    """Render a per-section voice-drift audit into a targeted corrective prompt
+    block. Pure: filters to keys that actually exist on the page, dedupes, and caps
+    at 6. Returns "" when nothing is usable — the caller then relies on the reopt's
+    existing voice deficiencies alone (never worse than prior behaviour). Accepts
+    either the parsed ``{"drift": [...]}`` object or a bare list, so a model that
+    drops the wrapper still works. Mirrors nlp-api ``_build_drift_block``."""
+    items = drift_map.get("drift") if isinstance(drift_map, dict) else drift_map
+    if not isinstance(items, list):
+        return ""
+    keys = set(section_keys or [])
+    lines: list[str] = []
+    seen: set = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("key") or "").strip()
+        if not key or key not in keys or key in seen:
+            continue
+        seen.add(key)
+        dims = item.get("dimensions")
+        dims_txt = (
+            ", ".join(d for d in dims if isinstance(d, str) and d.strip())
+            if isinstance(dims, list) else ""
+        )
+        note = str(item.get("note") or "").strip()
+        detail = " — ".join(p for p in (dims_txt, note) if p)
+        lines.append(f"  [{key}]{(' — ' + detail) if detail else ''}")
+        if len(lines) >= 6:
+            break
+    if not lines:
+        return ""
+    return (
+        "SECTIONS THAT DRIFT FROM THE BRAND VOICE (a per-section audit of the prior "
+        "draft — re-voice THESE sections HARDEST, in addition to fixing any deficiency "
+        "above: rewrite each so it reads distinctly like this client in the guide's "
+        "register and rhythm):\n" + "\n".join(lines) + "\n"
+    )
+
+
+async def localize_voice_drift(
+    sections: list[dict],
+    brand_card: Optional[BrandVoiceCard],
+    *,
+    judge_fn: Optional[JudgeFn] = None,
+    model: Optional[str] = None,
+) -> str:
+    """Best-effort per-section voice-drift audit (one cheap Haiku call). Returns a
+    "SECTIONS THAT DRIFT" prompt block naming the sections that drift from the
+    guide, or "" when the audit is disabled/unavailable/finds nothing or the client
+    has no guide. `sections` is `[{key, heading, text}]`. Never raises — a failure
+    leaves the corrective pass to sweep on its own (prior behaviour)."""
+    card = card_to_dict(brand_card)
+    if vcard.is_card_empty(card) or not sections:
+        return ""
+    fn = judge_fn or _default_judge
+    user = (
+        vcard.render_voice_card_block(card)
+        + "\n\nPAGE SECTIONS:\n\n"
+        + section_digest(sections)
+    )
+    try:
+        drift_map = await fn(_DRIFT_SYSTEM, user, model=model, max_tokens=1400, temperature=0)
+    except Exception as exc:
+        logger.warning(
+            "writer.voice_review.localize_failed",
+            extra={"error_type": type(exc).__name__, "error": str(exc)[:300]},
+        )
+        return ""
+    return build_drift_block(drift_map, {s.get("key") for s in sections if isinstance(s, dict)})
