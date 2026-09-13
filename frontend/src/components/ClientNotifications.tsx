@@ -59,11 +59,11 @@ export function ClientNotifications({ clientId }: { clientId: string }) {
     [visible],
   )
 
-  // Explicit per-group toggles; the default (below) applies until a user
-  // overrides it, and the default is re-derived from live data each render.
+  // Every group is collapsed by default; a user toggle overrides it. The header
+  // still shows each group's unread count, so new alerts are visible without
+  // expanding.
   const [override, setOverride] = useState<Partial<Record<Severity, boolean>>>({})
-  const isExpanded = (sev: Severity, hasUnread: boolean) =>
-    override[sev] ?? (sev === 'critical' || hasUnread)
+  const isExpanded = (sev: Severity) => override[sev] ?? false
   const toggleGroup = (sev: Severity, currentlyExpanded: boolean) =>
     setOverride(prev => ({ ...prev, [sev]: !currentlyExpanded }))
 
@@ -120,7 +120,7 @@ export function ClientNotifications({ clientId }: { clientId: string }) {
         {groups.map(g => {
           const c = sev(g.sev)
           const groupUnread = g.items.filter(n => n.status === 'unread').length
-          const expanded = isExpanded(g.sev, groupUnread > 0)
+          const expanded = isExpanded(g.sev)
           return (
             <div key={g.sev} style={{ border: '1px solid #e2e8f0', borderRadius: 8, overflow: 'hidden' }}>
               <button
