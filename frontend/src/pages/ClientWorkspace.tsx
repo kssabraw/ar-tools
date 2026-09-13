@@ -146,11 +146,10 @@ export function ClientWorkspace() {
       </Section>
 
       {/* ── Reporting ────────────────────────────────────────────────── */}
-      {/* Weekly Pulse — the copy-paste client update staff deliver by hand. */}
-      {id && <WeeklyPulse clientId={id} />}
       <Section
         title="Reporting"
         subtitle="Client-facing reports plus the live rank & visibility trackers behind them."
+        panel={id ? <WeeklyPulse clientId={id} /> : undefined}
       >
         <ActionCard
           icon={<FileBarChart size={22} />}
@@ -384,14 +383,18 @@ export function ClientWorkspace() {
 
       {/* ── SEO Strategist ──────────────────────────────────────────── */}
       {/* SerMaStr's strategist review + the intervention-outcome loop render as
-          their own full-width panels directly above the strategist cards; both
-          render nothing until there's something to show, so quiet clients stay
-          clean. */}
-      {id && <StrategistReview clientId={id} />}
-      {id && <InterventionOutcomes clientId={id} />}
+          their own full-width panels directly under the section subtitle, above
+          the strategist cards; both render nothing until there's something to
+          show, so quiet clients stay clean. */}
       <Section
         title="SEO Strategist"
         subtitle="The strategy layer — priorities, competitors, links & research."
+        panel={id ? (
+          <>
+            <StrategistReview clientId={id} />
+            <InterventionOutcomes clientId={id} />
+          </>
+        ) : undefined}
       >
         <ActionCard
           icon={<ListChecks size={22} />}
@@ -494,13 +497,16 @@ function icpCopy(client?: Client): string {
     : 'AI-detected — review, edit, or replace it with your own.'
 }
 
-function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
+function Section({ title, subtitle, panel, children }: { title: string; subtitle?: string; panel?: React.ReactNode; children: React.ReactNode }) {
   return (
     <section style={{ marginBottom: 32 }}>
       <h2 style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', margin: '0 0 2px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
         {title}
       </h2>
       {subtitle && <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 14px' }}>{subtitle}</p>}
+      {/* Full-width panel rendered directly under the subtitle, above the card
+          grid (e.g. Weekly Pulse, Strategist Review). */}
+      {panel}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 16 }}>
         {children}
       </div>
