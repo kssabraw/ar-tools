@@ -163,6 +163,28 @@ All four tiers ship. What's left is measurement, not engineering:
 
 ---
 
+## Next chat's job — live verification + calibration (NO more tiers to build)
+
+**The four-tier build is DONE and merged.** There is no Phase 5 and no new tier. The next session is a **verification + calibration pass**, not a feature build — most of it runs against the live Supabase/Railway stack, which the sandbox cannot reach (census.gov + the private `nlp`/worker are egress-blocked here). Treat "the code is correct" as already established (5824 platform-api tests green); the open question is "does it behave well on real data".
+
+**1. Verify the live TIGERweb CDP query (the one genuinely unproven piece).**
+- Pick a **US client** with `business_location` set + a verified `GOOGLE_MAPS_API_KEY` on PLATFORM (the same key the geo-grid/leadoff use). Non-US or no-maps-key clients degrade the CDP axis by design — not a valid test.
+- Run a **Tier 3** audit from the `/coverage-audit` page (or `POST /clients/{id}/coverage-audit {tier:3}`), poll the job, then GET the run.
+- **Confirm:** `provenance.location_axis` is `kind:"cdp"` with non-empty `states`/`counties` + a `candidates`/`verified` count, `location_axis` has real CDP names, and `census_cdp_cache` has one row per resolved state (Supabase MCP). If the axis is empty with a degraded note, read the worker's `census_cdp.*` logs — the usual suspects are `pick_cdp_layer` mis-selecting the TIGERweb layer or the `where=STATE='SS'` query shape. Fix on the worker, not by guessing in the sandbox.
+- Then run a **Tier 4** audit on the same client and confirm the subservice × CDP cells populate + the missing-locations table is correctly absent.
+
+**2. Calibrate the four placeholders from that first real run (all `config.py` env-tunable — change the env on PLATFORM, don't blind-edit defaults):**
+- `coverage_cdp_max` (60) — is the CDP axis a sensible size, or does it need a tighter/looser cap for the client's footprint?
+- `coverage_cell_volume_min` (10) — the demand floor, **matters most at Tier 4**. Look at how many CDP × subservice cells survive vs. get floored; tune so the report surfaces real opportunities without the zero-volume tail.
+- `coverage_audit_daily_call_budget` (200) — measure the actual paid DataForSEO calls a full 4-tier sweep of one client spends (only the demand fetch is metered; CDP resolution is free), then set the ceiling from reality.
+- `coverage_cdp_cache_days` (365) — fine as-is unless TIGER vintage churn suggests otherwise.
+
+**3. Decide refresh cadence (owner call).** Still on-demand only. If a scheduled monthly re-audit is wanted, that IS a small new build (a `gsc_scheduler` hook enqueuing per-tier `coverage_audit` jobs, self-gated + due-checked — mirror `enqueue_due_domain_intel`). Ask the owner before building it.
+
+**What NOT to do:** don't add a Phase 5 tier (there are only four), don't touch the axes-only seed contract / per-tier job decomposition / reserve-before-spend / the demand floor mechanism, and don't recalibrate a default without a live number behind it.
+
+---
+
 ## Open items (plan §7)
 
 - Module name (kept "Coverage Audit").
