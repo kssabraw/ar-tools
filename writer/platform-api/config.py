@@ -2926,6 +2926,14 @@ class Settings(BaseSettings):
     # (which geocode as `neighborhood`) are excluded — this only ADDS real nearby
     # localities. Comma list; coverage-audit-scoped (does not affect Local SEO).
     coverage_nearby_place_types: str = "city,town,suburb,neighbourhood,village"
+    # Cap on the Tier-1/2 CITY location axis (the city analogue of coverage_cdp_max
+    # for the CDP tiers). A coverage audit wants completeness within the chosen
+    # radius, and the 5/10-mile bound already limits how many localities exist, so
+    # this defaults to 0 = UNCAPPED (owner ruling 2026-09-14: "remove the cap").
+    # This is coverage-audit-scoped ONLY — the shared Local SEO silo/matrix planner
+    # keeps its own `local_seo_max_target_cities` ceiling, untouched. Set a positive
+    # value here to re-impose a ceiling on the audit's city axis.
+    coverage_max_target_cities: int = 0
     # Neighborhood decision gate (plan §0.4, Phase 5). Stage 1: drop a candidate
     # neighborhood below this "[main service] [neighborhood]" search volume before
     # spending a live SERP on it.

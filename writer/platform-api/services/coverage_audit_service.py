@@ -579,6 +579,7 @@ async def _resolve_location_axis(
             cities, city_notes = await target_cities.resolve_target_cities(
                 client, seed_location, location_code, get_supabase(),
                 center=center, radius_km=radius_km, place_types=place_types,
+                max_cities=settings.coverage_max_target_cities,
             )
             notes.extend(city_notes)
             for c in cities:
