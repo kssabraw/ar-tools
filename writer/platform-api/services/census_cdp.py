@@ -37,18 +37,22 @@ The three steps (plan §3.2):
       set is static, so it's cached in `census_cdp_cache` keyed by state FIPS and
       SHARED across every client in that state), enumerate the Census Designated
       Places with their centroids. Pre-filter to the service-area footprint bbox
-      (pure, free) so only CDPs near the client survive to the paid-ish
-      verification.
+      (pure, free) so only CDPs near the client survive to verification.
 
-  (c) **geocode-verify containment.** Forward-geocode each surviving CDP
-      (`maps_geocode.forward_geocode_places`, cached in `geocode_forward_cache`) and
-      keep it only when it falls inside a resolved footprint city
-      (`maps_geocode.place_is_within_city` against any footprint city — the exact
-      neighborhood-verification pattern).
+  (c) **verify containment against the footprint.** Each surviving CDP's
+      AUTHORITATIVE Census centroid (from step b) is checked against the footprint
+      cities with `maps_geocode.place_is_within_city` — kept only when it falls
+      inside a resolved footprint city. We do NOT forward-geocode the CDP name: the
+      centroid is exact, and geocoding "<CDP>, <seed_state>" would mislocate a CDP in
+      a DIFFERENT state of a multi-state footprint (e.g. Kansas City straddles
+      MO/KS) and re-introduce Google name ambiguity — so the centroid check is both
+      more correct and free.
 
 **No paid DataForSEO calls** happen in CDP resolution — it's all keyless census +
-Google-geocode (both cached) — so the `coverage_audit_usage` meter is untouched by
-the location axis. Best-effort throughout: no key / dead source / no counties
+one cached Google forward-geocode for the seed/footprint cities (the CDPs
+themselves are verified by centroid, no per-CDP geocode) — so the
+`coverage_audit_usage` meter is untouched by the location axis. Best-effort
+throughout: no key / dead source / no counties
 resolved → the CDP tier degrades with a visible note, never aborts (mirrors the
 `resolve_target_cities` geocoding-unavailable pattern). Idempotent — a reaper
 requeue finds every cache warm and re-bills nothing.
@@ -373,9 +377,15 @@ async def _fetch_state_cdps(client, state_fips: str, layer_id: int) -> list[dict
             break
         feats, exceeded = parse_cdp_features(data)
         out.extend(feats)
-        if not exceeded or not feats:
+        # Advance by the number of rows the SERVER returned, not the parsed count:
+        # a page can drop rows (no name/centroid), and stepping resultOffset by the
+        # smaller parsed count would re-request the dropped tail on the next page
+        # (deduped downstream, but wasted calls). `raw_count` also gates the loop, so
+        # a page of all-unparseable rows still makes progress rather than breaking early.
+        raw_count = len(data.get("features") or [])
+        if not exceeded or not raw_count:
             break
-        offset += len(feats)
+        offset += raw_count
     return out
 
 
@@ -493,7 +503,7 @@ async def resolve_cdp_axis(
 
     from services import leadoff_counties
 
-    candidates: dict[str, dict] = {}
+    candidates: list[dict] = []
     try:
         async with httpx.AsyncClient(follow_redirects=True) as hc:
             county_results: list[tuple[str, str]] = []
@@ -526,15 +536,27 @@ async def resolve_cdp_axis(
                         prov["notes"].append("Census CDP layer unavailable — CDP tier degraded.")
                         continue
                     st_cdps = await _fetch_state_cdps(hc, st, layer_id)
-                    _write_state_cdps(supabase, st, st_cdps)
+                    # NEVER cache an empty enumeration: every US state has CDPs, so
+                    # [] means a transient TIGERweb failure, not truth. Caching it
+                    # fresh would serve zero CDPs for coverage_cdp_cache_days (365) to
+                    # EVERY client in the state until the row goes stale. Mirrors
+                    # census_demand.py's `if rows:` upsert guard.
+                    if st_cdps:
+                        _write_state_cdps(supabase, st, st_cdps)
+                    else:
+                        prov["notes"].append(
+                            f"Census returned no CDPs for state {st} (likely a transient "
+                            "TIGERweb failure) — not cached; a retry will re-fetch."
+                        )
                 for cdp in st_cdps:
                     lat, lng = cdp.get("lat"), cdp.get("lng")
                     name = (cdp.get("name") or "").strip()
-                    if not name or not point_in_bbox(lat, lng, bbox):
-                        continue
-                    key = name.lower()
-                    if key not in candidates:
-                        candidates[key] = {"name": name, "lat": lat, "lng": lng}
+                    # Keep every in-bbox CDP (no dedup here): a same-named CDP can
+                    # exist in two footprint states, and only one may be inside the
+                    # footprint — containment decides per-centroid, name-dedup is at
+                    # the end.
+                    if name and point_in_bbox(lat, lng, bbox):
+                        candidates.append({"name": name, "lat": lat, "lng": lng})
     except Exception as exc:  # noqa: BLE001 — census/TIGERweb is best-effort
         logger.warning("census_cdp.enumeration_failed", extra={"error": str(exc)})
         prov["notes"].append("CDP enumeration failed — tier degraded.")
@@ -545,26 +567,36 @@ async def resolve_cdp_axis(
         prov["notes"].append("No CDPs found within the service-area footprint.")
         return [], prov, city_names
 
-    # 3) Geocode-verify containment (reuse forward_geocode + place_is_within_city).
-    queries = {
-        key: _area_query(cand["name"], seed_state, seed_country)
-        for key, cand in candidates.items()
-    }
-    try:
-        cdp_geo = await maps_geocode.forward_geocode_places(list(queries.values()), supabase=supabase)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("census_cdp.verify_geocode_failed", extra={"error": str(exc)})
-        prov["notes"].append("CDP containment verification failed — tier degraded.")
-        return [], prov, city_names
-
+    # 3) Verify containment using each CDP's AUTHORITATIVE Census centroid against
+    #    the footprint (reuse place_is_within_city). We deliberately do NOT
+    #    forward-geocode the CDP name here: geocoding "<CDP>, <seed_state>" mislocates
+    #    a CDP that sits in a DIFFERENT state of a multi-state footprint (e.g. Kansas
+    #    City straddles MO/KS — a KS CDP queried as "…, Missouri" resolves wrong or
+    #    not at all and gets dropped), and it re-introduces Google name ambiguity for
+    #    common CDP names. The TIGERweb centroid is exact, so a synthetic locality
+    #    candidate built from it feeds the same bounds/radius check with no extra
+    #    paid geocode and no state-string coupling. Name-dedup is applied here (via
+    #    `seen`) so a CDP kept in two states counts once.
     verified: list[str] = []
-    for key, cand in candidates.items():
-        g = cdp_geo.get(queries[key]) or {}
-        if any(maps_geocode.place_is_within_city(g, fc) for fc in footprint_geos):
+    seen: set[str] = set()
+    for cand in candidates:
+        key = cand["name"].lower()
+        if key in seen:
+            continue
+        synthetic = {
+            "matched": True,
+            "place_id": None,
+            "result_types": ["locality"],
+            "lat": cand["lat"],
+            "lng": cand["lng"],
+        }
+        if any(maps_geocode.place_is_within_city(synthetic, fc) for fc in footprint_geos):
+            seen.add(key)
             verified.append(cand["name"])
 
     axis = assemble_cdp_axis(verified, settings.coverage_cdp_max)
-    prov["verified"] = len(axis)
+    prov["verified"] = len(verified)  # distinct CDPs passing containment (pre-cap)
+    prov["axis_size"] = len(axis)     # what the tier actually uses (post-cap)
     if not axis:
         prov["notes"].append("No CDPs verified within the service-area footprint.")
     elif settings.coverage_cdp_max and len(verified) > settings.coverage_cdp_max:

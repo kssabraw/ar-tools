@@ -269,6 +269,30 @@ def test_derive_subservice_axis_one_service_failing_is_skipped(monkeypatch):
     assert any("could not expand" in n.lower() for n in prov["notes"])
 
 
+def test_derive_subservice_axis_empty_yield_service_is_recorded(monkeypatch):
+    """A service whose planner SUCCEEDS but produces no composable subservice is
+    recorded in `empty_services` (not silently dropped) so the review screen can
+    explain the omission."""
+    monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
+    monkeypatch.setattr(svc.icp_service, "resolve_icp_text", lambda client: "")
+
+    def _gen(service, city, llm, icp_block=""):
+        # "Barren Service" returns no silos → service_labels_from_pages yields nothing.
+        if service == "Barren Service":
+            return []
+        return [{"silo": "Core", "pages": [{"keyword": f"{service} {city}", "supporting_keywords": []}]}]
+
+    monkeypatch.setattr(svc.local_seo_silo, "_generate_service_pages", _gen)
+
+    main_axis = [{"label": "Roofing"}, {"label": "Barren Service"}]
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, main_axis, "Melbourne"))
+    assert [e["label"] for e in axis] == ["Roofing"]
+    assert prov["planned_services"] == ["Roofing"]
+    assert prov["failed_services"] == []            # it didn't error…
+    assert prov["empty_services"] == ["Barren Service"]  # …it just produced nothing
+    assert any("no distinct subservices" in n.lower() for n in prov["notes"])
+
+
 def test_derive_subservice_axis_icp_failure_is_non_fatal(monkeypatch):
     monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
 
@@ -537,6 +561,164 @@ def test_run_tier_4_override_axis_is_confirmed_subservice(monkeypatch):
     # Override tier 4 still drops the location-hub rows.
     assert row["provenance"]["location_rows_shown"] is False
     assert row["gaps"]["missing_locations"] == []
+
+
+# --- run_coverage_audit_tier (Tier 1 — planner offloaded off the event loop) ---
+def test_run_tier_1_offloads_service_axis_planner_off_the_loop(monkeypatch):
+    """The blocking service-axis planner must run in a worker thread (via
+    asyncio.to_thread), never on the shared event loop the API + job lanes run on.
+    We record the thread `_derive_service_axis` executes on and assert it is NOT
+    the event-loop's main thread."""
+    import threading
+
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme", "business_location": "Melbourne,Victoria,Australia",
+                     "gbp": {"website": "https://acme.example"}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2036)
+
+    async def _fake_loc(client, seed_location, code):
+        return [{"name": "Melbourne", "source": "seed"}], {"seed_city": "Melbourne", "notes": []}
+
+    monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
+
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
+        return (["https://acme.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+
+    ran_on: dict = {}
+    main_ident = threading.get_ident()
+
+    def _derive(client, classified, place_vocab):
+        ran_on["ident"] = threading.get_ident()
+        return [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
+
+    monkeypatch.setattr(svc, "_derive_service_axis", _derive)
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 1))
+    assert result["status"] == "complete"
+    # The planner ran, and on a DIFFERENT thread than the event loop → not blocking it.
+    assert "ident" in ran_on
+    assert ran_on["ident"] != main_ident
+
+
+# --- enqueue_coverage_audit (in-flight dedup) ---------------------------------
+class _EnqueueFake:
+    """A Supabase stub for enqueue_coverage_audit: returns a controlled in-flight
+    async_jobs list for the dedup read, and records/answers the two inserts."""
+
+    def __init__(self, inflight):
+        self._inflight = inflight
+        self.audit_inserts = 0
+        self.job_inserts = 0
+
+    def table(self, name):
+        return _EnqueueQuery(self, name)
+
+
+class _EnqueueQuery:
+    def __init__(self, fake, table):
+        self._fake = fake
+        self._table = table
+        self._mode = "select"
+
+    def select(self, *a, **k):
+        self._mode = "select"
+        return self
+
+    def insert(self, row):
+        self._mode = "insert"
+        if self._table == "coverage_audits":
+            self._fake.audit_inserts += 1
+        elif self._table == "async_jobs":
+            self._fake.job_inserts += 1
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def execute(self):
+        class _R:
+            pass
+
+        r = _R()
+        if self._mode == "insert" and self._table == "coverage_audits":
+            r.data = [{"id": "new-audit"}]
+        elif self._mode == "insert" and self._table == "async_jobs":
+            r.data = [{"id": "new-job"}]
+        else:  # the dedup select on async_jobs
+            r.data = self._fake._inflight
+        return r
+
+
+def test_enqueue_dedups_inflight_auto_run(monkeypatch):
+    """A fresh auto-run (service_axis=None) reuses an in-flight coverage_audit job
+    for the same (client, tier) with no edited axis — no second row/job is created."""
+    fake = _EnqueueFake(
+        inflight=[{"id": "job-A", "payload": {"tier": 1, "audit_id": "audit-A", "service_axis": None}}]
+    )
+    monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1")
+    assert (audit_id, job_id) == ("audit-A", "job-A")
+    assert fake.audit_inserts == 0 and fake.job_inserts == 0
+
+
+def test_enqueue_dedup_ignores_other_tier_and_override(monkeypatch):
+    """The in-flight job is a different tier AND an edited-axis run — neither
+    matches, so a fresh run is created."""
+    fake = _EnqueueFake(
+        inflight=[
+            {"id": "job-T2", "payload": {"tier": 2, "audit_id": "audit-T2", "service_axis": None}},
+            {"id": "job-edit", "payload": {"tier": 1, "audit_id": "audit-edit", "service_axis": ["Roofing"]}},
+        ]
+    )
+    monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1")
+    assert (audit_id, job_id) == ("new-audit", "new-job")
+    assert fake.audit_inserts == 1 and fake.job_inserts == 1
+
+
+def test_enqueue_override_always_fresh(monkeypatch):
+    """An edited-axis re-run never dedups against an in-flight auto-run — the team
+    asked for a new axis, so a fresh run is always created."""
+    fake = _EnqueueFake(
+        inflight=[{"id": "job-A", "payload": {"tier": 1, "audit_id": "audit-A", "service_axis": None}}]
+    )
+    monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1", service_axis=["Roofing"])
+    assert (audit_id, job_id) == ("new-audit", "new-job")
+    assert fake.audit_inserts == 1 and fake.job_inserts == 1
+
+
+def test_enqueue_no_inflight_creates_new(monkeypatch):
+    fake = _EnqueueFake(inflight=[])
+    monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1")
+    assert (audit_id, job_id) == ("new-audit", "new-job")
+    assert fake.audit_inserts == 1 and fake.job_inserts == 1
+
+
+def test_enqueue_unsupported_tier_rejected(monkeypatch):
+    monkeypatch.setattr(svc, "get_supabase", lambda: _EnqueueFake([]))
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    with _pytest.raises(HTTPException) as ei:
+        svc.enqueue_coverage_audit("client-1", 9, "user-1")
+    assert ei.value.status_code == 400
 
 
 if __name__ == "__main__":  # pragma: no cover

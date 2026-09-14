@@ -338,6 +338,7 @@ async def _derive_subservice_axis(
         "representative_city": representative_city,
         "planned_services": [],
         "failed_services": [],
+        "empty_services": [],  # planner returned, but no composable subservice came out
         "notes": [],
         "confirmed": False,
     }
@@ -358,6 +359,11 @@ async def _derive_subservice_axis(
     except Exception as exc:  # noqa: BLE001 — ICP grounding is non-critical
         logger.warning("coverage_audit.icp_fetch_failed", extra={"error": str(exc)})
 
+    # One planner call per main service. These are best-effort Anthropic calls — NOT
+    # metered through `coverage_audit_usage` and NOT cached, so unlike the demand
+    # batch a reaper requeue of this tier re-runs them (cheap: one call per service,
+    # far under the 30-min reaper window; only the DataForSEO demand step is the
+    # metered/idempotent one the reserve-before-spend guard protects).
     per_service_labels: list[dict] = []
     for service in main_services:
         try:
@@ -375,6 +381,11 @@ async def _derive_subservice_axis(
         if labels:
             per_service_labels.append({"service": service, "labels": labels})
             prov["planned_services"].append(service)
+        else:
+            # Planner succeeded but produced nothing composable (e.g. every page
+            # keyword was blank / stripped away) — record it so the review screen can
+            # explain the omission rather than the service silently vanishing.
+            prov["empty_services"].append(service)
 
     axis = core.merge_subservice_axis(per_service_labels)
     if not axis:
@@ -382,6 +393,10 @@ async def _derive_subservice_axis(
     if prov["failed_services"]:
         prov["notes"].append(
             f"Could not expand {len(prov['failed_services'])} service(s) into subservices."
+        )
+    if prov["empty_services"]:
+        prov["notes"].append(
+            f"{len(prov['empty_services'])} service(s) yielded no distinct subservices."
         )
     return axis, prov
 
@@ -583,9 +598,17 @@ async def run_coverage_audit_tier(
             "notes": ["Service axis edited and confirmed by the team."],
         }
     elif tier in (1, 3):
-        service_axis, svc_prov = _derive_service_axis(client, classified, place_vocab)
+        # `_derive_service_axis` runs the planner LLM (`_plan_service_axis` →
+        # `llm.call_tool`), a blocking multi-second call — offload it so it never
+        # stalls the shared event loop the API + every job lane run on (the same
+        # reason `_derive_subservice_axis` threads `_generate_service_pages`).
+        service_axis, svc_prov = await asyncio.to_thread(
+            _derive_service_axis, client, classified, place_vocab
+        )
     else:  # tiers 2/4 — expand main services into a city-agnostic subservice axis
-        main_axis, main_prov = _derive_service_axis(client, classified, place_vocab)
+        main_axis, main_prov = await asyncio.to_thread(
+            _derive_service_axis, client, classified, place_vocab
+        )
         sub_axis, sub_prov = await _derive_subservice_axis(client, main_axis, seed_city)
         combined_notes = list(main_prov.get("notes") or []) + list(sub_prov.get("notes") or [])
         if sub_axis:
@@ -598,6 +621,7 @@ async def run_coverage_audit_tier(
                 "main_services": sub_prov.get("main_services", []),
                 "planned_services": sub_prov.get("planned_services", []),
                 "failed_services": sub_prov.get("failed_services", []),
+                "empty_services": sub_prov.get("empty_services", []),
                 "representative_city": seed_city,
             }
         else:
@@ -770,6 +794,25 @@ def enqueue_coverage_audit(
         raise HTTPException(status_code=400, detail="coverage_audit_tier_unsupported")
     clean_sitemap = (sitemap_url or "").strip() or None
     supabase = get_supabase()
+    # Dedup a fresh auto-run: if an audit for this (client, tier) is already
+    # pending/running with no edited axis, reuse it instead of stacking a second
+    # paid run (a double-click, a client retry, or a second tab). An edited re-run
+    # (`service_axis` supplied) always starts fresh — the team asked for a new axis.
+    if service_axis is None:
+        inflight = (
+            supabase.table("async_jobs")
+            .select("id, payload")
+            .eq("job_type", "coverage_audit")
+            .eq("entity_id", client_id)
+            .in_("status", ["pending", "running"])
+            .execute()
+            .data
+            or []
+        )
+        for row in inflight:
+            p = row.get("payload") or {}
+            if int(p.get("tier") or 0) == tier and p.get("service_axis") is None and p.get("audit_id"):
+                return p["audit_id"], row["id"]
     audit = (
         supabase.table("coverage_audits")
         .insert({"client_id": client_id, "status": "pending", "tier": tier, "sitemap_url": clean_sitemap})

@@ -223,10 +223,12 @@ def _install_happy_path(monkeypatch, *, county=("Hudson County", "34017"), state
     monkeypatch.setattr(maps_geocode, "forward_geocode_places", _fake_forward)
     monkeypatch.setattr(target_cities, "resolve_target_cities", _fake_targets)
     monkeypatch.setattr(leadoff_counties, "_county_for_coord", _fake_county)
-    # place_is_within_city: a geocoded candidate (cdppid) is inside the footprint.
+    # Verification is now centroid-based (the synthetic candidate carries the CDP's
+    # Census centroid; place_id is None). A centroid near the footprint (lat ~40) is
+    # inside; FarAway (lat 10) is bbox-filtered before verification anyway.
     monkeypatch.setattr(
         maps_geocode, "place_is_within_city",
-        lambda cand, city: str(cand.get("place_id") or "").startswith("cdppid"),
+        lambda cand, city: 39.0 < (cand.get("lat") or 0.0) < 41.0,
     )
     # Cache warm → no TIGERweb network. Harrison is in the footprint bbox; FarAway isn't.
     default = [
@@ -319,9 +321,11 @@ def test_resolve_cdp_axis_adopts_geocode_city_for_street_address(monkeypatch):
     monkeypatch.setattr(maps_geocode, "forward_geocode_places", _fake_forward)
     monkeypatch.setattr(target_cities, "resolve_target_cities", _fake_targets)
     monkeypatch.setattr(leadoff_counties, "_county_for_coord", _fake_county)
+    # Centroid-based verification (place_id None): Plantation's centroid (lat ~40) is
+    # inside the city footprint.
     monkeypatch.setattr(
         maps_geocode, "place_is_within_city",
-        lambda cand, city: str(cand.get("place_id") or "").startswith("cdppid"),
+        lambda cand, city: 39.0 < (cand.get("lat") or 0.0) < 41.0,
     )
     monkeypatch.setattr(
         cdp, "state_cdps_cached",
@@ -339,8 +343,118 @@ def test_resolve_cdp_axis_adopts_geocode_city_for_street_address(monkeypatch):
     # The CDP verified against the city footprint (would have been 0 vs the rooftop box).
     assert [a["name"] for a in axis] == ["Plantation"]
     assert prov["verified"] == 1
-    # The CDP verify query carries the clean state/country, not the suite/zip garbage.
-    assert "Plantation, Florida, United States" in seen["queries"]
+    # CDPs are verified by their authoritative Census centroid — NOT by a per-CDP
+    # forward-geocode — so no "<CDP>, <state>" query is ever issued (this is what
+    # keeps a multi-state footprint's non-seed-state CDPs from being mis-queried).
+    assert "Plantation, Florida, United States" not in seen["queries"]
+
+
+# ── regression: adversarial-review fixes ──────────────────────────────────────
+def test_resolve_cdp_axis_does_not_cache_empty_enumeration(monkeypatch):
+    """Finding #1: a transient TIGERweb failure ([]) must NOT be written to the
+    per-state cache — else every client in the state is served zero CDPs for
+    coverage_cdp_cache_days (365) until the row goes stale."""
+    _set_maps_key(monkeypatch)
+    _install_happy_path(monkeypatch)  # base mocks (forward-geocode / targets / county)
+    monkeypatch.setattr(cdp, "state_cdps_cached", lambda st, days: None)  # force the fetch path
+
+    async def _fake_layer(hc):
+        return 36
+
+    async def _empty_fetch(hc, st, layer_id):
+        return []  # simulated transient TIGERweb failure
+
+    writes: list = []
+    monkeypatch.setattr(cdp, "_resolve_cdp_layer", _fake_layer)
+    monkeypatch.setattr(cdp, "_fetch_state_cdps", _empty_fetch)
+    monkeypatch.setattr(cdp, "_write_state_cdps", lambda sb, st, cdps: writes.append((st, cdps)))
+
+    axis, prov, city_names = asyncio.run(
+        cdp.resolve_cdp_axis({}, "Metropolis, New York, United States", 2840, object())
+    )
+    assert writes == []  # the empty enumeration is never cached
+    assert axis == []
+    assert any("not cached" in n.lower() for n in prov["notes"])
+
+
+def test_resolve_cdp_axis_verifies_cross_state_cdp(monkeypatch):
+    """Finding #2: a CDP in a NON-seed state of a multi-state footprint (Kansas City
+    straddles MO/KS) is verified by its authoritative centroid — never mis-queried
+    with the seed's state, which previously dropped it."""
+    from services import leadoff_counties, maps_geocode, target_cities
+
+    _set_maps_key(monkeypatch)
+
+    async def _fake_forward(queries, *, supabase=None):
+        # Only the seed is forward-geocoded now (CDPs verify by centroid).
+        return {
+            q: {
+                "matched": True, "place_id": "seedpid", "lat": 40.0, "lng": -74.0,
+                "bounds": {"ne_lat": 40.5, "ne_lng": -73.5, "sw_lat": 39.5, "sw_lng": -74.5},
+                "result_types": ["locality"],
+            }
+            for q in queries
+        }
+
+    async def _fake_targets(client, seed_location, code, sb):
+        return ([{"name": "Overland Park", "lat": 40.1, "lng": -74.1,
+                  "bounds": {"ne_lat": 40.3, "ne_lng": -73.9, "sw_lat": 39.9, "sw_lng": -74.3},
+                  "place_id": "opid"}], [])
+
+    async def _fake_county(client, lat, lng):
+        # seed centre → Missouri (29); the KS target centre → Kansas (20).
+        return ("Jackson County", "29095") if lat == 40.0 else ("Johnson County", "20091")
+
+    monkeypatch.setattr(maps_geocode, "forward_geocode_places", _fake_forward)
+    monkeypatch.setattr(target_cities, "resolve_target_cities", _fake_targets)
+    monkeypatch.setattr(leadoff_counties, "_county_for_coord", _fake_county)
+    monkeypatch.setattr(
+        maps_geocode, "place_is_within_city",
+        lambda cand, city: 39.0 < (cand.get("lat") or 0.0) < 41.0,
+    )
+
+    def _cache(st, days):
+        # The in-footprint CDP lives in KS (20); MO (29) has none in-footprint.
+        return [{"name": "Shawnee", "geoid": "2000123", "lat": 40.05, "lng": -74.05}] if st == "20" else []
+
+    monkeypatch.setattr(cdp, "state_cdps_cached", _cache)
+
+    axis, prov, city_names = asyncio.run(
+        cdp.resolve_cdp_axis({}, "Kansas City, Missouri, United States", 2840, object())
+    )
+    assert prov["states"] == ["20", "29"]  # both states resolved
+    assert [a["name"] for a in axis] == ["Shawnee"]  # the KS CDP verified despite seed=Missouri
+    assert prov["verified"] == 1
+
+
+def test_fetch_state_cdps_offset_advances_by_raw_count(monkeypatch):
+    """Finding #3: pagination advances resultOffset by the SERVER's returned row
+    count, not the parsed (post-filter) count, so dropped rows don't cause the tail
+    to be re-requested."""
+    calls: list = []
+    page1 = {
+        "features": [
+            {"attributes": {"NAME": "Alpha", "GEOID": "1", "CENTLAT": "+40.0", "CENTLON": "-74.0"}},
+            {"attributes": {"NAME": "NoCoord", "GEOID": "2"}},  # dropped by parse (no centroid)
+        ],
+        "exceededTransferLimit": True,
+    }
+    page2 = {
+        "features": [{"attributes": {"NAME": "Beta", "GEOID": "3", "CENTLAT": "+40.1", "CENTLON": "-74.1"}}],
+        "exceededTransferLimit": False,
+    }
+    pages = [page1, page2]
+
+    async def _fake_get_json(client, url, params):
+        calls.append(params["resultOffset"])
+        idx = len(calls) - 1
+        return pages[idx] if idx < len(pages) else {"features": [], "exceededTransferLimit": False}
+
+    monkeypatch.setattr(cdp, "_get_json", _fake_get_json)
+    out = asyncio.run(cdp._fetch_state_cdps(object(), "12", 36))
+    # page-2 offset is the RAW count of page 1 (2), NOT the parsed count (1).
+    assert calls == [0, 2]
+    assert [c["name"] for c in out] == ["Alpha", "Beta"]
 
 
 if __name__ == "__main__":  # pragma: no cover
