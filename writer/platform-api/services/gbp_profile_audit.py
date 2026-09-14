@@ -294,7 +294,7 @@ _FIELD_LABELS = {
     "open_status": "open/closed status", "open_info": "open/closed status",
     # Phase 3a / 3b editable fields.
     "labels": "labels", "special_hours": "special hours", "more_hours": "additional hours",
-    "service_area": "service area", "attributes": "attributes",
+    "service_area": "service area", "attributes": "attributes", "menu": "menu link",
 }
 
 
@@ -307,7 +307,7 @@ def _short(value: object, n: int = 60) -> str:
 def _value_preview(field: str, value: object) -> str:
     """A short, label-less preview of a single field value (the revert target)."""
     try:
-        if field in ("description", "website"):
+        if field in ("description", "website", "menu"):
             return f'"{_short(value, 50)}"' if value else "empty"
         if field == "labels":
             return _short(", ".join(map(str, value or [])), 60) if value else "none"
@@ -332,7 +332,7 @@ def describe_change(field: str, current: object, proposed: object) -> str:
     Pure + defensive (a shape it can't parse degrades to '<field> updated')."""
     label = _FIELD_LABELS.get(field, field or "profile")
     try:
-        if field in ("description", "website"):
+        if field in ("description", "website", "menu"):
             new = str(proposed or "").strip()
             old = str(current or "").strip()
             if not new:

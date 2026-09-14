@@ -737,6 +737,16 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Leave it blank to clear the website from the listing.',
     ],
   },
+  invalid_menu_url: {
+    title: 'That doesn’t look like a valid menu link',
+    meaning:
+      'The menu link needs a real web address (a scheme is added for you, ' +
+      'but it has to be an http/https URL with a domain).',
+    steps: [
+      'Enter the full URL of the menu or services page, e.g. https://www.example.com/menu.',
+      'Leave it blank to remove the menu link from the listing.',
+    ],
+  },
   too_many_labels: {
     title: 'Too many labels',
     meaning: 'Google allows at most 10 labels on a listing.',

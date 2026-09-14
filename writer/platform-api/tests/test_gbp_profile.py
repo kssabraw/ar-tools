@@ -1621,6 +1621,148 @@ def test_sync_attributes_resolves_applied(fake, monkeypatch):
     assert edit["status"] == "applied" and edit["next_sync_at"] is None
 
 
+# ── Pure: menu link (backed by the attributes/url_menu URL attribute) ─────────
+def test_build_menu_patch_adds_scheme_and_targets_url_menu():
+    body, mask = api.build_menu_patch("example.com/menu")
+    assert mask == "attributes/url_menu"
+    assert body["attributes"][0]["name"] == "attributes/url_menu"
+    assert body["attributes"][0]["valueType"] == "URL"
+    assert body["attributes"][0]["uriValues"] == [{"uri": "https://example.com/menu"}]
+    assert api.build_menu_patch("https://x.io/m")[0]["attributes"][0]["uriValues"] == [{"uri": "https://x.io/m"}]
+
+
+def test_build_menu_patch_clears_when_empty():
+    body, mask = api.build_menu_patch("  ")
+    assert mask == "attributes/url_menu"
+    # A cleared url_menu keeps the id in the mask with no URL value.
+    assert body["attributes"][0]["name"] == "attributes/url_menu"
+    assert body["attributes"][0]["uriValues"] == []
+
+
+def test_build_menu_patch_rejects_junk():
+    for bad in ("ftp://x.com/m", "not a url", "http://", "https://nodot"):
+        with pytest.raises(ValueError, match="invalid_menu_url"):
+            api.build_menu_patch(bad)
+
+
+def test_parse_menu():
+    attrs = [
+        {"attribute_id": "attributes/has_wifi", "value_type": "BOOL", "values": [True]},
+        {"attribute_id": "attributes/url_menu", "value_type": "URL", "urls": ["https://x.io/menu"]},
+    ]
+    assert api.parse_menu(attrs) == "https://x.io/menu"
+    assert api.parse_menu([]) == ""
+    assert api.parse_menu([{"attribute_id": "attributes/url_menu", "value_type": "URL", "urls": []}]) == ""
+
+
+def test_menu_changed_compares_only_url_menu():
+    live = [
+        {"attribute_id": "attributes/url_menu", "value_type": "URL", "urls": ["https://x.io/menu"]},
+        {"attribute_id": "attributes/has_wifi", "value_type": "BOOL", "values": [True]},
+    ]
+    # Snapshot matches the live url_menu → not changed, even though other attrs exist.
+    assert not api.menu_changed("https://x.io/menu", live)
+    assert api.menu_changed("https://x.io/OLD", live)
+    # A cleared snapshot vs a live menu is a change; matching empties are not.
+    assert api.menu_changed("", live)
+    assert not api.menu_changed("", [{"attribute_id": "attributes/url_menu", "value_type": "URL", "urls": []}])
+
+
+def test_classify_error_menu():
+    assert api.classify_profile_error(400, "", field="menu") == "invalid_menu_url"
+
+
+def test_menu_service_switch_points():
+    body, mask = svc._build_patch("menu", "example.com/menu")
+    assert mask == "attributes/url_menu" and body["attributes"][0]["name"] == "attributes/url_menu"
+    assert svc._is_attribute_backed("menu") and not svc._is_attributes("menu")
+    assert svc._proposed_from_request("menu", {"menu": "https://x.io/m"}) == "https://x.io/m"
+    # Clearing (empty string) is allowed; a missing key is rejected.
+    assert svc._proposed_from_request("menu", {"menu": ""}) == ""
+    with pytest.raises(HTTPException, match="menu_required"):
+        svc._proposed_from_request("menu", {})
+    # A bad URL surfaces as a 400 invalid_menu_url via the builder.
+    with pytest.raises(HTTPException) as ei:
+        svc._build_patch("menu", "ftp://x.com")
+    assert ei.value.status_code == 400 and "invalid_menu_url" in ei.value.detail
+
+
+# ── menu flow tests (rides the attributes endpoint, scoped to url_menu) ────────
+def _menu_res(url: str):
+    if not url:
+        return {"attributes": []}
+    return {"attributes": [{"name": "attributes/url_menu", "valueType": "URL", "uriValues": [{"uri": url}]}]}
+
+
+def _menu_edit(sb, **over):
+    row = dict(
+        id="e-1", client_id="c-1", location_row_id="loc-1", field="menu", source="manual",
+        current_value="https://old.example.com/menu",
+        proposed_value="https://new.example.com/menu",
+        status="applying", google_pending=False, sync_attempts=0, next_sync_at=None,
+    )
+    row.update(over)
+    sb.tables["gbp_profile_edits"].append(row)
+    return row
+
+
+def test_apply_menu_applied(fake, monkeypatch):
+    _menu_edit(fake, status="applying")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _menu_res("https://old.example.com/menu"))  # no drift
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: _menu_res("https://new.example.com/menu"))  # took
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    edit = fake.tables["gbp_profile_edits"][0]
+    assert edit["status"] == "applied" and edit.get("applied_at")
+
+
+def test_apply_menu_live_changed(fake, monkeypatch):
+    _menu_edit(fake, status="applying")
+    # url_menu changed out-of-band since the draft snapshot → abort.
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _menu_res("https://someone-else.example.com/menu"))
+    called = {"patched": False}
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: called.__setitem__("patched", True) or {})
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    assert fake.tables["gbp_profile_edits"][0]["status"] == "live_changed"
+    assert called["patched"] is False
+
+
+def test_apply_menu_clears(fake, monkeypatch):
+    _menu_edit(fake, status="applying", proposed_value="")  # clear the menu link
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _menu_res("https://old.example.com/menu"))  # no drift
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: _menu_res(""))  # cleared
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    assert fake.tables["gbp_profile_edits"][0]["status"] == "applied"
+
+
+def test_apply_menu_ignores_unrelated_attribute_drift(fake, monkeypatch):
+    # An UNRELATED attribute changing out-of-band must NOT abort a menu edit
+    # (menu_changed compares only url_menu, unlike attributes_diff).
+    _menu_edit(fake, status="applying")
+
+    def _get_attrs(*a, **k):
+        return {"attributes": [
+            {"name": "attributes/url_menu", "valueType": "URL", "uriValues": [{"uri": "https://old.example.com/menu"}]},
+            {"name": "attributes/has_wifi", "valueType": "BOOL", "values": [True]},
+        ]}
+    monkeypatch.setattr(svc.api, "get_attributes", _get_attrs)
+    monkeypatch.setattr(svc.api, "update_attributes", lambda *a, **k: _menu_res("https://new.example.com/menu"))
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_apply_job(job))
+    assert fake.tables["gbp_profile_edits"][0]["status"] == "applied"
+
+
+def test_sync_menu_resolves_applied(fake, monkeypatch):
+    _menu_edit(fake, status="pending_review", next_sync_at="2020-01-01T00:00:00+00:00")
+    monkeypatch.setattr(svc.api, "get_attributes", lambda *a, **k: _menu_res("https://new.example.com/menu"))  # matches proposed
+    job = {"id": "j1", "payload": {"edit_id": "e-1", "client_id": "c-1"}}
+    asyncio.run(svc.run_sync_job(job))
+    edit = fake.tables["gbp_profile_edits"][0]
+    assert edit["status"] == "applied" and edit["next_sync_at"] is None
+
+
 # ── Pure: AI secondary-categories draft (parse / match / merge+cap) ────────────
 def test_parse_category_names_dedup_and_order():
     raw = 'prose ["Roofing contractor", "Gutter cleaning service", "roofing contractor"] trail'

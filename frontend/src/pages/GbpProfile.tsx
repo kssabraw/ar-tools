@@ -5,6 +5,7 @@ import {
   ArrowLeft, Building2, Sparkles, Save, X, Trash2, RefreshCw, CheckCircle2,
   Clock, Plus, AlertTriangle, Info, Search, ShieldCheck, ShieldAlert,
   Globe, Tag, MapPin, CalendarDays, Power, LayoutGrid, Star, SlidersHorizontal,
+  Utensils,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob, type JobPoll } from '../lib/useResumableJob'
@@ -27,7 +28,7 @@ type EditStatus =
 type Field =
   | 'description' | 'hours' | 'services'
   | 'website' | 'labels' | 'special_hours' | 'more_hours' | 'service_area' | 'open_info'
-  | 'categories' | 'attributes'
+  | 'categories' | 'attributes' | 'menu'
 
 interface GbpLocationRow { id: string; location_id: string; title: string | null; access_status: string }
 interface HoursPeriod { open: string; close: string }
@@ -84,6 +85,7 @@ interface ProfileResponse {
   more_hours: MoreHoursEntry[]; service_area: ServiceAreaValue; open_info: OpenInfoValue | null
   categories_value: CategoriesValue
   attributes: AttributeValue[]; attributes_error?: string | null
+  menu: string
   edits: ProfileEdit[]
 }
 interface Job { job_id: string }
@@ -255,6 +257,7 @@ function ProfileEditor({ clientId, locationRowId, onChanged }: { clientId: strin
       <DescriptionCard clientId={clientId} locationRowId={locationRowId} current={p.description} edit={editFor('description')} onChanged={onChanged} />
       <CategoriesCard clientId={clientId} locationRowId={locationRowId} current={p.categories_value} edit={editFor('categories')} onChanged={onChanged} />
       <ServicesCard clientId={clientId} locationRowId={locationRowId} current={p.services} categories={p.categories} canModify={p.metadata.can_modify_service_list} edit={editFor('services')} onChanged={onChanged} />
+      <MenuLinkCard clientId={clientId} locationRowId={locationRowId} current={p.menu} currentError={p.attributes_error} edit={editFor('menu')} onChanged={onChanged} />
       <HoursCard clientId={clientId} locationRowId={locationRowId} current={p.hours} edit={editFor('hours')} onChanged={onChanged} />
       <SpecialHoursCard clientId={clientId} locationRowId={locationRowId} current={p.special_hours} edit={editFor('special_hours')} onChanged={onChanged} />
       <MoreHoursCard clientId={clientId} locationRowId={locationRowId} current={p.more_hours} edit={editFor('more_hours')} onChanged={onChanged} />
@@ -744,6 +747,57 @@ function WebsiteCard({ clientId, locationRowId, current, edit, onChanged }: {
       ) : (
         <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
           <button onClick={() => { setText(proposed ?? current ?? ''); setEditing(true) }} style={btn('#fff', '#334155')}><Globe size={13} /> Edit website</button>
+        </div>
+      )}
+    </Card>
+  )
+}
+
+// ── Menu link ───────────────────────────────────────────────────────────────
+// A first-class "Menu link" URL field backed by the attributes/url_menu attribute
+// (the same separate getAttributes/updateAttributes endpoint as attributes — a
+// menu link is a URL attribute, not a Location field). Google offers url_menu only
+// for categories that support a menu; if the listing's category doesn't, Apply
+// returns a `rejected` verdict (surfaced on the row) — never a silent bad write.
+function MenuLinkCard({ clientId, locationRowId, current, currentError, edit, onChanged }: {
+  clientId: string; locationRowId: string; current: string
+  currentError?: string | null; edit?: ProfileEdit; onChanged: () => void
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [text, setText] = useState('')
+  const { err, setErr } = useCardJobs(clientId, locationRowId, 'menu', onChanged)
+  const proposed = typeof edit?.proposed_value === 'string' ? edit.proposed_value : null
+  const refresh = () => qc.invalidateQueries({ queryKey: ['gbp-profile', clientId, locationRowId] })
+  const saveMut = useMutation({
+    mutationFn: () => edit && edit.status !== 'applied' && edit.status !== 'rejected'
+      ? api.patch(`/clients/${clientId}/gbp/profile/edits/${edit.id}`, { menu: text })
+      : api.post(`/clients/${clientId}/gbp/profile/edits`, { location_row_id: locationRowId, field: 'menu', menu: text }),
+    onSuccess: () => { setEditing(false); setErr(null); refresh() },
+    onError: (e: Error) => setErr(e.message),
+  })
+  return (
+    <Card title="Menu link" subtitle="A link to the business's menu or services page, shown on the listing as “Menu”. Leave blank to remove it. Not every category supports a menu link — Google will reject the edit if this one doesn't.">
+      {currentError ? (
+        <div style={{ fontSize: 12.5, color: '#b45309', display: 'flex', alignItems: 'center', gap: 6 }}>
+          <AlertTriangle size={13} /> Couldn't read the current menu link ({currentError}).
+        </div>
+      ) : (
+        <CurrentValue empty={!current}>{current || 'No menu link on the listing.'}</CurrentValue>
+      )}
+      {edit && <ProposedRow edit={edit} clientId={clientId} locationRowId={locationRowId} render={() => <span>{proposed || '(cleared)'}</span>} onChanged={onChanged} setErr={setErr} />}
+      {err && <ErrorDetails message={err} style={{ marginTop: 4 }} />}
+      {editing ? (
+        <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="https://www.example.com/menu" style={inputStyle} />
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={btn(ACCENT)}><Save size={13} /> Save draft</button>
+            <button onClick={() => setEditing(false)} style={btn('#fff', '#334155')}><X size={13} /> Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+          <button onClick={() => { setText(proposed ?? current ?? ''); setEditing(true) }} style={btn('#fff', '#334155')}><Utensils size={13} /> Edit menu link</button>
         </div>
       )}
     </Card>

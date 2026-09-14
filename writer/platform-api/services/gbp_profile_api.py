@@ -815,6 +815,68 @@ def attributes_subset_applied(proposed: list[dict], live: list[dict]) -> bool:
     return True
 
 
+# ───────────────────────────────────────────────────────────────────────────
+# Menu link — a first-class "Menu link" field backed by the ``attributes/url_menu``
+# URL attribute. It presents to the operator as a single URL string but rides the
+# SAME separate getAttributes/updateAttributes endpoint pair as ``attributes`` (a
+# menu link is not a Location field — Google models it as a URL attribute). So the
+# builders/parsers/diff below produce/consume the single-attribute shapes the
+# attributes machinery already handles, scoped to url_menu. Availability is
+# category-scoped (Google offers url_menu only for categories that support a menu);
+# a listing whose category doesn't support it returns a ``rejected`` verdict on
+# apply — never a silent bad write. Pure + unit-tested.
+# ───────────────────────────────────────────────────────────────────────────
+MENU_ATTRIBUTE_ID = "attributes/url_menu"
+
+
+def _menu_url(url: str) -> str:
+    """Coerce a menu URL for storage/compare, ``""`` when empty. A bare host gets
+    an ``https://`` scheme; a non-empty value that isn't a URL raises
+    ``invalid_menu_url``. Pure."""
+    v = (url or "").strip()
+    if not v:
+        return ""
+    try:
+        return _coerce_attr_url(v)
+    except ValueError:
+        raise ValueError("invalid_menu_url")
+
+
+def menu_entries(url: str) -> list[dict]:
+    """The single ``url_menu`` attribute entry for a menu link (the attribute-entry
+    shape ``build_attributes_patch``/``attributes_subset_applied`` consume). An
+    empty URL yields a cleared entry (empty ``urls``). Raises ``invalid_menu_url``
+    on a non-empty bad URL. Pure."""
+    v = _menu_url(url)
+    return [{"attribute_id": MENU_ATTRIBUTE_ID, "value_type": "URL", "urls": [v] if v else []}]
+
+
+def build_menu_patch(url: str) -> tuple[dict, str]:
+    """(body, updateMask) for the menu link — a single-attribute updateAttributes
+    patch on ``attributes/url_menu``. Empty clears it. Validates the URL. Pure."""
+    return build_attributes_patch(menu_entries(url))
+
+
+def parse_menu(attributes: list[dict]) -> str:
+    """The current menu link URL from a parsed attributes list (``parse_attributes``
+    output) — ``""`` when the listing has no url_menu set. Pure (unit-tested)."""
+    for entry in attributes or []:
+        if (entry.get("attribute_id") or "").strip() == MENU_ATTRIBUTE_ID:
+            for u in entry.get("urls") or []:
+                if isinstance(u, str) and u.strip():
+                    return u.strip()
+            return ""
+    return ""
+
+
+def menu_changed(snapshot_url: str, live_attributes: list[dict]) -> bool:
+    """True if the live menu link drifted from the draft-time snapshot — the
+    re-read-and-diff guard (Q3) scoped to ONLY url_menu (unlike ``attributes_diff``,
+    which trips on any attribute changing, a menu edit must ignore other
+    attributes). Pure (unit-tested)."""
+    return (parse_menu(live_attributes) or "").strip() != (snapshot_url or "").strip()
+
+
 def parse_service_area(loc: dict) -> list[str]:
     """The service-area place NAMES a listing publishes (v1
     ``serviceArea.places.placeInfos[].placeName``) — the towns/areas the business
@@ -1382,6 +1444,8 @@ def classify_profile_error(status_code: Optional[int], message: str = "", field:
             return "invalid_open_status"
         if field == "categories":
             return "invalid_category"
+        if field == "menu":
+            return "invalid_menu_url"
         if field == "attributes" or "attribute" in msg:
             return "invalid_attribute"
         if "category" in msg or "service" in msg:

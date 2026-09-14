@@ -20,6 +20,9 @@ ProfileField = Literal[
     "categories",
     # Phase 3b — attributes (SEPARATE getAttributes/updateAttributes endpoint pair).
     "attributes",
+    # Menu link — a first-class URL field backed by the attributes/url_menu
+    # attribute (same separate endpoint pair as attributes).
+    "menu",
 ]
 EditSource = Literal["manual", "ai", "strategist", "revert"]
 
@@ -177,6 +180,7 @@ class ProfileEditCreateRequest(BaseModel):
     open_info: Optional[OpenInfoValue] = None
     categories_value: Optional[CategoriesValue] = None
     attributes: Optional[list[AttributeValue]] = None
+    menu: Optional[str] = None  # the menu-link URL ("" clears it)
 
 
 class ProfileEditPatchRequest(BaseModel):
@@ -193,6 +197,7 @@ class ProfileEditPatchRequest(BaseModel):
     open_info: Optional[OpenInfoValue] = None
     categories_value: Optional[CategoriesValue] = None
     attributes: Optional[list[AttributeValue]] = None
+    menu: Optional[str] = None  # the menu-link URL ("" clears it)
 
 
 class ProfileDraftRequest(BaseModel):
@@ -261,6 +266,9 @@ class GbpProfileResponse(BaseModel):
     # attributes_error rather than failing the whole profile read).
     attributes: list[AttributeValue] = []
     attributes_error: Optional[str] = None
+    # Menu link — the current url_menu URL (derived from the attributes read; "" when
+    # unset). A menu-link edit stores its proposed value as a plain URL string.
+    menu: str = ""
     edits: list[GbpProfileEdit] = []
 
 

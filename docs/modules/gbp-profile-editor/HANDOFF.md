@@ -5,8 +5,27 @@
 > reuse map is the sibling `CLAUDE.md`; the root `/HANDOFF.md` remains the suite
 > handoff. This file is the "start here to build it" doc.
 
-## Status (2026-09-04; scope expanded 2026-09-09; Phases 3a + 3b built 2026-09-09; revert added 2026-09-09)
+## Status (2026-09-04; scope expanded 2026-09-09; Phases 3a + 3b built 2026-09-09; revert added 2026-09-09; menu link added 2026-09-14)
 
+- **✅ MENU LINK (2026-09-14) — a first-class `menu` field; Chat is not buildable.**
+  From Ryan's "GBP Missing Elements" issue (*add Menu/Service; add Chat*). **Chat: nothing to
+  build** — Google discontinued GBP chat/messaging on 2024-07-31 (no profile element, no API).
+  **Services: already live** since the 2026-09-09 enablement. **Menu link: BUILT** as a dedicated
+  URL card backed by the **`attributes/url_menu`** URL attribute — so `menu` is an
+  *attribute-backed* field (rides the SAME `getAttributes`/`updateAttributes` endpoint pair as
+  `attributes`, NOT `locations.patch`) that presents as a single URL string. Reuses the existing
+  `gbp_profile_edits` row / apply job / reconciler / freeze gate / history / revert; **no new job
+  type**. The re-read-and-diff is scoped to *only* url_menu (`api.menu_changed` — an unrelated
+  attribute drifting never aborts a menu edit; contrast the whole-set `attributes_diff`). Pure
+  `build_menu_patch`/`parse_menu`/`menu_entries`/`menu_changed` in `gbp_profile_api.py`; the
+  service branches via `_is_attribute_backed`/`_proposed_attr_entries`/`_attr_baseline_changed`;
+  `MenuLinkCard` mirrors `WebsiteCard`. **Manual-only** (not AI-draftable — a menu URL is an
+  operator fact, like hours). Migration `20260914120000_gbp_profile_menu.sql` widens the `field`
+  CHECK to add `'menu'` (**applied live**). Availability is category-scoped — a listing whose
+  category doesn't support url_menu returns a **`rejected`** verdict on Apply (surfaced), never a
+  silent bad write. Structured Food Menus (v4 `FoodMenus`) deliberately NOT built (restaurant-only;
+  0 food clients). New `invalid_menu_url` `ErrorDetails` code. 12 new unit tests (145 module tests
+  pass). Ships dark under the same two flags.
 - **✅ REVERT / change-on-file (2026-09-09) — every applied change can be undone.**
   The prior value of every field was already on file (each `gbp_profile_edits` row
   keeps `current_value`, the re-read-and-diff baseline; on a SUCCESSFULLY applied
