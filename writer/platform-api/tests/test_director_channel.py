@@ -11,7 +11,11 @@ from services import notifications as n
 
 
 def test_director_kinds_are_the_ops_kinds():
-    assert n.DIRECTOR_CHANNEL_KINDS == frozenset({"ops_digest", "ops_seam", "ops_efficiency", "guide_sync"})
+    # ops_board_report is DORA's weekly department-head board report to the L10
+    # (services/board_reports/) — routes to #dora like the other ops kinds.
+    assert n.DIRECTOR_CHANNEL_KINDS == frozenset(
+        {"ops_digest", "ops_seam", "ops_efficiency", "guide_sync", "ops_board_report"}
+    )
     # Kept in PACE_CHANNEL_KINDS too, so an unset DORA channel falls back to PACE.
     assert n.DIRECTOR_CHANNEL_KINDS <= n.PACE_CHANNEL_KINDS
 
