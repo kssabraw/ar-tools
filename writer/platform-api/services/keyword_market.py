@@ -213,18 +213,34 @@ async def _post_volume(client: httpx.AsyncClient, payload: list[dict]) -> dict:
 # ----------------------------------------------------------------------------
 # Orchestration
 # ----------------------------------------------------------------------------
+# PostgREST serves reads over a GET, so a large `.in_(keyword, [...])` becomes a
+# giant querystring that overflows the server's URI limit ("URL component 'query'
+# too long"). Chunk the read far below the DataForSEO 1000/POST cap — a whole-site
+# Coverage-Audit cell grid can carry tens of thousands of cell keywords.
+_CACHE_READ_CHUNK = 200
+# Upsert body cap (POST body, so far larger than the read URL cap is safe).
+_CACHE_WRITE_CHUNK = 1000
+
+
 def fetch_cached_market(supabase, keywords: list[str], location_code: int) -> dict[str, dict]:
-    """Cached market rows for these keywords at a location, keyed by lower keyword."""
+    """Cached market rows for these keywords at a location, keyed by lower keyword.
+    The `.in_()` read is chunked so an arbitrarily large keyword list never
+    overflows the PostgREST request URL."""
     if not keywords:
         return {}
-    rows = (
-        supabase.table("keyword_market")
-        .select("keyword, search_volume, cpc, competition, refreshed_at")
-        .in_("keyword", keywords)
-        .eq("location_code", location_code)
-        .execute()
-    ).data or []
-    return {r["keyword"].lower(): r for r in rows}
+    out: dict[str, dict] = {}
+    for i in range(0, len(keywords), _CACHE_READ_CHUNK):
+        chunk = keywords[i : i + _CACHE_READ_CHUNK]
+        rows = (
+            supabase.table("keyword_market")
+            .select("keyword, search_volume, cpc, competition, refreshed_at")
+            .in_("keyword", chunk)
+            .eq("location_code", location_code)
+            .execute()
+        ).data or []
+        for r in rows:
+            out[r["keyword"].lower()] = r
+    return out
 
 
 def stale_keywords(kw_list: list[str], cached: dict[str, dict], stale_cutoff: datetime) -> list[str]:
@@ -276,7 +292,12 @@ async def refresh_keywords(supabase, kw_list: list[str], location_code: int, *, 
         }
         for kw in to_fetch
     ]
-    supabase.table("keyword_market").upsert(records, on_conflict="keyword,location_code").execute()
+    # Chunk the upsert too — a whole-site Coverage-Audit grid can produce tens of
+    # thousands of records, and a single multi-MB POST body is fragile.
+    for i in range(0, len(records), _CACHE_WRITE_CHUNK):
+        supabase.table("keyword_market").upsert(
+            records[i : i + _CACHE_WRITE_CHUNK], on_conflict="keyword,location_code"
+        ).execute()
     return {"status": "ok", "fetched": len(records), "skipped": len(kw_list) - len(to_fetch)}
 
 
