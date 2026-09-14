@@ -301,8 +301,8 @@ def _prov_client(supabase, client_id: str, today: date, now: datetime) -> Option
         supabase.table("clients")
         .select(
             "name, website_url, gbp, brand_voice, detected_icp, differentiators, "
-            "icp_text, target_cities, retainer_monthly, is_sab, client_type, "
-            "business_location"
+            "icp_text, target_cities, targeted_services, client_notes, "
+            "retainer_monthly, is_sab, client_type, business_location"
         )
         .eq("id", client_id).limit(1).execute()
     ).data
@@ -344,6 +344,8 @@ def _prov_client(supabase, client_id: str, today: date, now: datetime) -> Option
         "target_cities": (c.get("target_cities") or [])[:12]
         if local
         else "n/a — no local campaign; suburb-level targeting does not apply",
+        "targeted_services": (c.get("targeted_services") or [])[:30],
+        "client_notes": ((c.get("client_notes") or "").strip()[:1500]) or None,
         "gbp": {
             "business_name": gbp.get("business_name"),
             "address": gbp.get("address"),

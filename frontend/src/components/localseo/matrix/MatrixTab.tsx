@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Grid3x3, Plus } from 'lucide-react'
+import { api } from '../../../lib/api'
+import type { Client } from '../../../lib/types'
 import { ErrorDetails } from '../../ErrorDetails'
 import { Spinner } from '../Spinner'
 import { card, primaryBtn } from '../shared'
@@ -30,8 +32,25 @@ export function MatrixTab({ clientId, focusMatrixId, onOpenPage }: Props) {
     enabled: view.kind === 'list',
   })
 
+  // The client's curated services (intake card) prefill a new matrix's services
+  // axis — editable, and only when the client has any on file. Shares the
+  // ['client', clientId] cache with the workspace/edit pages, so it's usually
+  // already warm; staleTime avoids refetch churn.
+  const { data: client, isPending: clientPending } = useQuery<Client>({
+    queryKey: ['client', clientId],
+    queryFn: () => api.get<Client>(`/clients/${clientId}`),
+    staleTime: 5 * 60_000,
+  })
+
   if (view.kind === 'new') {
-    return <MatrixBuilder clientId={clientId} onCreated={m => { void refetch(); setView({ kind: 'detail', id: m.id }) }} onCancel={() => setView({ kind: 'list' })} />
+    // MatrixBuilder reads initialServices only at mount, so wait for the client
+    // query to settle first (else a fast click loses the prefill). On error the
+    // query settles with no data → the builder just opens with an empty axis.
+    if (clientPending) {
+      return <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 8, color: '#64748b', fontSize: 13 }}><Spinner size={14} /> Loading…</div>
+    }
+    const initialServices = (client?.targeted_services ?? []).join('\n') || undefined
+    return <MatrixBuilder clientId={clientId} initialServices={initialServices} onCreated={m => { void refetch(); setView({ kind: 'detail', id: m.id }) }} onCancel={() => setView({ kind: 'list' })} />
   }
   if (view.kind === 'detail') {
     return (

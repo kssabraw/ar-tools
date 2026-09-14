@@ -845,8 +845,8 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         supabase.table("clients")
         .select(
             "website_url, gbp, gbp_place_id, brand_voice, detected_icp, "
-            "differentiators, icp_text, target_cities, retainer_monthly, "
-            "is_sab, client_type, business_location"
+            "differentiators, icp_text, target_cities, targeted_services, "
+            "client_notes, retainer_monthly, is_sab, client_type, business_location"
         )
         .eq("id", client_id)
         .limit(1)
@@ -885,9 +885,13 @@ def _ctx_setup(supabase, client_id: str, today: date) -> Optional[dict]:
         "target_cities": (c.get("target_cities") or [])[:12]
         if local
         else "n/a — no local campaign; suburb-level targeting does not apply",
+        "targeted_services": (c.get("targeted_services") or [])[:30],
         "has_brand_voice": bool(c.get("brand_voice")),
         "has_icp": bool(c.get("detected_icp") or c.get("differentiators")),
     }
+    notes = (c.get("client_notes") or "").strip()
+    if notes:
+        out["client_notes"] = notes[:1500]
     try:
         from services import icp_service
 

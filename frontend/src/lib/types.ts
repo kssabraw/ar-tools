@@ -121,6 +121,11 @@ export interface Client extends ClientListItem {
   page_structures: Record<string, PageStructureEntry> | null
   // Manual extra cities to plan location pages for (silo planner target-city source).
   target_cities: string[] | null
+  // Human-curated services the client wants to target/rank for. Feeds agent
+  // context and prefills the Local SEO matrix planner's services axis.
+  targeted_services: string[] | null
+  // Freeform internal notes captured on the intake card (AI-readable).
+  client_notes: string | null
   // Recipe Engine budget inputs (66% margin target → 34% deployable).
   retainer_monthly: number | null
   is_sab: boolean

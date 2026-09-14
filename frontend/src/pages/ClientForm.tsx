@@ -35,6 +35,8 @@ interface FormData {
   gsc_property: string
   business_location: string
   target_cities: string
+  targeted_services: string
+  client_notes: string
   gbp_place_id: string | null
   gbp: GbpProfile | null
   ps_local_landing: string
@@ -92,7 +94,7 @@ const empty: FormData = {
   gh_blog_post: '', gh_service_page: '', gh_location_page: '',
   wordpress_site_url: '', wordpress_username: '', wordpress_app_password: '', wordpress_app_password_set: false,
   wheelhouse_cpt_enabled: false,
-  logo_url: '', gsc_property: '', business_location: '', target_cities: '', gbp_place_id: null, gbp: null,
+  logo_url: '', gsc_property: '', business_location: '', target_cities: '', targeted_services: '', client_notes: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
   ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
   retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', content_writer_provider: 'anthropic', strategist_weekday: '',
@@ -283,6 +285,8 @@ export function ClientForm() {
         gsc_property: existing.gsc_property ?? '',
         business_location: existing.business_location ?? '',
         target_cities: (existing.target_cities ?? []).join(', '),
+        targeted_services: (existing.targeted_services ?? []).join(', '),
+        client_notes: existing.client_notes ?? '',
         gbp_place_id: existing.gbp_place_id,
         gbp: existing.gbp,
         ps_local_landing: psUrls.local_landing,
@@ -390,6 +394,11 @@ export function ClientForm() {
         gsc_property: form.gsc_property || null,
         business_location: form.business_location || null,
         target_cities: form.target_cities.split(',').map(s => s.trim()).filter(Boolean),
+        targeted_services: form.targeted_services.split(',').map(s => s.trim()).filter(Boolean),
+        // Send the trimmed string (not null) so emptying the box actually clears
+        // the stored note: the update handler treats null as "leave unchanged"
+        // but an empty string as "clear to null".
+        client_notes: form.client_notes.trim(),
         gbp_place_id: form.gbp_place_id,
         gbp: form.gbp,
         // Trust & Proof facts (docs/modules/local-landing-page-structure.md).
@@ -652,6 +661,27 @@ export function ClientForm() {
               style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
             />
             <p style={hintStyle}>Comma-separated. Extra cities the Local SEO silo planner should build location pages for, beyond the seed city. The planner also pulls cities from the GBP service area, this client's own site, and a ~10-mile radius — these are added on top.</p>
+          </div>
+          <div>
+            <label style={labelStyle}>Targeted Services</label>
+            <input
+              value={form.targeted_services}
+              onChange={set('targeted_services')}
+              placeholder="e.g. Roof Repair, Gutter Cleaning, Storm Damage Restoration"
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <p style={hintStyle}>Comma-separated. The services this client wants to target/rank for. Prefills the Local SEO service × location matrix planner, and gives SerMaStr &amp; the strategist the client's real service list to reason from.</p>
+          </div>
+          <div>
+            <label style={labelStyle}>Client Notes</label>
+            <textarea
+              value={form.client_notes}
+              onChange={set('client_notes')}
+              rows={5}
+              placeholder="Freeform internal notes about this client — context, preferences, do's and don'ts, anything the team (and the AI agents) should keep in mind."
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box', resize: 'vertical', lineHeight: 1.6 }}
+            />
+            <p style={hintStyle}>Internal notes. Visible to the team on this card and readable by the AI agents (SerMaStr / strategist) as client context.</p>
           </div>
         </div>
 
