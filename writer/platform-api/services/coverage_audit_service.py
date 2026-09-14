@@ -46,12 +46,19 @@ from services import coverage_audit as core
 from services import (
     census_cdp,
     icp_service,
+    job_priority,
     keyword_market,
     local_seo_silo,
     site_page_index,
     target_cities,
 )
 from services.dataforseo_rank import location_code_for
+
+# Tiers 3/4 (CDP × main-service / CDP × subservice) fan out a large cross-product
+# and can run many minutes; they ride the dedicated coverage lane at BACKGROUND
+# priority so the fast, user-watched Tiers 1/2 are claimed ahead of them
+# (the claim orders `priority DESC`). See the COVERAGE-AUDIT lane in main.py.
+_SLOW_TIERS = (3, 4)
 
 logger = logging.getLogger(__name__)
 
@@ -819,12 +826,16 @@ def enqueue_coverage_audit(
         .execute()
     ).data[0]
     audit_id = audit["id"]
+    priority = (
+        job_priority.BACKGROUND if tier in _SLOW_TIERS else job_priority.INTERACTIVE
+    )
     job = (
         supabase.table("async_jobs")
         .insert(
             {
                 "job_type": "coverage_audit",
                 "entity_id": client_id,
+                "priority": priority,
                 "payload": {
                     "client_id": client_id,
                     "audit_id": audit_id,

@@ -226,14 +226,18 @@ class Settings(BaseSettings):
         "fanout_regate": 45,
         "fanout_fanout": 45,
         "fanout_architecture": 45,
-        # A Tier-3 Coverage Audit (CDP × main-service) reverse-geocodes the
+        # Coverage Audit. Tier 3 (CDP × main-service) reverse-geocodes the
         # service-area counties and forward-geocodes every candidate CDP for
-        # containment verification — on a cold geocode cache that can graze the
-        # 30-min default. The reaper requeue re-runs the tier, but every census /
-        # geocode / demand step is cached + idempotent, so a requeue is cheap; 60
-        # min keeps the reaper a genuine backstop without firing on a healthy run.
-        # (Tiers 1–2 finish well within the default; the override is harmless for them.)
-        "coverage_audit": 60,
+        # containment — on a cold cache that grazes the 30-min default, but every
+        # census/geocode/demand step is cached + idempotent, so a requeue is cheap.
+        # Tier 4 (CDP × subservice) is the real ceiling: it fans the subservice
+        # PLANNER (an LLM call, NOT cached) across every CDP — hundreds of calls,
+        # observed ~95 min live — so a reaper requeue RE-SPENDS on the planner. The
+        # timeout must exceed a healthy Tier 4 or the requeue doubles that spend;
+        # 120 min is the backstop. (Tiers 1–2 finish within the default; harmless
+        # for them.) Tier 4's slowness itself is a calibration item — bound the
+        # planner fan-out — tracked in the coverage-audit handoff, not solved here.
+        "coverage_audit": 120,
         # A whole-client DataForSEO rank refresh fetches one live SERP per keyword
         # GSC can't cover — a client with ~100 keywords is a ~1h run at healthy
         # SERP latency, and a DataForSEO degradation (a burst of transient 40101
@@ -321,12 +325,24 @@ class Settings(BaseSettings):
         # (so the user can navigate away): the PDF reports (WeasyPrint render) and
         # the backlink lookup (DataForSEO pull on a cache miss).
         "keyword_research_report", "fanout_report", "backlink_lookup",
-        # Coverage Audit — the user clicks "Run audit" and watches the run screen
-        # poll for the result (geocode + census CDP resolution + a demand fetch,
-        # ~1–2 min). Same must-not-queue rationale as local_seo_action: it must not
-        # wait behind a long MAIN-lane background sweep (e.g. a dataforseo_rank run).
-        "coverage_audit",
+        # NOTE: coverage_audit is NOT here — it has its OWN dedicated lane
+        # (`coverage_job_types` / `coverage_lane_workers` below) so several audits
+        # run concurrently and a slow Tier 3/4 can't monopolize the single
+        # interactive worker that serves clicks (page-generate, scrapes, …).
     ]
+    # COVERAGE-AUDIT lane (2026-09-14): coverage_audit runs on its OWN dedicated
+    # lane, `coverage_lane_workers` wide, so multiple audits run at once and a
+    # long Tier 4 (CDP × subservice — a large cross-product) never blocks a fast
+    # Tier 1 the user is watching. The lane is the SOLE claimer of these types
+    # (excluded from MAIN + BULK below, off the interactive allowlist above), and
+    # the claim's `priority DESC` ordering makes fast tiers (1/2, INTERACTIVE
+    # priority) precede slow tiers (3/4, BACKGROUND priority — see
+    # enqueue_coverage_audit) whenever a worker frees up. The atomic guarded claim
+    # keeps N workers from double-claiming a row. Each audit leans on DataForSEO +
+    # Anthropic, so size against `coverage_audit_daily_call_budget` and the key
+    # pool when raising this. 0 disables the dedicated lane (falls back to MAIN).
+    coverage_job_types: List[str] = ["coverage_audit"]
+    coverage_lane_workers: int = 2
     # Content-compliance guardrail: block publishing content that gives human
     # dosing/administration instructions, claims branded-drug equivalence,
     # promises guaranteed results, or advocates buying — for clients in a
