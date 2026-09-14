@@ -61,6 +61,7 @@ interface AuditRun {
     | null
   error: string | null
   sitemap_url: string | null
+  radius_miles: number | null
   created_at: string
 }
 interface StatusResponse {
@@ -127,15 +128,27 @@ export function CoverageAudit() {
   const [axisDraft, setAxisDraft] = useState('')
   const [seedError, setSeedError] = useState<string | null>(null)
   const [sitemapUrl, setSitemapUrl] = useState('')
+  const [radiusMiles, setRadiusMiles] = useState<5 | 10>(10)
 
-  // Seed the sitemap-override field from the latest run's setting so a plain
-  // "Re-run" preserves the override (clearing it opts back into auto-discovery).
-  // Re-seeds when a new run lands (id changes) or the tier switches.
+  // Seed the sitemap-override + radius fields from the latest run's setting so a
+  // plain "Re-run" preserves them. Re-seeds when a new run lands (id changes) or
+  // the tier switches.
   const latestSitemap = status?.latest?.sitemap_url ?? ''
+  const latestRadius = status?.latest?.radius_miles ?? null
   const latestRunId = status?.latest?.id
   useEffect(() => {
     setSitemapUrl(latestSitemap)
-  }, [latestRunId, latestSitemap, tier])
+    if (latestRadius === 5 || latestRadius === 10) setRadiusMiles(latestRadius)
+  }, [latestRunId, latestSitemap, latestRadius, tier])
+
+  // The audit hard-bounds its location axis to a radius of the business center —
+  // the GBP coordinates, else the address on the client's card. With neither, there
+  // is no center to place the radius around, so the run is blocked with an alert.
+  const hasCenter = Boolean(
+    (client?.gbp?.latitude != null && client?.gbp?.longitude != null) ||
+      client?.business_location?.trim() ||
+      client?.gbp?.address?.trim(),
+  )
 
   // The audit runs as a background async_jobs job (one per tier). The in-flight
   // job id is persisted per tier so navigating away — or switching tiers — and back
@@ -163,6 +176,7 @@ export function CoverageAudit() {
     void auditJob.start(async () => {
       const r = await api.post<{ job_id: string }>(`/clients/${id}/coverage-audit`, {
         tier,
+        radius_miles: radiusMiles,
         ...(sm ? { sitemap_url: sm } : {}),
       })
       return r.job_id
@@ -278,9 +292,40 @@ export function CoverageAudit() {
         ))}
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-        <button style={running || disabled ? { ...primaryBtn, opacity: 0.6, cursor: 'default' } : primaryBtn}
-          onClick={runAudit} disabled={running || disabled}>
+      {/* No radius center — block the run + tell the team what to add (the audit
+          needs a GBP or a business address to center the radius on). */}
+      {client && !hasCenter && !disabled && (
+        <div style={warnBox}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 600, marginBottom: 4 }}>
+            <AlertTriangle size={15} /> Add a location first
+          </div>
+          This audit scans within a radius of the business. {client.name ?? 'This client'} has no{' '}
+          <strong>Google Business Profile</strong> and no <strong>business address</strong>, so there's no center to
+          scan around. Add one on the{' '}
+          <Link to={id ? `/clients/${id}` : '/'} style={{ color: '#92400e', fontWeight: 600 }}>
+            client's card
+          </Link>{' '}
+          (connect the GBP or set the business location), then come back.
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+        {/* Radius scope — the location axis is hard-bounded to this radius of the
+            business center (GBP coords, else the business address). */}
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: '#475569' }}>
+          Radius
+          <select
+            value={radiusMiles}
+            onChange={(e) => setRadiusMiles(Number(e.target.value) === 5 ? 5 : 10)}
+            disabled={running || disabled || !hasCenter}
+            style={{ padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 13, color: '#0f172a', background: '#fff', cursor: 'pointer' }}
+          >
+            <option value={5}>5 miles</option>
+            <option value={10}>10 miles</option>
+          </select>
+        </label>
+        <button style={running || disabled || !hasCenter ? { ...primaryBtn, opacity: 0.6, cursor: 'default' } : primaryBtn}
+          onClick={runAudit} disabled={running || disabled || !hasCenter}>
           <RefreshCw size={15} className={running ? 'spin' : undefined} />
           {running ? `Running… ${auditJob.elapsed}s` : latest ? `Re-run Tier ${tier}` : `Run Tier ${tier} audit`}
         </button>

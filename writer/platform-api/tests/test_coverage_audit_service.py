@@ -82,7 +82,7 @@ def test_location_axis_merges_target_cities(monkeypatch):
     monkeypatch.setattr(svc.settings, "google_maps_api_key", "key", raising=False)
     monkeypatch.setattr(svc, "get_supabase", lambda: object())
 
-    async def _fake_resolve(client, seed_location, code, sb):
+    async def _fake_resolve(client, seed_location, code, sb, **kwargs):
         return ([{"name": "Geelong", "source": "nearby"}, {"name": "Ballarat", "source": "manual"}], ["Nearby note"])
 
     monkeypatch.setattr(svc.target_cities, "resolve_target_cities", _fake_resolve)
@@ -384,7 +384,7 @@ def test_run_tier_3_uses_cdp_location_axis_and_keeps_location_rows(monkeypatch):
     monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
 
     # CDP location axis + city place-vocab (census_cdp is mocked wholesale here).
-    async def _fake_cdp(client, seed_location, code, sb):
+    async def _fake_cdp(client, seed_location, code, sb, **kwargs):
         return (
             [{"name": "Harrison", "source": "census_cdp"}, {"name": "Kearny", "source": "census_cdp"}],
             {"kind": "cdp", "seed_city": "Metropolis", "notes": ["CDP note"], "states": ["34"]},
@@ -452,7 +452,7 @@ def test_run_tier_4_uses_cdp_axis_and_subservice_axis_and_drops_location_rows(mo
     monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
 
     # CDP location axis + city place-vocab (census_cdp mocked wholesale, like Tier 3).
-    async def _fake_cdp(client, seed_location, code, sb):
+    async def _fake_cdp(client, seed_location, code, sb, **kwargs):
         return (
             [{"name": "Harrison", "source": "census_cdp"}, {"name": "Kearny", "source": "census_cdp"}],
             {"kind": "cdp", "seed_city": "Metropolis", "notes": ["CDP note"], "states": ["34"]},
@@ -534,7 +534,7 @@ def test_run_tier_4_override_axis_is_confirmed_subservice(monkeypatch):
     )
     monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
 
-    async def _fake_cdp(client, seed_location, code, sb):
+    async def _fake_cdp(client, seed_location, code, sb, **kwargs):
         return ([{"name": "Harrison", "source": "census_cdp"}], {"kind": "cdp", "seed_city": "Metropolis", "notes": []}, ["Metropolis"])
 
     monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
@@ -580,7 +580,7 @@ def test_run_tier_1_offloads_service_axis_planner_off_the_loop(monkeypatch):
     )
     monkeypatch.setattr(svc, "location_code_for", lambda client: 2036)
 
-    async def _fake_loc(client, seed_location, code):
+    async def _fake_loc(client, seed_location, code, **kwargs):
         return [{"name": "Melbourne", "source": "seed"}], {"seed_city": "Melbourne", "notes": []}
 
     monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
@@ -688,6 +688,7 @@ def test_enqueue_dedup_ignores_other_tier_and_override(monkeypatch):
         ]
     )
     monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {"business_location": "Metropolis, NY"})
     audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1")
     assert (audit_id, job_id) == ("new-audit", "new-job")
     assert fake.audit_inserts == 1 and fake.job_inserts == 1
@@ -700,6 +701,7 @@ def test_enqueue_override_always_fresh(monkeypatch):
         inflight=[{"id": "job-A", "payload": {"tier": 1, "audit_id": "audit-A", "service_axis": None}}]
     )
     monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {"business_location": "Metropolis, NY"})
     audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1", service_axis=["Roofing"])
     assert (audit_id, job_id) == ("new-audit", "new-job")
     assert fake.audit_inserts == 1 and fake.job_inserts == 1
@@ -708,6 +710,7 @@ def test_enqueue_override_always_fresh(monkeypatch):
 def test_enqueue_no_inflight_creates_new(monkeypatch):
     fake = _EnqueueFake(inflight=[])
     monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {"business_location": "Metropolis, NY"})
     audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1")
     assert (audit_id, job_id) == ("new-audit", "new-job")
     assert fake.audit_inserts == 1 and fake.job_inserts == 1
@@ -719,6 +722,7 @@ def test_enqueue_fast_tier_is_interactive_priority(monkeypatch):
     for tier in (1, 2):
         fake = _EnqueueFake(inflight=[])
         monkeypatch.setattr(svc, "get_supabase", lambda f=fake: f)
+        monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {"business_location": "Metropolis, NY"})
         svc.enqueue_coverage_audit("client-1", tier, "user-1")
         assert fake.job_row["priority"] == svc.job_priority.INTERACTIVE
 
@@ -729,6 +733,7 @@ def test_enqueue_slow_tier_is_background_priority(monkeypatch):
     for tier in (3, 4):
         fake = _EnqueueFake(inflight=[])
         monkeypatch.setattr(svc, "get_supabase", lambda f=fake: f)
+        monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {"business_location": "Metropolis, NY"})
         svc.enqueue_coverage_audit("client-1", tier, "user-1")
         assert fake.job_row["priority"] == svc.job_priority.BACKGROUND
 
@@ -741,6 +746,106 @@ def test_enqueue_unsupported_tier_rejected(monkeypatch):
     with _pytest.raises(HTTPException) as ei:
         svc.enqueue_coverage_audit("client-1", 9, "user-1")
     assert ei.value.status_code == 400
+
+
+# --- radius center + no-center gate + radius threading ------------------------
+def test_gbp_center_prefers_coordinates():
+    assert svc._gbp_center({"gbp": {"latitude": 40.7, "longitude": -81.4}}) == (40.7, -81.4)
+    assert svc._gbp_center({"gbp": {}}) is None
+    assert svc._gbp_center({}) is None
+    # Unparseable coords → None (never crashes the gate).
+    assert svc._gbp_center({"gbp": {"latitude": "x", "longitude": "y"}}) is None
+
+
+def test_seed_location_is_business_location_only():
+    # The seed CITY axis stays business_location-only (a full GBP street address
+    # would parse to a garbage city name); the GBP address feeds the radius CENTER
+    # via _resolve_center, not the seed city.
+    assert svc._seed_location({"business_location": "Boise, ID"}) == "Boise, ID"
+    assert svc._seed_location({"gbp": {"address": "1 Main St, Navarre, OH"}}) == ""
+    assert svc._seed_location({}) == ""
+
+
+def test_has_center_true_for_gbp_coords_or_any_address():
+    assert svc._has_center({"gbp": {"latitude": 1, "longitude": 2}}) is True
+    assert svc._has_center({"business_location": "Boise, ID"}) is True
+    assert svc._has_center({"gbp": {"address": "1 Main St, Boise, ID"}}) is True
+    assert svc._has_center({}) is False
+
+
+def test_resolve_center_uses_gbp_coords_without_geocoding(monkeypatch):
+    async def _boom(*a, **k):
+        raise AssertionError("GBP coords must not trigger a geocode")
+
+    monkeypatch.setattr(svc.maps_geocode, "forward_geocode_places", _boom)
+    got = asyncio.run(svc._resolve_center({"gbp": {"latitude": 26.5, "longitude": -80.1}}, None))
+    assert got == (26.5, -80.1, "gbp")
+
+
+def test_enqueue_no_center_raises_and_writes_nothing(monkeypatch):
+    fake = _EnqueueFake(inflight=[])
+    monkeypatch.setattr(svc, "get_supabase", lambda: fake)
+    monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {})  # no gbp, no business_location
+    import pytest as _pytest
+    from fastapi import HTTPException
+
+    with _pytest.raises(HTTPException) as ei:
+        svc.enqueue_coverage_audit("client-1", 1, "user-1")
+    assert ei.value.status_code == 400 and ei.value.detail == "coverage_audit_no_center"
+    assert fake.audit_inserts == 0 and fake.job_inserts == 0
+
+
+def test_enqueue_stores_radius_default_and_coerces(monkeypatch):
+    for req, expect in [(5, 5), (10, 10), (None, svc.DEFAULT_RADIUS_MILES), (7, svc.DEFAULT_RADIUS_MILES)]:
+        fake = _EnqueueFake(inflight=[])
+        monkeypatch.setattr(svc, "get_supabase", lambda f=fake: f)
+        monkeypatch.setattr(svc.local_seo_silo, "_get_client", lambda cid: {"business_location": "Metropolis, NY"})
+        svc.enqueue_coverage_audit("client-1", 1, "user-1", radius_miles=req)
+        assert fake.job_row["payload"]["radius_miles"] == expect
+
+
+def test_run_tier_threads_center_and_radius_into_location_axis(monkeypatch):
+    """A run with radius_miles resolves the GBP center and hard-bounds the location
+    axis: `_resolve_location_axis` receives `center` + `radius_km`."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme", "business_location": "Metropolis, NY",
+                     "gbp": {"website": "https://acme.example", "latitude": 40.0, "longitude": -80.0}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
+
+    seen: dict = {}
+
+    async def _fake_loc(client, seed_location, code, center=None, radius_km=None):
+        seen["center"] = center
+        seen["radius_km"] = radius_km
+        return [{"name": "Metropolis", "source": "seed"}], {"seed_city": "Metropolis", "notes": []}
+
+    monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
+
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
+        return (["https://acme.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+    monkeypatch.setattr(
+        svc, "_derive_service_axis",
+        lambda client, classified, place_vocab: (
+            [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
+        ),
+    )
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 1, radius_miles=5))
+    assert result["status"] == "complete"
+    assert seen["center"] == (40.0, -80.0)  # GBP coords, no geocode
+    assert abs(seen["radius_km"] - 5 * svc._MILES_TO_KM) < 1e-6
 
 
 if __name__ == "__main__":  # pragma: no cover

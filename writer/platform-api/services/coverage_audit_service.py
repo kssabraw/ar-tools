@@ -49,6 +49,7 @@ from services import (
     job_priority,
     keyword_market,
     local_seo_silo,
+    maps_geocode,
     site_page_index,
     target_cities,
 )
@@ -59,6 +60,13 @@ from services.dataforseo_rank import location_code_for
 # priority so the fast, user-watched Tiers 1/2 are claimed ahead of them
 # (the claim orders `priority DESC`). See the COVERAGE-AUDIT lane in main.py.
 _SLOW_TIERS = (3, 4)
+
+# Radius scope (owner ruling 2026-09-14): the audit's location axis is HARD-BOUNDED
+# to a user-chosen radius around the business center. Two options in the UI; 10 mi
+# matches the pre-existing nearby-city default, 5 mi is the tighter scope.
+RADIUS_MILES_ALLOWED = (5, 10)
+DEFAULT_RADIUS_MILES = 10
+_MILES_TO_KM = 1.60934
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +80,7 @@ SUPPORTED_TIERS = (1, 2, 3, 4)
 
 _AUDIT_COLS = (
     "id, client_id, status, tier, service_axis, location_axis, gaps, provenance, "
-    "error, sitemap_url, created_at"
+    "error, sitemap_url, radius_miles, created_at"
 )
 
 
@@ -140,6 +148,56 @@ def _seed_location(client: dict) -> str:
     location. Prefers `business_location`; degrades to "" (→ location axis is
     seed-less and the report says so)."""
     return (client.get("business_location") or "").strip()
+
+
+def _gbp_center(client: dict) -> Optional[tuple[float, float]]:
+    """The GBP listing's exact coordinates, if present + parseable. Google already
+    geocoded these at capture, so the GBP center needs no geocoding call."""
+    gbp = client.get("gbp") or {}
+    lat, lng = gbp.get("latitude"), gbp.get("longitude")
+    try:
+        if lat is not None and lng is not None:
+            return float(lat), float(lng)
+    except (TypeError, ValueError):
+        pass
+    return None
+
+
+def _gbp_address(client: dict) -> str:
+    return ((client.get("gbp") or {}).get("address") or "").strip()
+
+
+def _has_center(client: dict) -> bool:
+    """Cheap pre-flight check: can the audit resolve a radius center at all? True
+    when the GBP carries coordinates OR any business address is set (the typed
+    `business_location` or the GBP address). No geocoding — presence only, so the
+    'add these first' gate is synchronous."""
+    return _gbp_center(client) is not None or bool(_seed_location(client)) or bool(_gbp_address(client))
+
+
+async def _resolve_center(client: dict, supabase) -> Optional[tuple[float, float, str]]:
+    """Resolve the radius center as ``(lat, lng, source)``. GBP coordinates win
+    (exact, already geocoded); otherwise geocode a business address once (cached) —
+    the typed `business_location` first, then the GBP address. Returns None only
+    when none of them yields a point."""
+    gbp = _gbp_center(client)
+    if gbp is not None:
+        return gbp[0], gbp[1], "gbp"
+    if not settings.google_maps_api_key:
+        return None
+    for query, source in ((_seed_location(client), "business_location"), (_gbp_address(client), "gbp")):
+        if not query:
+            continue
+        try:
+            geo = await maps_geocode.forward_geocode_places([query], supabase=supabase)
+        except Exception as exc:  # noqa: BLE001 — center geocode is best-effort
+            logger.warning("coverage_audit.center_geocode_failed", extra={"error": str(exc)})
+            continue
+        g = geo.get(query) or {}
+        lat, lng = g.get("lat"), g.get("lng")
+        if lat is not None and lng is not None:
+            return float(lat), float(lng), source
+    return None
 
 
 def _gbp_categories(client: dict) -> list[str]:
@@ -410,11 +468,17 @@ async def _derive_subservice_axis(
 
 # ── location axis (seed city + resolve_target_cities) ──────────────────────────
 async def _resolve_location_axis(
-    client: dict, seed_location: str, location_code: Optional[int]
+    client: dict,
+    seed_location: str,
+    location_code: Optional[int],
+    center: Optional[tuple[float, float]] = None,
+    radius_km: Optional[float] = None,
 ) -> tuple[list[dict], dict]:
     """Seed city + `resolve_target_cities`. Returns ``(axis, provenance)``. Surfaces
     the geocoding-unavailable degrade VISIBLY (plan §5) rather than a silent
-    seed-only axis."""
+    seed-only axis. When ``center`` + ``radius_km`` are given, every discovered
+    city is HARD-BOUNDED to within that radius of the business center (the seed
+    city — the business's own city — is always kept as the anchor)."""
     notes: list[str] = []
     axis: list[dict] = []
     seen: set[str] = set()
@@ -431,7 +495,8 @@ async def _resolve_location_axis(
     elif seed_city:
         try:
             cities, city_notes = await target_cities.resolve_target_cities(
-                client, seed_location, location_code, get_supabase()
+                client, seed_location, location_code, get_supabase(),
+                center=center, radius_km=radius_km,
             )
             notes.extend(city_notes)
             for c in cities:
@@ -499,6 +564,7 @@ async def run_coverage_audit_tier(
     tier: int,
     service_axis_override: Optional[list] = None,
     sitemap_url: Optional[str] = None,
+    radius_miles: Optional[int] = None,
 ) -> dict:
     """Run one tier of the audit and persist it onto the `coverage_audits` row
     ``audit_id``. Idempotent by audit_id: a reaper requeue re-runs into the same
@@ -527,6 +593,27 @@ async def run_coverage_audit_tier(
     seed_location = _seed_location(client)
     location_code = location_code_for(client)
 
+    # Radius scope: resolve the business center (GBP coords first, else the geocoded
+    # business address) and the km bound. The location axis is HARD-BOUNDED to this
+    # radius — cities AND CDPs beyond it are excluded (owner ruling 2026-09-14). A
+    # center that can't be resolved degrades to an unbounded axis + a visible note.
+    center: Optional[tuple[float, float]] = None
+    radius_km: Optional[float] = None
+    if radius_miles:
+        resolved = await _resolve_center(client, supabase)
+        if resolved is not None:
+            center = (resolved[0], resolved[1])
+            radius_km = radius_miles * _MILES_TO_KM
+            notes.append(
+                f"Scoped to a {radius_miles}-mile radius of the business "
+                f"({'GBP location' if resolved[2] == 'gbp' else 'business address'})."
+            )
+        else:
+            notes.append(
+                "Couldn't resolve the business center — the radius wasn't applied "
+                "(set a GBP or a business location, and GOOGLE_MAPS_API_KEY)."
+            )
+
     # 1) Location axis first — its names are the place vocabulary the classifier
     #    uses to split service vs place tokens.
     #    Tiers 3/4 swap cities → the census CDP list, but STILL use the city names as
@@ -536,11 +623,13 @@ async def run_coverage_audit_tier(
     #    census/geocode — no paid calls.
     if tier in (3, 4):
         location_axis, loc_prov, city_vocab = await census_cdp.resolve_cdp_axis(
-            client, seed_location, location_code, supabase
+            client, seed_location, location_code, supabase, center=center, radius_km=radius_km
         )
         place_vocab = list(city_vocab) + core._axis_names(location_axis)
     else:
-        location_axis, loc_prov = await _resolve_location_axis(client, seed_location, location_code)
+        location_axis, loc_prov = await _resolve_location_axis(
+            client, seed_location, location_code, center=center, radius_km=radius_km
+        )
         place_vocab = [row["name"] for row in location_axis]
     notes.extend(loc_prov.get("notes") or [])
 
@@ -755,6 +844,7 @@ async def run_coverage_audit_job(job: dict) -> None:
             audit_id, client_id, tier,
             service_axis_override=payload.get("service_axis"),
             sitemap_url=payload.get("sitemap_url"),
+            radius_miles=payload.get("radius_miles"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
@@ -791,16 +881,26 @@ def enqueue_coverage_audit(
     user_id: Optional[str],
     service_axis: Optional[list] = None,
     sitemap_url: Optional[str] = None,
+    radius_miles: Optional[int] = None,
 ) -> tuple[str, str]:
     """Create a `coverage_audits` run row (status pending) and enqueue its tier job.
     Returns ``(audit_id, job_id)``. An edited service axis (``service_axis``
     supplied) starts a fresh run — the prior run stays as history. ``sitemap_url``
     (optional) is an explicit sitemap/sitemap-index URL to crawl verbatim; it is
-    stored on the run so an edit-axis re-run reuses it."""
+    stored on the run so an edit-axis re-run reuses it. ``radius_miles`` (5 or 10)
+    hard-bounds the location axis to a radius of the business center; it is stored
+    so an edit-axis re-run reuses it.
+
+    Raises 400 ``coverage_audit_no_center`` when the client has neither a GBP nor a
+    business address — the audit can't place a radius center, so the UI asks the
+    team to add one first."""
     if tier not in SUPPORTED_TIERS:
         raise HTTPException(status_code=400, detail="coverage_audit_tier_unsupported")
-    clean_sitemap = (sitemap_url or "").strip() or None
     supabase = get_supabase()
+    # Radius: keep only the two supported options; default to 10 mi (matches the
+    # pre-existing nearby-city scope). None/unsupported → the default.
+    radius = radius_miles if radius_miles in RADIUS_MILES_ALLOWED else DEFAULT_RADIUS_MILES
+    clean_sitemap = (sitemap_url or "").strip() or None
     # Dedup a fresh auto-run: if an audit for this (client, tier) is already
     # pending/running with no edited axis, reuse it instead of stacking a second
     # paid run (a double-click, a client retry, or a second tab). An edited re-run
@@ -820,9 +920,17 @@ def enqueue_coverage_audit(
             p = row.get("payload") or {}
             if int(p.get("tier") or 0) == tier and p.get("service_axis") is None and p.get("audit_id"):
                 return p["audit_id"], row["id"]
+    # New run: require a resolvable radius center (a reuse above already passed this
+    # gate when it was first created, so it's checked only here).
+    client = local_seo_silo._get_client(client_id)
+    if not _has_center(client):
+        raise HTTPException(status_code=400, detail="coverage_audit_no_center")
     audit = (
         supabase.table("coverage_audits")
-        .insert({"client_id": client_id, "status": "pending", "tier": tier, "sitemap_url": clean_sitemap})
+        .insert({
+            "client_id": client_id, "status": "pending", "tier": tier,
+            "sitemap_url": clean_sitemap, "radius_miles": radius,
+        })
         .execute()
     ).data[0]
     audit_id = audit["id"]
@@ -842,6 +950,7 @@ def enqueue_coverage_audit(
                     "tier": tier,
                     "service_axis": service_axis,
                     "sitemap_url": clean_sitemap,
+                    "radius_miles": radius,
                     "user_id": user_id,
                 },
             }

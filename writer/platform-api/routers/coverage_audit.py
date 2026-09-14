@@ -34,6 +34,10 @@ class StartAuditRequest(BaseModel):
     # robots.txt + conventional-path guessing). For a site whose sitemap is at a
     # non-standard path, or to point straight at a large site's index.
     sitemap_url: Optional[str] = None
+    # Radius (miles) the location axis is hard-bounded to, around the business
+    # center (GBP coords, else the geocoded business address). 5 or 10; the service
+    # coerces anything else to the default (10).
+    radius_miles: Optional[int] = None
 
 
 class EditServiceAxisRequest(BaseModel):
@@ -82,7 +86,8 @@ async def start_coverage_audit(
         raise HTTPException(status_code=429, detail="budget_exceeded")
     try:
         audit_id, job_id = svc.enqueue_coverage_audit(
-            str(client_id), body.tier, auth["user_id"], sitemap_url=body.sitemap_url
+            str(client_id), body.tier, auth["user_id"],
+            sitemap_url=body.sitemap_url, radius_miles=body.radius_miles,
         )
     except HTTPException:
         raise
@@ -138,6 +143,7 @@ async def edit_service_axis(
         new_audit_id, job_id = svc.enqueue_coverage_audit(
             str(client_id), run.get("tier") or 1, auth["user_id"], service_axis=services,
             sitemap_url=run.get("sitemap_url"),  # carry the operator's sitemap override forward
+            radius_miles=run.get("radius_miles"),  # and the radius scope
         )
     except HTTPException:
         raise
