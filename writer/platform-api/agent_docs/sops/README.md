@@ -5,6 +5,7 @@ The agency's agent-operable SOP library. **Start with `_ORCHESTRATOR.md`** — i
 | File | Owns |
 |---|---|
 | `_ORCHESTRATOR.md` | Routing, shared definitions, global agent rules, roles (§6), limits (§7) |
+| `SEO_Fundamentals.md` | The *why* layer: how search + AI retrieval work; defines the theory terms the tactic SOPs use but don't define (entity strength, brand understanding, topical completeness, knowledge-graph confidence, topical authority, search intent, striking distance, E-E-A-T, the local triad, semantic relevance, cannibalization, extractability, authority/link-equity). Reference primer, not a playbook |
 | `Site_Architecture_and_Internal_Linking_SOP.md` | Site plans: page list, URLs, nav, schema, internal links (incl. the Site Planning Algorithm + golden trace) |
 | `Link_Building_SOP.md` | Link strategy & SEO NEO execution; Freeze Protocol; master link-type table |
 | `Link_Building_Recipe_Engine.md` | Budget → costed, assigned monthly task plan |
