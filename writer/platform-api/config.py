@@ -310,6 +310,11 @@ class Settings(BaseSettings):
         # (so the user can navigate away): the PDF reports (WeasyPrint render) and
         # the backlink lookup (DataForSEO pull on a cache miss).
         "keyword_research_report", "fanout_report", "backlink_lookup",
+        # Coverage Audit — the user clicks "Run audit" and watches the run screen
+        # poll for the result (geocode + census CDP resolution + a demand fetch,
+        # ~1–2 min). Same must-not-queue rationale as local_seo_action: it must not
+        # wait behind a long MAIN-lane background sweep (e.g. a dataforseo_rank run).
+        "coverage_audit",
     ]
     # Content-compliance guardrail: block publishing content that gives human
     # dosing/administration instructions, claims branded-drug equivalence,
