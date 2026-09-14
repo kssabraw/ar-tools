@@ -158,14 +158,20 @@ export function useResumableJob<T, M = undefined>(opts: Options<T, M>) {
   // On mount, reconnect to a persisted job (if any). On unmount, stop polling
   // but leave the persisted id so the next mount resumes.
   useEffect(() => {
-    if (autoResume) {
-      const p = readStore<M>(storageKey)
-      if (p) {
-        // elapsed is already its fresh 0 on this mount; just start the interval
-        // (no synchronous setState in the effect) and resume polling.
-        runInterval()
-        drive(p.jobId, p.meta, true)
-      }
+    const p = autoResume ? readStore<M>(storageKey) : null
+    // Resync `phase` to THIS key's operation. The useState initializer only runs on
+    // the first mount, so without this a storageKey change that happens while the
+    // component stays mounted (e.g. switching the tier/scope/run the key encodes)
+    // would reconnect the poll loop below but leave `phase` stale from the previous
+    // key — the busy indicator wouldn't show for the reconnected job. On the first
+    // mount this matches the initializer (a no-op); on a key change it's the fix.
+    // `start()` never changes storageKey, so this can't clobber a just-started run.
+    setPhase(p ? 'running' : 'idle')
+    if (p) {
+      // elapsed is already its fresh 0 on this mount; just start the interval
+      // (no synchronous setState in the effect) and resume polling.
+      runInterval()
+      drive(p.jobId, p.meta, true)
     }
     return () => {
       cancelledRef.current = true

@@ -269,6 +269,30 @@ def test_derive_subservice_axis_one_service_failing_is_skipped(monkeypatch):
     assert any("could not expand" in n.lower() for n in prov["notes"])
 
 
+def test_derive_subservice_axis_empty_yield_service_is_recorded(monkeypatch):
+    """A service whose planner SUCCEEDS but produces no composable subservice is
+    recorded in `empty_services` (not silently dropped) so the review screen can
+    explain the omission."""
+    monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
+    monkeypatch.setattr(svc.icp_service, "resolve_icp_text", lambda client: "")
+
+    def _gen(service, city, llm, icp_block=""):
+        # "Barren Service" returns no silos → service_labels_from_pages yields nothing.
+        if service == "Barren Service":
+            return []
+        return [{"silo": "Core", "pages": [{"keyword": f"{service} {city}", "supporting_keywords": []}]}]
+
+    monkeypatch.setattr(svc.local_seo_silo, "_generate_service_pages", _gen)
+
+    main_axis = [{"label": "Roofing"}, {"label": "Barren Service"}]
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, main_axis, "Melbourne"))
+    assert [e["label"] for e in axis] == ["Roofing"]
+    assert prov["planned_services"] == ["Roofing"]
+    assert prov["failed_services"] == []            # it didn't error…
+    assert prov["empty_services"] == ["Barren Service"]  # …it just produced nothing
+    assert any("no distinct subservices" in n.lower() for n in prov["notes"])
+
+
 def test_derive_subservice_axis_icp_failure_is_non_fatal(monkeypatch):
     monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
 

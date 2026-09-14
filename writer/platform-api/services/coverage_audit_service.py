@@ -338,6 +338,7 @@ async def _derive_subservice_axis(
         "representative_city": representative_city,
         "planned_services": [],
         "failed_services": [],
+        "empty_services": [],  # planner returned, but no composable subservice came out
         "notes": [],
         "confirmed": False,
     }
@@ -358,6 +359,11 @@ async def _derive_subservice_axis(
     except Exception as exc:  # noqa: BLE001 — ICP grounding is non-critical
         logger.warning("coverage_audit.icp_fetch_failed", extra={"error": str(exc)})
 
+    # One planner call per main service. These are best-effort Anthropic calls — NOT
+    # metered through `coverage_audit_usage` and NOT cached, so unlike the demand
+    # batch a reaper requeue of this tier re-runs them (cheap: one call per service,
+    # far under the 30-min reaper window; only the DataForSEO demand step is the
+    # metered/idempotent one the reserve-before-spend guard protects).
     per_service_labels: list[dict] = []
     for service in main_services:
         try:
@@ -375,6 +381,11 @@ async def _derive_subservice_axis(
         if labels:
             per_service_labels.append({"service": service, "labels": labels})
             prov["planned_services"].append(service)
+        else:
+            # Planner succeeded but produced nothing composable (e.g. every page
+            # keyword was blank / stripped away) — record it so the review screen can
+            # explain the omission rather than the service silently vanishing.
+            prov["empty_services"].append(service)
 
     axis = core.merge_subservice_axis(per_service_labels)
     if not axis:
@@ -382,6 +393,10 @@ async def _derive_subservice_axis(
     if prov["failed_services"]:
         prov["notes"].append(
             f"Could not expand {len(prov['failed_services'])} service(s) into subservices."
+        )
+    if prov["empty_services"]:
+        prov["notes"].append(
+            f"{len(prov['empty_services'])} service(s) yielded no distinct subservices."
         )
     return axis, prov
 
@@ -606,6 +621,7 @@ async def run_coverage_audit_tier(
                 "main_services": sub_prov.get("main_services", []),
                 "planned_services": sub_prov.get("planned_services", []),
                 "failed_services": sub_prov.get("failed_services", []),
+                "empty_services": sub_prov.get("empty_services", []),
                 "representative_city": seed_city,
             }
         else:
