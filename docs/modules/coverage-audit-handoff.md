@@ -2,7 +2,7 @@
 
 **Module slug:** `coverage_audit` · **Authoritative plan:** `docs/modules/coverage-audit-module-plan-v1_0.md` (design authority; owner decisions §0; adversarial-review findings + resolutions §8).
 
-**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) BUILT** — draft PR (branch `claude/coverage-audit-phase-2-tier-2-zohz69`), local tests green + ruff/mypy/tsc/vite build clean. **No new migration** (the subservice axis rides the run's jsonb, same as the Tier-1 service axis — re-verified: Phase 0's tables/RPC/`coverage_audit` per-tier job type already cover it). **Next step is Phase 3 (Tier 3: CDP × main-service — the NEW census integration, worker-only).**
+**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green: platform-api tests + lint & typecheck + Netlify). **No new migration** (the subservice axis rides the run's jsonb, same as the Tier-1 service axis — re-verified: Phase 0's tables/RPC/`coverage_audit` per-tier job type already cover it). **Next step is Phase 3 (Tier 3: CDP × main-service — the NEW census integration, worker-only).**
 
 ---
 
