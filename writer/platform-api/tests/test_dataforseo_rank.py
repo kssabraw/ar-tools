@@ -135,19 +135,31 @@ def _http_status_error(code: int) -> httpx.HTTPStatusError:
     return httpx.HTTPStatusError("boom", request=request, response=response)
 
 
-def test_is_terminal_task_code():
-    assert dataforseo_rank.is_terminal_task_code(40100) is True  # auth
-    assert dataforseo_rank.is_terminal_task_code(40200) is True  # payment
-    assert dataforseo_rank.is_terminal_task_code(40202) is False  # throttle/limit — retry, not abort
-    assert dataforseo_rank.is_terminal_task_code(50000) is False  # server-internal — retryable
-    assert dataforseo_rank.is_terminal_task_code(40501) is False  # invalid field — per-keyword skip
-    assert dataforseo_rank.is_terminal_task_code(0) is False
+def test_is_terminal_task_message():
+    # Auth / billing messages abort the whole run.
+    assert dataforseo_rank.is_terminal_task_message("Authentication failed") is True
+    assert dataforseo_rank.is_terminal_task_message("Unauthorized.") is True
+    assert dataforseo_rank.is_terminal_task_message("Access denied") is True
+    assert dataforseo_rank.is_terminal_task_message("Payment Required") is True
+    assert dataforseo_rank.is_terminal_task_message("Insufficient funds on the account") is True
+    # Transient / per-keyword messages must NOT be terminal. The regression that
+    # aborted a whole live run after 3 keywords: 40101 "Internal SE Server Error".
+    assert dataforseo_rank.is_terminal_task_message("Internal SE Server Error.") is False
+    assert dataforseo_rank.is_terminal_task_message("You reached the limit") is False
+    assert dataforseo_rank.is_terminal_task_message("Invalid Field") is False
+    assert dataforseo_rank.is_terminal_task_message("") is False
 
 
 def test_is_retryable_exc():
+    # A non-terminal task error (e.g. the transient "Internal SE Server Error")
+    # is retryable; an auth/billing terminal error is not.
+    assert dataforseo_rank.is_retryable_exc(
+        dataforseo_rank.DataForSeoTaskError(40101, "Internal SE Server Error.")
+    ) is True
     assert dataforseo_rank.is_retryable_exc(dataforseo_rank.DataForSeoTaskError(40202, "limit")) is True
-    assert dataforseo_rank.is_retryable_exc(dataforseo_rank.DataForSeoTaskError(50000, "server")) is True
-    assert dataforseo_rank.is_retryable_exc(dataforseo_rank.DataForSeoTerminalError(40200, "no funds")) is False
+    assert dataforseo_rank.is_retryable_exc(
+        dataforseo_rank.DataForSeoTerminalError(40200, "Payment Required")
+    ) is False
     assert dataforseo_rank.is_retryable_exc(_http_status_error(503)) is True
     assert dataforseo_rank.is_retryable_exc(_http_status_error(429)) is True
     assert dataforseo_rank.is_retryable_exc(_http_status_error(400)) is False

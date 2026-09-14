@@ -60,14 +60,22 @@ def _auth_header() -> dict[str, str]:
 # downstream as a full null week and can trip a false deindex signal. So retry
 # transient failures per keyword; fail fast (and abort the run) only on the
 # auth/payment codes that will hit every keyword.
-# ----------------------------------------------------------------------------
-# DataForSEO task status_codes that mean "this will fail for EVERY keyword"
-# (bad credentials / no balance). Aborting the run on these is cheaper and
-# clearer than failing 96 keywords one at a time.
-_TERMINAL_TASK_CODES = frozenset({
-    40100, 40101, 40102, 40103,  # authentication / access denied
-    40200, 40201,                # payment required / insufficient funds
-})
+# Only an account-wide auth/billing failure is worth aborting a whole run for
+# (it will hit every keyword). DataForSEO's task status_codes are NOT grouped by
+# category into clean numeric ranges — e.g. 40101 is "Internal SE Server Error",
+# a TRANSIENT search-engine failure DataForSEO itself already retried, not an
+# auth error — so classify "terminal" from the message the API returns, never a
+# guessed code range. Everything that isn't clearly auth/billing (internal SE
+# errors, throttles, generic task errors) is transient and gets retried.
+_TERMINAL_MESSAGE_TERMS = (
+    # authentication / authorization
+    "unauthor", "not authorized", "authentication", "authorization",
+    "access denied", "forbidden", "invalid login", "invalid password",
+    "invalid credential", "invalid api key",
+    # payment / balance
+    "payment required", "insufficient funds", "insufficient balance",
+    "not enough money", "not enough credits", "out of money", "no funds",
+)
 # HTTP statuses worth retrying (rate limit + transient server errors).
 _RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
 
@@ -89,9 +97,14 @@ class DataForSeoTerminalError(DataForSeoTaskError):
     """An auth/payment task error — it will hit every keyword, so abort the run."""
 
 
-def is_terminal_task_code(code: int) -> bool:
-    """True for auth/payment task codes that should abort the whole run."""
-    return int(code or 0) in _TERMINAL_TASK_CODES
+def is_terminal_task_message(message: str) -> bool:
+    """True when a task-level error message signals an account-wide auth/billing
+    problem that will hit every keyword (so the run should abort). Classified by
+    message, not code, because DataForSEO codes aren't categorized by numeric
+    range — a transient "Internal SE Server Error" (40101) must NOT read as
+    terminal."""
+    m = (message or "").lower()
+    return any(term in m for term in _TERMINAL_MESSAGE_TERMS)
 
 
 def is_retryable_exc(exc: Exception) -> bool:
@@ -320,7 +333,7 @@ async def fetch_serp_rank(keyword: str, domain: str, location_code: int) -> Opti
     code = int(task.get("status_code") or 0)
     if code >= 40000:
         msg = task.get("status_message") or ""
-        if is_terminal_task_code(code):
+        if is_terminal_task_message(msg):
             raise DataForSeoTerminalError(code, msg)
         raise DataForSeoTaskError(code, msg)
     items = (task.get("result") or [{}])[0].get("items") or []
