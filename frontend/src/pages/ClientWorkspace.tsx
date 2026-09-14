@@ -6,6 +6,7 @@ import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList, BookOpen, Share2, Send, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
+  LayoutGrid,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -444,6 +445,13 @@ export function ClientWorkspace() {
           description="Point at any domain — a competitor, a prospect, the client's own site — and see its estimated organic traffic, authority, and every keyword it ranks for with volume, position & value. The SEMrush-style research view."
           to={id ? `/clients/${id}/domain-intel` : undefined}
           cta="Open"
+        />
+        <ActionCard
+          icon={<LayoutGrid size={22} />}
+          label="Coverage Audit"
+          description="Scans the whole site as it stands and finds the location & service pages that don't exist yet — missing services, missing cities, and service×city combos — ranked by real search demand. Seed a Service×Location Matrix from the gaps in one click."
+          to={id ? `/clients/${id}/coverage-audit` : undefined}
+          cta="Audit"
         />
       </Section>
 

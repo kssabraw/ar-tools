@@ -1061,6 +1061,9 @@ async def _process_job(job: dict) -> None:
         await run_keyword_gap_job(job)
     elif job_type == "link_gap":
         await run_link_gap_job(job)
+    elif job_type == "coverage_audit":
+        from services.coverage_audit_service import run_coverage_audit_job
+        await run_coverage_audit_job(job)
     elif job_type == "keyword_research":
         await run_keyword_research_job(job)
     elif job_type == "keyword_research_report":

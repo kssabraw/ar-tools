@@ -214,12 +214,60 @@ def classify_site_pages(
     return buckets
 
 
+# ── derive a candidate service axis from the classified site ───────────────────
+def service_phrase_from_url(url: str, place_tokens: Optional[Iterable[str]]) -> str:
+    """Reconstruct a readable service phrase from a URL's path, in slug order, with
+    generic wrapper words (`content_tokens`' drop-list) and place tokens removed.
+
+    ``/service-areas/roof-restoration/melbourne/`` with place {"melbourne"} →
+    "Roof Restoration"; ``/gutter-cleaning/`` → "Gutter Cleaning". Order is taken
+    from the URL slug (not `classify_site_pages`' sorted token set, which loses it)
+    so the derived label reads naturally. Empty when nothing service-shaped
+    remains. Pure — no I/O."""
+    place = frozenset(t.lower() for t in (place_tokens or ()))
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for slug in url_path_slugs(url):
+        valid = content_tokens(slug)  # generics + 1-char noise dropped upstream
+        for tok in slug.split("-"):
+            if tok in valid and tok not in place and tok not in seen:
+                seen.add(tok)
+                ordered.append(tok)
+    return " ".join(w.title() for w in ordered)
+
+
+def derive_site_services(
+    classified: Optional[dict], place_vocab: Optional[Iterable[str]]
+) -> list[str]:
+    """Candidate main-service phrases observed on the client's site — the
+    service-shaped part of every ``service_only`` and ``service_location`` page,
+    place-stripped, deduped (case-insensitive, first-seen order).
+
+    This is the *site* half of the service axis; the caller merges it with the
+    GBP-category seed + the planner (plan §0.2) before the team confirms/edits.
+    Pure — no I/O; consumes the output of `classify_site_pages`."""
+    classified = classified or {}
+    place_tokens = _place_token_set(place_vocab)
+    out: list[str] = []
+    seen: set[str] = set()
+    for bucket in (BUCKET_SERVICE_ONLY, BUCKET_SERVICE_LOCATION):
+        for entry in classified.get(bucket) or []:
+            phrase = service_phrase_from_url(entry.get("url") or "", place_tokens)
+            key = phrase.lower()
+            if phrase and key not in seen:
+                seen.add(key)
+                out.append(phrase)
+    return out
+
+
 # ── ideal-vs-actual coverage grid (report only — never matrix cell state) ──────
 def build_coverage_grid(
     service_axis: Optional[Iterable],
     location_axis: Optional[Iterable],
     site_index: Optional[dict],
     in_tool_index: Optional[dict] = None,
+    *,
+    primary_service: Optional[str] = None,
 ) -> dict:
     """Mark each service, location, and service×location cell ``present`` /
     ``absent`` for the demand-ranked gap REPORT.
@@ -229,10 +277,16 @@ def build_coverage_grid(
 
       * service (city-less service page) — keyword = the service name, matched by
         content-word-set equality (`match_site_page_for_keyword`);
-      * location (bare location hub, ``/melbourne/``) — matched by the generic
-        place-name matcher (`match_site_location_page`). The location-hub *keyword*
-        definition (plan §7 open item) is deferred to Phase 1; Phase 0 detects the
-        generic place-name page, which is exactly the hub a local business uses;
+      * location (a city hub) — presence matched by the generic place-name matcher
+        (`match_site_location_page`, catching a bare ``/melbourne/``) OR, when a
+        ``primary_service`` is given, by that service's city page
+        (`"<primary_service> <location>"`) — a local business's city landing page
+        IS its "<service> <city>" page, so either counts as covering the city. The
+        location-hub **keyword** (plan §7 open item, resolved for Phase 1) is
+        ``"<primary main service> <location>"`` when a primary service is supplied
+        (a bare place name carries no isolated commercial demand, so it can't be
+        demand-ranked); with no primary service the keyword is the bare place name
+        (the Phase-0 default, unchanged);
       * cell — keyword = ``"<service> <location>"`` (matching the Matrix's own
         `build_matrix_silos` composition), matched by content-word-set equality.
 
@@ -267,14 +321,33 @@ def build_coverage_grid(
             {"service": s, "keyword": s, "present": present, "match_url": url, "source": source}
         )
 
+    primary = (primary_service or "").strip()
     loc_rows: list[dict] = []
     for loc in locations:
+        hub_keyword = f"{primary} {loc}".strip() if primary else loc
+
+        def _match(idx, loc=loc, hub_keyword=hub_keyword):
+            # A bare place hub (/melbourne/) OR the primary-service city page both
+            # count as covering the city; presence via either.
+            hit = match_site_location_page(loc, idx["location_index"])
+            if hit:
+                return hit
+            if primary:
+                return match_site_page_for_keyword(hub_keyword, idx["token_index"])
+            return None
+
         present, url, source = _resolve(
-            lambda loc=loc: match_site_location_page(loc, site["location_index"]),
-            lambda loc=loc: match_site_location_page(loc, intool["location_index"]),
+            lambda: _match(site),
+            lambda: _match(intool),
         )
         loc_rows.append(
-            {"location": loc, "keyword": loc, "present": present, "match_url": url, "source": source}
+            {
+                "location": loc,
+                "keyword": hub_keyword,
+                "present": present,
+                "match_url": url,
+                "source": source,
+            }
         )
 
     cell_rows: list[dict] = []
@@ -387,3 +460,32 @@ def rank_gaps(
         )
     )
     return ranked
+
+
+# ── Matrix seed payload (AXES ONLY — plan §0.5 / §8 Major #1) ──────────────────
+def build_matrix_seed_body(
+    name: str,
+    location: str,
+    location_code: Optional[int],
+    service_axis: Optional[Iterable],
+    location_axis: Optional[Iterable],
+) -> dict:
+    """Build the `MatrixCreateRequest`-shaped body for
+    `local_seo_matrix_store.create_matrix`, carrying the tier's FULL axes (every
+    service × every location — not just the gaps).
+
+    AXES ONLY: this deliberately emits **only** the axes + the seed location. It
+    NEVER carries per-cell coverage — `create_matrix` builds the cells and calls
+    its own `mark_coverage` (re-scanning the live site) to decide found / on_site /
+    missing. Seeding the audit's own present/absent verdict onto cells would create
+    a second, divergence-prone source of truth (plan §8 Major #1). Pure — no I/O."""
+    return {
+        "name": name,
+        "location": location,
+        "location_code": location_code,
+        # Plain label / name lists; create_matrix runs normalize_services /
+        # normalize_locations on them. `_axis_names` accepts either strings or the
+        # audit's {label|name, ...} dicts.
+        "services": _axis_names(service_axis),
+        "locations": _axis_names(location_axis),
+    }
