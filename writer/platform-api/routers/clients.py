@@ -582,21 +582,24 @@ async def update_client(
             updates["detected_icp"] = icp_service.merge_raw_text(
                 existing.get("detected_icp"), body.icp_text
             )
-    if body.google_drive_folder_id is not None:
-        updates["google_drive_folder_id"] = body.google_drive_folder_id
+    if "google_drive_folder_id" in body.model_fields_set:
+        updates["google_drive_folder_id"] = body.google_drive_folder_id or None
     if body.drive_folders is not None:
         updates["drive_folders"] = body.drive_folders
-    if body.github_repo is not None:
-        updates["github_repo"] = body.github_repo
-    if body.github_branch is not None:
-        updates["github_branch"] = body.github_branch
-    if body.github_content_path is not None:
-        updates["github_content_path"] = body.github_content_path
+    # Explicit-set semantics: a field present in the request (even as null/"")
+    # clears the stored value; omitting it leaves it unchanged. The intake form
+    # always sends these keys, so emptying an input persists the clear.
+    if "github_repo" in body.model_fields_set:
+        updates["github_repo"] = body.github_repo or None
+    if "github_branch" in body.model_fields_set:
+        updates["github_branch"] = body.github_branch or None
+    if "github_content_path" in body.model_fields_set:
+        updates["github_content_path"] = body.github_content_path or None
     if body.github_content_paths is not None:
         updates["github_content_paths"] = body.github_content_paths
-    if body.wordpress_site_url is not None:
+    if "wordpress_site_url" in body.model_fields_set:
         updates["wordpress_site_url"] = body.wordpress_site_url or None
-    if body.wordpress_username is not None:
+    if "wordpress_username" in body.model_fields_set:
         updates["wordpress_username"] = body.wordpress_username or None
     # app_password: omitted (None) leaves the stored secret untouched; an empty
     # string clears it; a value replaces it.
@@ -604,12 +607,12 @@ async def update_client(
         updates["wordpress_app_password"] = body.wordpress_app_password or None
     if body.wheelhouse_cpt_enabled is not None:
         updates["wheelhouse_cpt_enabled"] = body.wheelhouse_cpt_enabled
-    if body.logo_url is not None:
-        updates["logo_url"] = body.logo_url
-    if body.gsc_property is not None:
-        updates["gsc_property"] = body.gsc_property
-    if body.business_location is not None:
-        updates["business_location"] = body.business_location
+    if "logo_url" in body.model_fields_set:
+        updates["logo_url"] = body.logo_url or None
+    if "gsc_property" in body.model_fields_set:
+        updates["gsc_property"] = body.gsc_property or None
+    if "business_location" in body.model_fields_set:
+        updates["business_location"] = body.business_location or None
     # Recipe Engine budget inputs (§1–§2).
     if body.retainer_monthly is not None:
         updates["retainer_monthly"] = body.retainer_monthly
