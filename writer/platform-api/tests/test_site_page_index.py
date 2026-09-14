@@ -5,6 +5,8 @@ No network: only the pure helpers (slugify / parse / index / match) are exercise
 
 from __future__ import annotations
 
+import asyncio
+
 from services import site_page_index as spi
 
 
@@ -309,3 +311,121 @@ def test_site_base_url():
     assert spi.site_base_url("acme.com") == "https://acme.com"
     assert spi.site_base_url("http://acme.com/x") == "http://acme.com"
     assert spi.site_base_url("") == ""
+
+
+# ---------------------------------------------------------------------------
+# _fetch_sitemap_urls / discover_site_urls — sitemap override + truncation
+# (network mocked via _fetch_text)
+# ---------------------------------------------------------------------------
+_URLSET = (
+    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    "<url><loc>https://acme.com/a</loc></url>"
+    "<url><loc>https://acme.com/b</loc></url>"
+    "</urlset>"
+)
+_INDEX = (
+    '<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+    "<sitemap><loc>https://acme.com/child-1.xml</loc></sitemap>"
+    "<sitemap><loc>https://acme.com/child-2.xml</loc></sitemap>"
+    "</sitemapindex>"
+)
+
+
+def _install_fetch(monkeypatch, mapping):
+    async def _fake_fetch(_client, url):
+        return mapping.get(url)
+    monkeypatch.setattr(spi, "_fetch_text", _fake_fetch)
+
+
+def test_fetch_sitemap_seed_override_skips_robots_and_default_paths(monkeypatch):
+    # Only the supplied (non-standard-path) sitemap is served; robots.txt + the
+    # conventional /sitemap.xml paths return None. The override must still find it.
+    _install_fetch(monkeypatch, {"https://acme.com/hidden/map.xml": _URLSET})
+    urls, truncated = asyncio.run(
+        spi._fetch_sitemap_urls("https://acme.com", seed_sitemaps=["https://acme.com/hidden/map.xml"])
+    )
+    assert urls == ["https://acme.com/a", "https://acme.com/b"]
+    assert truncated is False
+
+
+def test_fetch_sitemap_seed_override_follows_index(monkeypatch):
+    # A seeded sitemap-INDEX is followed one level into its children.
+    _install_fetch(monkeypatch, {
+        "https://acme.com/sitemap_index.xml": _INDEX,
+        "https://acme.com/child-1.xml": _URLSET,
+        "https://acme.com/child-2.xml": (
+            '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+            "<url><loc>https://acme.com/c</loc></url></urlset>"
+        ),
+    })
+    urls, truncated = asyncio.run(
+        spi._fetch_sitemap_urls("https://acme.com", seed_sitemaps=["https://acme.com/sitemap_index.xml"])
+    )
+    assert set(urls) == {"https://acme.com/a", "https://acme.com/b", "https://acme.com/c"}
+    assert truncated is False
+
+
+def test_fetch_sitemap_truncates_at_url_cap(monkeypatch):
+    _install_fetch(monkeypatch, {"https://acme.com/map.xml": _URLSET})
+    urls, truncated = asyncio.run(
+        spi._fetch_sitemap_urls("https://acme.com", seed_sitemaps=["https://acme.com/map.xml"], max_urls=1)
+    )
+    assert urls == ["https://acme.com/a"]  # capped
+    assert truncated is True
+
+
+def test_fetch_sitemap_exact_cap_is_not_truncated(monkeypatch):
+    # A complete crawl that lands on EXACTLY max_urls unique pages (empty queue,
+    # nothing dropped) must NOT report truncated — no false "pages weren't scanned".
+    _install_fetch(monkeypatch, {"https://acme.com/map.xml": _URLSET})  # 2 URLs
+    urls, truncated = asyncio.run(
+        spi._fetch_sitemap_urls("https://acme.com", seed_sitemaps=["https://acme.com/map.xml"], max_urls=2)
+    )
+    assert urls == ["https://acme.com/a", "https://acme.com/b"]
+    assert truncated is False
+
+
+def test_discover_site_urls_sitemap_url_override_and_truncated_source(monkeypatch):
+    _install_fetch(monkeypatch, {"https://acme.com/hidden/map.xml": _URLSET})
+    # Even with an unusable website URL, an explicit sitemap URL drives the crawl.
+    urls, source = asyncio.run(
+        spi.discover_site_urls("", 0, sitemap_url="https://acme.com/hidden/map.xml")
+    )
+    assert urls == ["https://acme.com/a", "https://acme.com/b"]
+    assert source == "sitemap"
+    # A cap → source flips to sitemap_truncated (the audit surfaces a note off this).
+    urls2, source2 = asyncio.run(
+        spi.discover_site_urls("", 0, sitemap_url="https://acme.com/hidden/map.xml", max_urls=1)
+    )
+    assert source2 == "sitemap_truncated"
+
+
+def test_discover_site_urls_paid_only_skips_the_sitemap(monkeypatch):
+    # paid_only must NOT touch the sitemap (no _fetch_text) and go straight to the
+    # DataForSEO site: query — so a caller that already ran the free sitemap pass
+    # doesn't re-fetch it on the paid retry.
+    fetched = {"sitemap": False}
+
+    async def _fake_fetch(_client, _url):
+        fetched["sitemap"] = True
+        return _URLSET
+
+    async def _fake_indexed(domain, code):
+        return ["https://acme.com/from-index"]
+
+    monkeypatch.setattr(spi, "_fetch_text", _fake_fetch)
+    monkeypatch.setattr(spi, "_fetch_google_indexed_urls", _fake_indexed)
+    urls, source = asyncio.run(spi.discover_site_urls("https://acme.com", 2840, paid_only=True))
+    assert urls == ["https://acme.com/from-index"]
+    assert source == "google_index"
+    assert fetched["sitemap"] is False  # the sitemap was never crawled
+
+
+def test_discover_site_urls_ignores_non_http_sitemap_override(monkeypatch):
+    # A junk override is ignored and discovery falls back to the normal path
+    # (here nothing is served → no pages, no paid fallback).
+    _install_fetch(monkeypatch, {})
+    urls, source = asyncio.run(
+        spi.discover_site_urls("https://acme.com", 0, use_paid_fallback=False, sitemap_url="not-a-url")
+    )
+    assert urls == [] and source == "none"
