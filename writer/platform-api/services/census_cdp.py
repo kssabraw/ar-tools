@@ -391,7 +391,9 @@ async def _fetch_state_cdps(client, state_fips: str, layer_id: int) -> list[dict
 
 # ── the CDP location axis (orchestration) ──────────────────────────────────────
 async def resolve_cdp_axis(
-    client: dict, seed_location: str, location_code: Optional[int], supabase
+    client: dict, seed_location: str, location_code: Optional[int], supabase,
+    center: Optional[tuple[float, float]] = None,
+    radius_km: Optional[float] = None,
 ) -> tuple[list[dict], dict, list[str]]:
     """Resolve the Tier-3 CDP location axis for a client's service area.
 
@@ -579,10 +581,20 @@ async def resolve_cdp_axis(
     #    `seen`) so a CDP kept in two states counts once.
     verified: list[str] = []
     seen: set[str] = set()
+    beyond_radius = 0
     for cand in candidates:
         key = cand["name"].lower()
         if key in seen:
             continue
+        # Radius hard bound (owner ruling 2026-09-14): when a business center +
+        # radius are supplied, a CDP whose authoritative Census centroid is beyond
+        # the radius is excluded — the audit is scoped to "within N miles of the
+        # business", not the whole city footprint. Additive to the containment check.
+        if center is not None and radius_km is not None:
+            dist = maps_geocode.haversine_km(center[0], center[1], cand["lat"], cand["lng"])
+            if dist > radius_km:
+                beyond_radius += 1
+                continue
         synthetic = {
             "matched": True,
             "place_id": None,
@@ -593,6 +605,8 @@ async def resolve_cdp_axis(
         if any(maps_geocode.place_is_within_city(synthetic, fc) for fc in footprint_geos):
             seen.add(key)
             verified.append(cand["name"])
+    if beyond_radius:
+        prov["beyond_radius"] = beyond_radius
 
     axis = assemble_cdp_axis(verified, settings.coverage_cdp_max)
     prov["verified"] = len(verified)  # distinct CDPs passing containment (pre-cap)

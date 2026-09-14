@@ -82,10 +82,20 @@ def _query(*parts: str) -> str:
 
 async def resolve_target_cities(
     client: dict, seed_location: str, location_code: Optional[int], supabase,
+    *,
+    center: Optional[tuple[float, float]] = None,
+    radius_km: Optional[float] = None,
 ) -> tuple[list[dict], list[str]]:
     """Return ``(additional_cities, degraded_notes)``. Each city is
     ``{name, lat, lng, bounds, place_id, state, country, source}`` and excludes the
-    seed city. Caps at `local_seo_max_target_cities`."""
+    seed city. Caps at `local_seo_max_target_cities`.
+
+    ``center`` + ``radius_km`` (both optional) hard-bound the result: the nearby
+    search centres on ``center`` (the precise business point, not the seed-city
+    centroid) with ``radius_km`` as its reach, and EVERY candidate — including the
+    otherwise-unbounded GBP-service-area + manual sources — is dropped when its
+    centre is beyond ``radius_km``. Omitting them keeps the legacy behaviour
+    (seed-centroid origin, only website/nearby distance-bounded)."""
     notes: list[str] = []
     seed_city, seed_state, seed_country = _parse_area(seed_location)
     if not seed_city:
@@ -134,11 +144,17 @@ async def resolve_target_cities(
     seed_lat, seed_lng = seed_geo.get("lat"), seed_geo.get("lng")
     seed_pid = seed_geo.get("place_id")
 
+    # Distance origin + nearby-search reach: an explicit business center overrides
+    # the seed-city centroid, and an explicit radius overrides the config default.
+    origin_lat = center[0] if center is not None else seed_lat
+    origin_lng = center[1] if center is not None else seed_lng
+    search_radius_km = radius_km if radius_km is not None else settings.local_seo_nearby_city_radius_km
+
     # 3) Nearby cities within the radius (Overpass), then geocode their names too.
-    if seed_lat is not None and seed_lng is not None:
+    if origin_lat is not None and origin_lng is not None:
         try:
             nearby = await overpass.nearby_cities(
-                seed_lat, seed_lng, settings.local_seo_nearby_city_radius_km
+                origin_lat, origin_lng, search_radius_km
             )
         except Exception as exc:  # noqa: BLE001 — Overpass is best-effort
             logger.warning("target_cities.overpass_failed", extra={"error": str(exc)})
@@ -163,8 +179,12 @@ async def resolve_target_cities(
         notes.append("Couldn't resolve the seed city — nearby cities were not searched.")
 
     # 4) Keep real, distinct localities; bound discovered sources by distance.
+    #    Legacy: only website/nearby are distance-bounded (nearby ≤ radius, website
+    #    ≤ radius×mult); gbp/manual are authoritative and kept regardless. When an
+    #    explicit `radius_km` is set, it's a HARD bound on EVERY source.
     radius = settings.local_seo_nearby_city_radius_km
     website_max_km = radius * settings.local_seo_website_city_radius_mult
+    hard_bound = radius_km is not None
     kept: list[dict] = []
     seen_pids: set[str] = set()
     for key, source in sources.items():
@@ -179,16 +199,20 @@ async def resolve_target_cities(
             continue
         lat, lng = cg.get("lat"), cg.get("lng")
         dist = (
-            maps_geocode.haversine_km(seed_lat, seed_lng, lat, lng)
-            if None not in (seed_lat, seed_lng, lat, lng)
+            maps_geocode.haversine_km(origin_lat, origin_lng, lat, lng)
+            if None not in (origin_lat, origin_lng, lat, lng)
             else None
         )
         if source in ("website", "nearby"):
             if not (types & _CITY_LEVEL_TYPES):
                 continue
-            limit = radius if source == "nearby" else website_max_km
+            limit = radius_km if hard_bound else (radius if source == "nearby" else website_max_km)
             if dist is None or dist > limit:
                 continue
+        elif hard_bound and (dist is None or dist > radius_km):
+            # gbp / manual: normally kept regardless of distance, but an explicit
+            # radius overrides that and bounds them too.
+            continue
         if pid:
             seen_pids.add(pid)
         kept.append({

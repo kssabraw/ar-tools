@@ -112,6 +112,17 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Save, then try again.',
     ],
   },
+  coverage_audit_no_center: {
+    title: 'Add a location first',
+    meaning:
+      'The Coverage Audit scans within a radius of the business, but this client ' +
+      'has neither a Google Business Profile nor a business address — so there’s no ' +
+      'center to scan around.',
+    steps: [
+      'Open the client’s card and connect the Google Business Profile, or set the business location.',
+      'Save, then come back and run the audit.',
+    ],
+  },
   client_has_no_gbp_category: {
     title: 'This client has no Google Business Profile category',
     meaning:
