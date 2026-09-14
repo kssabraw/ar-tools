@@ -85,6 +85,7 @@ async def resolve_target_cities(
     *,
     center: Optional[tuple[float, float]] = None,
     radius_km: Optional[float] = None,
+    place_types: Optional[tuple[str, ...]] = None,
 ) -> tuple[list[dict], list[str]]:
     """Return ``(additional_cities, degraded_notes)``. Each city is
     ``{name, lat, lng, bounds, place_id, state, country, source}`` and excludes the
@@ -95,7 +96,12 @@ async def resolve_target_cities(
     centroid) with ``radius_km`` as its reach, and EVERY candidate — including the
     otherwise-unbounded GBP-service-area + manual sources — is dropped when its
     centre is beyond ``radius_km``. Omitting them keeps the legacy behaviour
-    (seed-centroid origin, only website/nearby distance-bounded)."""
+    (seed-centroid origin, only website/nearby distance-bounded).
+
+    ``place_types`` overrides the OSM place types the nearby search enumerates
+    (default: the shared `local_seo_overpass_place_types`, city/town). Callers on a
+    suburb-geography metro (the Coverage Audit) pass a broader set incl. `suburb`;
+    the geocode filter below still keeps only real localities."""
     notes: list[str] = []
     seed_city, seed_state, seed_country = _parse_area(seed_location)
     if not seed_city:
@@ -154,7 +160,7 @@ async def resolve_target_cities(
     if origin_lat is not None and origin_lng is not None:
         try:
             nearby = await overpass.nearby_cities(
-                origin_lat, origin_lng, search_radius_km
+                origin_lat, origin_lng, search_radius_km, place_types=place_types
             )
         except Exception as exc:  # noqa: BLE001 — Overpass is best-effort
             logger.warning("target_cities.overpass_failed", extra={"error": str(exc)})

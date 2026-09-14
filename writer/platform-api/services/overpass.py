@@ -97,8 +97,18 @@ async def places_near(
     return []
 
 
-async def nearby_cities(lat: float, lng: float, radius_km: float) -> list[dict]:
+async def nearby_cities(
+    lat: float, lng: float, radius_km: float,
+    place_types: tuple[str, ...] | None = None,
+) -> list[dict]:
     """Cities/towns within `radius_km` of (lat, lng), via Overpass. Returns
-    ``[{name, lat, lng, place}]`` (possibly empty). Never raises."""
-    place_types = tuple(t.strip() for t in settings.local_seo_overpass_place_types.split(",") if t.strip())
-    return await places_near(lat, lng, radius_km, place_types or ("city", "town"))
+    ``[{name, lat, lng, place}]`` (possibly empty). Never raises.
+
+    ``place_types`` overrides the OSM place types queried; by default it reads the
+    shared `local_seo_overpass_place_types` (city,town). The Coverage Audit passes
+    a broader set (incl. `suburb`) so suburb-geography metros resolve — see
+    `coverage_nearby_place_types`."""
+    types = place_types or tuple(
+        t.strip() for t in settings.local_seo_overpass_place_types.split(",") if t.strip()
+    )
+    return await places_near(lat, lng, radius_km, types or ("city", "town"))

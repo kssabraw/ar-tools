@@ -72,3 +72,28 @@ def test_resolve_target_cities_radius_hard_bounds_authoritative_sources(monkeypa
         tc.resolve_target_cities(client, "Seedville,ST,US", 1, None, center=(0.0, 0.0), radius_km=16.09)
     )
     assert "FarCity" not in [c["name"] for c in cities2]
+
+
+def test_resolve_target_cities_threads_place_types_to_overpass(monkeypatch):
+    """The Coverage Audit passes a broadened OSM place-type set (incl. `suburb`) so
+    a suburb-geography metro resolves; resolve_target_cities threads it to Overpass."""
+    seen: dict = {}
+
+    async def _fake_geocode(queries, supabase=None):
+        return {q: {"matched": True, "place_id": "seed" if "seedville" in q.lower() else "n",
+                    "result_types": ["locality"], "lat": 0.0, "lng": 0.0, "bounds": None,
+                    "admin_area": "ST", "country": "US"} for q in queries}
+
+    async def _fake_nearby(lat, lng, radius_km, place_types=None):
+        seen["place_types"] = place_types
+        return []
+
+    monkeypatch.setattr(tc.settings, "google_maps_api_key", "x")
+    monkeypatch.setattr(tc.maps_geocode, "forward_geocode_places", _fake_geocode)
+    monkeypatch.setattr(tc.overpass, "nearby_cities", _fake_nearby)
+
+    asyncio.run(tc.resolve_target_cities(
+        {}, "Seedville,ST,US", 1, None,
+        place_types=("city", "town", "suburb"),
+    ))
+    assert seen["place_types"] == ("city", "town", "suburb")

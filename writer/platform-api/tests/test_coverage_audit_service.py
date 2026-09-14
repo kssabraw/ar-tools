@@ -818,7 +818,7 @@ def test_run_tier_threads_center_and_radius_into_location_axis(monkeypatch):
 
     seen: dict = {}
 
-    async def _fake_loc(client, seed_location, code, center=None, radius_km=None):
+    async def _fake_loc(client, seed_location, code, center=None, radius_km=None, place_types=None):
         seen["center"] = center
         seen["radius_km"] = radius_km
         return [{"name": "Metropolis", "source": "seed"}], {"seed_city": "Metropolis", "notes": []}
@@ -894,9 +894,10 @@ def test_run_tier_uses_coordinate_derived_clean_seed(monkeypatch):
 
     seen: dict = {}
 
-    async def _fake_loc(client, seed_location, code, center=None, radius_km=None):
+    async def _fake_loc(client, seed_location, code, center=None, radius_km=None, place_types=None):
         seen["seed_location"] = seed_location
         seen["center"] = center
+        seen["place_types"] = place_types
         return [{"name": "Carlton North", "source": "seed"}], {"seed_city": "Carlton North", "notes": []}
 
     monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
@@ -923,6 +924,65 @@ def test_run_tier_uses_coordinate_derived_clean_seed(monkeypatch):
     # The garbage street-address seed was replaced by the clean coordinate seed.
     assert seen["seed_location"] == "Carlton North, Victoria"
     assert seen["center"] == (-37.789839, 144.9713263)
+    # The broadened nearby place types (incl. suburb) are threaded to the axis.
+    assert "suburb" in (seen.get("place_types") or ())
+
+
+# --- demand floor off by default + nearby place-types threading ---------------
+def test_cell_volume_floor_defaults_to_zero():
+    # Owner ruling 2026-09-14: no demand floor — the audit returns ALL cells.
+    assert svc.settings.coverage_cell_volume_min == 0
+
+
+def test_run_tier_applies_no_cell_floor_even_with_demand(monkeypatch):
+    """With the floor off (config default 0), cells are ranked with min_volume=0 —
+    every service×location cell is returned, not just the high-volume ones — even
+    when demand data IS available (which previously triggered the floor)."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme", "business_location": "Metropolis, NY",
+                     "gbp": {"website": "https://acme.example", "latitude": 40.0, "longitude": -80.0}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
+
+    async def _fake_loc(client, seed_location, code, center=None, radius_km=None, place_types=None):
+        return [{"name": "Metropolis", "source": "seed"}], {"seed_city": "Metropolis", "notes": []}
+
+    monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
+
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
+        return (["https://acme.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    # Demand IS available (would have triggered the floor before the ruling).
+    async def _fake_demand(keywords, code):
+        return {"metropolis roof restoration": {"search_volume": 1}}, True, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+    monkeypatch.setattr(
+        svc, "_derive_service_axis",
+        lambda client, classified, place_vocab: (
+            [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
+        ),
+    )
+
+    rank_calls: list = []
+    real_rank = svc.core.rank_gaps
+
+    def _capture(gaps, market, min_volume=0):
+        rank_calls.append(min_volume)
+        return real_rank(gaps, market, min_volume=min_volume)
+
+    monkeypatch.setattr(svc.core, "rank_gaps", _capture)
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 1, radius_miles=5))
+    assert result["status"] == "complete"
+    # services, locations AND cells all ranked unfloored (min_volume 0).
+    assert rank_calls and all(mv == 0 for mv in rank_calls)
 
 
 if __name__ == "__main__":  # pragma: no cover
