@@ -2,7 +2,7 @@
 
 **Module slug:** `coverage_audit` · **Authoritative plan:** `docs/modules/coverage-audit-module-plan-v1_0.md` (design authority; owner decisions §0; adversarial-review findings + resolutions §8).
 
-**Status (2026-09-13):** Plan written, adversarially reviewed, all four Major findings fixed in-plan. **Nothing is built yet.** PR #1067 (docs-only) carries the plan + this handoff. Next step is **Phase 0**.
+**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) BUILT** — draft PR #1070, all CI green (ruff/mypy/pytest/Netlify). Branch `claude/hopeful-rubin-dk9t19`. **Next step is Phase 2 (Tier 2: city × subservice).**
 
 ---
 
@@ -53,31 +53,61 @@ Also folded in (don't reintroduce): `classify_page_type` is nlp-api-only — use
 
 ---
 
-## Phase 0 scope (the next chat's job)
+## Phase 0 — MERGED (PR #1069)
 
-Pure foundations, no external calls, no UI:
+Pure foundations, applied live:
+- **`services/coverage_audit.py`** — `classify_site_pages`, `build_coverage_grid` (AXES-ONLY), `diff_coverage`, `rank_gaps` (with the `coverage_cell_volume_min` floor), `MATRIX_CELL_STATE_KEYS`.
+- **`services/site_page_index.py`** — `is_blog_url` (formalizes the non-page exclusion).
+- **Migration `20260914120000_coverage_audit.sql`** (applied live) — `coverage_audits` run table, `coverage_audit_usage` meter + `reserve_coverage_audit_calls` RPC, `coverage_audit` async-job type.
+- **`config.py`** — the `coverage_audit_*` block (`coverage_audit_enabled`, `coverage_audit_daily_call_budget`=200, `coverage_cell_volume_min`=10, `coverage_neighborhood_volume_min`=20, `coverage_neighborhood_serp_dedicated_min`=3).
 
-1. **`services/coverage_audit.py`** — pure core:
-   - `classify_site_pages(urls, place_vocab)` → bucket URLs into `service_only` / `location_only` / `service_location` / `other` via `content_tokens` + `is_blog_url` (place-tokens = intersection with the location universe names).
-   - `build_coverage_grid(service_axis, location_axis, site_index, in_tool_index)` → per-cell `present`/`absent` **for the report only** (never written to matrix cells).
-   - `diff_coverage(...)` → `{missing_services, missing_locations, missing_cells}`.
-   - `rank_gaps(gaps, market, min_volume)` → attach volume/CPC/est-value + opportunity score, **apply the `coverage_cell_volume_min` floor**.
-2. **Data model** — migration in `writer/supabase/migrations/` (apply live via Supabase MCP): `coverage_audits` run table (jsonb-heavy, like `keyword_research_runs`), `coverage_audit_usage` meter + `reserve_coverage_audit_calls` RPC, widen the `async_jobs` type CHECK for a **per-tier** `coverage_audit` job.
-3. **`config.py`** — `coverage_cell_volume_min`, `coverage_neighborhood_volume_min`, `coverage_neighborhood_serp_dedicated_min`, `coverage_audit_usage` daily ceiling (placeholder ~200/day).
-4. **Unit tests** (`tests/test_coverage_audit.py`) — pure core against fixtures: classification buckets, the AXES-ONLY grid, the demand floor, empty-state degrade.
+## Phase 1 — BUILT (Tier 1: city × main-service), draft PR #1070, CI green
 
-Phase 0 decides and enforces the **axes-only Matrix seed contract** up front. No `resolve_target_cities`/planner/SERP wiring yet (that's Phase 1).
+The shippable core. **No new migration** — the service axis lives on the run's jsonb; Phase 0's tables/RPC/job-type already cover it (re-verified live via Supabase MCP).
+
+**Backend**
+- **`services/coverage_audit.py` (pure additions):**
+  - `derive_site_services(classified, place_vocab)` / `service_phrase_from_url(url, place_tokens)` — the *site* half of the service axis (place-stripped, slug-order-preserving service phrases from `service_only` + `service_location` pages).
+  - `build_coverage_grid(..., *, primary_service=None)` — added a keyword-only `primary_service` param. Location rows: keyword = `"<primary_service> <city>"` (resolves the plan §7 location-hub keyword); presence = a bare `/city/` hub OR the primary-service city page. **Omitting `primary_service` is byte-identical to Phase 0** (bare place keyword, hub-only match).
+  - `build_matrix_seed_body(name, location, location_code, service_axis, location_axis)` — AXES ONLY; a test asserts it never carries `MATRIX_CELL_STATE_KEYS`.
+- **`services/coverage_audit_service.py` (new, impure runner):** `run_coverage_audit_tier` (Tier-1 only), `run_coverage_audit_job`, `enqueue_coverage_audit`, `get_audit`/`list_audits`/`latest_audit`, `seed_matrix_from_audit`, own `reserve_budget`/`budget_remaining`. Service axis: `derive_site_services` + GBP-category seed expanded by a best-effort planner LLM (`_service_llm`, Sonnet) → team-edit re-run. Location axis: `resolve_target_cities` + a visible geocoding-unavailable note. Demand: cached-first via `keyword_market`, reserve-before-spend + cache-idempotent (reaper-safe). Floor on cells only.
+- **`routers/coverage_audit.py` (new):** `GET .../coverage-audit` (status+history+latest), `POST` (start), `GET .../jobs/{job_id}` (poll), `GET .../{audit_id}` (run), `PUT .../{audit_id}/service-axis` (edit→fresh re-run), `POST .../{audit_id}/seed-matrix`. Registered in `main.py`; dispatch in `job_worker.py` (lazy import; NOT freeze-gated — it's analysis).
+- **Tests:** `tests/test_coverage_audit.py` (pure additions) + `tests/test_coverage_audit_service.py` (planner merge/provenance/fallbacks, geocoding degrade, demand reserve/idempotency, keyword collector).
+
+**Frontend**
+- `frontend/src/pages/CoverageAudit.tsx` (new) — Tier-1 gap report (missing services / cities / service×city, demand-ranked), editable service axis with a "confirm to refine" banner, "Seed matrix" + per-gap "Create page" deep links (`/clients/:id/local-seo?tab=matrix&matrix=<id>` / `?tab=new`).
+- Route `clients/:id/coverage-audit` in `App.tsx`; a **separate** "Coverage Audit" workspace card in `ClientWorkspace.tsx` (SEO Strategist section, `LayoutGrid` icon) — not a Local SEO tab (§0.6).
+
+**Plan §7 open items resolved this phase:**
+- **Location-hub keyword** → `"<primary main service> <city>"` (a bare place name has no isolated commercial demand).
+- **Service-axis confirmation UX** → run on the auto-derived axis with a "confirm to refine" banner + edit/re-run (non-blocking).
+
+**Seed-location note:** Tier 1 derives the seed city from `clients.business_location` and the location code from `dataforseo_rank.location_code_for(client)`. No `business_location` → location axis is empty with a visible note (service-axis-only audit still runs). Carry this into Tier 2/3.
 
 ---
 
-## Open items (plan §7 — none block Phase 0)
+## Phase 2 scope (the next chat's job) — Tier 2: city × subservice
+
+Reuse the Tier-1 runner; the delta is the **subservice axis** and threading `tier=2` through enqueue/run/UI.
+
+1. **Subservice axis** — for each *confirmed main service* run the Local SEO planner `local_seo_silo._generate_service_pages(service, representative_city, llm, icp_block)`, which emits **per-city** pages, then **derive a city-agnostic axis** by stripping/deduping the representative city (plan §0.2 / §6). `local_seo_matrix.service_labels_from_pages(per_silo, city)` already strips the city — reuse it. Pick one representative city (the seed city).
+2. **Run + matrix** — `tier=2` produces a city × subservice grid + matrix seed. `SUPPORTED_TIERS` currently `(1,)` — add `2`; `run_coverage_audit_tier` currently hard-raises on `tier != 1`, so branch it. The service axis for Tier 2 = the subservice list (not main services); the location axis is unchanged (cities). `primary_service` for the location-hub keyword → the first *main* service (keep, or drop location rows for Tier 2 since the matrix is subservice×city — owner call).
+3. **Cost** — the subservice axis can be large (main services × variations); the `coverage_cell_volume_min` floor matters more. The planner call is one LLM call per main service (cheap, no paid SERP) — reserve nothing for it, but keep it best-effort.
+4. **UI** — a tier selector (T1 / T2) on `CoverageAudit.tsx`, or a second run button; the report + seed-matrix code is tier-agnostic already.
+
+Do NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
+
+---
+
+## Open items (plan §7 — none block Phase 2)
 
 - Module name (kept "Coverage Audit").
-- **Location-hub keyword definition** — what keyword represents a bare location page (`/melbourne/` → `{melbourne}`, but a city page is usually `"[primary service] [city]"`). Decide before Phase 1's `build_coverage_grid` treats location-axis pages.
-- Service-axis confirmation UX (block audit vs. run-on-auto-derived-with-banner).
-- Refresh cadence (on-demand v1 vs. monthly scheduled re-audit).
-- CDP county scope (all touched counties vs. only those with a verified CDP inside the footprint).
-- Calibrate `coverage_cell_volume_min` + the daily ceiling from a first live run.
+- ~~Location-hub keyword~~ — **RESOLVED (Phase 1):** `"<primary main service> <city>"`.
+- ~~Service-axis confirmation UX~~ — **RESOLVED (Phase 1):** run-on-auto-derived + confirm-to-refine banner.
+- Refresh cadence (on-demand v1 vs. monthly scheduled re-audit) — still on-demand only.
+- CDP county scope (all touched counties vs. only those with a verified CDP inside the footprint) — decide before Phase 3.
+- Calibrate `coverage_cell_volume_min` + the daily ceiling from a first live run (both still placeholders — 10 / 200).
+- **Tier-2 location-row question** (above §2.2): keep location-hub rows in a subservice audit, or show subservice + cell gaps only?
 
 ---
 
