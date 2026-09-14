@@ -368,12 +368,20 @@ def _derive_service_axis(
     client: dict, classified: dict, place_vocab: list[str],
     nav_services: Optional[list[str]] = None,
 ) -> tuple[list[dict], dict]:
-    """Resolve the auto-derived Tier-1 service axis + its provenance. Feeds the
-    planner the OBSERVED services — nav-menu labels first (clean + city-less), then
-    the URL-derived services — plus the GBP-category seed, and merges the planner's
-    expansion (authoritative order) with any observed service it missed, so nothing
-    real is dropped. Each entry is tagged with its source(s) for the review screen.
-    Best-effort."""
+    """Resolve the auto-derived Tier-1 service axis + its provenance.
+
+    Feeds the planner the OBSERVED services — nav-menu labels first (clean +
+    city-less), then the URL-derived services — plus the GBP-category seed, and
+    then **trusts the planner's cleaned list as the axis** when it ran. The
+    planner already SEES every observed service and is designed to emit the
+    distinct real services, so re-appending the raw URL slugs it didn't echo only
+    imports junk — chrome pages ("Contact Us"), leaked suburb names, and
+    fragmentary near-duplicates ("Restoration", "Colorbond") of the real labels
+    (measured on FCR: 15 clean planner services vs 33 slug leftovers → a 48-entry
+    axis). Only when the planner is UNAVAILABLE do we fall back to the raw
+    observed services (nav-first), then to the GBP categories, so a run without a
+    content model still has something to edit. Each entry is tagged with its
+    source(s) for the review screen. Best-effort."""
     site_services = core.derive_site_services(classified, place_vocab)
     nav_services = nav_services or []
     gbp_cats = _gbp_categories(client)
@@ -395,19 +403,19 @@ def _derive_service_axis(
     gbp_set = {c.lower() for c in gbp_cats}
     planned_set = {p.lower() for p in planned}
 
-    # Planner order first, then any observed service the planner didn't emit.
-    ordered: list[str] = list(planned)
-    seen = set(planned_set)
-    for s in observed:
-        if s.lower() not in seen:
-            seen.add(s.lower())
-            ordered.append(s)
-    # Last resort: no observed services and no planner → offer the raw GBP
-    # categories so the team has something to edit rather than an empty axis.
+    # Planner ran → its cleaned list IS the axis (it saw the observed services and
+    # chose the distinct ones; the raw slug leftovers are noise, not coverage).
+    # Planner unavailable → fall back to the raw observed services, then GBP.
     fallback_used = False
-    if not ordered and gbp_cats:
+    if planned:
+        ordered: list[str] = list(planned)
+    elif observed:
+        ordered = list(observed)
+    elif gbp_cats:
         ordered = list(gbp_cats)
         fallback_used = True
+    else:
+        ordered = []
 
     axis: list[dict] = []
     for label in ordered:

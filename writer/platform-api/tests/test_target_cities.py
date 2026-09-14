@@ -74,6 +74,45 @@ def test_resolve_target_cities_radius_hard_bounds_authoritative_sources(monkeypa
     assert "FarCity" not in [c["name"] for c in cities2]
 
 
+def test_resolve_target_cities_website_uses_canonical_locality_name(monkeypatch):
+    """A local site's service-area page slug ("/roofing-fitzroy/" → candidate
+    "Roofing Fitzroy") still geocodes to the real locality (Fitzroy) — Google
+    ignores the service word — so without the fix it surfaces as a garbage
+    location NAME. resolve_target_cities uses the geocoder's canonical `city`
+    (locality component) for a website candidate, cleaning it to "Fitzroy"."""
+    async def _fake_geocode(queries, supabase=None):
+        out = {}
+        for q in queries:
+            if "roofing fitzroy" in q.lower():
+                out[q] = {"matched": True, "place_id": "fitzroy", "result_types": ["locality"],
+                          "lat": 0.01, "lng": 0.01, "bounds": None, "city": "Fitzroy",
+                          "admin_area": "VIC", "country": "AU"}
+            else:  # the seed
+                out[q] = {"matched": True, "place_id": "seed", "result_types": ["locality"],
+                          "lat": 0.0, "lng": 0.0, "bounds": None, "city": "Carlton North",
+                          "admin_area": "VIC", "country": "AU"}
+        return out
+
+    async def _fake_discover(website, code, **kwargs):
+        return (["https://acme.com/roofing-fitzroy/"], "sitemap")
+
+    async def _fake_nearby(lat, lng, radius_km, place_types=None):
+        return []
+
+    monkeypatch.setattr(tc.settings, "google_maps_api_key", "x")
+    monkeypatch.setattr(tc.maps_geocode, "forward_geocode_places", _fake_geocode)
+    monkeypatch.setattr(tc.overpass, "nearby_cities", _fake_nearby)
+    monkeypatch.setattr(tc.site_page_index, "discover_site_urls", _fake_discover)
+
+    cities, _ = asyncio.run(tc.resolve_target_cities(
+        {"website_url": "https://acme.com"}, "Carlton North,VIC,AU", 1, None,
+        center=(0.0, 0.0), radius_km=16.09,
+    ))
+    names = [c["name"] for c in cities]
+    assert "Fitzroy" in names                 # canonical locality, not the slug
+    assert "Roofing Fitzroy" not in names     # raw slug name is not surfaced
+
+
 def test_resolve_target_cities_threads_place_types_to_overpass(monkeypatch):
     """The Coverage Audit passes a broadened OSM place-type set (incl. `suburb`) so
     a suburb-geography metro resolves; resolve_target_cities threads it to Overpass."""
