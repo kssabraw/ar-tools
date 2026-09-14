@@ -395,7 +395,10 @@ export function ClientForm() {
         business_location: form.business_location || null,
         target_cities: form.target_cities.split(',').map(s => s.trim()).filter(Boolean),
         targeted_services: form.targeted_services.split(',').map(s => s.trim()).filter(Boolean),
-        client_notes: form.client_notes.trim() || null,
+        // Send the trimmed string (not null) so emptying the box actually clears
+        // the stored note: the update handler treats null as "leave unchanged"
+        // but an empty string as "clear to null".
+        client_notes: form.client_notes.trim(),
         gbp_place_id: form.gbp_place_id,
         gbp: form.gbp,
         // Trust & Proof facts (docs/modules/local-landing-page-structure.md).
