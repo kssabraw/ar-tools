@@ -345,12 +345,25 @@ async def _fetch_text(client: httpx.AsyncClient, url: str) -> Optional[str]:
     return None
 
 
-async def _fetch_sitemap_urls(base_url: str) -> list[str]:
-    """Collect page URLs from the site's sitemap(s). robots.txt directives first,
-    then common default paths; sitemap-index files are followed one level into
-    their children. Bounded by `local_seo_sitemap_max_files` / `_max_urls`."""
-    max_files = settings.local_seo_sitemap_max_files
-    max_urls = settings.local_seo_sitemap_max_urls
+async def _fetch_sitemap_urls(
+    base_url: str,
+    *,
+    seed_sitemaps: Optional[list[str]] = None,
+    max_urls: Optional[int] = None,
+    max_files: Optional[int] = None,
+) -> tuple[list[str], bool]:
+    """Collect page URLs from the site's sitemap(s). Returns ``(urls, truncated)``
+    — ``truncated`` is True when a cap stopped the crawl with more to fetch (so the
+    caller can warn that some pages weren't scanned).
+
+    ``seed_sitemaps`` overrides discovery: when given, the crawl starts from those
+    sitemap URLs verbatim (robots.txt + the conventional default paths are skipped)
+    — a VA can point straight at a sitemap that lives at a non-standard path or at
+    the site's sitemap index. Sitemap-index files are still followed one level into
+    their children either way. Bounded by ``max_files`` / ``max_urls`` (default to
+    the `local_seo_sitemap_*` settings)."""
+    max_files = max_files or settings.local_seo_sitemap_max_files
+    max_urls = max_urls or settings.local_seo_sitemap_max_urls
     page_urls: list[str] = []
     seen_sitemaps: set[str] = set()
 
@@ -359,12 +372,16 @@ async def _fetch_sitemap_urls(base_url: str) -> list[str]:
         follow_redirects=True,
         headers={"User-Agent": settings.crawler_user_agent},
     ) as client:
-        # Seed the queue from robots.txt + the conventional sitemap paths.
         queue: list[str] = []
-        robots = await _fetch_text(client, f"{base_url}/robots.txt")
-        if robots:
-            queue.extend(parse_robots_sitemaps(robots))
-        queue.extend(f"{base_url}{p}" for p in _DEFAULT_SITEMAP_PATHS)
+        if seed_sitemaps:
+            # Explicit override — trust the supplied sitemap URL(s), skip guessing.
+            queue.extend(s for s in seed_sitemaps if s)
+        else:
+            # Seed the queue from robots.txt + the conventional sitemap paths.
+            robots = await _fetch_text(client, f"{base_url}/robots.txt")
+            if robots:
+                queue.extend(parse_robots_sitemaps(robots))
+            queue.extend(f"{base_url}{p}" for p in _DEFAULT_SITEMAP_PATHS)
 
         while queue and len(seen_sitemaps) < max_files and len(page_urls) < max_urls:
             sm_url = queue.pop(0)
@@ -381,6 +398,14 @@ async def _fetch_sitemap_urls(base_url: str) -> list[str]:
                 if ch not in seen_sitemaps:
                     queue.append(ch)
 
+        # Truncated only with real evidence that a cap left content unfetched:
+        #  - we collected MORE raw URLs than the cap (so the trim below drops some), or
+        #  - a cap stopped the loop while sitemaps were still queued (unfetched).
+        # A complete crawl that lands on exactly `max_urls` unique pages with an empty
+        # queue is NOT truncated (avoids a false "some pages weren't scanned" warning).
+        stopped_by_cap = len(seen_sitemaps) >= max_files or len(page_urls) >= max_urls
+        truncated = (len(page_urls) > max_urls) or (bool(queue) and stopped_by_cap)
+
     # De-dupe while preserving order; trim to the cap.
     deduped: list[str] = []
     seen: set[str] = set()
@@ -390,7 +415,7 @@ async def _fetch_sitemap_urls(base_url: str) -> list[str]:
             deduped.append(u)
         if len(deduped) >= max_urls:
             break
-    return deduped
+    return deduped, truncated
 
 
 async def _fetch_google_indexed_urls(domain: str, location_code: int) -> list[str]:
@@ -437,24 +462,45 @@ async def _fetch_google_indexed_urls(domain: str, location_code: int) -> list[st
 
 
 async def discover_site_urls(
-    website_url: str, location_code: int, *, use_paid_fallback: bool = True
+    website_url: str,
+    location_code: int,
+    *,
+    use_paid_fallback: bool = True,
+    paid_only: bool = False,
+    sitemap_url: Optional[str] = None,
+    max_urls: Optional[int] = None,
+    max_files: Optional[int] = None,
 ) -> tuple[list[str], str]:
     """Discover the client's site URLs. Returns ``(urls, source)`` where source is
-    ``"sitemap"`` | ``"google_index"`` | ``"none"``. Never raises — a site with no
-    readable sitemap and no indexed pages yields ``([], "none")``.
+    ``"sitemap"`` | ``"sitemap_truncated"`` | ``"google_index"`` | ``"none"``. Never
+    raises — a site with no readable sitemap and no indexed pages yields
+    ``([], "none")``. ``"sitemap_truncated"`` means the sitemap crawl hit a cap and
+    the page list is partial (the caller should warn that some pages weren't scanned).
 
+    ``sitemap_url`` (optional) is an explicit sitemap or sitemap-index URL to crawl
+    verbatim, skipping robots.txt + the conventional path guessing — for a site whose
+    sitemap is at a non-standard path, or to point straight at the index. An override
+    that yields no pages falls through to the paid fallback like a missed sitemap.
     ``use_paid_fallback`` (default True) gates the DataForSEO ``site:`` query used
-    when no sitemap is readable; pass False to keep discovery free (sitemap-only)."""
-    base = site_base_url(website_url)
-    if not base:
-        return [], "none"
-
-    urls = await _fetch_sitemap_urls(base)
-    if urls:
-        return urls, "sitemap"
-
-    if not use_paid_fallback:
-        return [], "none"
+    when no sitemap is readable; pass False to keep discovery free (sitemap-only).
+    ``paid_only`` (default False) skips the sitemap crawl entirely and runs only the
+    ``site:`` query — for a caller that already ran the free sitemap pass and now just
+    wants the paid fallback, so the sitemap isn't re-fetched.
+    ``max_urls`` / ``max_files`` override the crawl caps (default the settings)."""
+    if not paid_only:
+        seed = None
+        if sitemap_url and sitemap_url.strip().lower().startswith(("http://", "https://")):
+            seed = [sitemap_url.strip()]
+        # An override sitemap can drive the crawl even when the website URL is unusable.
+        base = site_base_url(website_url) or (site_base_url(seed[0]) if seed else "")
+        if base or seed:
+            urls, truncated = await _fetch_sitemap_urls(
+                base, seed_sitemaps=seed, max_urls=max_urls, max_files=max_files
+            )
+            if urls:
+                return urls, ("sitemap_truncated" if truncated else "sitemap")
+        if not use_paid_fallback:
+            return [], "none"
 
     from services.dataforseo_rank import extract_domain
 

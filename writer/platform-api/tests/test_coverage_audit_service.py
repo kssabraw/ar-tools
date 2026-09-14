@@ -370,7 +370,7 @@ def test_run_tier_3_uses_cdp_location_axis_and_keeps_location_rows(monkeypatch):
     monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
 
     # Site scan → one existing service page; service-axis derivation → main services.
-    async def _fake_scan(website, code, use_paid_fallback=True):
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
         return (["https://acme.example/roof-restoration/"], "sitemap")
 
     monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
@@ -437,7 +437,7 @@ def test_run_tier_4_uses_cdp_axis_and_subservice_axis_and_drops_location_rows(mo
 
     monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
 
-    async def _fake_scan(website, code, use_paid_fallback=True):
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
         return (["https://acme.example/roof-restoration/"], "sitemap")
 
     monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
@@ -515,7 +515,7 @@ def test_run_tier_4_override_axis_is_confirmed_subservice(monkeypatch):
 
     monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
 
-    async def _fake_scan(website, code, use_paid_fallback=True):
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
         return (["https://acme.example/leak-repair-metropolis/"], "sitemap")
 
     monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)

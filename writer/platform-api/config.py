@@ -2921,6 +2921,13 @@ class Settings(BaseSettings):
     # (coverage_cell_volume_min) does the real Tier-3/4 taming. Calibrate from a
     # first live CDP run. 0 = uncapped.
     coverage_cdp_max: int = 60
+    # Sitemap-crawl caps for the whole-site audit — higher than the shared
+    # `local_seo_sitemap_*` defaults (5000/30) because the audit's accuracy depends
+    # on seeing EVERY page (a missed page reads as a false gap). When the crawl hits
+    # a cap the run surfaces a "some pages weren't scanned" degraded note. A VA can
+    # also pass a specific sitemap URL to point straight at a large site's index.
+    coverage_sitemap_max_urls: int = 20000
+    coverage_sitemap_max_files: int = 100
 
     class Config:
         env_file = ".env"

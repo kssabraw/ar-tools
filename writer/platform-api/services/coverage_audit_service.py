@@ -65,7 +65,7 @@ SUPPORTED_TIERS = (1, 2, 3, 4)
 
 _AUDIT_COLS = (
     "id, client_id, status, tier, service_axis, location_axis, gaps, provenance, "
-    "error, created_at"
+    "error, sitemap_url, created_at"
 )
 
 
@@ -472,7 +472,11 @@ async def _fetch_demand(keywords: list[str], location_code: Optional[int]) -> tu
 
 # ── the tier run ───────────────────────────────────────────────────────────────
 async def run_coverage_audit_tier(
-    audit_id: str, client_id: str, tier: int, service_axis_override: Optional[list] = None
+    audit_id: str,
+    client_id: str,
+    tier: int,
+    service_axis_override: Optional[list] = None,
+    sitemap_url: Optional[str] = None,
 ) -> dict:
     """Run one tier of the audit and persist it onto the `coverage_audits` row
     ``audit_id``. Idempotent by audit_id: a reaper requeue re-runs into the same
@@ -519,22 +523,41 @@ async def run_coverage_audit_tier(
     notes.extend(loc_prov.get("notes") or [])
 
     # 2) Scan the site (free sitemap first; the paid site: fallback is reserved).
+    #    An operator-supplied sitemap_url (optional) is crawled verbatim — for a site
+    #    whose sitemap is at a non-standard path or to point straight at a large
+    #    site's index. The audit's own (higher) sitemap caps apply because a missed
+    #    page reads as a false gap; a cap-truncated scan surfaces a visible note.
     website = _website(client)
+    scan_caps = {
+        "max_urls": settings.coverage_sitemap_max_urls,
+        "max_files": settings.coverage_sitemap_max_files,
+    }
     urls: list[str] = []
     source = "none"
-    if not website:
+    if not website and not sitemap_url:
         notes.append("No website configured — cannot scan the site; every axis reads as a gap.")
     else:
-        urls, source = await site_page_index.discover_site_urls(website, location_code or 0, use_paid_fallback=False)
-        if not urls:
-            reserved = True
+        urls, source = await site_page_index.discover_site_urls(
+            website, location_code or 0, use_paid_fallback=False, sitemap_url=sitemap_url, **scan_caps
+        )
+        # Only spend on the paid site: fallback when a website domain exists to query
+        # (a sitemap-only, website-less run can't use it). The retry is paid_only, so
+        # it doesn't re-crawl the sitemap the free pass already tried.
+        if not urls and website:
             try:
                 reserve_budget(1)
             except BudgetExceeded:
-                reserved = False
                 notes.append("No sitemap and the demand budget is exhausted — site scan limited; results may over-report gaps.")
-            if reserved:
-                urls, source = await site_page_index.discover_site_urls(website, location_code or 0, use_paid_fallback=True)
+            else:
+                urls, source = await site_page_index.discover_site_urls(
+                    website, location_code or 0, paid_only=True
+                )
+        if source == "sitemap_truncated":
+            notes.append(
+                f"Site scan hit a scan cap ({settings.coverage_sitemap_max_urls:,} pages / "
+                f"{settings.coverage_sitemap_max_files} sitemaps) — some pages weren't scanned, so gaps may be "
+                "over-reported. Point the audit at a more specific sitemap URL to narrow the scan."
+            )
         if not urls:
             notes.append("No pages discovered on the site — results may over-report gaps.")
 
@@ -661,7 +684,7 @@ async def run_coverage_audit_tier(
     provenance = {
         "service_axis": svc_prov,
         "location_axis": loc_prov,
-        "scan": {"url_count": len(urls), "source": source, "website": website},
+        "scan": {"url_count": len(urls), "source": source, "website": website, "sitemap_url": sitemap_url or None},
         "demand": {"available": demand_available, "location_code": location_code},
         # Subservice tiers (2/4) show subservice + subservice×location cell gaps only;
         # the location-hub ("missing locations") rows are a main-service concern (plan
@@ -706,7 +729,9 @@ async def run_coverage_audit_job(job: dict) -> None:
         if not audit_id or not client_id:
             raise ValueError("coverage_audit_missing_ids")
         result = await run_coverage_audit_tier(
-            audit_id, client_id, tier, service_axis_override=payload.get("service_axis")
+            audit_id, client_id, tier,
+            service_axis_override=payload.get("service_axis"),
+            sitemap_url=payload.get("sitemap_url"),
         )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
@@ -738,13 +763,20 @@ def _fail_audit(audit_id: Optional[str], client_id: Optional[str], error: str) -
 
 # ── enqueue / read (for the router) ────────────────────────────────────────────
 def enqueue_coverage_audit(
-    client_id: str, tier: int, user_id: Optional[str], service_axis: Optional[list] = None
+    client_id: str,
+    tier: int,
+    user_id: Optional[str],
+    service_axis: Optional[list] = None,
+    sitemap_url: Optional[str] = None,
 ) -> tuple[str, str]:
     """Create a `coverage_audits` run row (status pending) and enqueue its tier job.
     Returns ``(audit_id, job_id)``. An edited service axis (``service_axis``
-    supplied) starts a fresh run — the prior run stays as history."""
+    supplied) starts a fresh run — the prior run stays as history. ``sitemap_url``
+    (optional) is an explicit sitemap/sitemap-index URL to crawl verbatim; it is
+    stored on the run so an edit-axis re-run reuses it."""
     if tier not in SUPPORTED_TIERS:
         raise HTTPException(status_code=400, detail="coverage_audit_tier_unsupported")
+    clean_sitemap = (sitemap_url or "").strip() or None
     supabase = get_supabase()
     # Dedup a fresh auto-run: if an audit for this (client, tier) is already
     # pending/running with no edited axis, reuse it instead of stacking a second
@@ -767,7 +799,7 @@ def enqueue_coverage_audit(
                 return p["audit_id"], row["id"]
     audit = (
         supabase.table("coverage_audits")
-        .insert({"client_id": client_id, "status": "pending", "tier": tier})
+        .insert({"client_id": client_id, "status": "pending", "tier": tier, "sitemap_url": clean_sitemap})
         .execute()
     ).data[0]
     audit_id = audit["id"]
@@ -782,6 +814,7 @@ def enqueue_coverage_audit(
                     "audit_id": audit_id,
                     "tier": tier,
                     "service_axis": service_axis,
+                    "sitemap_url": clean_sitemap,
                     "user_id": user_id,
                 },
             }

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, LayoutGrid, RefreshCw, AlertTriangle, Download, Pencil } from 'lucide-react'
@@ -60,6 +60,7 @@ interface AuditRun {
     | { degraded_notes?: string[]; service_axis?: { confirmed?: boolean }; location_rows_shown?: boolean }
     | null
   error: string | null
+  sitemap_url: string | null
   created_at: string
 }
 interface StatusResponse {
@@ -125,6 +126,16 @@ export function CoverageAudit() {
   const [editing, setEditing] = useState(false)
   const [axisDraft, setAxisDraft] = useState('')
   const [seedError, setSeedError] = useState<string | null>(null)
+  const [sitemapUrl, setSitemapUrl] = useState('')
+
+  // Seed the sitemap-override field from the latest run's setting so a plain
+  // "Re-run" preserves the override (clearing it opts back into auto-discovery).
+  // Re-seeds when a new run lands (id changes) or the tier switches.
+  const latestSitemap = status?.latest?.sitemap_url ?? ''
+  const latestRunId = status?.latest?.id
+  useEffect(() => {
+    setSitemapUrl(latestSitemap)
+  }, [latestRunId, latestSitemap, tier])
 
   // The audit runs as a background async_jobs job (one per tier). The in-flight
   // job id is persisted per tier so navigating away — or switching tiers — and back
@@ -148,8 +159,12 @@ export function CoverageAudit() {
 
   const runAudit = () => {
     setRunError(null)
+    const sm = sitemapUrl.trim()
     void auditJob.start(async () => {
-      const r = await api.post<{ job_id: string }>(`/clients/${id}/coverage-audit`, { tier })
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/coverage-audit`, {
+        tier,
+        ...(sm ? { sitemap_url: sm } : {}),
+      })
       return r.job_id
     }, undefined)
   }
@@ -277,6 +292,26 @@ export function CoverageAudit() {
             Last run: {new Date(latest.created_at).toLocaleString()} · {latest.status}
           </span>
         )}
+      </div>
+
+      {/* Optional sitemap override — for a site whose sitemap is at a non-standard
+          path, or to point straight at a large site's index. Blank = auto-discover. */}
+      <div style={{ marginBottom: 20, maxWidth: 620 }}>
+        <label style={{ display: 'block', fontSize: 12, color: '#64748b', marginBottom: 4 }}>
+          Sitemap URL <span style={{ color: '#94a3b8' }}>(optional — leave blank to auto-discover)</span>
+        </label>
+        <input
+          type="url"
+          value={sitemapUrl}
+          onChange={(e) => setSitemapUrl(e.target.value)}
+          placeholder={latest?.sitemap_url || 'https://example.com/sitemap_index.xml'}
+          disabled={running || disabled}
+          style={{ width: '100%', padding: '8px 12px', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 13, color: '#0f172a', outline: 'none' }}
+        />
+        <div style={{ ...noteLine, marginTop: 4 }}>
+          Point the audit at a specific sitemap or sitemap-index if auto-discovery misses pages (a missed page reads as a false gap).
+          {latest?.sitemap_url && !sitemapUrl.trim() ? ` Last run used: ${latest.sitemap_url}` : ''}
+        </div>
       </div>
 
       {runError !== null && (

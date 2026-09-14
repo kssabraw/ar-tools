@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 class StartAuditRequest(BaseModel):
     tier: int = 1
+    # Optional explicit sitemap / sitemap-index URL to crawl verbatim (skips
+    # robots.txt + conventional-path guessing). For a site whose sitemap is at a
+    # non-standard path, or to point straight at a large site's index.
+    sitemap_url: Optional[str] = None
 
 
 class EditServiceAxisRequest(BaseModel):
@@ -77,7 +81,9 @@ async def start_coverage_audit(
     if svc.budget_remaining() <= 0:
         raise HTTPException(status_code=429, detail="budget_exceeded")
     try:
-        audit_id, job_id = svc.enqueue_coverage_audit(str(client_id), body.tier, auth["user_id"])
+        audit_id, job_id = svc.enqueue_coverage_audit(
+            str(client_id), body.tier, auth["user_id"], sitemap_url=body.sitemap_url
+        )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -130,7 +136,8 @@ async def edit_service_axis(
         raise HTTPException(status_code=429, detail="budget_exceeded")
     try:
         new_audit_id, job_id = svc.enqueue_coverage_audit(
-            str(client_id), run.get("tier") or 1, auth["user_id"], service_axis=services
+            str(client_id), run.get("tier") or 1, auth["user_id"], service_axis=services,
+            sitemap_url=run.get("sitemap_url"),  # carry the operator's sitemap override forward
         )
     except HTTPException:
         raise
