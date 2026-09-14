@@ -291,5 +291,119 @@ def test_tier_2_is_supported():
     assert 2 in svc.SUPPORTED_TIERS
 
 
+def test_tier_3_is_supported():
+    assert 3 in svc.SUPPORTED_TIERS
+
+
+# --- run_coverage_audit_tier (Tier 3 — CDP location axis wiring) ----------------
+class _FakeQuery:
+    """Minimal chainable Supabase query stub that records the coverage_audits update."""
+
+    def __init__(self, store, table):
+        self._store = store
+        self._table = table
+        self._payload = None
+
+    def update(self, row):
+        self._payload = row
+        return self
+
+    def insert(self, row):
+        self._payload = row
+        return self
+
+    def select(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def is_(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        if self._table == "coverage_audits" and self._payload is not None:
+            self._store["audit_update"] = self._payload
+
+        class _R:
+            data = []
+
+        return _R()
+
+
+class _FakeSupabase:
+    def __init__(self, store):
+        self._store = store
+
+    def table(self, name):
+        return _FakeQuery(self._store, name)
+
+
+def test_run_tier_3_uses_cdp_location_axis_and_keeps_location_rows(monkeypatch):
+    """Tier 3 swaps the location axis to the census CDP list, uses the MAIN-service
+    axis (Tier-1 path), keeps the location-hub rows, and threads cities into the
+    place vocabulary. Everything external is mocked."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme Roofing", "business_location": "Metropolis,New York,United States",
+                     "gbp": {"website": "https://acme.example"}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
+
+    # CDP location axis + city place-vocab (census_cdp is mocked wholesale here).
+    async def _fake_cdp(client, seed_location, code, sb):
+        return (
+            [{"name": "Harrison", "source": "census_cdp"}, {"name": "Kearny", "source": "census_cdp"}],
+            {"kind": "cdp", "seed_city": "Metropolis", "notes": ["CDP note"], "states": ["34"]},
+            ["Metropolis", "Newark"],
+        )
+
+    monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
+
+    # Site scan → one existing service page; service-axis derivation → main services.
+    async def _fake_scan(website, code, use_paid_fallback=True):
+        return (["https://acme.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(
+        svc, "_derive_service_axis",
+        lambda client, classified, place_vocab: (
+            [{"label": "Roof Restoration", "sources": ["site"]}, {"label": "Gutter Cleaning", "sources": ["planner"]}],
+            {"confirmed": False, "kind": "main_service", "notes": []},
+        ),
+    )
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    # No demand data (keeps the test offline; floor disabled, gaps shown).
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 3))
+    assert result["status"] == "complete"
+
+    row = store["audit_update"]
+    assert row["tier"] == 3
+    # Location axis is the CDP list, not cities.
+    assert [l["name"] for l in row["location_axis"]] == ["Harrison", "Kearny"]
+    assert all(l["source"] == "census_cdp" for l in row["location_axis"])
+    # Main-service axis (Tier-1 path), not subservices.
+    assert [s["label"] for s in row["service_axis"]] == ["Roof Restoration", "Gutter Cleaning"]
+    # Tier 3 KEEPS the location-hub rows (a CDP hub is a main-service concept).
+    assert row["provenance"]["location_rows_shown"] is True
+    # Location-hub keyword uses the primary main service + the CDP.
+    hub_keywords = {g["keyword"] for g in row["gaps"]["missing_locations"]}
+    assert "Roof Restoration Harrison" in hub_keywords
+    assert "Roof Restoration Kearny" in hub_keywords
+    # The CDP note is surfaced in the degraded-notes banner.
+    assert "CDP note" in row["provenance"]["degraded_notes"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

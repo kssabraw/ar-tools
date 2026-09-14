@@ -1,0 +1,254 @@
+"""Unit tests for services/census_cdp.py (Coverage Audit Tier 3 — CDP enumeration).
+
+The live TIGERweb / census.gov queries can't run in the sandbox (census.gov is
+egress-blocked), so this covers the PURE decision helpers (layer pick, feature
+parse, footprint bbox, containment pre-filter, county scope, axis assembly,
+staleness) plus the `resolve_cdp_axis` orchestrator with every network call
+(forward-geocode, county reverse-geocode, state CDP enumeration) mocked. The live
+TIGERweb query itself is verified on the deployed worker after merge.
+"""
+
+import asyncio
+
+import pytest
+
+from services import census_cdp as cdp
+
+
+# ── pick_cdp_layer ─────────────────────────────────────────────────────────────
+def test_pick_cdp_layer_prefers_exact_census_designated_places():
+    layers = [
+        {"id": 30, "name": "Incorporated Places"},
+        {"id": 32, "name": "Census Designated Places Labels"},  # label — skipped
+        {"id": 36, "name": "Census Designated Places"},
+        {"id": 38, "name": "American Indian Designated Places"},
+    ]
+    assert cdp.pick_cdp_layer(layers) == 36
+
+
+def test_pick_cdp_layer_falls_back_to_designated_place_excluding_label_and_tribal():
+    layers = [
+        {"id": 1, "name": "Some Designated Place Labels"},  # label — skipped
+        {"id": 2, "name": "Tribal Designated Place"},        # tribal — skipped
+        {"id": 3, "name": "Other Designated Place"},         # fallback match
+    ]
+    assert cdp.pick_cdp_layer(layers) == 3
+
+
+def test_pick_cdp_layer_none_when_absent():
+    assert cdp.pick_cdp_layer([{"id": 1, "name": "Counties"}, {"id": 2, "name": "States"}]) is None
+    assert cdp.pick_cdp_layer([]) is None
+
+
+# ── parse_cdp_features ─────────────────────────────────────────────────────────
+def test_parse_cdp_features_extracts_name_geoid_centroid():
+    resp = {
+        "features": [
+            {"attributes": {"NAME": "Harrison", "GEOID": "3400123", "CENTLAT": "+40.75", "CENTLON": "-74.16"}},
+            {"attributes": {"BASENAME": "Kearny", "GEOID": "3400234", "INTPTLAT": "+40.77", "INTPTLON": "-74.15"}},
+            {"attributes": {"NAME": "", "CENTLAT": "+1", "CENTLON": "+1"}},        # no name — dropped
+            {"attributes": {"NAME": "NoCoords", "GEOID": "x"}},                    # no centroid — dropped
+        ],
+        "exceededTransferLimit": True,
+    }
+    feats, exceeded = cdp.parse_cdp_features(resp)
+    assert exceeded is True
+    assert [f["name"] for f in feats] == ["Harrison", "Kearny"]
+    assert feats[0]["lat"] == 40.75 and feats[0]["lng"] == -74.16
+    assert feats[1]["lat"] == 40.77  # INTPTLAT fallback + leading '+' stripped
+
+
+def test_parse_cdp_features_empty():
+    feats, exceeded = cdp.parse_cdp_features({})
+    assert feats == [] and exceeded is False
+
+
+# ── footprint_bbox / point_in_bbox ─────────────────────────────────────────────
+def test_footprint_bbox_bounds_and_pads():
+    bbox = cdp.footprint_bbox([(40.0, -74.0), (40.5, -74.5)], pad_km=30.0)
+    la_min, la_max, ln_min, ln_max = bbox
+    # Padded outward beyond the raw min/max on every side.
+    assert la_min < 40.0 and la_max > 40.5
+    assert ln_min < -74.5 and ln_max > -74.0
+
+
+def test_footprint_bbox_none_without_points():
+    assert cdp.footprint_bbox([], 30.0) is None
+    assert cdp.footprint_bbox([(None, None)], 30.0) is None
+
+
+def test_point_in_bbox():
+    bbox = (39.7, 40.97, -74.55, -73.6)
+    assert cdp.point_in_bbox(40.0, -74.0, bbox) is True     # inside
+    assert cdp.point_in_bbox(10.0, 10.0, bbox) is False     # far outside
+    assert cdp.point_in_bbox(None, -74.0, bbox) is False    # missing coord
+    assert cdp.point_in_bbox(40.0, -74.0, None) is False    # no bbox
+
+
+# ── build_footprint_geos ───────────────────────────────────────────────────────
+def test_build_footprint_geos_includes_seed_and_synthesizes_targets():
+    seed_geo = {"matched": True, "place_id": "seedpid", "lat": 40.0, "lng": -74.0, "bounds": {"x": 1}}
+    targets = [
+        {"name": "Newark", "lat": 40.7, "lng": -74.17, "bounds": {"y": 1}, "place_id": "newarkpid"},
+        {"name": "NoCoords", "lat": None, "lng": None},  # skipped
+    ]
+    geos = cdp.build_footprint_geos(seed_geo, targets)
+    assert len(geos) == 2
+    assert geos[0] is seed_geo
+    assert geos[1]["matched"] is True and geos[1]["place_id"] == "newarkpid"
+    assert geos[1]["result_types"] == []
+
+
+def test_build_footprint_geos_skips_unmatched_seed():
+    geos = cdp.build_footprint_geos({"matched": False}, [])
+    assert geos == []
+
+
+# ── county_scope ───────────────────────────────────────────────────────────────
+def test_county_scope_dedupes_counties_and_states():
+    results = [("Hudson County", "34017"), ("Hudson County", "34017"), ("Essex County", "34013"), ("Kings County", "36047")]
+    counties, states = cdp.county_scope(results)
+    assert counties == ["34013", "34017", "36047"]
+    assert states == ["34", "36"]
+
+
+def test_county_scope_drops_invalid_fips():
+    counties, states = cdp.county_scope([("x", "12"), ("y", ""), ("z", "abcde"), None])
+    assert counties == [] and states == []
+
+
+# ── assemble_cdp_axis ──────────────────────────────────────────────────────────
+def test_assemble_cdp_axis_dedupes_sorts_and_caps():
+    axis = cdp.assemble_cdp_axis(["Kearny", "harrison", "Harrison", "", "Belleville"], cap=2)
+    # deduped case-insensitively, sorted by name, capped at 2.
+    assert [a["name"] for a in axis] == ["Belleville", "harrison"]
+    assert all(a["source"] == "census_cdp" for a in axis)
+
+
+def test_assemble_cdp_axis_uncapped():
+    axis = cdp.assemble_cdp_axis(["B", "A", "C"], cap=0)
+    assert [a["name"] for a in axis] == ["A", "B", "C"]
+
+
+# ── is_stale ───────────────────────────────────────────────────────────────────
+def test_is_stale_zero_days_never_stale():
+    assert cdp.is_stale("2000-01-01T00:00:00+00:00", 0) is False
+
+
+def test_is_stale_unparseable_is_stale():
+    assert cdp.is_stale("not-a-date", 365) is True
+
+
+def test_is_stale_fresh_vs_old():
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    assert cdp.is_stale(now, 365) is False
+    assert cdp.is_stale("2000-01-01T00:00:00+00:00", 365) is True
+
+
+# ── resolve_cdp_axis (orchestrator — network mocked) ───────────────────────────
+def _set_maps_key(monkeypatch, value="key"):
+    monkeypatch.setattr(cdp.settings, "google_maps_api_key", value, raising=False)
+    monkeypatch.setattr(cdp.settings, "local_seo_neighborhood_radius_km", 30.0, raising=False)
+    monkeypatch.setattr(cdp.settings, "coverage_cdp_max", 60, raising=False)
+    monkeypatch.setattr(cdp.settings, "coverage_cdp_cache_days", 365, raising=False)
+
+
+def test_resolve_cdp_axis_no_seed_degrades(monkeypatch):
+    _set_maps_key(monkeypatch)
+    axis, prov, city_names = asyncio.run(cdp.resolve_cdp_axis({}, "", 2840, object()))
+    assert axis == [] and city_names == []
+    assert any("no business location" in n.lower() for n in prov["notes"])
+
+
+def test_resolve_cdp_axis_no_maps_key_degrades(monkeypatch):
+    monkeypatch.setattr(cdp.settings, "google_maps_api_key", "", raising=False)
+    axis, prov, city_names = asyncio.run(
+        cdp.resolve_cdp_axis({}, "Metropolis, New York, United States", 2840, object())
+    )
+    assert axis == []
+    assert city_names == ["Metropolis"]  # seed name still available for place vocab
+    assert any("geocoding unavailable" in n.lower() for n in prov["notes"])
+
+
+def _install_happy_path(monkeypatch, *, county=("Hudson County", "34017"), state_cdps=None):
+    """Wire the network mocks for a full happy-path resolve_cdp_axis run."""
+    from services import leadoff_counties, maps_geocode, target_cities
+
+    async def _fake_forward(queries, *, supabase=None):
+        out = {}
+        for q in queries:
+            if q.startswith("Metropolis"):  # the seed city
+                out[q] = {
+                    "matched": True, "place_id": "seedpid", "lat": 40.0, "lng": -74.0,
+                    "bounds": {"ne_lat": 40.3, "ne_lng": -73.7, "sw_lat": 39.7, "sw_lng": -74.3},
+                    "result_types": ["locality"],
+                }
+            else:  # a candidate CDP verification
+                out[q] = {"matched": True, "place_id": f"cdppid:{q}", "lat": 40.05, "lng": -74.05, "result_types": ["locality"]}
+        return out
+
+    async def _fake_targets(client, seed_location, code, sb):
+        return ([{"name": "Newark", "lat": 40.7, "lng": -74.17, "bounds": {"z": 1}, "place_id": "newarkpid"}], ["target note"])
+
+    async def _fake_county(client, lat, lng):
+        return county
+
+    monkeypatch.setattr(maps_geocode, "forward_geocode_places", _fake_forward)
+    monkeypatch.setattr(target_cities, "resolve_target_cities", _fake_targets)
+    monkeypatch.setattr(leadoff_counties, "_county_for_coord", _fake_county)
+    # place_is_within_city: a geocoded candidate (cdppid) is inside the footprint.
+    monkeypatch.setattr(
+        maps_geocode, "place_is_within_city",
+        lambda cand, city: str(cand.get("place_id") or "").startswith("cdppid"),
+    )
+    # Cache warm → no TIGERweb network. Harrison is in the footprint bbox; FarAway isn't.
+    default = [
+        {"name": "Harrison", "geoid": "3400123", "lat": 40.02, "lng": -74.02},
+        {"name": "FarAway", "geoid": "9999999", "lat": 10.0, "lng": 10.0},
+    ]
+    monkeypatch.setattr(cdp, "state_cdps_cached", lambda st, days: state_cdps if state_cdps is not None else default)
+
+
+def test_resolve_cdp_axis_happy_path(monkeypatch):
+    _set_maps_key(monkeypatch)
+    _install_happy_path(monkeypatch)
+    axis, prov, city_names = asyncio.run(
+        cdp.resolve_cdp_axis({}, "Metropolis, New York, United States", 2840, object())
+    )
+    # Only the in-footprint, containment-verified CDP survives.
+    assert [a["name"] for a in axis] == ["Harrison"]
+    assert axis[0]["source"] == "census_cdp"
+    assert city_names == ["Metropolis", "Newark"]  # place vocab: seed + target
+    assert prov["states"] == ["34"]
+    assert prov["counties"] == ["34017"]
+    assert prov["candidates"] == 1  # FarAway pre-filtered out by the bbox
+    assert prov["verified"] == 1
+    assert "target note" in prov["notes"]
+
+
+def test_resolve_cdp_axis_no_counties_degrades(monkeypatch):
+    _set_maps_key(monkeypatch)
+    _install_happy_path(monkeypatch, county=None)  # county reverse-geocode returns nothing
+    axis, prov, city_names = asyncio.run(
+        cdp.resolve_cdp_axis({}, "Metropolis, New York, United States", 2840, object())
+    )
+    assert axis == []
+    assert city_names == ["Metropolis", "Newark"]  # still usable as place vocab
+    assert any("couldn't resolve the service-area counties" in n.lower() for n in prov["notes"])
+
+
+def test_resolve_cdp_axis_no_cdps_in_footprint_degrades(monkeypatch):
+    _set_maps_key(monkeypatch)
+    # Every enumerated CDP sits far outside the footprint bbox → zero candidates.
+    _install_happy_path(monkeypatch, state_cdps=[{"name": "FarAway", "lat": 10.0, "lng": 10.0}])
+    axis, prov, city_names = asyncio.run(
+        cdp.resolve_cdp_axis({}, "Metropolis, New York, United States", 2840, object())
+    )
+    assert axis == []
+    assert prov["candidates"] == 0
+    assert any("no cdps found within the service-area footprint" in n.lower() for n in prov["notes"])
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__, "-q"]))
