@@ -429,6 +429,7 @@ async def create_client(
         "logo_url": body.logo_url,
         "gsc_property": body.gsc_property,
         "business_location": body.business_location,
+        "client_notes": (body.client_notes.strip() or None) if body.client_notes else None,
         "created_by": auth["user_id"],
     }
     if body.gbp_place_id is not None:
@@ -437,6 +438,8 @@ async def create_client(
         row["gbp"] = body.gbp.model_dump()
     if body.target_cities is not None:
         row["target_cities"] = body.target_cities
+    if body.targeted_services is not None:
+        row["targeted_services"] = body.targeted_services
     if body.drive_folders is not None:
         row["drive_folders"] = body.drive_folders
     if body.github_content_paths is not None:
@@ -636,6 +639,10 @@ async def update_client(
         updates["gbp"] = body.gbp.model_dump()
     if body.target_cities is not None:
         updates["target_cities"] = body.target_cities
+    if body.targeted_services is not None:
+        updates["targeted_services"] = body.targeted_services
+    if body.client_notes is not None:
+        updates["client_notes"] = body.client_notes.strip() or None
     if body.trust_signals is not None:
         updates["trust_signals"] = body.trust_signals.model_dump()
 

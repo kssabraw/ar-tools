@@ -182,6 +182,13 @@ class ClientDetail(BaseModel):
     # Cities the team explicitly wants location pages for, beyond the primary —
     # one source feeding the silo planner's target-city discovery.
     target_cities: list[str] = Field(default_factory=list)
+    # Human-curated services the client wants to target/rank for (comma-separated
+    # on the intake card). Feeds agent context (SerMaStr/strategist) and prefills
+    # the Local SEO matrix planner's services axis.
+    targeted_services: list[str] = Field(default_factory=list)
+    # Freeform internal notes captured on the intake card. AI-readable — surfaced
+    # to the SerMaStr + strategist client-context providers.
+    client_notes: Optional[str] = None
     # Recipe Engine budget inputs (docs/sops/Link_Building_Recipe_Engine.md §1–§2).
     retainer_monthly: Optional[float] = None
     is_sab: bool = False
@@ -299,6 +306,10 @@ class ClientCreateRequest(BaseModel):
     gbp_place_id: Optional[str] = None
     gbp: Optional[GbpProfile] = None
     target_cities: Optional[list[str]] = None
+    # Human-curated services the client wants to target/rank for (see ClientDetail).
+    targeted_services: Optional[list[str]] = None
+    # Freeform internal notes captured on the intake card (AI-readable).
+    client_notes: Optional[str] = None
     # Recipe Engine budget inputs.
     retainer_monthly: Optional[float] = None
     is_sab: Optional[bool] = None
@@ -324,6 +335,11 @@ class ClientUpdateRequest(BaseModel):
     page_structure_urls: Optional[PageStructureUrls] = None
     page_structure_guidelines: Optional[PageStructureGuidelines] = None
     target_cities: Optional[list[str]] = None
+    # Human-curated services the client wants to target/rank for (see ClientDetail).
+    targeted_services: Optional[list[str]] = None
+    # Freeform internal notes captured on the intake card (AI-readable). Send an
+    # empty string to clear the stored note back to null.
+    client_notes: Optional[str] = None
     name: Optional[str] = Field(None, min_length=1, max_length=200)
     website_url: Optional[str] = None
     brand_guide_source_type: Optional[Literal["text", "file"]] = None

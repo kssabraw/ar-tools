@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Grid3x3, Plus } from 'lucide-react'
+import { api } from '../../../lib/api'
+import type { Client } from '../../../lib/types'
 import { ErrorDetails } from '../../ErrorDetails'
 import { Spinner } from '../Spinner'
 import { card, primaryBtn } from '../shared'
@@ -30,8 +32,16 @@ export function MatrixTab({ clientId, focusMatrixId, onOpenPage }: Props) {
     enabled: view.kind === 'list',
   })
 
+  // The client's curated services (intake card) prefill a new matrix's services
+  // axis — editable, and only when the client has any on file.
+  const { data: client } = useQuery<Client>({
+    queryKey: ['client', clientId],
+    queryFn: () => api.get<Client>(`/clients/${clientId}`),
+  })
+
   if (view.kind === 'new') {
-    return <MatrixBuilder clientId={clientId} onCreated={m => { void refetch(); setView({ kind: 'detail', id: m.id }) }} onCancel={() => setView({ kind: 'list' })} />
+    const initialServices = (client?.targeted_services ?? []).join('\n') || undefined
+    return <MatrixBuilder clientId={clientId} initialServices={initialServices} onCreated={m => { void refetch(); setView({ kind: 'detail', id: m.id }) }} onCancel={() => setView({ kind: 'list' })} />
   }
   if (view.kind === 'detail') {
     return (
