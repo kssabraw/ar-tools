@@ -540,21 +540,23 @@ async def run_coverage_audit_tier(
         urls, source = await site_page_index.discover_site_urls(
             website, location_code or 0, use_paid_fallback=False, sitemap_url=sitemap_url, **scan_caps
         )
-        if not urls:
-            reserved = True
+        # Only spend on the paid site: fallback when a website domain exists to query
+        # (a sitemap-only, website-less run can't use it). The retry is paid_only, so
+        # it doesn't re-crawl the sitemap the free pass already tried.
+        if not urls and website:
             try:
                 reserve_budget(1)
             except BudgetExceeded:
-                reserved = False
                 notes.append("No sitemap and the demand budget is exhausted — site scan limited; results may over-report gaps.")
-            if reserved:
+            else:
                 urls, source = await site_page_index.discover_site_urls(
-                    website, location_code or 0, use_paid_fallback=True, sitemap_url=sitemap_url, **scan_caps
+                    website, location_code or 0, paid_only=True
                 )
         if source == "sitemap_truncated":
             notes.append(
-                f"Site scan hit the {settings.coverage_sitemap_max_urls:,}-page cap — some pages weren't scanned, "
-                "so gaps may be over-reported. Point the audit at a more specific sitemap URL to narrow the scan."
+                f"Site scan hit a scan cap ({settings.coverage_sitemap_max_urls:,} pages / "
+                f"{settings.coverage_sitemap_max_files} sitemaps) — some pages weren't scanned, so gaps may be "
+                "over-reported. Point the audit at a more specific sitemap URL to narrow the scan."
             )
         if not urls:
             notes.append("No pages discovered on the site — results may over-report gaps.")

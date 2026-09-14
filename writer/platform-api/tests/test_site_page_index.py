@@ -400,6 +400,27 @@ def test_discover_site_urls_sitemap_url_override_and_truncated_source(monkeypatc
     assert source2 == "sitemap_truncated"
 
 
+def test_discover_site_urls_paid_only_skips_the_sitemap(monkeypatch):
+    # paid_only must NOT touch the sitemap (no _fetch_text) and go straight to the
+    # DataForSEO site: query — so a caller that already ran the free sitemap pass
+    # doesn't re-fetch it on the paid retry.
+    fetched = {"sitemap": False}
+
+    async def _fake_fetch(_client, _url):
+        fetched["sitemap"] = True
+        return _URLSET
+
+    async def _fake_indexed(domain, code):
+        return ["https://acme.com/from-index"]
+
+    monkeypatch.setattr(spi, "_fetch_text", _fake_fetch)
+    monkeypatch.setattr(spi, "_fetch_google_indexed_urls", _fake_indexed)
+    urls, source = asyncio.run(spi.discover_site_urls("https://acme.com", 2840, paid_only=True))
+    assert urls == ["https://acme.com/from-index"]
+    assert source == "google_index"
+    assert fetched["sitemap"] is False  # the sitemap was never crawled
+
+
 def test_discover_site_urls_ignores_non_http_sitemap_override(monkeypatch):
     # A junk override is ignored and discovery falls back to the normal path
     # (here nothing is served → no pages, no paid fallback).

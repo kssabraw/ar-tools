@@ -466,6 +466,7 @@ async def discover_site_urls(
     location_code: int,
     *,
     use_paid_fallback: bool = True,
+    paid_only: bool = False,
     sitemap_url: Optional[str] = None,
     max_urls: Optional[int] = None,
     max_files: Optional[int] = None,
@@ -482,23 +483,24 @@ async def discover_site_urls(
     that yields no pages falls through to the paid fallback like a missed sitemap.
     ``use_paid_fallback`` (default True) gates the DataForSEO ``site:`` query used
     when no sitemap is readable; pass False to keep discovery free (sitemap-only).
+    ``paid_only`` (default False) skips the sitemap crawl entirely and runs only the
+    ``site:`` query — for a caller that already ran the free sitemap pass and now just
+    wants the paid fallback, so the sitemap isn't re-fetched.
     ``max_urls`` / ``max_files`` override the crawl caps (default the settings)."""
-    seed = None
-    if sitemap_url and sitemap_url.strip().lower().startswith(("http://", "https://")):
-        seed = [sitemap_url.strip()]
-    # An override sitemap can drive the crawl even when the website URL is unusable.
-    base = site_base_url(website_url) or (site_base_url(seed[0]) if seed else "")
-    if not base and not seed:
-        return [], "none"
-
-    urls, truncated = await _fetch_sitemap_urls(
-        base, seed_sitemaps=seed, max_urls=max_urls, max_files=max_files
-    )
-    if urls:
-        return urls, ("sitemap_truncated" if truncated else "sitemap")
-
-    if not use_paid_fallback:
-        return [], "none"
+    if not paid_only:
+        seed = None
+        if sitemap_url and sitemap_url.strip().lower().startswith(("http://", "https://")):
+            seed = [sitemap_url.strip()]
+        # An override sitemap can drive the crawl even when the website URL is unusable.
+        base = site_base_url(website_url) or (site_base_url(seed[0]) if seed else "")
+        if base or seed:
+            urls, truncated = await _fetch_sitemap_urls(
+                base, seed_sitemaps=seed, max_urls=max_urls, max_files=max_files
+            )
+            if urls:
+                return urls, ("sitemap_truncated" if truncated else "sitemap")
+        if not use_paid_fallback:
+            return [], "none"
 
     from services.dataforseo_rank import extract_domain
 
