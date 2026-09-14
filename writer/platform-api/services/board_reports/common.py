@@ -100,6 +100,17 @@ def render_report(report: dict) -> str:
             rendered.append(f"{prefix}*{it.get('name', '')}* — {it.get('line', '')}")
         parts.append(f"*{rows.get('title', 'Detail')}*\n" + "\n".join(rendered))
 
+    cases = report.get("cases") or {}
+    citems = cases.get("items") or []
+    if citems:
+        blocks = []
+        for c in citems:
+            ce = RAG_EMOJI.get(c.get("rag"), "") if c.get("rag") else ""
+            head = f"{ce} *{c.get('name', '')}*".strip()
+            lines = [f"    _{d.get('label')}:_ {d.get('text')}" for d in (c.get("detail") or []) if d.get("text")]
+            blocks.append(head + ("\n" + "\n".join(lines) if lines else ""))
+        parts.append(f"*{cases.get('title', 'Detail')}*\n" + "\n\n".join(blocks))
+
     if report.get("wins"):
         parts.append("*Wins*\n" + "\n".join(f"• {w}" for w in report["wins"]))
 
@@ -133,11 +144,16 @@ def week_dedupe_key(agent: str, today: date) -> str:
 _MEMO_SYSTEM = (
     "You are {persona}, a department head giving your weekly report to the C-suite "
     "board of an SEO agency. From the FACTS below (already computed — never invent "
-    "or change a number), write a 2–4 sentence spoken-voice summary of your "
-    "department this week. Lead with the verdict, name the one or two things that "
-    "matter most, and if there is an ask of the board, close with it plainly. "
-    "Slack mrkdwn only: *bold* for emphasis, no headings, no tables, no bullet "
-    "lists. Be direct and specific; no filler."
+    "or change a number, name, or diagnosis), write a substantive executive "
+    "narrative of your department this week: a few short paragraphs (up to ~8 "
+    "sentences). Lead with the verdict, then explain the story BEHIND the numbers "
+    "and each flagged item — the who (client, teammate, competitor), what, where "
+    "(market / keyword / channel), why (the root cause / diagnosis), and how "
+    "(what's being done or is needed). Draw the who/what/why/how from the CASES and "
+    "risks in the facts — cite the specific names, keywords, and diagnoses given "
+    "there; do not restate the scorecard counts mechanically. Close with the ask of "
+    "the board if there is one. Slack mrkdwn only: *bold* for emphasis, no headings, "
+    "no tables. Be specific and concrete; no filler."
 )
 
 
@@ -151,6 +167,7 @@ def attach_narrative(report: dict, persona: str) -> None:
         "verdict": report.get("verdict"),
         "status": report.get("rag"),
         "scorecard": report.get("scorecard"),
+        "cases": (report.get("cases") or {}).get("items"),
         "wins": report.get("wins"),
         "risks": report.get("risks"),
         "asks": report.get("asks"),
@@ -239,6 +256,23 @@ def render_html(report: dict) -> str:
             )
         h.append("</table>")
 
+    cases = report.get("cases") or {}
+    citems = cases.get("items") or []
+    if citems:
+        h.append(f"<h2>{_esc(cases.get('title', 'Detail'))}</h2>")
+        for c in citems:
+            dot_fg, _ = _RAG_HTML.get(c.get("rag"), ("#57606a", ""))
+            dot = f"<span class='dot' style='background:{dot_fg}'></span>" if c.get("rag") else ""
+            h.append(f"<div class='case'><div class='case-h'>{dot}{_esc(c.get('name'))}</div>")
+            for d in (c.get("detail") or []):
+                if not d.get("text"):
+                    continue
+                h.append(
+                    f"<div class='case-d'><span class='case-l'>{_esc(d.get('label'))}:</span> "
+                    f"{_esc(d.get('text'))}</div>"
+                )
+            h.append("</div>")
+
     def _list(title: str, items_):
         if not items_:
             return
@@ -284,6 +318,9 @@ def render_html(report: dict) -> str:
         ".dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}"
         ".muted{color:#57606a;font-weight:400}"
         "ul{margin:4px 0;padding-left:18px}li{margin:2px 0}"
+        ".case{margin:0 0 12px;padding:8px 10px;border:1px solid #eaeef2;border-radius:6px}"
+        ".case-h{font-weight:600;font-size:13px;margin-bottom:4px}"
+        ".case-d{margin:2px 0}.case-l{color:#57606a;font-weight:600}"
     )
     return f"<!doctype html><html><head><meta charset='utf-8'><style>{style}</style></head><body>{''.join(h)}</body></html>"
 

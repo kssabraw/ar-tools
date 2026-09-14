@@ -57,7 +57,79 @@ def verdict_for(*, overloaded: int, behind_pace: int, overdue: int, stuck: int,
     return "green", "Delivery on track — nothing overdue, stuck, or over capacity."
 
 
-def build_report(today: date, *, rep: dict, prev_completed: int, workload: dict) -> dict:
+def _pace_cases(board: dict, names: dict, overloaded: list[dict]) -> list[dict]:
+    """The who/what/why/how detail behind the delivery numbers: over-capacity
+    people, the specific stuck + overdue tasks (with client + owner + days), and
+    behind-pace clients. Pure."""
+    items: list[dict] = []
+    for m in overloaded[:5]:
+        nm = m.get("name") or m.get("gid")
+        bits = []
+        if m.get("utilization_pct") is not None:
+            bits.append(f"{m['utilization_pct']}% utilized")
+        if m.get("weekly_hours"):
+            bits.append(f"~{round(m.get('open_hours') or 0)}h committed vs {round(m['weekly_hours'])}h/wk capacity")
+        items.append({
+            "name": f"{nm} — over capacity", "rag": "red",
+            "detail": [
+                {"label": "Load", "text": "; ".join(bits) or "over capacity"},
+                {"label": "Action", "text": "Rebalance load or add capacity."},
+            ],
+        })
+
+    stuck, overdue, behind = [], [], []
+    for c in (board.get("clients") or []):
+        cname = names.get(c.get("client_id"), "Client")
+        for s in c.get("stale", []):
+            stuck.append((cname, s))
+        for o in c.get("overdue", []):
+            overdue.append((cname, o))
+        if (c.get("month_pace") or {}).get("behind"):
+            behind.append((cname, c["month_pace"]))
+    stuck.sort(key=lambda x: -(x[1].get("days") or 0))
+
+    for cname, s in stuck[:6]:
+        status = s.get("status_key") or "in progress"
+        if s.get("days") is not None:
+            status = f"{status} for {s['days']}d"
+        items.append({
+            "name": s.get("name") or "Task", "rag": "yellow",
+            "detail": [
+                {"label": "Client", "text": cname},
+                {"label": "Owner", "text": s.get("assignee_name") or "unassigned"},
+                {"label": "Status", "text": f"Stuck — {status}"},
+                {"label": "Action", "text": "Unblock or reassign."},
+            ],
+        })
+    for cname, o in overdue[:4]:
+        due = f"due {str(o.get('due_date'))[:10]}" if o.get("due_date") else "past due"
+        items.append({
+            "name": o.get("name") or "Task", "rag": "yellow",
+            "detail": [
+                {"label": "Client", "text": cname},
+                {"label": "Owner", "text": o.get("assignee_name") or "unassigned"},
+                {"label": "Status", "text": f"Overdue — {due}"},
+                {"label": "Action", "text": "Triage and re-date."},
+            ],
+        })
+    for cname, p in behind[:4]:
+        if p.get("mode") == "due_weighted":
+            nums = f"{round((p.get('actual') or 0) * 100)}% done vs {round((p.get('expected') or 0) * 100)}% expected by now"
+        else:
+            nums = (f"{round((p.get('pct_complete') or 0) * 100)}% done vs "
+                    f"{round((p.get('pct_elapsed') or 0) * 100)}% of the month elapsed")
+        items.append({
+            "name": f"{cname} — behind pace", "rag": "red",
+            "detail": [
+                {"label": "Pace", "text": nums},
+                {"label": "Action", "text": "Review the plan / re-scope this week."},
+            ],
+        })
+    return items
+
+
+def build_report(today: date, *, rep: dict, prev_completed: int, workload: dict,
+                 board: Optional[dict] = None, names: Optional[dict] = None) -> dict:
     """Assemble the PACE board report from the delivery report + workload. Pure."""
     completed = rep.get("completed_count", 0)
     overdue = rep.get("overdue", 0)
@@ -103,22 +175,10 @@ def build_report(today: date, *, rep: dict, prev_completed: int, workload: dict)
     if prev_completed and completed > prev_completed:
         wins.append(f"Throughput up vs last week ({prev_completed} → {completed}).")
 
+    # The detail now lives in `cases` (named tasks/people); keep `risks` empty so
+    # it isn't a redundant terse echo above the full write-ups.
+    cases_items = _pace_cases(board or {}, names or {}, overloaded)
     risks: list[dict] = []
-    for m in overloaded[:5]:
-        risks.append({
-            "issue": f"{m.get('name') or m.get('gid')} over capacity",
-            "severity": "capacity", "owner": m.get("name") or m.get("gid"),
-            "action": "rebalance load or add capacity",
-        })
-    if behind_pace:
-        risks.append({
-            "issue": f"{behind_pace} client{'s' if behind_pace != 1 else ''} behind the monthly plan",
-            "action": "review plans / re-scope this week",
-        })
-    if overdue >= 5:
-        risks.append({"issue": f"{overdue} tasks overdue", "action": "triage and re-date"})
-    if stuck:
-        risks.append({"issue": f"{stuck} tasks blocked/stale", "action": "unblock or reassign"})
 
     asks: list[str] = []
     if overloaded:
@@ -137,19 +197,35 @@ def build_report(today: date, *, rep: dict, prev_completed: int, workload: dict)
         "title": f"PACE delivery board report · week of {common.monday_of(today).isoformat()}",
         "verdict": verdict, "rag": rag, "as_of": today.isoformat(),
         "scorecard": scorecard, "wins": wins, "risks": risks, "asks": asks,
+        "cases": {"title": "Delivery detail — stuck work, capacity, pace", "items": cases_items},
         "outlook": outlook,
     }
     return report
 
 
+def _client_names(supabase, client_ids: list) -> dict:
+    ids = [c for c in {c for c in client_ids if c}]
+    if not ids:
+        return {}
+    try:
+        rows = supabase.table("clients").select("id, name").in_("id", ids).execute().data or []
+        return {r["id"]: r.get("name") or r["id"] for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("board_reports.pace_names_failed", extra={"error": str(exc)})
+        return {}
+
+
 def run(today: Optional[date] = None) -> dict:
     """Build + emit the PACE board report. Best-effort."""
-    from services import pace_report, task_workload
+    from services import pace_report, pm_signals, task_workload
 
     today = today or date.today()
     rep = pace_report.build_report(None, today=today, period_days=7)
     prev_completed = _completed_between(today - timedelta(days=14), today - timedelta(days=7))
     workload = task_workload.build_team_workload()
-    report = build_report(today, rep=rep, prev_completed=prev_completed, workload=workload)
+    board = pm_signals.build_board_digest(None, today)
+    names = _client_names(get_supabase(), [c.get("client_id") for c in board.get("clients", [])])
+    report = build_report(today, rep=rep, prev_completed=prev_completed, workload=workload,
+                          board=board, names=names)
     common.attach_narrative(report, "PACE, the VP of Delivery & Operations")
     return common.emit_report(report, kind="pace_board_report", today=today, link="/workload")

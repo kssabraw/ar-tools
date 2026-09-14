@@ -28,9 +28,36 @@ _SEAM_ACTION: dict[str, tuple[str, str]] = {
     "autonomy_proposed_unactioned": ("autonomy proposals unactioned", "review the ledger"),
     "duplicate_target": ("two agents acting on one target", "de-conflict the target"),
 }
+# Why each seam matters — the board-level consequence (the WHY behind the flag).
+_SEAM_WHY: dict[str, str] = {
+    "content_shipped_degraded": "Off-brand or low-quality content reached a client — reputational + rework risk.",
+    "unwatched_seam": "Work is being created by a source nothing owns — it can pile up unseen.",
+    "qa_idle": "Nothing is reaching QA — deliverables may be shipping unchecked.",
+    "strategist_proposal_pending": "Strategy proposals are stalling for a human decision — recommended work isn't starting.",
+    "strategist_approved_unplaced": "Approved work isn't on anyone's board — it won't get done.",
+    "autonomy_proposed_unactioned": "The autonomy agent flagged work nobody has actioned.",
+    "duplicate_target": "Two agents are acting on the same target — wasted or conflicting effort.",
+}
 # Seams severe enough to make the whole operation red regardless of count.
 _RED_SEAMS = {"content_shipped_degraded", "unwatched_seam"}
 _RED_SEAM_COUNT = 5
+
+
+def _flag_desc(flag: dict, names: dict) -> str:
+    """A specific 'Client — <what> (since date)' descriptor for one seam flag. Pure."""
+    cid = flag.get("client_id")
+    who = names.get(cid, cid) if cid else "portfolio"
+    ev = flag.get("evidence") or {}
+    specific = (
+        ev.get("title") or ev.get("page") or ev.get("url") or ev.get("keyword")
+        or ev.get("source") or ev.get("name")
+    )
+    txt = str(who)
+    if specific:
+        txt += f" — {specific}"
+    if flag.get("since"):
+        txt += f" (since {str(flag['since'])[:10]})"
+    return txt
 
 
 def _client_names(client_ids) -> dict:
@@ -131,23 +158,35 @@ def build_report(today: date, *, model: dict, names: dict) -> dict:
     if not seam_count:
         wins.append("Zero cross-agent handoffs stalled this week.")
 
-    def _named(items: list[dict]) -> str:
-        cs = sorted({names.get(i.get("client_id"), i.get("client_id") or "portfolio") for i in items})
-        return ", ".join(cs[:3]) + (f" +{len(cs) - 3}" if len(cs) > 3 else "")
-
-    risks: list[dict] = []
+    # Detailed per-seam cases: the specific items (client + what + since), why it
+    # matters, and the action. Replaces the terse risks list.
+    cases_items: list[dict] = []
     for seam, items in by_seam.items():
         label, action = _SEAM_ACTION.get(seam, (seam, "review"))
-        sev = "critical" if seam in _RED_SEAMS else None
-        risks.append({
-            "issue": f"{len(items)} · {label} ({_named(items)})",
-            "severity": sev, "action": action,
+        descs = [_flag_desc(f, names) for f in items[:6]]
+        if len(items) > 6:
+            descs.append(f"…+{len(items) - 6} more")
+        detail = [{"label": "Items", "text": "; ".join(descs)}]
+        if _SEAM_WHY.get(seam):
+            detail.append({"label": "Why it matters", "text": _SEAM_WHY[seam]})
+        detail.append({"label": "Action", "text": action[:1].upper() + action[1:] + "."})
+        cases_items.append({
+            "name": label, "rag": "red" if seam in _RED_SEAMS else "yellow", "detail": detail,
         })
     if holds:
-        risks.append({
-            "issue": f"{len(holds)} task(s) held at capacity",
-            "action": "assign owners / add capacity",
+        hd = "; ".join(
+            f"{names.get(h.get('client_id'), h.get('client_id') or 'portfolio')} — "
+            f"{h.get('name')}" + (f" ({h.get('reason')})" if h.get("reason") else "")
+            for h in holds[:6]
+        )
+        cases_items.append({
+            "name": "Capacity holds — work waiting on an assignee", "rag": "yellow",
+            "detail": [
+                {"label": "Items", "text": hd},
+                {"label": "Action", "text": "Assign owners or add capacity."},
+            ],
         })
+    risks: list[dict] = []
 
     asks: list[str] = []
     if autonomy.get("proposed", 0) > max(autonomy.get("executed", 0), 2):
@@ -164,7 +203,7 @@ def build_report(today: date, *, model: dict, names: dict) -> dict:
     if rel["pace_approved_pct"] is not None or rel["sermastr_worked_pct"] is not None:
         lean = (
             "room to lean on automation further"
-            if (rel["pace_approved_pct"] or 0) >= 80 and not risks
+            if (rel["pace_approved_pct"] or 0) >= 80 and not cases_items
             else "hold current autonomy posture while seams clear"
         )
         outlook = f"Reliability supports {lean}."
@@ -174,6 +213,7 @@ def build_report(today: date, *, model: dict, names: dict) -> dict:
         "title": f"DORA operations board report · week of {common.monday_of(today).isoformat()}",
         "verdict": verdict, "rag": rag, "as_of": today.isoformat(),
         "scorecard": scorecard, "wins": wins, "risks": risks, "asks": asks,
+        "cases": {"title": "Cross-agent seams — what, who, why & the fix", "items": cases_items},
         "outlook": outlook,
     }
 

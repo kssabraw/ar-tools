@@ -116,6 +116,30 @@ redundant Slack content duplicating the PACE board report — unset
 `PACE_REPORT_WEEKDAY` when the board reports go live. DORA's exception `ops_digest`
 and the PACE daily digest are complementary (daily/exception) and can stay.
 
+## Detail depth — the who/what/where/why/how (owner ask 2026-09-14)
+A scorecard alone is "a list of tasks and problems." Each report now also carries
+**cases** — per-client / per-problem write-ups (`common.render_report` +
+`render_html` render a `cases: {title, items:[{name, rag, detail:[{label,text}]}]}`
+section), drawn from the diagnostics the suite already produces (nothing invented):
+- **Client Health** — every **non-green** client gets a case: *Status* (the metrics
+  line), *Why* (frozen reason, behind/overdue goals with current-vs-target,
+  deindex-risk keywords, biggest organic drop, and the Action Plan's per-problem
+  **diagnosis**/classification), *What's being done* (the Action Plan
+  **recommendation** + open response-episode notes), *Who & where* (named
+  competitors + market). Green clients stay one line in the "All clients" table.
+- **PACE** — cases name the specific **stuck** and **overdue** tasks (task · client ·
+  owner · days-in-status/due-date · action), the **over-capacity** people
+  (utilization + committed-vs-capacity), and the **behind-pace** clients (done-vs-
+  expected %).
+- **DORA** — one case per open cross-agent **seam**: the specific items (client + the
+  evidence: proposal title / degraded page / etc. + since-date), *why it matters*,
+  and the fix; plus a capacity-holds case.
+
+The LLM department-head **memo** is fed these cases and writes a fuller
+who/what/where/why/how narrative (up to `board_reports_narrative_max_tokens`),
+citing the specific names/keywords/diagnoses. All case fields are deterministic and
+best-effort per sub-read (a dead module drops one line, never the report).
+
 ## Config (all in `config.py`)
 - `board_reports_enabled` (bool, default False) — master gate.
 - `board_reports_weekday` (int, default 0 = Monday).
