@@ -76,6 +76,47 @@ def test_chunk_keywords_respects_cap():
     assert keyword_market.chunk_keywords(["a"], size=1000) == [["a"]]
 
 
+class _FakeMarketRead:
+    """Chainable Supabase stub that records each `.in_()` chunk size and returns a
+    row per keyword in the chunk (so the merged result covers the whole list)."""
+
+    def __init__(self, recorder):
+        self._recorder = recorder
+        self._chunk: list[str] = []
+
+    def table(self, _name):
+        return self
+
+    def select(self, *_a, **_k):
+        return self
+
+    def in_(self, _col, values):
+        self._chunk = list(values)
+        self._recorder.append(len(values))
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def execute(self):
+        class _R:
+            data = [{"keyword": k, "search_volume": 1, "cpc": None, "competition": None, "refreshed_at": None} for k in self._chunk]
+        return _R()
+
+
+def test_fetch_cached_market_chunks_large_in_query():
+    # A whole-site Coverage-Audit cell grid can carry thousands of keywords; the
+    # `.in_()` read must be chunked so it never overflows the PostgREST URL.
+    sizes: list[int] = []
+    keywords = [f"kw {i}" for i in range(4500)]
+    out = keyword_market.fetch_cached_market(_FakeMarketRead(sizes), keywords, 2840)
+    # Chunked at _CACHE_READ_CHUNK (200), no chunk over the cap, all keywords covered.
+    assert max(sizes) <= keyword_market._CACHE_READ_CHUNK
+    assert sum(sizes) == 4500
+    assert len(out) == 4500
+    assert keyword_market.fetch_cached_market(_FakeMarketRead([]), [], 2840) == {}
+
+
 # --- rate-limit retry -------------------------------------------------------
 # DataForSEO throttling arrives as HTTP 429 OR as an HTTP 200 whose task body
 # says "Too many requests" (the observed live failure) — both retry.
