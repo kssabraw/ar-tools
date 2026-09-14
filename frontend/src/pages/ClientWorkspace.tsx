@@ -104,6 +104,10 @@ export function ClientWorkspace() {
       {id && <FreezeBanner clientId={id} />}
       {id && <ClientNotifications clientId={id} />}
 
+      {/* Read-only business context captured on the intake card — the targeted
+          services and internal notes. Renders nothing until one is set. */}
+      <BusinessContextPanel client={client} id={id} />
+
       {/* ── Onboarding ───────────────────────────────────────────────── */}
       <Section
         title="Onboarding"
@@ -503,6 +507,42 @@ function icpCopy(client?: Client): string {
   return (icp?.source === 'user' || Boolean(icp?.raw_text))
     ? 'Set by you — your profile supersedes the app-detected one across both tools.'
     : 'AI-detected — review, edit, or replace it with your own.'
+}
+
+function BusinessContextPanel({ client, id }: { client?: Client; id?: string }) {
+  const services = client?.targeted_services ?? []
+  const notes = (client?.client_notes ?? '').trim()
+  // Nothing captured yet → render nothing rather than an empty shell.
+  if (services.length === 0 && !notes) return null
+  const labelStyle: React.CSSProperties = { fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', margin: '0 0 6px' }
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 12, background: '#fff', padding: 18, marginBottom: 24 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: services.length && notes ? 14 : 0 }}>
+        <span style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Business Context</span>
+        {id && (
+          <Link to={`/clients/${id}/edit`} style={ctaStyle}>Edit <ArrowRight size={14} /></Link>
+        )}
+      </div>
+      <div style={{ display: 'grid', gap: 16 }}>
+        {services.length > 0 && (
+          <div>
+            <p style={labelStyle}>Targeted Services</p>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {services.map((s, i) => (
+                <span key={i} style={{ fontSize: 13, color: '#334155', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 999, padding: '3px 10px' }}>{s}</span>
+              ))}
+            </div>
+          </div>
+        )}
+        {notes && (
+          <div>
+            <p style={labelStyle}>Client Notes</p>
+            <p style={{ fontSize: 13, color: '#334155', lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' }}>{notes}</p>
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 function Section({ title, subtitle, panel, children }: { title: string; subtitle?: string; panel?: React.ReactNode; children: React.ReactNode }) {
