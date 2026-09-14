@@ -2,7 +2,7 @@
 
 **Module slug:** `coverage_audit` · **Authoritative plan:** `docs/modules/coverage-audit-module-plan-v1_0.md` (design authority; owner decisions §0; adversarial-review findings + resolutions §8).
 
-**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) BUILT** — draft PR #1070, all CI green (ruff/mypy/pytest/Netlify). Branch `claude/hopeful-rubin-dk9t19`. **Next step is Phase 2 (Tier 2: city × subservice).**
+**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green: platform-api tests + lint & typecheck + Netlify). **No new migration** (the subservice axis rides the run's jsonb, same as the Tier-1 service axis — re-verified: Phase 0's tables/RPC/`coverage_audit` per-tier job type already cover it). **Next step is Phase 3 (Tier 3: CDP × main-service — the NEW census integration, worker-only).**
 
 ---
 
@@ -86,28 +86,53 @@ The shippable core. **No new migration** — the service axis lives on the run's
 
 ---
 
-## Phase 2 scope (the next chat's job) — Tier 2: city × subservice
+## Phase 2 — BUILT (Tier 2: city × subservice)
 
-Reuse the Tier-1 runner; the delta is the **subservice axis** and threading `tier=2` through enqueue/run/UI.
+The delta from Tier 1 was the **subservice axis** + threading `tier=2` end-to-end. Everything else (location axis, demand rank + floor, matrix seed, report UI, meter, job decomposition) is reused unchanged.
 
-1. **Subservice axis** — for each *confirmed main service* run the Local SEO planner `local_seo_silo._generate_service_pages(service, representative_city, llm, icp_block)`, which emits **per-city** pages, then **derive a city-agnostic axis** by stripping/deduping the representative city (plan §0.2 / §6). `local_seo_matrix.service_labels_from_pages(per_silo, city)` already strips the city — reuse it. Pick one representative city (the seed city).
-2. **Run + matrix** — `tier=2` produces a city × subservice grid + matrix seed. `SUPPORTED_TIERS` currently `(1,)` — add `2`; `run_coverage_audit_tier` currently hard-raises on `tier != 1`, so branch it. The service axis for Tier 2 = the subservice list (not main services); the location axis is unchanged (cities). `primary_service` for the location-hub keyword → the first *main* service (keep, or drop location rows for Tier 2 since the matrix is subservice×city — owner call).
-3. **Cost** — the subservice axis can be large (main services × variations); the `coverage_cell_volume_min` floor matters more. The planner call is one LLM call per main service (cheap, no paid SERP) — reserve nothing for it, but keep it best-effort.
-4. **UI** — a tier selector (T1 / T2) on `CoverageAudit.tsx`, or a second run button; the report + seed-matrix code is tier-agnostic already.
+**Backend**
+- **`services/coverage_audit.py` (pure addition):** `merge_subservice_axis(per_service_labels)` — the cross-service merge/dedupe. Input is a list of `{"service": <main>, "labels": [{label, group}]}` (each `labels` = the output of `local_seo_matrix.service_labels_from_pages(per_silo, representative_city)` for ONE main service, already city-stripped + slug-deduped within that service). It merges across services, re-dedupes case-insensitively by label (first-seen order), and tags each surviving subservice with its parent main `service` + planner `group`. Entries carry `label` + `sources` so a subservice axis flows through `build_coverage_grid` / `build_matrix_seed_body` / the UI **byte-identically** to a main-service axis. Pure, unit-tested.
+- **`services/coverage_audit_service.py`:** `SUPPORTED_TIERS = (1, 2)`. New `_derive_subservice_axis(client, main_axis, representative_city)` — best-effort, async: resolves the ICP block (`icp_service.resolve_icp_text`, non-fatal), gets the planner LLM (`local_seo_silo._service_llm`), runs `local_seo_silo._generate_service_pages(service, representative_city, llm, icp_block)` **once per confirmed main service** (via `asyncio.to_thread` so N LLM calls don't block the worker loop), strips the representative city via the reused `local_seo_matrix.service_labels_from_pages`, and merges with `core.merge_subservice_axis`. `run_coverage_audit_tier` no longer hard-raises on `tier != 1`; it branches: an **override** (edited axis) is used verbatim for either tier (Tier 2 = confirmed subservices); a fresh **Tier 1** derives main services; a fresh **Tier 2** derives main services → expands to subservices, **degrading cleanly to the main-service axis with a visible note** if the planner is unavailable / every call fails (never aborts). Representative city = the seed city (`loc_prov["seed_city"]`, same string the planner composes with and the strip removes).
+- **`routers/coverage_audit.py`:** `GET .../coverage-audit?tier=<n>` (defaults 1) returns the per-tier `latest` (+ `supported_tiers`); `list_audits` history spans all tiers. Start / edit-axis / seed-matrix already thread the run's tier.
+
+**Frontend** — `pages/CoverageAudit.tsx` gained a **T1 / T2 tier selector** (each tier keeps its own `latest` run + in-flight job via a tier-scoped `useResumableJob` storage key). The report is tier-agnostic; for T2 the labels read "Subservice axis" / "Missing subservices" / "Subservice × City cells", and the Cities stat + Missing-cities table are hidden (see the location-row decision below).
+
+**Tier-2 location-row decision (open item — RESOLVED):** **show subservice + cell gaps only; DROP the location-hub "missing cities" rows.** A city-hub gap (does a city have a *main-service* landing page) is exactly Tier 1's question, measured against the MAIN service axis; re-reporting it inside a subservice audit would (a) double-count what Tier 1 already surfaces and (b) rank it against a keyword (`"<primary main service> <city>"`) that isn't even on the Tier-2 service axis. Implementation: for `tier != 1` the runner sets `diff["missing_locations"] = []` (which also stops the demand fetch from spending on hub keywords the tier won't show) and passes `primary_service=None` to `build_coverage_grid`; provenance carries `location_rows_shown=false`, and the frontend keys the Cities stat + table off it. The location axis itself is unchanged — it still builds the subservice×city cells and seeds the matrix (subservices × cities). **The Tier-2 matrix + its cell gaps carry all the actionable location signal.**
+
+**Cost / guardrails held:** the subservice planner is one LLM call per main service (cheap, no paid SERP) — reserves nothing, kept best-effort. The `coverage_cell_volume_min` floor still applies to cells (matters MORE here — the subservice cross-product is larger). The Matrix's own 200-page sign-off gate (`MATRIX_SIGNOFF_THRESHOLD`) fires at seed/generate time via `create_matrix`, unchanged. Axes-only seed contract, per-tier job decomposition, and reserve-before-spend/idempotency all untouched.
+
+**Tests:** `tests/test_coverage_audit.py` (pure `merge_subservice_axis` — cross-service merge/dedupe, flow-through `_axis_names`/`build_matrix_seed_body`, empty/blank degrade) + `tests/test_coverage_audit_service.py` (`_derive_subservice_axis` happy path + city-strip, no-LLM degrade, no-main-services degrade, per-service failure isolation, non-fatal ICP failure, `SUPPORTED_TIERS` includes 2).
+
+---
+
+## Phase 3 scope (the next chat's job) — Tier 3: CDP × main-service (NEW census integration, worker-only)
+
+This is where the reuse stops being near-total — CDP enumeration is **genuinely new engineering** (plan §0.3 / §3.2 / §8 Major #2). **census.gov is egress-blocked from the sandbox** (as with `census_demand.py` / `leadoff_geocode.py`), so `census_cdp.py` is built + tested **on the deployed worker only** — the pure decision helpers around it can still be sandbox-unit-tested, but the live TIGERweb query cannot.
+
+1. **`services/census_cdp.py` (new, worker-only).** Three steps:
+   - **(a) service-area → county FIPS.** Reverse-geocode each resolved city/anchor from the location universe (`resolve_target_cities`) → county via the census geocoder (`geographies/coordinates`, the same census.gov family `census_demand.py`/`leadoff_geocode.py`/`leadoff_counties.py` use) → the county-FIPS set.
+   - **(b) TIGERweb Places / CDP-layer query.** A **different** ArcGIS-REST layer than `census_demand.py`'s block-group layer (same `tigerweb.geo.census.gov` host) — enumerate CDPs in those counties. This is the new query; there is no existing CDP enumeration to reuse.
+   - **(c) geocode-verify containment** within the service-area footprint (reuse `maps_geocode.forward_geocode_places` + `place_is_within_city`), cached like `geocode_forward_cache` (a `census_cdp_cache` table or a keyed reuse of the forward cache; freshness-bounded).
+   - **Best-effort:** no key / dead source / no counties resolved → the CDP tiers degrade with a visible note, never abort (mirror the `resolve_target_cities` geocoding-unavailable pattern).
+2. **Location axis = CDPs.** Tier 3's location axis is the verified CDP list (distinct from cities and from neighborhoods); the service axis is the **main services** (reuse `_derive_service_axis` exactly as Tier 1). Add `3` to `SUPPORTED_TIERS`; the `run_coverage_audit_tier` branch swaps the location-axis source (CDPs instead of `resolve_target_cities`) and otherwise reuses the Tier-1 path. The location-hub decision is a real question again here (a CDP hub IS a main-service concept, unlike Tier 2's subservice case) — likely **keep** location-hub rows for Tier 3 (the Tier-1 rationale for dropping them does not apply), but confirm.
+3. **The demand floor matters most at Tier 3/4** (CDP × subservice in Phase 4) — the CDP cross-product is the largest. `coverage_cell_volume_min` is already wired; no change needed, but calibrate it from the first live CDP run.
+4. **Job:** still one `coverage_audit` job per tier (a Tier-3 run that geocodes many CDPs may approach the 30-min reaper — if so, add a `stale_timeout_for` override for tier 3 rather than splitting the job). Every census/geocode step cached + (where paid) metered before spend.
+
+**Decide before Phase 3 (plan §7):** CDP county scope — all counties the service area touches, or only counties with a geocode-verified CDP inside the footprint (bounds the census pulls)?
 
 Do NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
 
 ---
 
-## Open items (plan §7 — none block Phase 2)
+## Open items (plan §7 — none block Phase 3)
 
 - Module name (kept "Coverage Audit").
 - ~~Location-hub keyword~~ — **RESOLVED (Phase 1):** `"<primary main service> <city>"`.
 - ~~Service-axis confirmation UX~~ — **RESOLVED (Phase 1):** run-on-auto-derived + confirm-to-refine banner.
+- ~~Tier-2 location-row question~~ — **RESOLVED (Phase 2):** subservice audits show subservice + cell gaps only; location-hub rows dropped (a Tier-1 concern). See the Phase 2 section.
 - Refresh cadence (on-demand v1 vs. monthly scheduled re-audit) — still on-demand only.
-- CDP county scope (all touched counties vs. only those with a verified CDP inside the footprint) — decide before Phase 3.
+- CDP county scope (all touched counties vs. only those with a verified CDP inside the footprint) — **decide before Phase 3** (above §3).
 - Calibrate `coverage_cell_volume_min` + the daily ceiling from a first live run (both still placeholders — 10 / 200).
-- **Tier-2 location-row question** (above §2.2): keep location-hub rows in a subservice audit, or show subservice + cell gaps only?
 
 ---
 

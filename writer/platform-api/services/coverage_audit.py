@@ -260,6 +260,48 @@ def derive_site_services(
     return out
 
 
+# ── subservice axis (Tier 2 — city-agnostic, merged across main services) ──────
+def merge_subservice_axis(per_service_labels: Optional[Iterable[dict]]) -> list[dict]:
+    """Merge each confirmed main service's city-stripped subservice labels into ONE
+    city-agnostic subservice axis for a Tier-2 (city × subservice) audit.
+
+    Input: an iterable of ``{"service": <main service>, "labels": [{"label",
+    "group"}]}`` — each ``labels`` list is the output of
+    ``local_seo_matrix.service_labels_from_pages(per_silo, representative_city)`` for
+    ONE main service. The Local SEO planner (`_generate_service_pages`) emits
+    PER-CITY pages ("<modifier> <service> <city>"), and that reused helper strips
+    the representative city (case-insensitive) and dedupes by slug *within* one
+    service. This function is the delta on top of it: it MERGES across every main
+    service and re-dedupes case-insensitively by label (first-seen order preserved),
+    tagging each surviving subservice with its parent main ``service`` and the
+    planner ``group`` (silo) for the review screen.
+
+    Output entries carry ``label`` + ``sources`` (like the Tier-1 service-axis
+    entries) so a subservice axis flows through `build_coverage_grid`,
+    `build_matrix_seed_body`, `diff_coverage`, and the UI byte-identically to a
+    main-service axis — the only tier-2 delta is what fills the service axis, not
+    how it's consumed. Pure — no I/O."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for bundle in per_service_labels or []:
+        service = str((bundle or {}).get("service") or "").strip()
+        for entry in (bundle or {}).get("labels") or []:
+            label = str((entry or {}).get("label") or "").strip()
+            key = label.lower()
+            if not label or key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "label": label,
+                    "sources": ["planner"],
+                    "service": service or None,
+                    "group": (entry or {}).get("group") or None,
+                }
+            )
+    return out
+
+
 # ── ideal-vs-actual coverage grid (report only — never matrix cell state) ──────
 def build_coverage_grid(
     service_axis: Optional[Iterable],

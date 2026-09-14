@@ -44,14 +44,22 @@ def _require_enabled() -> None:
 
 
 @router.get("/clients/{client_id}/coverage-audit")
-async def get_coverage_audit(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
-    """Module status + run history + the latest Tier-1 run for the client."""
+async def get_coverage_audit(
+    client_id: UUID, tier: int = 1, auth: dict = Depends(require_auth)
+) -> dict:
+    """Module status + run history + the latest run for the client at ``tier``
+    (defaults to Tier 1). The history lists every tier; ``latest`` is per-tier so the
+    UI's tier selector reads the right run."""
+    if tier not in svc.SUPPORTED_TIERS:
+        raise HTTPException(status_code=400, detail="coverage_audit_tier_unsupported")
     try:
         return {
             "enabled": settings.coverage_audit_enabled,
+            "tier": tier,
+            "supported_tiers": list(svc.SUPPORTED_TIERS),
             "budget_remaining": svc.budget_remaining(),
             "audits": svc.list_audits(str(client_id)),
-            "latest": svc.latest_audit(str(client_id), 1),
+            "latest": svc.latest_audit(str(client_id), tier),
         }
     except Exception as exc:  # noqa: BLE001
         logger.error("coverage_audit.list_failed", extra={"client_id": str(client_id), "error": str(exc)})
