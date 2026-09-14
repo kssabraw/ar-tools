@@ -189,6 +189,33 @@ def build_footprint_geos(
     return out
 
 
+def resolve_seed_place(
+    seed_geo: Optional[dict],
+    parsed_city: str,
+    parsed_state: str,
+    parsed_country: str,
+) -> tuple[str, str, str]:
+    """The clean ``(city, state, country)`` for the service area, preferring the
+    seed forward-geocode's OWN address components over the comma-split of the raw
+    ``business_location``.
+
+    ``local_seo_silo._parse_area`` assumes DataForSEO's canonical
+    ``"City,State,Country"`` and takes segment[0] as the city — but a client's
+    ``business_location`` is often a full street address
+    (``"2890 Marina Mile Blvd, 108 W State Rd 84 Suite, Fort Lauderdale, FL 33312"``),
+    so it mis-reads the street as the city and the suite/zip as the state/country.
+    The seed geocode resolves the address to its real ``locality`` (Fort
+    Lauderdale) / ``administrative_area_level_1`` (Florida) / ``country`` (United
+    States), which is what the CDP footprint + verify queries need. Falls back to
+    each parsed value when the geocode lacks that component (a bare-city location
+    is unchanged). Pure; unit-tested."""
+    geo = seed_geo or {}
+    city = (geo.get("city") or "").strip() or parsed_city
+    state = (geo.get("admin_area") or "").strip() or parsed_state
+    country = (geo.get("country") or "").strip() or parsed_country
+    return city, state, country
+
+
 def county_scope(
     county_results: Optional[list[tuple[str, str]]]
 ) -> tuple[list[str], list[str]]:
@@ -396,9 +423,12 @@ async def resolve_cdp_axis(
 
     from services import maps_geocode, target_cities
 
-    # 1) Footprint: forward-geocode the seed city (cache-served) + resolve the
+    # 1) Footprint: forward-geocode the seed location (cache-served) + resolve the
     #    target cities (one resolve_target_cities call — same as Tier 1/2).
-    seed_query = _area_query(seed_city, seed_state, seed_country)
+    #    Geocode the RAW business_location (the most complete string), not the
+    #    comma-split — `_parse_area` mis-reads a street address, and the raw string
+    #    resolves to the real city regardless.
+    seed_query = (seed_location or "").strip() or _area_query(seed_city, seed_state, seed_country)
     try:
         geo = await maps_geocode.forward_geocode_places([seed_query], supabase=supabase)
     except Exception as exc:  # noqa: BLE001
@@ -409,6 +439,31 @@ async def resolve_cdp_axis(
     if not seed_geo.get("matched") or seed_geo.get("lat") is None:
         prov["notes"].append("CDP tier skipped — couldn't resolve the seed city to verify CDPs.")
         return [], prov, city_names
+
+    # Adopt the geocode's OWN locality/admin/country over the (possibly
+    # street-address) comma-split, so the seed city, footprint containment, the
+    # classifier place vocab, the CDP verify queries, and the Tier-4 representative
+    # city all use the real city (e.g. "Fort Lauderdale", not "2890 Marina Mile Blvd").
+    seed_city, seed_state, seed_country = resolve_seed_place(
+        seed_geo, seed_city, seed_state, seed_country
+    )
+    prov["seed_city"] = seed_city
+    city_names = [seed_city] if seed_city else []
+
+    # Prefer a CITY-level geo (with real city bounds) for containment: the raw seed
+    # geocode of a street address has a rooftop-sized box that no CDP falls inside.
+    # Re-geocode the clean city; fall back to the raw seed geo if that misses.
+    seed_footprint_geo = seed_geo
+    city_query = _area_query(seed_city, seed_state, seed_country)
+    if city_query and city_query.strip().lower() != seed_query.strip().lower():
+        try:
+            city_geo_map = await maps_geocode.forward_geocode_places([city_query], supabase=supabase)
+        except Exception as exc:  # noqa: BLE001 — best-effort; the raw seed geo still works
+            logger.warning("census_cdp.city_geocode_failed", extra={"error": str(exc)})
+            city_geo_map = {}
+        city_geo = city_geo_map.get(city_query) or {}
+        if city_geo.get("matched") and city_geo.get("bounds") and city_geo.get("lat") is not None:
+            seed_footprint_geo = city_geo
 
     try:
         cities, city_notes = await target_cities.resolve_target_cities(
@@ -424,7 +479,7 @@ async def resolve_cdp_axis(
             city_names.append(nm)
     prov["footprint_cities"] = list(dict.fromkeys(city_names))
 
-    footprint_geos = build_footprint_geos(seed_geo, cities)
+    footprint_geos = build_footprint_geos(seed_footprint_geo, cities)
     centers = [(g.get("lat"), g.get("lng")) for g in footprint_geos]
     bbox = footprint_bbox(centers, settings.local_seo_neighborhood_radius_km)
     if not bbox:
