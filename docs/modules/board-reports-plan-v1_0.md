@@ -95,30 +95,35 @@ Portfolio RAG = worst client RAG.
   ~1am PT Mon — before the noon L10). Self-gated on `board_reports_enabled`.
 - Runs off the event loop (`asyncio.to_thread`) so the N-client scorecard + any
   memo never block the scheduler.
-- Delivered via `notifications.emit`: `pace_board_report` → `#pace`,
-  `ops_board_report` → `#dora`, `client_board_report` → strategy channel.
-  Each deduped per ISO week.
-- **PDF copy to Google Drive** (owner ask): each report is also rendered to PDF
-  (`common.render_html` → `client_report.render_pdf` WeasyPrint) and uploaded to
-  `board_reports_drive_folder_id` via the Apps Script webhook
-  (`google_docs.upload_pdf`). Best-effort + additive — gated on the folder id +
-  `google_apps_script_url`; a failure never affects the Slack/in-app delivery.
-  Driven with `asyncio.run` since the report runs in the scheduler's worker thread.
+- **Delivery is PDF-only by default** (owner ruling 2026-09-14): each report is
+  rendered to PDF (`common.render_html` → `client_report.render_pdf` WeasyPrint)
+  and uploaded to `board_reports_drive_folder_id` via the Apps Script webhook
+  (`google_docs.upload_pdf`) — the sole output. Driven with `asyncio.run` since
+  the report runs in the scheduler's worker thread. Gated on the folder id +
+  `google_apps_script_url`.
+- **Slack + in-app posting is off by default** (`board_reports_slack_enabled`):
+  when on, the reports also post via `notifications.emit` — `pace_board_report` →
+  `#pace`, `ops_board_report` → `#dora`, `client_board_report` → strategy channel,
+  deduped per ISO week. The routing kinds exist regardless; they're just inert
+  while the flag is off.
 - **Runs every Monday including all-green weeks** (a board wants the full picture)
   — the deliberate opposite of the suppress-on-quiet exception digests.
 
 ## Overlap note (operational)
-When `board_reports_enabled` is turned on, the plain weekly PACE delivery report
-(`pace_report_weekday`) becomes redundant with the PACE board report — turn it off
-(`PACE_REPORT_WEEKDAY` unset). DORA's exception `ops_digest` and the PACE daily
-digest are complementary (daily/exception) and can stay.
+With PDF-only delivery the board reports post nothing to Slack, so there's no
+double-post. The plain weekly PACE delivery report (`pace_report_weekday`) is now
+redundant Slack content duplicating the PACE board report — unset
+`PACE_REPORT_WEEKDAY` when the board reports go live. DORA's exception `ops_digest`
+and the PACE daily digest are complementary (daily/exception) and can stay.
 
 ## Config (all in `config.py`)
 - `board_reports_enabled` (bool, default False) — master gate.
 - `board_reports_weekday` (int, default 0 = Monday).
 - `board_reports_narrative_enabled` (bool, default True) — the LLM memo (best-effort).
 - `board_reports_narrative_model` / `board_reports_narrative_provider` — memo LLM.
-- `board_reports_drive_folder_id` — Drive folder for the PDF copy (empty ⇒ no PDF).
+- `board_reports_drive_folder_id` — Drive folder for the PDF (empty ⇒ no PDF).
+- `board_reports_slack_enabled` (bool, default False) — PDF-only when off; also
+  post to Slack + the in-app feed when on.
 
 ## Deferred (fast-follow)
 - Dollar margin on PACE once a loaded hourly cost is set.

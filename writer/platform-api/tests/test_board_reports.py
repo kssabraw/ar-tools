@@ -258,6 +258,27 @@ def test_render_html_is_a_full_doc_with_sections_and_escaping():
     assert "Outlook" in html and "steady" in html
 
 
+def test_emit_report_pdf_only_by_default(monkeypatch):
+    from services import notifications
+
+    calls = {"emit": 0, "pdf": 0}
+    monkeypatch.setattr(notifications, "emit", lambda **kw: calls.__setitem__("emit", calls["emit"] + 1))
+    monkeypatch.setattr(common, "maybe_publish_pdf",
+                        lambda report: calls.__setitem__("pdf", calls["pdf"] + 1) or {"published": True})
+    report = {"agent": "PACE", "title": "T", "verdict": "v", "rag": "green"}
+
+    # Slack off (the default per the 2026-09-14 ruling) → PDF only, no notification.
+    monkeypatch.setattr(common.settings, "board_reports_slack_enabled", False)
+    r = common.emit_report(report, kind="pace_board_report", today=MON, link="/x")
+    assert calls == {"emit": 0, "pdf": 1}
+    assert r["slack"] is False and r["emitted"] is False and r["pdf"]["published"] is True
+
+    # Slack on → also post the notification.
+    monkeypatch.setattr(common.settings, "board_reports_slack_enabled", True)
+    common.emit_report(report, kind="pace_board_report", today=MON, link="/x")
+    assert calls == {"emit": 1, "pdf": 2}
+
+
 def test_maybe_publish_pdf_gated_off_when_unconfigured(monkeypatch):
     monkeypatch.setattr(common.settings, "board_reports_drive_folder_id", "")
     monkeypatch.setattr(common.settings, "google_apps_script_url", "https://example/webhook")

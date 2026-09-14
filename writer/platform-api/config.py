@@ -2894,6 +2894,11 @@ class Settings(BaseSettings):
     # Master gate — nothing fires until this is true (safe to build/deploy dark).
     board_reports_enabled: bool = False
     board_reports_weekday: int = 0              # 0=Mon; fires at gsc_ingest_hour_utc (~1am PT Mon, before the L10)
+    # Delivery channels. Owner ruling 2026-09-14: deliver ONLY the PDF to Drive,
+    # not Slack. When False, the board reports skip the Slack/in-app notification
+    # entirely and the PDF (board_reports_drive_folder_id) is the sole output. Flip
+    # True to also post to #pace / #dora / the strategy channel + the in-app feed.
+    board_reports_slack_enabled: bool = False
     # The optional LLM "department head memo" that leads each report in the head's
     # voice (best-effort via report_llm → degrades to the deterministic report).
     # The numbers are always deterministic; the memo only phrases them.

@@ -318,25 +318,28 @@ def maybe_publish_pdf(report: dict) -> dict:
 # Emit (I/O)
 # ---------------------------------------------------------------------------
 def emit_report(report: dict, *, kind: str, today: date, link: str) -> dict:
-    """Render + emit one board report via the shared notifications pipe (Slack +
-    in-app), then best-effort publish a PDF copy to the configured Drive folder.
-    Deduped per ISO week; severity follows the RAG. Best-effort throughout."""
-    from services import notifications
-
-    agent = report.get("agent", kind)
-    body = render_report(report)
-    severity = "warning" if report.get("rag") == "red" else "info"
-    nid = notifications.emit(
-        client_id=None,
-        kind=kind,
-        title=report.get("title", "Board report"),
-        summary=body,
-        severity=severity,
-        payload={"link": link},
-        dedupe_key=week_dedupe_key(agent, today),
-    )
+    """Deliver one board report. Owner ruling 2026-09-14: PDF-only by default —
+    publish the PDF copy to the configured Drive folder, and post to Slack + the
+    in-app feed ONLY when ``board_reports_slack_enabled`` is on. Deduped per ISO
+    week; severity follows the RAG. Best-effort throughout."""
     pdf = maybe_publish_pdf(report)
+
+    nid = None
+    if settings.board_reports_slack_enabled:
+        from services import notifications
+
+        agent = report.get("agent", kind)
+        severity = "warning" if report.get("rag") == "red" else "info"
+        nid = notifications.emit(
+            client_id=None,
+            kind=kind,
+            title=report.get("title", "Board report"),
+            summary=render_report(report),
+            severity=severity,
+            payload={"link": link},
+            dedupe_key=week_dedupe_key(agent, today),
+        )
     return {
         "emitted": nid is not None, "deduped": nid is None,
-        "rag": report.get("rag"), "pdf": pdf,
+        "rag": report.get("rag"), "pdf": pdf, "slack": settings.board_reports_slack_enabled,
     }
