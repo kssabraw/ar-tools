@@ -86,6 +86,18 @@ def test_deindexed_from_status():
     assert "deindexed" in _types(signals)
     d = next(s for s in signals if s.alert_type == "deindexed")
     assert d.source == "gsc"
+    assert "GSC impressions" in d.message
+
+
+def test_deindexed_dataforseo_wording_and_source():
+    # A DataForSEO-only keyword (no GSC): the deindex alert must NOT blame GSC
+    # impressions the client doesn't have, and its source must be the real one.
+    rows = _df([(o, 4) for o in range(21, 28)])  # established DFS presence then gone
+    signals = rank_alerts.detect_alerts("kw", rows, "dataforseo", "deindex_risk", TODAY)
+    d = next(s for s in signals if s.alert_type == "deindexed")
+    assert d.source == "dataforseo"
+    assert "GSC" not in d.message
+    assert "Google results" in d.message
 
 
 # ---------------------------------------------------------------------------
