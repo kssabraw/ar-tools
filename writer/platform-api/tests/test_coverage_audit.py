@@ -247,6 +247,107 @@ def test_rank_gaps_empty_degrade():
     assert ca.rank_gaps(None, None) == []
 
 
+# --- service_phrase_from_url / derive_site_services (service-axis derivation) --
+def test_service_phrase_from_url_strips_place_and_generics():
+    assert (
+        ca.service_phrase_from_url(
+            "https://x.com/service-areas/roof-restoration/melbourne/", {"melbourne"}
+        )
+        == "Roof Restoration"
+    )
+    assert ca.service_phrase_from_url("https://x.com/gutter-cleaning/", set()) == "Gutter Cleaning"
+    # A bare place page has no service words left once the place is stripped.
+    assert ca.service_phrase_from_url("https://x.com/melbourne/", {"melbourne"}) == ""
+    # Order comes from the slug, not a sorted token set.
+    assert ca.service_phrase_from_url("https://x.com/emergency-plumbing/", set()) == "Emergency Plumbing"
+
+
+def test_derive_site_services_from_classified():
+    urls = [
+        "https://x.com/roof-restoration/",             # service_only
+        "https://x.com/gutter-cleaning-melbourne/",    # service_location
+        "https://x.com/melbourne/",                    # location_only (not a service)
+        "https://x.com/blog/why-roofs/",               # other
+    ]
+    classified = ca.classify_site_pages(urls, ["Melbourne"])
+    services = ca.derive_site_services(classified, ["Melbourne"])
+    # service_only first, then service_location; place stripped; blog excluded.
+    assert services == ["Roof Restoration", "Gutter Cleaning"]
+
+
+def test_derive_site_services_dedupes_case_insensitive():
+    urls = ["https://x.com/roofing/", "https://x.com/roofing-melbourne/"]
+    classified = ca.classify_site_pages(urls, ["Melbourne"])
+    assert ca.derive_site_services(classified, ["Melbourne"]) == ["Roofing"]
+
+
+def test_derive_site_services_empty_degrade():
+    assert ca.derive_site_services(None, None) == []
+    assert ca.derive_site_services({}, []) == []
+
+
+# --- location-hub keyword (plan §7 resolution: "<primary service> <city>") -----
+def test_grid_location_hub_keyword_and_primary_service_presence():
+    # Only a "<primary> <city>" page exists (no bare /melbourne/ hub).
+    site = _site_index(["https://x.com/roof-restoration-melbourne/"])
+    grid = ca.build_coverage_grid(
+        ["Roof Restoration", "Gutters"],
+        ["Melbourne", "Geelong"],
+        site,
+        primary_service="Roof Restoration",
+    )
+    loc = {r["location"]: r for r in grid["locations"]}
+    # The location-hub keyword is "<primary service> <city>", demand-rankable.
+    assert loc["Melbourne"]["keyword"] == "Roof Restoration Melbourne"
+    assert loc["Geelong"]["keyword"] == "Roof Restoration Geelong"
+    # Melbourne is covered because the primary-service city page acts as its hub.
+    assert loc["Melbourne"]["present"] is True
+    assert loc["Geelong"]["present"] is False
+
+
+def test_grid_location_hub_prefers_bare_hub_page():
+    # A bare /geelong/ hub counts even without a primary-service page.
+    site = _site_index(["https://x.com/geelong/"])
+    grid = ca.build_coverage_grid(
+        ["Roof Restoration"], ["Geelong"], site, primary_service="Roof Restoration"
+    )
+    assert grid["locations"][0]["present"] is True
+
+
+def test_grid_without_primary_service_keeps_bare_place_keyword():
+    # Phase-0 default: no primary_service → bare place-name keyword + hub-only match.
+    site = _site_index(["https://x.com/roof-restoration-melbourne/"])
+    grid = ca.build_coverage_grid(["Roof Restoration"], ["Melbourne"], site)
+    row = grid["locations"][0]
+    assert row["keyword"] == "Melbourne"
+    # No bare /melbourne/ hub and no primary-service fallback → absent.
+    assert row["present"] is False
+
+
+# --- build_matrix_seed_body (AXES ONLY) ---------------------------------------
+def test_build_matrix_seed_body_axes_only():
+    body = ca.build_matrix_seed_body(
+        "Coverage Audit T1",
+        "Melbourne,Victoria,Australia",
+        2036,
+        [{"label": "Roof Restoration", "sources": ["site"]}, {"label": "Gutters"}],
+        [{"name": "Melbourne", "source": "seed"}, {"name": "Geelong", "source": "nearby"}],
+    )
+    assert body["services"] == ["Roof Restoration", "Gutters"]
+    assert body["locations"] == ["Melbourne", "Geelong"]
+    assert body["location"] == "Melbourne,Victoria,Australia"
+    assert body["location_code"] == 2036
+    # Must never smuggle any Matrix per-cell coverage state (plan §8 Major #1).
+    assert not (set(body.keys()) & ca.MATRIX_CELL_STATE_KEYS)
+
+
+def test_build_matrix_seed_body_accepts_bare_strings():
+    body = ca.build_matrix_seed_body("N", "Loc", None, ["Roofing"], ["Melbourne"])
+    assert body["services"] == ["Roofing"]
+    assert body["locations"] == ["Melbourne"]
+    assert body["location_code"] is None
+
+
 # --- competition → difficulty proxy -------------------------------------------
 def test_competition_to_difficulty_bands():
     assert ca._competition_to_difficulty("LOW") == 20.0

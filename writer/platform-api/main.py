@@ -23,6 +23,7 @@ from routers.briefs import router as briefs_router
 from routers.citations import router as citations_router
 from routers.clients import router as clients_router
 from routers.competitors import router as competitors_router
+from routers.coverage_audit import router as coverage_audit_router
 from routers.domain_intel import router as domain_intel_router
 from routers.keyword_research import router as keyword_research_router
 from routers.content_schedule import router as content_schedule_router
@@ -329,6 +330,7 @@ app.include_router(citations_router)
 app.include_router(clients_router)
 app.include_router(social_router)
 app.include_router(competitors_router)
+app.include_router(coverage_audit_router)
 app.include_router(content_schedule_router)
 app.include_router(dashboard_router)
 app.include_router(deliverables_router)
