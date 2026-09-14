@@ -1347,6 +1347,37 @@ _CAT_LOC = {
 }
 
 
+def test_categories_diff_is_id_based_order_and_name_insensitive():
+    # Wellington Internal Medicine Group regression: Google ACCEPTED the categories
+    # but re-ordered the additional list (and returned its own canonical
+    # displayNames) on read-back, so the default _norm compare reported a false
+    # difference and the edit was marked `rejected`.
+    proposed = {
+        "primary": {"id": "categories/gcid:internist", "name": "Internist"},
+        "additional": [
+            {"id": "categories/gcid:medical_clinic", "name": "Medical clinic"},
+            {"id": "categories/gcid:doctor", "name": "Doctor"},
+        ],
+    }
+    live_reordered_and_renamed = {
+        "primary": {"id": "categories/gcid:internist", "name": "Internal medicine physician"},
+        "additional": [
+            {"id": "categories/gcid:doctor", "name": "Physician"},          # reordered + renamed
+            {"id": "categories/gcid:medical_clinic", "name": "Medical Center"},
+        ],
+    }
+    assert not api.diff_field("categories", proposed, live_reordered_and_renamed)
+    # A genuine category change (different gcid) IS still detected.
+    changed_additional = {**proposed, "additional": [{"id": "categories/gcid:hospital", "name": "Hospital"}]}
+    assert api.diff_field("categories", proposed, changed_additional)
+    # A primary-category change IS still detected.
+    changed_primary = {**proposed, "primary": {"id": "categories/gcid:dentist", "name": "Dentist"}}
+    assert api.diff_field("categories", proposed, changed_primary)
+    # An added secondary category IS detected.
+    added = {**proposed, "additional": proposed["additional"] + [{"id": "categories/gcid:hospital"}]}
+    assert api.diff_field("categories", proposed, added)
+
+
 def test_parse_categories_value():
     v = api.parse_categories_value(_CAT_LOC)
     assert v["primary"] == {"id": "categories/gcid:roofing_contractor", "name": "Roofing contractor"}
