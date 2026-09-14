@@ -2,9 +2,9 @@
 
 **Module slug:** `coverage_audit` · **Authoritative plan:** `docs/modules/coverage-audit-module-plan-v1_0.md` (design authority; owner decisions §0; adversarial-review findings + resolutions §8).
 
-**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green). **Phase 3 (Tier 3: CDP × main-service) BUILT** (draft PR — the new census CDP integration, worker-only; migration `20260914130000_coverage_audit_cdp_cache.sql` applied live). **Next step is Phase 4 (Tier 4: CDP × subservice — cross the CDP axis with the subservice axis).**
+**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green). **Phase 3 (Tier 3: CDP × main-service) MERGED** (PR #1076 — all CI green: platform-api tests + lint & typecheck + Netlify; squash-merged to `main` as `fc1afa5`; the new census CDP integration, worker-only; migration `20260914130000_coverage_audit_cdp_cache.sql` applied live). **Next step is Phase 4 (Tier 4: CDP × subservice — cross the CDP axis with the subservice axis).**
 
-> ⚠️ **The live TIGERweb CDP query is UNVERIFIED from the sandbox** (census.gov is egress-blocked, same as `census_demand.py` / `leadoff_geocode.py`). The pure decision helpers around it are unit-tested; the enumeration query itself must be confirmed on the deployed Railway worker after merge — run a Tier-3 audit on a US client with a `business_location` + `GOOGLE_MAPS_API_KEY` set, and check the run's `provenance.location_axis` (for a Tier-3 run this is the CDP provenance: `kind:"cdp"` + states / counties / candidate+verified counts + notes) and the `census_cdp_cache` rows (one per state). If `pick_cdp_layer` mis-selects the layer or the `STATE='SS'` query shape is wrong, the tier degrades with a visible note (never aborts) — check `census_cdp.*` logs on the worker.
+> ⚠️ **The live TIGERweb CDP query is UNVERIFIED from the sandbox** (census.gov is egress-blocked, same as `census_demand.py` / `leadoff_geocode.py`). The pure decision helpers around it are unit-tested; the enumeration query itself must be confirmed on the deployed Railway worker now that it's merged — run a Tier-3 audit on a US client with a `business_location` + `GOOGLE_MAPS_API_KEY` set, and check the run's `provenance.location_axis` (for a Tier-3 run this is the CDP provenance: `kind:"cdp"` + states / counties / candidate+verified counts + notes) and the `census_cdp_cache` rows (one per state). If `pick_cdp_layer` mis-selects the layer or the `STATE='SS'` query shape is wrong, the tier degrades with a visible note (never aborts) — check `census_cdp.*` logs on the worker.
 
 ---
 
@@ -107,7 +107,7 @@ The delta from Tier 1 was the **subservice axis** + threading `tier=2` end-to-en
 
 ---
 
-## Phase 3 — BUILT (Tier 3: CDP × main-service — NEW census integration, worker-only)
+## Phase 3 — MERGED (Tier 3: CDP × main-service — NEW census integration, worker-only), PR #1076
 
 CDP enumeration is **genuinely new engineering** (plan §0.3 / §3.2 / §8 Major #2), not reuse — `census_demand.py` queries only the TIGERweb *block-group* layer. The delta from Tier 1 is the **location axis**: the authoritative Census CDP list for the service area, instead of `resolve_target_cities`' cities. The service axis stays main services (the runner reuses the Tier-1 path verbatim).
 
