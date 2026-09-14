@@ -32,6 +32,7 @@ never aborts the audit.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from datetime import date, datetime, timedelta, timezone
@@ -42,14 +43,20 @@ from fastapi import HTTPException
 from config import settings
 from db.supabase_client import get_supabase
 from services import coverage_audit as core
-from services import keyword_market, local_seo_silo, site_page_index, target_cities
+from services import (
+    icp_service,
+    keyword_market,
+    local_seo_silo,
+    site_page_index,
+    target_cities,
+)
 from services.dataforseo_rank import location_code_for
 
 logger = logging.getLogger(__name__)
 
 TIER_MIN = 1
 TIER_MAX = 4
-SUPPORTED_TIERS = (1,)  # Phase 1 ships Tier 1; Tiers 2–4 land in later phases.
+SUPPORTED_TIERS = (1, 2)  # Phase 1: Tier 1 (city × main-service). Phase 2: Tier 2 (city × subservice).
 
 _AUDIT_COLS = (
     "id, client_id, status, tier, service_axis, location_axis, gaps, provenance, "
@@ -291,6 +298,89 @@ def _derive_service_axis(client: dict, classified: dict, place_vocab: list[str])
     return axis, provenance
 
 
+# ── subservice axis (Tier 2 — expand each main service, city-agnostic) ─────────
+_SUBSERVICE_PLANNER_UNAVAILABLE = (
+    "Subservice planner unavailable — showing the main services instead "
+    "(Tier 2 degraded to main-service coverage). Retry once the content model is configured."
+)
+
+
+async def _derive_subservice_axis(
+    client: dict, main_axis: list[dict], representative_city: str
+) -> tuple[list[dict], dict]:
+    """Expand each confirmed main service into its subservice variations and derive
+    a CITY-AGNOSTIC subservice axis (Tier 2).
+
+    Runs the Local SEO planner `local_seo_silo._generate_service_pages(service,
+    representative_city, llm, icp_block)` once per main service — it emits per-city
+    pages — then strips the representative city via the reused
+    `local_seo_matrix.service_labels_from_pages` (plan §0.2 / §6) and merges across
+    services with the pure `core.merge_subservice_axis`. Best-effort: no LLM / every
+    call failing → an empty axis (the caller falls back to the main-service axis
+    with a visible note — never aborts). The representative city is the seed city
+    (same string the planner composes with and the strip removes). Returns
+    ``(axis, provenance)``."""
+    from services import local_seo_matrix  # local import: pulls the heavy silo chain lazily
+
+    main_services = [
+        str((e or {}).get("label") or "").strip()
+        for e in (main_axis or [])
+        if str((e or {}).get("label") or "").strip()
+    ]
+    prov: dict = {
+        "kind": "subservice",
+        "main_services": main_services,
+        "representative_city": representative_city,
+        "planned_services": [],
+        "failed_services": [],
+        "notes": [],
+        "confirmed": False,
+    }
+    if not main_services:
+        prov["notes"].append("No main services to expand into subservices.")
+        return [], prov
+
+    llm = local_seo_silo._service_llm()
+    if not llm:
+        prov["notes"].append("Subservice planner skipped — content model not configured.")
+        return [], prov
+
+    # ICP grounds the planner's buying-situation reasoning; best-effort (a client
+    # with no ICP on file → the planner infers the ideal customer itself).
+    icp_block = ""
+    try:
+        icp_block = icp_service.resolve_icp_text(client) or ""
+    except Exception as exc:  # noqa: BLE001 — ICP grounding is non-critical
+        logger.warning("coverage_audit.icp_fetch_failed", extra={"error": str(exc)})
+
+    per_service_labels: list[dict] = []
+    for service in main_services:
+        try:
+            per_silo = await asyncio.to_thread(
+                local_seo_silo._generate_service_pages, service, representative_city, llm, icp_block
+            )
+        except Exception as exc:  # noqa: BLE001 — one service failing must not sink the axis
+            logger.warning(
+                "coverage_audit.subservice_gen_failed",
+                extra={"service": service, "error": str(exc)},
+            )
+            prov["failed_services"].append(service)
+            continue
+        labels = local_seo_matrix.service_labels_from_pages(per_silo, representative_city)
+        if labels:
+            per_service_labels.append({"service": service, "labels": labels})
+            prov["planned_services"].append(service)
+
+    axis = core.merge_subservice_axis(per_service_labels)
+    if not axis:
+        prov["notes"].append("Subservice expansion produced no subservices.")
+    if prov["failed_services"]:
+        prov["notes"].append(
+            f"Could not expand {len(prov['failed_services'])} service(s) into subservices."
+        )
+    return axis, prov
+
+
 # ── location axis (seed city + resolve_target_cities) ──────────────────────────
 async def _resolve_location_axis(
     client: dict, seed_location: str, location_code: Optional[int]
@@ -381,8 +471,16 @@ async def run_coverage_audit_tier(
 ) -> dict:
     """Run one tier of the audit and persist it onto the `coverage_audits` row
     ``audit_id``. Idempotent by audit_id: a reaper requeue re-runs into the same
-    row with the caches warm. Phase 1 supports Tier 1 only."""
-    if tier != 1:
+    row with the caches warm.
+
+    Tier 1 = city × main-service; Tier 2 = city × subservice. The ONLY delta between
+    them is what fills the service axis: Tier 2 expands each auto-derived main service
+    into its subservice variations (city-agnostic), then reuses the identical grid /
+    diff / demand-rank / matrix-seed path. Tier 2 also DROPS the location-hub
+    ("missing cities") rows — a city-hub gap is a Tier-1 question (measured against
+    the MAIN service axis); re-reporting it in a subservice audit would double-count
+    Tier 1 and rank against a keyword absent from this tier's axis."""
+    if tier not in SUPPORTED_TIERS:
         raise ValueError(f"unsupported_tier: {tier}")
     supabase = get_supabase()
     client = local_seo_silo._get_client(client_id)
@@ -417,30 +515,76 @@ async def run_coverage_audit_tier(
         if not urls:
             notes.append("No pages discovered on the site — results may over-report gaps.")
 
-    # 3) Classify + derive/confirm the service axis.
+    # 3) Classify + derive/confirm the service axis (tier-specific).
+    #    An edited axis (override) is used verbatim for either tier — for Tier 2 the
+    #    supplied list is the confirmed SUBSERVICE axis. A fresh Tier-1 run derives
+    #    main services; a fresh Tier-2 run derives main services, then expands each
+    #    into a city-agnostic subservice axis (degrading to the main services if the
+    #    planner is unavailable — never aborting).
     classified = core.classify_site_pages(urls, place_vocab)
+    seed_city = loc_prov.get("seed_city") or ""
     if service_axis_override is not None:
         service_axis = [
             {"label": (s.get("label") if isinstance(s, dict) else s) or "", "sources": ["confirmed"]}
             for s in service_axis_override
             if (s.get("label") if isinstance(s, dict) else s)
         ]
-        svc_prov: dict = {"confirmed": True, "notes": ["Service axis edited and confirmed by the team."]}
-    else:
+        svc_prov: dict = {
+            "confirmed": True,
+            "kind": "subservice" if tier == 2 else "main_service",
+            "notes": ["Service axis edited and confirmed by the team."],
+        }
+    elif tier == 1:
         service_axis, svc_prov = _derive_service_axis(client, classified, place_vocab)
+    else:  # tier == 2 — expand main services into a city-agnostic subservice axis
+        main_axis, main_prov = _derive_service_axis(client, classified, place_vocab)
+        sub_axis, sub_prov = await _derive_subservice_axis(client, main_axis, seed_city)
+        combined_notes = list(main_prov.get("notes") or []) + list(sub_prov.get("notes") or [])
+        if sub_axis:
+            service_axis = sub_axis
+            svc_prov = {
+                "confirmed": False,
+                "kind": "subservice",
+                "notes": combined_notes,
+                "main_service_axis": main_prov,
+                "main_services": sub_prov.get("main_services", []),
+                "planned_services": sub_prov.get("planned_services", []),
+                "failed_services": sub_prov.get("failed_services", []),
+                "representative_city": seed_city,
+            }
+        else:
+            # Degrade cleanly to the main-service axis (never abort). The report is
+            # still useful — it shows main-service coverage — and the team can retry.
+            service_axis = main_axis
+            svc_prov = {
+                "confirmed": False,
+                "kind": "main_service_fallback",
+                "notes": combined_notes + [_SUBSERVICE_PLANNER_UNAVAILABLE],
+                "main_service_axis": main_prov,
+                "main_services": sub_prov.get("main_services", []),
+            }
     notes.extend(svc_prov.get("notes") or [])
 
     # 4) Build the AXES-ONLY report grid + diff.
+    #    The location-hub keyword uses the primary MAIN service for Tier 1; Tier 2
+    #    drops location rows entirely (below), so it needs no primary and passes None.
     site_index = {
         "token_index": site_page_index.build_page_token_index(urls),
         "location_index": site_page_index.build_location_slug_index(urls),
     }
     in_tool_index = _in_tool_index(client_id)
-    primary_service = str(service_axis[0]["label"]) if service_axis else None
+    primary_service = (
+        str(service_axis[0]["label"]) if (tier == 1 and service_axis) else None
+    )
     grid = core.build_coverage_grid(
         service_axis, location_axis, site_index, in_tool_index, primary_service=primary_service
     )
     diff = core.diff_coverage(grid)
+    if tier != 1:
+        # Location-hub rows are a Tier-1 concern (does a city have a main-service
+        # landing page). Dropping them here also keeps the demand fetch from spending
+        # on hub keywords this tier won't show. Decision recorded in provenance.
+        diff["missing_locations"] = []
 
     # 5) Demand — reserve before spend, cache-idempotent.
     market, demand_available, demand_notes = await _fetch_demand(_collect_keywords(diff), location_code)
@@ -479,6 +623,10 @@ async def run_coverage_audit_tier(
         "location_axis": loc_prov,
         "scan": {"url_count": len(urls), "source": source, "website": website},
         "demand": {"available": demand_available, "location_code": location_code},
+        # Tier 2 shows subservice + subservice×city gaps only; the location-hub
+        # ("missing cities") rows are a Tier-1 concern (plan §7 / handoff open item,
+        # resolved this phase). The frontend keys the Cities stat + table off this.
+        "location_rows_shown": tier == 1,
         "degraded_notes": degraded_notes,
     }
 

@@ -56,16 +56,22 @@ interface AuditRun {
   service_axis: ServiceAxisEntry[] | null
   location_axis: LocationAxisEntry[] | null
   gaps: AuditGaps | null
-  provenance: { degraded_notes?: string[]; service_axis?: { confirmed?: boolean } } | null
+  provenance:
+    | { degraded_notes?: string[]; service_axis?: { confirmed?: boolean }; location_rows_shown?: boolean }
+    | null
   error: string | null
   created_at: string
 }
 interface StatusResponse {
   enabled: boolean
+  tier: number
+  supported_tiers: number[]
   budget_remaining: number
   audits: { id: string; status: string; tier: number; created_at: string; error: string | null }[]
   latest: AuditRun | null
 }
+
+type Tier = 1 | 2
 
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
@@ -89,14 +95,16 @@ export function CoverageAudit() {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
 
+  const [tier, setTier] = useState<Tier>(1)
+
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
     queryFn: () => api.get<Client>(`/clients/${id}`),
     enabled: Boolean(id),
   })
   const { data: status } = useQuery<StatusResponse>({
-    queryKey: ['coverage-audit', id],
-    queryFn: () => api.get<StatusResponse>(`/clients/${id}/coverage-audit`),
+    queryKey: ['coverage-audit', id, tier],
+    queryFn: () => api.get<StatusResponse>(`/clients/${id}/coverage-audit?tier=${tier}`),
     enabled: Boolean(id),
   })
 
@@ -106,9 +114,10 @@ export function CoverageAudit() {
   const [seedError, setSeedError] = useState<string | null>(null)
 
   // The audit runs as a background async_jobs job (one per tier). The in-flight
-  // job id is persisted so navigating away and back reconnects to it.
+  // job id is persisted per tier so navigating away — or switching tiers — and back
+  // reconnects to the right job.
   const auditJob = useResumableJob<{ audit_id?: string }, undefined>({
-    storageKey: `coverage-audit:${id}`,
+    storageKey: `coverage-audit:${id}:${tier}`,
     poll: async (jobId) => {
       const st = await api.get<{ status: string; error?: string; result?: { audit_id?: string } }>(
         `/clients/${id}/coverage-audit/jobs/${jobId}`,
@@ -127,7 +136,7 @@ export function CoverageAudit() {
   const runAudit = () => {
     setRunError(null)
     void auditJob.start(async () => {
-      const r = await api.post<{ job_id: string }>(`/clients/${id}/coverage-audit`, { tier: 1 })
+      const r = await api.post<{ job_id: string }>(`/clients/${id}/coverage-audit`, { tier })
       return r.job_id
     }, undefined)
   }
@@ -172,6 +181,13 @@ export function CoverageAudit() {
   const confirmed = latest?.provenance?.service_axis?.confirmed ?? false
   const serviceAxis = latest?.service_axis ?? []
   const locationAxis = latest?.location_axis ?? []
+  // Render off the RUN's own tier (a completed run may predate a tier switch).
+  const reportTier = latest?.tier ?? tier
+  const isSubservice = reportTier === 2
+  // Tier 2 drops the location-hub ("missing cities") rows — the server records the
+  // decision on the run; default to the tier when an older run lacks the flag.
+  const showLocations = latest?.provenance?.location_rows_shown ?? reportTier === 1
+  const serviceAxisLabel = isSubservice ? 'Subservice axis' : 'Service axis'
 
   const startEditing = () => {
     setAxisDraft(serviceAxis.map((s) => s.label).join('\n'))
@@ -190,21 +206,44 @@ export function CoverageAudit() {
         <LayoutGrid size={22} color="#6366f1" />
         <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>Coverage Audit</h1>
       </div>
-      <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 20px' }}>
-        Scans the whole site as it stands and finds the location & service pages that don't exist yet —
-        missing services, missing cities, and service×city combos — ranked by real search demand. Tier 1
-        (city × main service).
+      <p style={{ color: '#64748b', fontSize: 13, margin: '0 0 16px' }}>
+        Scans the whole site as it stands and finds the location & service pages that don't exist yet,
+        ranked by real search demand. <strong>Tier 1</strong> covers city × main service;{' '}
+        <strong>Tier 2</strong> drills into city × subservice (each main service expanded into its
+        variations).
       </p>
 
       {disabled && (
         <div style={errBox}>Coverage Audit is disabled for this environment.</div>
       )}
 
+      {/* Tier selector — switches the run + report between city×main-service (T1)
+          and city×subservice (T2). Each tier keeps its own latest run + in-flight job. */}
+      <div style={{ display: 'inline-flex', gap: 2, marginBottom: 16, background: '#f1f5f9', borderRadius: 8, padding: 3 }}>
+        {([1, 2] as Tier[]).map((t) => (
+          <button
+            key={t}
+            style={t === tier ? tierBtnActive : tierBtn}
+            onClick={() => {
+              if (t === tier) return
+              setEditing(false)
+              setRunError(null)
+              setSeedError(null)
+              setTier(t)
+            }}
+            disabled={running}
+            title={t === 1 ? 'City × main service' : 'City × subservice'}
+          >
+            Tier {t} · {t === 1 ? 'main services' : 'subservices'}
+          </button>
+        ))}
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
         <button style={running || disabled ? { ...primaryBtn, opacity: 0.6, cursor: 'default' } : primaryBtn}
           onClick={runAudit} disabled={running || disabled}>
           <RefreshCw size={15} className={running ? 'spin' : undefined} />
-          {running ? `Running… ${auditJob.elapsed}s` : latest ? 'Re-run audit' : 'Run audit'}
+          {running ? `Running… ${auditJob.elapsed}s` : latest ? `Re-run Tier ${tier}` : `Run Tier ${tier} audit`}
         </button>
         <span style={{ color: '#94a3b8', fontSize: 12 }}>
           {budget > 100000 ? 'Demand budget: unlimited' : `Demand budget left today: ${num(budget)}`}
@@ -251,15 +290,21 @@ export function CoverageAudit() {
         <>
           {/* Coverage summary */}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
-            <Stat label="Services" present={counts?.services_present} absent={counts?.services_absent} />
-            <Stat label="Cities" present={counts?.locations_present} absent={counts?.locations_absent} />
-            <Stat label="Service × City cells" present={counts?.cells_present} absent={counts?.cells_absent} />
+            <Stat label={isSubservice ? 'Subservices' : 'Services'} present={counts?.services_present} absent={counts?.services_absent} />
+            {showLocations && (
+              <Stat label="Cities" present={counts?.locations_present} absent={counts?.locations_absent} />
+            )}
+            <Stat
+              label={isSubservice ? 'Subservice × City cells' : 'Service × City cells'}
+              present={counts?.cells_present}
+              absent={counts?.cells_absent}
+            />
           </div>
 
           {/* Service axis — auto-derived, confirm to refine (plan §8 item / §7). */}
           <section style={panel}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-              <h2 style={panelTitle}>Service axis</h2>
+              <h2 style={panelTitle}>{serviceAxisLabel}</h2>
               {!editing && (
                 <button style={ghostBtn} onClick={startEditing} disabled={running}>
                   <Pencil size={13} /> Edit & re-run
@@ -268,13 +313,16 @@ export function CoverageAudit() {
             </div>
             {!confirmed && !editing && (
               <div style={{ ...noteLine, marginBottom: 10 }}>
-                These services were auto-derived from the site + GBP categories. Edit and re-run to refine
-                the audit.
+                {isSubservice
+                  ? 'These subservices were expanded from the main services by the planner. Edit and re-run to refine the audit.'
+                  : 'These services were auto-derived from the site + GBP categories. Edit and re-run to refine the audit.'}
               </div>
             )}
             {editing ? (
               <div>
-                <div style={{ ...noteLine, marginBottom: 8 }}>One service per line. Re-running audits the edited axis.</div>
+                <div style={{ ...noteLine, marginBottom: 8 }}>
+                  One {isSubservice ? 'subservice' : 'service'} per line. Re-running audits the edited axis.
+                </div>
                 <textarea value={axisDraft} onChange={(e) => setAxisDraft(e.target.value)}
                   rows={Math.max(4, serviceAxis.length + 1)} style={textareaStyle} />
                 <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
@@ -289,7 +337,11 @@ export function CoverageAudit() {
                 {serviceAxis.map((s) => (
                   <span key={s.label} style={axisChip} title={(s.sources ?? []).join(', ')}>{s.label}</span>
                 ))}
-                {serviceAxis.length === 0 && <span style={{ color: '#94a3b8', fontSize: 13 }}>No services derived.</span>}
+                {serviceAxis.length === 0 && (
+                  <span style={{ color: '#94a3b8', fontSize: 13 }}>
+                    No {isSubservice ? 'subservices' : 'services'} derived.
+                  </span>
+                )}
               </div>
             )}
           </section>
@@ -324,25 +376,33 @@ export function CoverageAudit() {
 
           {/* Gap tables */}
           <GapTable
-            title="Missing services"
-            subtitle="City-less service pages the site doesn't have yet."
+            title={isSubservice ? 'Missing subservices' : 'Missing services'}
+            subtitle={
+              isSubservice
+                ? "City-less subservice pages the site doesn't have yet."
+                : "City-less service pages the site doesn't have yet."
+            }
             rows={gaps.missing_services}
             kind="service"
             newHref={localSeoNew}
           />
+          {/* Tier 2 drops the location-hub rows — a city-hub gap is a Tier-1 concern
+              (measured against the main-service axis), not a subservice one. */}
+          {showLocations && (
+            <GapTable
+              title="Missing cities"
+              subtitle="Cities with no dedicated page (ranked by the primary service's demand there)."
+              rows={gaps.missing_locations}
+              kind="location"
+              newHref={localSeoNew}
+            />
+          )}
           <GapTable
-            title="Missing cities"
-            subtitle="Cities with no dedicated page (ranked by the primary service's demand there)."
-            rows={gaps.missing_locations}
-            kind="location"
-            newHref={localSeoNew}
-          />
-          <GapTable
-            title="Missing service × city pages"
+            title={isSubservice ? 'Missing subservice × city pages' : 'Missing service × city pages'}
             subtitle={
               counts?.cell_floor
                 ? `Demand-ranked; ${num(counts.cells_below_floor)} sub-floor combos (< ${num(counts.cell_floor)} searches/mo) hidden.`
-                : 'Service × city combinations the site is missing.'
+                : `${isSubservice ? 'Subservice' : 'Service'} × city combinations the site is missing.`
             }
             rows={gaps.missing_cells}
             kind="cell"
@@ -441,6 +501,8 @@ function GapTable({
 const backLink: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, color: '#64748b', fontSize: 13, textDecoration: 'none', marginBottom: 16 }
 const primaryBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '9px 16px', background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }
 const ghostBtn: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', background: '#fff', color: '#475569', border: '1px solid #cbd5e1', borderRadius: 8, fontSize: 13, fontWeight: 500, cursor: 'pointer' }
+const tierBtn: React.CSSProperties = { padding: '6px 14px', background: 'transparent', color: '#475569', border: 'none', borderRadius: 6, fontSize: 13, fontWeight: 600, cursor: 'pointer' }
+const tierBtnActive: React.CSSProperties = { ...tierBtn, background: '#fff', color: '#4338ca', boxShadow: '0 1px 2px rgba(15,23,42,0.12)' }
 const th: React.CSSProperties = { textAlign: 'left', padding: '9px 12px', background: '#f8fafc', color: '#475569', fontWeight: 600, fontSize: 12, whiteSpace: 'nowrap' }
 const td: React.CSSProperties = { padding: '8px 12px', color: '#334155' }
 const emptyBox: React.CSSProperties = { padding: 40, textAlign: 'center', color: '#94a3b8', border: '1px dashed #e2e8f0', borderRadius: 8 }

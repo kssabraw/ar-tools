@@ -192,5 +192,104 @@ def test_fetch_demand_budget_exhausted_uses_cache(monkeypatch):
     assert any("budget exhausted" in n.lower() for n in notes)
 
 
+# --- _derive_subservice_axis (Tier 2 — planner expansion + city-strip merge) ---
+def _fake_llm():
+    """A truthy sentinel standing in for the Sonnet client (never called directly —
+    _generate_service_pages is monkeypatched)."""
+    return object()
+
+
+def test_derive_subservice_axis_expands_and_strips_city(monkeypatch):
+    monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
+    monkeypatch.setattr(svc.icp_service, "resolve_icp_text", lambda client: "")
+
+    # The planner emits PER-CITY pages ("<modifier> <service> <city>"); the reused
+    # service_labels_from_pages strips the representative city. Return realistic silos.
+    def _gen(service, city, llm, icp_block=""):
+        assert city == "Melbourne"  # representative city threaded through
+        return [
+            {
+                "silo": "Core",
+                "pages": [
+                    {"keyword": f"{service} {city}", "supporting_keywords": []},
+                    {"keyword": f"Emergency {service} {city}", "supporting_keywords": []},
+                ],
+            }
+        ]
+
+    monkeypatch.setattr(svc.local_seo_silo, "_generate_service_pages", _gen)
+
+    main_axis = [{"label": "Roof Restoration"}, {"label": "Gutter Cleaning"}]
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, main_axis, "Melbourne"))
+    labels = [e["label"] for e in axis]
+    # City stripped from every page; merged across both main services, deduped.
+    assert labels == [
+        "Roof Restoration",
+        "Emergency Roof Restoration",
+        "Gutter Cleaning",
+        "Emergency Gutter Cleaning",
+    ]
+    assert prov["kind"] == "subservice"
+    assert prov["planned_services"] == ["Roof Restoration", "Gutter Cleaning"]
+    assert prov["failed_services"] == []
+    # Each subservice is tagged with its parent main service (for the review screen).
+    assert {e["label"]: e["service"] for e in axis}["Emergency Gutter Cleaning"] == "Gutter Cleaning"
+
+
+def test_derive_subservice_axis_no_llm_degrades(monkeypatch):
+    monkeypatch.setattr(svc.local_seo_silo, "_service_llm", lambda: None)
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, [{"label": "Roofing"}], "Melbourne"))
+    assert axis == []
+    assert any("planner skipped" in n.lower() for n in prov["notes"])
+
+
+def test_derive_subservice_axis_no_main_services_degrades():
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, [], "Melbourne"))
+    assert axis == []
+    assert any("no main services" in n.lower() for n in prov["notes"])
+
+
+def test_derive_subservice_axis_one_service_failing_is_skipped(monkeypatch):
+    monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
+    monkeypatch.setattr(svc.icp_service, "resolve_icp_text", lambda client: "")
+
+    def _gen(service, city, llm, icp_block=""):
+        if service == "Broken Service":
+            raise RuntimeError("planner blew up")
+        return [{"silo": "Core", "pages": [{"keyword": f"{service} {city}", "supporting_keywords": []}]}]
+
+    monkeypatch.setattr(svc.local_seo_silo, "_generate_service_pages", _gen)
+
+    main_axis = [{"label": "Roofing"}, {"label": "Broken Service"}]
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, main_axis, "Melbourne"))
+    # The good service still produces subservices; the failing one is recorded.
+    assert [e["label"] for e in axis] == ["Roofing"]
+    assert prov["planned_services"] == ["Roofing"]
+    assert prov["failed_services"] == ["Broken Service"]
+    assert any("could not expand" in n.lower() for n in prov["notes"])
+
+
+def test_derive_subservice_axis_icp_failure_is_non_fatal(monkeypatch):
+    monkeypatch.setattr(svc.local_seo_silo, "_service_llm", _fake_llm)
+
+    def _boom(client):
+        raise RuntimeError("icp read failed")
+
+    monkeypatch.setattr(svc.icp_service, "resolve_icp_text", _boom)
+    monkeypatch.setattr(
+        svc.local_seo_silo,
+        "_generate_service_pages",
+        lambda service, city, llm, icp_block="": [
+            {"silo": "Core", "pages": [{"keyword": f"{service} {city}", "supporting_keywords": []}]}
+        ],
+    )
+    axis, prov = asyncio.run(svc._derive_subservice_axis({}, [{"label": "Roofing"}], "Melbourne"))
+    assert [e["label"] for e in axis] == ["Roofing"]  # ICP failure degraded silently
+
+
+def test_tier_2_is_supported():
+    assert 2 in svc.SUPPORTED_TIERS
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))

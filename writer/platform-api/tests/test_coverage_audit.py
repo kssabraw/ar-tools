@@ -348,6 +348,64 @@ def test_build_matrix_seed_body_accepts_bare_strings():
     assert body["location_code"] is None
 
 
+# --- merge_subservice_axis (Tier 2 — cross-service merge/dedupe) --------------
+def test_merge_subservice_axis_merges_and_dedupes_across_services():
+    # Each `labels` list is what `service_labels_from_pages(per_silo, city)` returns
+    # for ONE main service (already city-stripped + slug-deduped within the service).
+    axis = ca.merge_subservice_axis(
+        [
+            {
+                "service": "Roof Restoration",
+                "labels": [
+                    {"label": "Roof Restoration", "group": "Core"},
+                    {"label": "Emergency Roof Restoration", "group": "Urgency"},
+                ],
+            },
+            {
+                "service": "Gutter Cleaning",
+                "labels": [
+                    {"label": "Gutter Cleaning", "group": "Core"},
+                    # A duplicate label from a second service is dropped (first wins).
+                    {"label": "emergency roof restoration", "group": "Urgency"},
+                ],
+            },
+        ]
+    )
+    labels = [e["label"] for e in axis]
+    assert labels == ["Roof Restoration", "Emergency Roof Restoration", "Gutter Cleaning"]
+    by_label = {e["label"]: e for e in axis}
+    # Each entry carries its parent main service + planner silo group + a planner source.
+    assert by_label["Emergency Roof Restoration"]["service"] == "Roof Restoration"
+    assert by_label["Emergency Roof Restoration"]["group"] == "Urgency"
+    assert by_label["Gutter Cleaning"]["sources"] == ["planner"]
+    # Every entry is shaped like a service-axis entry (label + sources) so it flows
+    # through build_coverage_grid / build_matrix_seed_body unchanged.
+    for e in axis:
+        assert "label" in e and "sources" in e
+
+
+def test_merge_subservice_axis_flows_through_matrix_seed_and_axis_names():
+    axis = ca.merge_subservice_axis(
+        [{"service": "Roofing", "labels": [{"label": "Metal Roofing", "group": "Types"}]}]
+    )
+    # _axis_names reads `label` from the dicts — the seed body carries plain names.
+    assert ca._axis_names(axis) == ["Metal Roofing"]
+    body = ca.build_matrix_seed_body("N", "Loc", 1, axis, [{"name": "Melbourne"}])
+    assert body["services"] == ["Metal Roofing"]
+    assert not (set(body.keys()) & ca.MATRIX_CELL_STATE_KEYS)
+
+
+def test_merge_subservice_axis_empty_and_blank_degrade():
+    assert ca.merge_subservice_axis(None) == []
+    assert ca.merge_subservice_axis([]) == []
+    # Blank labels + missing service are skipped, never crash.
+    axis = ca.merge_subservice_axis(
+        [{"service": "", "labels": [{"label": "  "}, {"label": "Roofing"}]}]
+    )
+    assert [e["label"] for e in axis] == ["Roofing"]
+    assert axis[0]["service"] is None
+
+
 # --- competition → difficulty proxy -------------------------------------------
 def test_competition_to_difficulty_bands():
     assert ca._competition_to_difficulty("LOW") == 20.0
