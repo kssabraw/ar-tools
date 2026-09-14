@@ -2881,6 +2881,38 @@ class Settings(BaseSettings):
     director_slack_bot_token: str = ""          # DIRECTOR_SLACK_BOT_TOKEN — the DORA app's xoxb- bot token
     director_slack_signing_secret: str = ""     # DIRECTOR_SLACK_SIGNING_SECRET — the DORA app's signing secret
 
+    # ── Board reports (services/board_reports/) — owner ask 2026-09-14 ───────
+    # The three agents report to the Monday-noon L10 "as department heads to a
+    # C-suite board": PACE (delivery/capacity), DORA (operating-model health),
+    # SerMaStr (client results — a portfolio Client Health scorecard). Each is
+    # the shared six-part board shape (verdict+RAG · scorecard · wins · risks &
+    # actions · asks · outlook), assembled deterministically from data the suite
+    # already produces, with an optional best-effort LLM department-head memo on
+    # top. Weekly on the shared scheduler; runs EVERY week including all-green
+    # (a board wants the whole picture — the opposite of the suppress-on-quiet
+    # exception digests). Doc: docs/modules/board-reports-plan-v1_0.md.
+    # Master gate — nothing fires until this is true (safe to build/deploy dark).
+    board_reports_enabled: bool = False
+    board_reports_weekday: int = 0              # 0=Mon; fires at gsc_ingest_hour_utc (~1am PT Mon, before the L10)
+    # Delivery channels. Owner ruling 2026-09-14: deliver ONLY the PDF to Drive,
+    # not Slack. When False, the board reports skip the Slack/in-app notification
+    # entirely and the PDF (board_reports_drive_folder_id) is the sole output. Flip
+    # True to also post to #pace / #dora / the strategy channel + the in-app feed.
+    board_reports_slack_enabled: bool = False
+    # The optional LLM "department head memo" that leads each report in the head's
+    # voice (best-effort via report_llm → degrades to the deterministic report).
+    # The numbers are always deterministic; the memo only phrases them.
+    board_reports_narrative_enabled: bool = True
+    board_reports_narrative_provider: str = "anthropic"
+    board_reports_narrative_model: str = "claude-sonnet-4-6"
+    board_reports_narrative_max_tokens: int = 700
+    # Also publish each weekly board report as a PDF into this Google Drive folder
+    # (in addition to Slack + the in-app feed) — owner ask 2026-09-14. Best-effort:
+    # rendered via WeasyPrint (client_report.render_pdf) → the Apps Script webhook
+    # (google_docs.upload_pdf), so it also needs google_apps_script_url configured.
+    # Empty ⇒ no PDF is published (Slack/in-app unaffected). Env-overridable.
+    board_reports_drive_folder_id: str = "1DmHlIOq4N7xbFDWURPeXin3LTTmcgf5E"
+
     # ── DORA guide sync (services/guide_sync.py) — owner ask 2026-09-02 ──────
     # When a module change lands on main, CI (.github/workflows/guide-sync.yml →
     # scripts/report_module_changes.py) POSTs the user-facing diff to
