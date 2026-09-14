@@ -99,6 +99,32 @@ def test_build_footprint_geos_includes_seed_and_synthesizes_targets():
     assert geos[1]["result_types"] == []
 
 
+# ── resolve_seed_place ──────────────────────────────────────────────────────────
+def test_resolve_seed_place_prefers_geocode_locality_over_street_address():
+    # A street-address business_location: _parse_area mis-reads the street as the
+    # city; the geocode's own components carry the real place.
+    seed_geo = {"matched": True, "city": "Fort Lauderdale", "admin_area": "Florida", "country": "United States"}
+    city, state, country = cdp.resolve_seed_place(
+        seed_geo, "2890 Marina Mile Blvd", "108 W State Rd 84 Suite", "FL 33312"
+    )
+    assert (city, state, country) == ("Fort Lauderdale", "Florida", "United States")
+
+
+def test_resolve_seed_place_falls_back_to_parsed_when_geocode_missing_components():
+    # A clean "City, State, Country" seed whose geocode carries no components →
+    # unchanged (the parsed values win).
+    city, state, country = cdp.resolve_seed_place(
+        {"matched": True}, "Metropolis", "New York", "United States"
+    )
+    assert (city, state, country) == ("Metropolis", "New York", "United States")
+
+
+def test_resolve_seed_place_none_geo_returns_parsed():
+    assert cdp.resolve_seed_place(None, "Austin", "Texas", "United States") == (
+        "Austin", "Texas", "United States",
+    )
+
+
 def test_build_footprint_geos_skips_unmatched_seed():
     geos = cdp.build_footprint_geos({"matched": False}, [])
     assert geos == []
@@ -248,6 +274,73 @@ def test_resolve_cdp_axis_no_cdps_in_footprint_degrades(monkeypatch):
     assert axis == []
     assert prov["candidates"] == 0
     assert any("no cdps found within the service-area footprint" in n.lower() for n in prov["notes"])
+
+
+def test_resolve_cdp_axis_adopts_geocode_city_for_street_address(monkeypatch):
+    """A street-address business_location: the seed geocode's own locality/admin/
+    country replace the mis-parsed comma-split, and a CITY-level re-geocode (with
+    real bounds) becomes the containment footprint — so CDPs verify instead of the
+    axis collapsing against a rooftop box (the WheelHouse IT Fort Lauderdale bug)."""
+    from services import leadoff_counties, maps_geocode, target_cities
+
+    _set_maps_key(monkeypatch)
+    street = "2890 Marina Mile Blvd, 108 W State Rd 84 Suite, Fort Lauderdale, FL 33312"
+    city_query = "Fort Lauderdale, Florida, United States"
+    seen: dict = {"queries": []}
+
+    async def _fake_forward(queries, *, supabase=None):
+        out = {}
+        for q in queries:
+            seen["queries"].append(q)
+            if q == street:  # raw seed geocode → a rooftop point WITH real components
+                out[q] = {
+                    "matched": True, "city": "Fort Lauderdale", "admin_area": "Florida",
+                    "country": "United States", "place_id": "roofpid", "lat": 40.0, "lng": -74.0,
+                    "bounds": {"ne_lat": 40.001, "ne_lng": -73.999, "sw_lat": 39.999, "sw_lng": -74.001},
+                    "result_types": ["street_address"],
+                }
+            elif q == city_query:  # clean city re-geocode → a CITY-sized footprint
+                out[q] = {
+                    "matched": True, "city": "Fort Lauderdale", "admin_area": "Florida",
+                    "country": "United States", "place_id": "citypid", "lat": 40.0, "lng": -74.0,
+                    "bounds": {"ne_lat": 40.3, "ne_lng": -73.7, "sw_lat": 39.7, "sw_lng": -74.3},
+                    "result_types": ["locality"],
+                }
+            else:  # a candidate CDP verification (query carries the clean state/country)
+                out[q] = {"matched": True, "place_id": f"cdppid:{q}", "lat": 40.05, "lng": -74.05, "result_types": ["locality"]}
+        return out
+
+    async def _fake_targets(client, seed_location, code, sb):
+        return ([], [])  # no target cities → the seed footprint must carry the verify
+
+    async def _fake_county(client, lat, lng):
+        return ("Broward County", "12011")
+
+    monkeypatch.setattr(maps_geocode, "forward_geocode_places", _fake_forward)
+    monkeypatch.setattr(target_cities, "resolve_target_cities", _fake_targets)
+    monkeypatch.setattr(leadoff_counties, "_county_for_coord", _fake_county)
+    monkeypatch.setattr(
+        maps_geocode, "place_is_within_city",
+        lambda cand, city: str(cand.get("place_id") or "").startswith("cdppid"),
+    )
+    monkeypatch.setattr(
+        cdp, "state_cdps_cached",
+        lambda st, days: [{"name": "Plantation", "geoid": "1200123", "lat": 40.02, "lng": -74.02}],
+    )
+
+    axis, prov, city_names = asyncio.run(cdp.resolve_cdp_axis({}, street, 1015027, object()))
+
+    # The mis-parsed street address is replaced by the geocoded city everywhere.
+    assert prov["seed_city"] == "Fort Lauderdale"
+    assert city_names == ["Fort Lauderdale"]
+    assert prov["states"] == ["12"]  # Florida
+    # A city-level re-geocode ran (distinct from the raw street geocode).
+    assert city_query in seen["queries"]
+    # The CDP verified against the city footprint (would have been 0 vs the rooftop box).
+    assert [a["name"] for a in axis] == ["Plantation"]
+    assert prov["verified"] == 1
+    # The CDP verify query carries the clean state/country, not the suite/zip garbage.
+    assert "Plantation, Florida, United States" in seen["queries"]
 
 
 if __name__ == "__main__":  # pragma: no cover
