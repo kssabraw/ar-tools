@@ -176,11 +176,151 @@ def attach_narrative(report: dict, persona: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# HTML render (for the PDF copy) — pure
+# ---------------------------------------------------------------------------
+_RAG_HTML = {
+    "green": ("#1a7f37", "#dafbe1"),
+    "yellow": ("#9a6700", "#fff8c5"),
+    "red": ("#cf222e", "#ffebe9"),
+}
+
+
+def _esc(s) -> str:
+    return (
+        str(s if s is not None else "")
+        .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    )
+
+
+def render_html(report: dict) -> str:
+    """A standalone, self-contained HTML document for the PDF copy of a board
+    report. Pure — same content as ``render_report``, laid out for print."""
+    rag = report.get("rag", "green")
+    fg, bg = _RAG_HTML.get(rag, ("#57606a", "#eaeef2"))
+    emoji = RAG_EMOJI.get(rag, "")
+    h: list[str] = []
+
+    h.append(f"<h1>{_esc(report.get('title', 'Board report'))}</h1>")
+    if report.get("as_of"):
+        h.append(f"<p class='asof'>As of {_esc(report['as_of'])}</p>")
+    h.append(
+        f"<div class='verdict' style='color:{fg};background:{bg}'>"
+        f"{emoji} {_esc(report.get('verdict', ''))}</div>"
+    )
+    if report.get("narrative"):
+        h.append(f"<p class='memo'>{_esc(report['narrative'])}</p>")
+
+    scorecard = report.get("scorecard") or []
+    if scorecard:
+        h.append("<h2>Scorecard</h2><table class='sc'>")
+        for it in scorecard:
+            extra = []
+            if it.get("delta"):
+                extra.append(_esc(it["delta"]))
+            if it.get("target"):
+                extra.append("vs target " + _esc(it["target"]))
+            tail = f" <span class='muted'>({'; '.join(extra)})</span>" if extra else ""
+            h.append(
+                f"<tr><td class='lbl'>{_esc(it.get('label'))}</td>"
+                f"<td class='val'>{_esc(it.get('value'))}{tail}</td></tr>"
+            )
+        h.append("</table>")
+
+    rows = report.get("rows") or {}
+    items = rows.get("items") or []
+    if items:
+        h.append(f"<h2>{_esc(rows.get('title', 'Detail'))}</h2><table class='rows'>")
+        for it in items:
+            dot_fg, _ = _RAG_HTML.get(it.get("rag"), ("#57606a", ""))
+            dot = f"<span class='dot' style='background:{dot_fg}'></span>" if it.get("rag") else ""
+            h.append(
+                f"<tr><td class='nm'>{dot}{_esc(it.get('name'))}</td>"
+                f"<td>{_esc(it.get('line'))}</td></tr>"
+            )
+        h.append("</table>")
+
+    def _list(title: str, items_):
+        if not items_:
+            return
+        h.append(f"<h2>{title}</h2><ul>")
+        for x in items_:
+            h.append(f"<li>{_esc(x)}</li>")
+        h.append("</ul>")
+
+    _list("Wins", report.get("wins"))
+
+    risks = report.get("risks") or []
+    if risks:
+        h.append("<h2>Risks &amp; actions</h2><ul>")
+        for r in risks:
+            sev = f"<b>[{_esc(r['severity'])}]</b> " if r.get("severity") else ""
+            tail = ", ".join(_esc(x) for x in (r.get("owner"), r.get("eta")) if x)
+            tail = f" <span class='muted'>({tail})</span>" if tail else ""
+            h.append(f"<li>{sev}{_esc(r.get('issue'))} → {_esc(r.get('action'))}{tail}</li>")
+        h.append("</ul>")
+
+    asks = report.get("asks") or []
+    h.append("<h2>Asks of the board</h2>")
+    if asks:
+        h.append("<ul>" + "".join(f"<li>{_esc(a)}</li>" for a in asks) + "</ul>")
+    else:
+        h.append("<p class='muted'>None this week.</p>")
+
+    if report.get("outlook"):
+        h.append(f"<h2>Outlook</h2><p>{_esc(report['outlook'])}</p>")
+
+    style = (
+        "body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;"
+        "color:#1f2328;margin:0;font-size:12px;line-height:1.5}"
+        "h1{font-size:19px;margin:0 0 2px}"
+        "h2{font-size:13px;margin:18px 0 6px;border-bottom:1px solid #d0d7de;padding-bottom:3px}"
+        ".asof{color:#57606a;margin:0 0 12px;font-size:11px}"
+        ".verdict{font-size:14px;font-weight:600;padding:10px 12px;border-radius:6px;margin:0 0 12px}"
+        ".memo{font-style:italic;color:#24292f;margin:0 0 8px}"
+        "table{border-collapse:collapse;width:100%}"
+        "table.sc td,table.rows td{padding:4px 8px;border-bottom:1px solid #eaeef2;vertical-align:top}"
+        ".sc .lbl{color:#57606a;width:55%}.sc .val{font-weight:600}"
+        ".rows .nm{font-weight:600;width:32%;white-space:nowrap}"
+        ".dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:6px}"
+        ".muted{color:#57606a;font-weight:400}"
+        "ul{margin:4px 0;padding-left:18px}li{margin:2px 0}"
+    )
+    return f"<!doctype html><html><head><meta charset='utf-8'><style>{style}</style></head><body>{''.join(h)}</body></html>"
+
+
+def maybe_publish_pdf(report: dict) -> dict:
+    """Best-effort: render the board report to PDF and upload it to the configured
+    Google Drive folder. Gated on ``board_reports_drive_folder_id`` +
+    ``google_apps_script_url``; any failure is swallowed (Slack/in-app already
+    shipped). Designed to run inside the scheduler's worker thread (off the event
+    loop), so the async Drive upload is driven with ``asyncio.run``."""
+    folder = settings.board_reports_drive_folder_id
+    if not folder or not settings.google_apps_script_url:
+        return {"published": False, "reason": "not_configured"}
+    try:
+        import asyncio
+
+        from services import client_report, google_docs
+
+        pdf = client_report.render_pdf(render_html(report))
+        title = report.get("title", "Board report")
+        result = asyncio.run(google_docs.upload_pdf(folder, title, pdf))
+        return {"published": True, "file_url": result.get("file_url")}
+    except Exception as exc:  # noqa: BLE001 — the PDF copy is additive; the report already shipped
+        logger.warning(
+            "board_reports.pdf_failed",
+            extra={"agent": report.get("agent"), "error": str(exc)},
+        )
+        return {"published": False, "reason": "error"}
+
+
+# ---------------------------------------------------------------------------
 # Emit (I/O)
 # ---------------------------------------------------------------------------
 def emit_report(report: dict, *, kind: str, today: date, link: str) -> dict:
-    """Render + emit one board report via the shared notifications pipe. Deduped
-    per ISO week; severity follows the RAG. Best-effort."""
+    """Render + emit one board report via the shared notifications pipe (Slack +
+    in-app), then best-effort publish a PDF copy to the configured Drive folder.
+    Deduped per ISO week; severity follows the RAG. Best-effort throughout."""
     from services import notifications
 
     agent = report.get("agent", kind)
@@ -195,4 +335,8 @@ def emit_report(report: dict, *, kind: str, today: date, link: str) -> dict:
         payload={"link": link},
         dedupe_key=week_dedupe_key(agent, today),
     )
-    return {"emitted": nid is not None, "deduped": nid is None, "rag": report.get("rag")}
+    pdf = maybe_publish_pdf(report)
+    return {
+        "emitted": nid is not None, "deduped": nid is None,
+        "rag": report.get("rag"), "pdf": pdf,
+    }

@@ -233,3 +233,36 @@ def test_client_build_report_all_green():
     assert r["rag"] == "green"
     assert any("Every client green" in w for w in r["wins"])
     assert r["asks"] == []
+
+
+# ---------------------------------------------------------------------------
+# HTML render (PDF copy) + PDF publish gate
+# ---------------------------------------------------------------------------
+def test_render_html_is_a_full_doc_with_sections_and_escaping():
+    report = {
+        "title": "PACE board report <b>", "verdict": "all good", "rag": "green",
+        "as_of": "2026-09-14",
+        "scorecard": [{"label": "Completed", "value": "7", "delta": "+2 (+40%)"}],
+        "rows": {"title": "Clients", "items": [{"rag": "red", "name": "Acme & Co", "line": "frozen"}]},
+        "wins": ["shipped a lot"],
+        "risks": [{"issue": "Acme frozen", "severity": "critical", "action": "escalate"}],
+        "asks": [], "outlook": "steady",
+    }
+    html = common.render_html(report)
+    assert html.startswith("<!doctype html>") and "</html>" in html
+    assert "PACE board report &lt;b&gt;" in html      # title escaped, no raw tag injected
+    assert "Acme &amp; Co" in html
+    assert "Scorecard" in html and "Completed" in html
+    assert "Risks &amp; actions" in html and "[critical]" in html
+    assert "None this week." in html                   # empty asks
+    assert "Outlook" in html and "steady" in html
+
+
+def test_maybe_publish_pdf_gated_off_when_unconfigured(monkeypatch):
+    monkeypatch.setattr(common.settings, "board_reports_drive_folder_id", "")
+    monkeypatch.setattr(common.settings, "google_apps_script_url", "https://example/webhook")
+    assert common.maybe_publish_pdf({"title": "x"})["reason"] == "not_configured"
+    # Folder set but no webhook → still gated (no phantom publish attempt).
+    monkeypatch.setattr(common.settings, "board_reports_drive_folder_id", "FOLDER")
+    monkeypatch.setattr(common.settings, "google_apps_script_url", "")
+    assert common.maybe_publish_pdf({"title": "x"})["reason"] == "not_configured"

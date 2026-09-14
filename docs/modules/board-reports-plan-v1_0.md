@@ -98,6 +98,12 @@ Portfolio RAG = worst client RAG.
 - Delivered via `notifications.emit`: `pace_board_report` → `#pace`,
   `ops_board_report` → `#dora`, `client_board_report` → strategy channel.
   Each deduped per ISO week.
+- **PDF copy to Google Drive** (owner ask): each report is also rendered to PDF
+  (`common.render_html` → `client_report.render_pdf` WeasyPrint) and uploaded to
+  `board_reports_drive_folder_id` via the Apps Script webhook
+  (`google_docs.upload_pdf`). Best-effort + additive — gated on the folder id +
+  `google_apps_script_url`; a failure never affects the Slack/in-app delivery.
+  Driven with `asyncio.run` since the report runs in the scheduler's worker thread.
 - **Runs every Monday including all-green weeks** (a board wants the full picture)
   — the deliberate opposite of the suppress-on-quiet exception digests.
 
@@ -112,6 +118,7 @@ digest are complementary (daily/exception) and can stay.
 - `board_reports_weekday` (int, default 0 = Monday).
 - `board_reports_narrative_enabled` (bool, default True) — the LLM memo (best-effort).
 - `board_reports_narrative_model` / `board_reports_narrative_provider` — memo LLM.
+- `board_reports_drive_folder_id` — Drive folder for the PDF copy (empty ⇒ no PDF).
 
 ## Deferred (fast-follow)
 - Dollar margin on PACE once a loaded hourly cost is set.

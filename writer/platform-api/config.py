@@ -2901,6 +2901,12 @@ class Settings(BaseSettings):
     board_reports_narrative_provider: str = "anthropic"
     board_reports_narrative_model: str = "claude-sonnet-4-6"
     board_reports_narrative_max_tokens: int = 700
+    # Also publish each weekly board report as a PDF into this Google Drive folder
+    # (in addition to Slack + the in-app feed) — owner ask 2026-09-14. Best-effort:
+    # rendered via WeasyPrint (client_report.render_pdf) → the Apps Script webhook
+    # (google_docs.upload_pdf), so it also needs google_apps_script_url configured.
+    # Empty ⇒ no PDF is published (Slack/in-app unaffected). Env-overridable.
+    board_reports_drive_folder_id: str = "1DmHlIOq4N7xbFDWURPeXin3LTTmcgf5E"
 
     # ── DORA guide sync (services/guide_sync.py) — owner ask 2026-09-02 ──────
     # When a module change lands on main, CI (.github/workflows/guide-sync.yml →
