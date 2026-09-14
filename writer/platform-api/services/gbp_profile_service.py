@@ -141,6 +141,10 @@ async def read_current(client_id: str, location_row_id: str) -> dict:
         # Phase 3b — attributes (separate endpoint; best-effort).
         "attributes": attributes,
         "attributes_error": attributes_error,
+        # Menu link — the url_menu URL, derived from the same (best-effort)
+        # attributes read; "" when unset or the attributes read failed
+        # (attributes_error carries the failure the MenuLinkCard surfaces too).
+        "menu": api.parse_menu(attributes),
         "edits": edits,
     }
 
@@ -272,13 +276,46 @@ _FIELD_KEY = {
     "categories": "categories_value",
     # Phase 3b — attributes ride under `attributes`. NOTE: attributes are NOT in
     # parse_location_fields (a separate endpoint), so `_field_value` is never
-    # called for them — the create/apply/sync paths branch on `_is_attributes`.
+    # called for them — the create/apply/sync paths branch on `_is_attribute_backed`.
     "attributes": "attributes",
+    # Menu link — a first-class "Menu link" URL field backed by the
+    # `attributes/url_menu` attribute. Also attribute-backed (separate endpoint),
+    # so it never reaches `_field_value` either; its value is a plain URL string.
+    "menu": "menu",
 }
+
+# Fields written through the SEPARATE getAttributes/updateAttributes endpoint pair
+# (not locations.patch): the generic `attributes` editor and the single-attribute
+# `menu` link. Both branch to _run_apply_attributes / _run_sync_attributes.
+_ATTRIBUTE_BACKED = frozenset({"attributes", "menu"})
 
 
 def _is_attributes(field: str) -> bool:
+    """The generic attributes editor (a full subset of attributes)."""
     return field == "attributes"
+
+
+def _is_attribute_backed(field: str) -> bool:
+    """A field written via the attributes endpoint pair (attributes OR menu)."""
+    return field in _ATTRIBUTE_BACKED
+
+
+def _proposed_attr_entries(edit: dict) -> list[dict]:
+    """The attribute-entry list an attribute-backed edit patches. For `menu` the
+    stored proposed value is a URL string → the single url_menu entry; for
+    `attributes` it is already the entry list."""
+    if edit.get("field") == "menu":
+        return api.menu_entries(edit.get("proposed_value") or "")
+    return edit.get("proposed_value") or []
+
+
+def _attr_baseline_changed(edit: dict, live_now: list[dict]) -> bool:
+    """The re-read-and-diff (Q3) for an attribute-backed edit. `menu` compares only
+    the url_menu attribute (so an unrelated attribute changing out-of-band never
+    aborts a menu edit); `attributes` compares the whole set."""
+    if edit.get("field") == "menu":
+        return api.menu_changed(edit.get("current_value") or "", live_now)
+    return api.attributes_diff(edit.get("current_value") or [], live_now)
 
 
 def _attr_name(location: dict) -> str:
@@ -331,6 +368,9 @@ def _build_patch(field: str, proposed, allowed_categories: Optional[set[str]] = 
             # Google validates ids/values on apply; the builder is self-describing
             # (each entry carries its value_type), so no pre-validation set here.
             return api.build_attributes_patch(proposed or [])
+        if field == "menu":
+            # A single url_menu URL attribute (empty clears it); validated here.
+            return api.build_menu_patch(proposed or "")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     raise HTTPException(status_code=400, detail="invalid_field")
@@ -362,14 +402,17 @@ async def create_edit(
     field = body.get("field")
     location = _location(str(body["location_row_id"]), client_id)
     proposed = _proposed_from_request(field, body)
-    # Snapshot the live current value + validate the proposed value. Attributes
-    # read from a separate endpoint (getAttributes); everything else from the
-    # Location. Services are validated against the listing's live categories.
-    if _is_attributes(field):
-        current = api.parse_attributes(
+    # Snapshot the live current value + validate the proposed value. Attribute-
+    # backed fields (attributes, menu) read from a separate endpoint
+    # (getAttributes); everything else from the Location. Services are validated
+    # against the listing's live categories.
+    if _is_attribute_backed(field):
+        live_attrs = api.parse_attributes(
             await asyncio.to_thread(api.get_attributes, _attr_name(location))
         )
         _build_patch(field, proposed)  # raises 400 on invalid
+        # attributes → the full editor list; menu → just the current url_menu URL.
+        current = live_attrs if field == "attributes" else api.parse_menu(live_attrs)
     else:
         loc = await asyncio.to_thread(api.get_location, _location_name(location))
         parsed = api.parse_location_fields(loc)
@@ -525,7 +568,7 @@ async def run_apply_job(job: dict) -> None:
             return
         field = edit["field"]
         location = _location(edit["location_row_id"], client_id)
-        if _is_attributes(field):
+        if _is_attribute_backed(field):
             await _run_apply_attributes(job, edit, client_id, location)
             return
         name = _location_name(location)
@@ -575,19 +618,20 @@ async def run_apply_job(job: dict) -> None:
 
 
 async def _run_apply_attributes(job: dict, edit: dict, client_id: str, location: dict) -> None:
-    """Apply an ``attributes`` edit via the SEPARATE getAttributes/updateAttributes
-    endpoint pair (attributes don't ride locations.patch). Re-reads the whole
-    attribute set + aborts into live_changed on out-of-band drift (Q3), patches the
-    masked subset, then settles applied / pending_review / rejected. Attributes
-    usually settle synchronously; the pending path (rare) is checked via the
-    Location's metadata and chased by the same reconciler."""
+    """Apply an attribute-backed edit (``attributes`` or ``menu``) via the SEPARATE
+    getAttributes/updateAttributes endpoint pair (neither rides locations.patch).
+    Re-reads the attribute set + aborts into live_changed on out-of-band drift (Q3
+    — whole-set for attributes, url_menu-only for menu), patches the masked subset,
+    then settles applied / pending_review / rejected. Attributes usually settle
+    synchronously; the pending path (rare) is checked via the Location's metadata
+    and chased by the same reconciler."""
     edit_id = edit["id"]
     field = edit["field"]
     aname = _attr_name(location)
     name = _location_name(location)
 
     live_now = api.parse_attributes(await asyncio.to_thread(api.get_attributes, aname))
-    if api.attributes_diff(edit.get("current_value") or [], live_now):
+    if _attr_baseline_changed(edit, live_now):
         _set_edit(edit_id, {"status": "live_changed", "error": None})
         _settle_job(job["id"], {"edit_id": edit_id, "state": "live_changed"})
         logger.info("gbp_profile.live_changed", extra={"edit_id": edit_id, "field": field})
@@ -595,7 +639,7 @@ async def _run_apply_attributes(job: dict, edit: dict, client_id: str, location:
 
     body, mask = _build_patch(field, edit["proposed_value"])
     patched = api.parse_attributes(await asyncio.to_thread(api.update_attributes, aname, body, mask, field))
-    if api.attributes_subset_applied(edit["proposed_value"] or [], patched):
+    if api.attributes_subset_applied(_proposed_attr_entries(edit), patched):
         _set_edit(edit_id, {"status": "applied", "google_pending": False,
                             "applied_at": "now()", "next_sync_at": None, "error": None})
         _settle_job(job["id"], {"edit_id": edit_id, "state": "applied"})
@@ -706,7 +750,7 @@ async def run_sync_job(job: dict) -> None:
             return
         field = edit["field"]
         location = _location(edit["location_row_id"], client_id)
-        if _is_attributes(field):
+        if _is_attribute_backed(field):
             await _run_sync_attributes(job, edit, client_id, location)
             return
         loc = await asyncio.to_thread(api.get_location, _location_name(location))
@@ -746,16 +790,17 @@ async def run_sync_job(job: dict) -> None:
 
 
 async def _run_sync_attributes(job: dict, edit: dict, client_id: str, location: dict) -> None:
-    """One reconciler check for a pending ``attributes`` edit (separate endpoint).
-    Re-reads the attribute set + settles applied/rejected or advances the backoff
-    clock — the attributes analogue of the generic run_sync_job body."""
+    """One reconciler check for a pending attribute-backed edit (``attributes`` or
+    ``menu``; separate endpoint). Re-reads the attribute set + settles
+    applied/rejected or advances the backoff clock — the attribute analogue of the
+    generic run_sync_job body."""
     edit_id = edit["id"]
     field = edit["field"]
     aname = _attr_name(location)
     name = _location_name(location)
 
     live_now = api.parse_attributes(await asyncio.to_thread(api.get_attributes, aname))
-    if api.attributes_subset_applied(edit["proposed_value"] or [], live_now):
+    if api.attributes_subset_applied(_proposed_attr_entries(edit), live_now):
         _set_edit(edit_id, {"status": "applied", "google_pending": False,
                             "next_sync_at": None, "error": None})
         _settle_job(job["id"], {"edit_id": edit_id, "state": "applied"})

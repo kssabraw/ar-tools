@@ -350,6 +350,34 @@ hours, all built + merged dark in PR #1011). Recorded in the PRD's **v1.1 amendm
   mask with an empty value); the `read_current` attributes read is best-effort. **The v1 attributes
   `updateMask` shape is flagged to re-verify live at activation.** Only **3c (media)** remains.
 
+### "Missing elements" issue — Menu link (built) + Chat (not buildable) (2026-09-14)
+
+Ryan Maizis logged "GBP Missing Elements": *(1) add Menu/Service, (2) add Chat.* Findings +
+owner decision (via AskUserQuestion):
+
+- **Chat — NOT buildable; nothing shipped.** Google **permanently discontinued** GBP
+  chat/messaging on **2024-07-31** (new chats stopped mid-July 2024). There is no profile element
+  and no API to re-enable it — it's a dead Google feature, not a gap in our tool. (Google's only
+  pointer for eligible accounts is SMS/WhatsApp contact tied to the phone number, which isn't an
+  API-settable profile field.) Reported to the owner; no code.
+- **Services already shipped.** The **Services** card (structured + free-form) has been live since
+  the 2026-09-09 enablement and is in production use — so "Menu/Service" is not a services gap.
+- **"Menu link" — BUILT (a first-class `menu` field).** Owner ruling: add a dedicated **Menu link**
+  URL card rather than relying on the generic Attributes card. In GBP's data model the menu link
+  is the **`attributes/url_menu`** URL attribute, so `menu` is an **attribute-backed field**: it
+  presents as a single URL string but rides the SAME separate `getAttributes`/`updateAttributes`
+  endpoint pair as `attributes` (NOT `locations.patch`), reusing the existing `gbp_profile_edits`
+  row / apply job (re-read-and-diff, scoped to *only* url_menu so unrelated attributes drifting
+  never abort a menu edit) / reconciler / freeze gate / history / revert. **No new job type**
+  (reuses `gbp_profile_apply`/`gbp_profile_sync`). Manual-only (not AI-draftable — a menu URL is a
+  fact the operator supplies, like hours). Migration `20260914120000_gbp_profile_menu.sql` widens
+  the `field` CHECK to add `'menu'` (applied live). `url_menu` availability is category-scoped —
+  where a listing's category doesn't support it, Apply returns a **`rejected`** verdict (surfaced),
+  never a silent bad write. **Structured Food Menus (v4 `FoodMenus`) deliberately NOT built** — a
+  separate v4 surface, restaurant-only, and the agency has 0 food/restaurant clients.
+- Ships dark under the same flags as the rest of the module (`gbp_api_enabled` +
+  `gbp_profile_enabled`) — currently ON in production.
+
 
 ---
 
