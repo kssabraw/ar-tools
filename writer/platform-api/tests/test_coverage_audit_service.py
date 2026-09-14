@@ -13,6 +13,17 @@ import pytest
 from services import coverage_audit_service as svc
 
 
+@pytest.fixture(autouse=True)
+def _no_nav_network(monkeypatch):
+    """Keep the always-on nav-menu fetch offline by default: `_fetch_nav_services`
+    calls ScrapeOwl on the homepage, so stub it to return no HTML (→ no nav
+    services). Tests that exercise the nav path re-monkeypatch it explicitly."""
+    async def _empty(url, timeout=30, **_kwargs):
+        return ""
+
+    monkeypatch.setattr(svc.website_scraper, "scrapeowl_fetch", _empty)
+
+
 # --- _derive_service_axis (planner merge + provenance) ------------------------
 def test_derive_service_axis_merges_planner_and_site(monkeypatch):
     monkeypatch.setattr(
@@ -59,6 +70,95 @@ def test_derive_service_axis_last_resort_raw_gbp_categories(monkeypatch):
 def test_gbp_categories_dedupes_primary_and_list():
     client = {"gbp": {"gbp_category": "Roofing Contractor", "gbp_categories": ["Roofing Contractor", "Gutter Service"]}}
     assert svc._gbp_categories(client) == ["Roofing Contractor", "Gutter Service"]
+
+
+# --- _derive_service_axis with nav-menu services (the primary observed signal) --
+def test_derive_service_axis_nav_services_lead_and_are_tagged(monkeypatch):
+    # Planner echoes the observed list it's handed, so we can assert the order +
+    # the nav-first provenance without an LLM.
+    monkeypatch.setattr(svc, "_plan_service_axis", lambda observed, gbp, name: (list(observed), None))
+    client = {"name": "Acme", "gbp": {}}
+    classified = {"service_only": [{"url": "https://x.com/roof-restoration/"}]}
+    axis, prov = svc._derive_service_axis(
+        client, classified, [], nav_services=["Gutter Cleaning", "Roof Restoration"]
+    )
+    labels = [a["label"] for a in axis]
+    # Nav labels lead (cleaner signal); the URL-only service follows if new.
+    assert labels == ["Gutter Cleaning", "Roof Restoration"]
+    by_label = {a["label"]: a["sources"] for a in axis}
+    assert by_label["Gutter Cleaning"] == ["planner", "nav"]      # nav-only
+    assert set(by_label["Roof Restoration"]) == {"planner", "nav", "site"}  # both
+    assert prov["nav_services"] == ["Gutter Cleaning", "Roof Restoration"]
+
+
+def test_derive_service_axis_feeds_nav_before_site_to_planner(monkeypatch):
+    captured: dict = {}
+
+    def _fake_plan(observed, gbp, name):
+        captured["observed"] = list(observed)
+        return ["Roofing"], None
+
+    monkeypatch.setattr(svc, "_plan_service_axis", _fake_plan)
+    classified = {"service_only": [{"url": "https://x.com/siding/"}]}
+    svc._derive_service_axis(
+        {"name": "Acme", "gbp": {}}, classified, [], nav_services=["Roofing"]
+    )
+    # Observed list = nav first, then any URL-derived service not already named.
+    assert captured["observed"] == ["Roofing", "Siding"]
+
+
+def test_derive_service_axis_without_nav_is_unchanged(monkeypatch):
+    """Backward-compat: omitting nav_services reproduces the prior behaviour."""
+    monkeypatch.setattr(svc, "_plan_service_axis", lambda observed, gbp, name: (list(observed), None))
+    classified = {"service_only": [{"url": "https://x.com/roof-restoration/"}]}
+    axis, prov = svc._derive_service_axis({"name": "Acme", "gbp": {}}, classified, [])
+    assert [a["label"] for a in axis] == ["Roof Restoration"]
+    assert prov["nav_services"] == []
+
+
+# --- _fetch_nav_services (best-effort homepage nav read) ----------------------
+_NAV_HTML = """
+<header><nav class="menu">
+  <a href="/">Home</a>
+  <a href="/roof-restoration/">Roof Restoration</a>
+  <a href="/gutter-cleaning/">Gutter Cleaning</a>
+  <a href="/melbourne/">Melbourne</a>
+  <a href="/contact/">Contact</a>
+</nav></header>"""
+
+
+def test_fetch_nav_services_reads_menu(monkeypatch):
+    async def _html(url, timeout=30, **_kwargs):
+        assert url == "https://acme.com"  # scheme added
+        return _NAV_HTML
+
+    monkeypatch.setattr(svc.website_scraper, "scrapeowl_fetch", _html)
+    labels, note = asyncio.run(svc._fetch_nav_services("acme.com", ["Melbourne"]))
+    # Services kept; Home/Contact chrome + the place hub dropped via place_vocab.
+    assert labels == ["Roof Restoration", "Gutter Cleaning"]
+    assert note is None
+
+
+def test_fetch_nav_services_no_website():
+    assert asyncio.run(svc._fetch_nav_services("", ["Melbourne"])) == ([], None)
+
+
+def test_fetch_nav_services_fetch_failure_is_noted(monkeypatch):
+    async def _boom(url, timeout=30, **_kwargs):
+        raise RuntimeError("scrapeowl 500")
+
+    monkeypatch.setattr(svc.website_scraper, "scrapeowl_fetch", _boom)
+    labels, note = asyncio.run(svc._fetch_nav_services("https://acme.com", []))
+    assert labels == []
+    assert note and "nav menu" in note
+
+
+def test_fetch_nav_services_empty_html_no_note(monkeypatch):
+    async def _empty(url, timeout=30, **_kwargs):
+        return ""
+
+    monkeypatch.setattr(svc.website_scraper, "scrapeowl_fetch", _empty)
+    assert asyncio.run(svc._fetch_nav_services("https://acme.com", [])) == ([], None)
 
 
 # --- _resolve_location_axis (geocoding-unavailable degrade) --------------------
@@ -400,7 +500,7 @@ def test_run_tier_3_uses_cdp_location_axis_and_keeps_location_rows(monkeypatch):
     monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
     monkeypatch.setattr(
         svc, "_derive_service_axis",
-        lambda client, classified, place_vocab: (
+        lambda client, classified, place_vocab, nav_services=None: (
             [{"label": "Roof Restoration", "sources": ["site"]}, {"label": "Gutter Cleaning", "sources": ["planner"]}],
             {"confirmed": False, "kind": "main_service", "notes": []},
         ),
@@ -470,8 +570,9 @@ def test_run_tier_4_uses_cdp_axis_and_subservice_axis_and_drops_location_rows(mo
     # to prove the footprint cities + CDP names are threaded in.
     captured: dict = {}
 
-    def _fake_main(client, classified, place_vocab):
+    def _fake_main(client, classified, place_vocab, nav_services=None):
         captured["place_vocab"] = list(place_vocab)
+        captured["nav_services"] = list(nav_services or [])
         return (
             [{"label": "Roof Restoration", "sources": ["site"]}],
             {"confirmed": False, "kind": "main_service", "notes": []},
@@ -599,7 +700,7 @@ def test_run_tier_1_offloads_service_axis_planner_off_the_loop(monkeypatch):
     ran_on: dict = {}
     main_ident = threading.get_ident()
 
-    def _derive(client, classified, place_vocab):
+    def _derive(client, classified, place_vocab, nav_services=None):
         ran_on["ident"] = threading.get_ident()
         return [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
 
@@ -610,6 +711,59 @@ def test_run_tier_1_offloads_service_axis_planner_off_the_loop(monkeypatch):
     # The planner ran, and on a DIFFERENT thread than the event loop → not blocking it.
     assert "ident" in ran_on
     assert ran_on["ident"] != main_ident
+
+
+def test_run_tier_1_threads_nav_services_into_derive(monkeypatch):
+    """A fresh Tier-1 run fetches the homepage nav and threads its service labels
+    into `_derive_service_axis` as the primary observed signal."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme", "business_location": "Melbourne,Victoria,Australia",
+                     "gbp": {"website": "https://acme.example"}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2036)
+
+    async def _fake_loc(client, seed_location, code, **kwargs):
+        return [{"name": "Melbourne", "source": "seed"}], {"seed_city": "Melbourne", "notes": []}
+
+    monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
+
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
+        return (["https://acme.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+
+    # Homepage nav returns two clean, city-less service labels (+ chrome + a place).
+    async def _nav_html(url, timeout=30, **_kwargs):
+        return (
+            '<nav class="menu"><a href="/">Home</a>'
+            '<a href="/roof-restoration/">Roof Restoration</a>'
+            '<a href="/gutter-cleaning/">Gutter Cleaning</a>'
+            '<a href="/melbourne/">Melbourne</a></nav>'
+        )
+
+    monkeypatch.setattr(svc.website_scraper, "scrapeowl_fetch", _nav_html)
+
+    captured: dict = {}
+
+    def _derive(client, classified, place_vocab, nav_services=None):
+        captured["nav_services"] = list(nav_services or [])
+        return [{"label": "Roof Restoration", "sources": ["nav"]}], {"confirmed": False, "notes": []}
+
+    monkeypatch.setattr(svc, "_derive_service_axis", _derive)
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 1))
+    assert result["status"] == "complete"
+    # The nav labels reached the derive step (place hub + Home chrome stripped).
+    assert captured["nav_services"] == ["Roof Restoration", "Gutter Cleaning"]
 
 
 # --- enqueue_coverage_audit (in-flight dedup) ---------------------------------
@@ -837,7 +991,7 @@ def test_run_tier_threads_center_and_radius_into_location_axis(monkeypatch):
     monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
     monkeypatch.setattr(
         svc, "_derive_service_axis",
-        lambda client, classified, place_vocab: (
+        lambda client, classified, place_vocab, nav_services=None: (
             [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
         ),
     )
@@ -914,7 +1068,7 @@ def test_run_tier_uses_coordinate_derived_clean_seed(monkeypatch):
     monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
     monkeypatch.setattr(
         svc, "_derive_service_axis",
-        lambda client, classified, place_vocab: (
+        lambda client, classified, place_vocab, nav_services=None: (
             [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
         ),
     )
@@ -965,7 +1119,7 @@ def test_run_tier_applies_no_cell_floor_even_with_demand(monkeypatch):
     monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
     monkeypatch.setattr(
         svc, "_derive_service_axis",
-        lambda client, classified, place_vocab: (
+        lambda client, classified, place_vocab, nav_services=None: (
             [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
         ),
     )

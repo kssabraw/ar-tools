@@ -50,8 +50,10 @@ from services import (
     keyword_market,
     local_seo_silo,
     maps_geocode,
+    site_nav,
     site_page_index,
     target_cities,
+    website_scraper,
 )
 from services.dataforseo_rank import location_code_for
 
@@ -269,8 +271,9 @@ def _in_tool_index(client_id: str) -> dict:
 
 # ── service-axis planner (GBP-category expansion, best-effort LLM) ─────────────
 _SERVICE_AXIS_SYSTEM = (
-    "You are a local SEO strategist. Given a local business's observed service "
-    "pages and its Google Business Profile categories, list its distinct MAIN "
+    "You are a local SEO strategist. Given a local business's observed services "
+    "(from its nav menu and service pages) and its Google Business Profile "
+    "categories, list its distinct MAIN "
     "SERVICES as short, commercial, CITY-AGNOSTIC service phrases a customer would "
     "search — e.g. 'Roof Restoration', 'Gutter Cleaning', 'Emergency Plumbing'. "
     "GBP categories are business-TYPE labels ('Roofing Contractor', 'Plumber') — "
@@ -308,7 +311,7 @@ def _plan_service_axis(site_services: list[str], gbp_cats: list[str], business_n
         return [], "Service-axis planner skipped — content model not configured; used the site's own service pages."
     user = (
         f"Business: {business_name or '(unknown)'}\n"
-        f"Observed service pages: {', '.join(site_services) if site_services else '(none found)'}\n"
+        f"Observed services: {', '.join(site_services) if site_services else '(none found)'}\n"
         f"GBP categories: {', '.join(gbp_cats) if gbp_cats else '(none)'}"
     )
     try:
@@ -335,28 +338,72 @@ def _plan_service_axis(site_services: list[str], gbp_cats: list[str], business_n
     return out, None
 
 
-def _derive_service_axis(client: dict, classified: dict, place_vocab: list[str]) -> tuple[list[dict], dict]:
-    """Resolve the auto-derived Tier-1 service axis + its provenance. Merges the
-    planner's expansion (authoritative order) with any site-observed service not
-    already covered, so nothing real is dropped if the planner misses it. Each
-    entry is tagged with its source(s) for the review screen. Best-effort."""
-    site_services = core.derive_site_services(classified, place_vocab)
-    gbp_cats = _gbp_categories(client)
-    planned, note = _plan_service_axis(site_services, gbp_cats, client.get("name") or "")
+async def _fetch_nav_services(website: str, place_vocab: list[str]) -> tuple[list[str], Optional[str]]:
+    """Best-effort: fetch the site homepage and read its nav menu for service
+    labels. This is the PRIMARY observed-services signal — nav items name services
+    city-agnostically ("Roof Restoration"), unlike the URL slugs
+    `derive_site_services` reads (which carry cities and may not exist). Returns
+    ``(labels, note)``; a note is set only when the fetch failed (the caller then
+    leans on the URL-derived services). Never raises."""
+    if not website:
+        return [], None
+    url = website if website.startswith(("http://", "https://")) else f"https://{website}"
+    try:
+        html = await website_scraper.scrapeowl_fetch(url, 30)
+    except Exception as exc:  # noqa: BLE001 — nav read is a bonus signal
+        logger.warning("coverage_audit.nav_fetch_failed", extra={"error": str(exc)})
+        return [], "Couldn't read the site's nav menu — derived services from the sitemap only."
+    if not html:
+        return [], None
+    place_tokens = frozenset().union(
+        *(site_page_index.content_tokens(name) for name in place_vocab)
+    ) if place_vocab else frozenset()
+    labels = site_nav.nav_service_labels(
+        html, site_nav._base_domain(url), place_tokens=place_tokens
+    )
+    return labels, None
 
+
+def _derive_service_axis(
+    client: dict, classified: dict, place_vocab: list[str],
+    nav_services: Optional[list[str]] = None,
+) -> tuple[list[dict], dict]:
+    """Resolve the auto-derived Tier-1 service axis + its provenance. Feeds the
+    planner the OBSERVED services — nav-menu labels first (clean + city-less), then
+    the URL-derived services — plus the GBP-category seed, and merges the planner's
+    expansion (authoritative order) with any observed service it missed, so nothing
+    real is dropped. Each entry is tagged with its source(s) for the review screen.
+    Best-effort."""
+    site_services = core.derive_site_services(classified, place_vocab)
+    nav_services = nav_services or []
+    gbp_cats = _gbp_categories(client)
+
+    # Observed services: nav labels first (the cleaner, city-agnostic signal), then
+    # any URL-derived service the nav didn't name — deduped, first-seen order.
+    observed: list[str] = []
+    seen_obs: set[str] = set()
+    for s in [*nav_services, *site_services]:
+        key = (s or "").lower()
+        if s and key not in seen_obs:
+            seen_obs.add(key)
+            observed.append(s)
+
+    planned, note = _plan_service_axis(observed, gbp_cats, client.get("name") or "")
+
+    nav_set = {s.lower() for s in nav_services}
     site_set = {s.lower() for s in site_services}
     gbp_set = {c.lower() for c in gbp_cats}
     planned_set = {p.lower() for p in planned}
 
-    # Planner order first, then any observed site service the planner didn't emit.
+    # Planner order first, then any observed service the planner didn't emit.
     ordered: list[str] = list(planned)
     seen = set(planned_set)
-    for s in site_services:
+    for s in observed:
         if s.lower() not in seen:
             seen.add(s.lower())
             ordered.append(s)
-    # Last resort: no site pages and no planner → offer the raw GBP categories so
-    # the team has something to edit rather than an empty axis.
+    # Last resort: no observed services and no planner → offer the raw GBP
+    # categories so the team has something to edit rather than an empty axis.
     fallback_used = False
     if not ordered and gbp_cats:
         ordered = list(gbp_cats)
@@ -368,6 +415,8 @@ def _derive_service_axis(client: dict, classified: dict, place_vocab: list[str])
         sources = []
         if low in planned_set:
             sources.append("planner")
+        if low in nav_set:
+            sources.append("nav")
         if low in site_set:
             sources.append("site")
         if low in gbp_set:
@@ -383,6 +432,7 @@ def _derive_service_axis(client: dict, classified: dict, place_vocab: list[str])
         notes.append("No services could be derived — add them manually to run the audit.")
     provenance = {
         "site_services": site_services,
+        "nav_services": nav_services,
         "gbp_categories": gbp_cats,
         "planner_used": bool(planned),
         "notes": notes,
@@ -725,6 +775,14 @@ async def run_coverage_audit_tier(
     #    aborting.
     classified = core.classify_site_pages(urls, place_vocab)
     seed_city = loc_prov.get("seed_city") or ""
+    # Nav-menu services are the PRIMARY observed-services signal for a fresh derive
+    # (a site's nav names its services city-agnostically, unlike the URL slugs). One
+    # best-effort homepage fetch, only when we're actually deriving an axis.
+    nav_services: list[str] = []
+    if service_axis_override is None:
+        nav_services, nav_note = await _fetch_nav_services(website, place_vocab)
+        if nav_note:
+            notes.append(nav_note)
     if service_axis_override is not None:
         service_axis = [
             {"label": (s.get("label") if isinstance(s, dict) else s) or "", "sources": ["confirmed"]}
@@ -742,11 +800,11 @@ async def run_coverage_audit_tier(
         # stalls the shared event loop the API + every job lane run on (the same
         # reason `_derive_subservice_axis` threads `_generate_service_pages`).
         service_axis, svc_prov = await asyncio.to_thread(
-            _derive_service_axis, client, classified, place_vocab
+            _derive_service_axis, client, classified, place_vocab, nav_services
         )
     else:  # tiers 2/4 — expand main services into a city-agnostic subservice axis
         main_axis, main_prov = await asyncio.to_thread(
-            _derive_service_axis, client, classified, place_vocab
+            _derive_service_axis, client, classified, place_vocab, nav_services
         )
         sub_axis, sub_prov = await _derive_subservice_axis(client, main_axis, seed_city)
         combined_notes = list(main_prov.get("notes") or []) + list(sub_prov.get("notes") or [])
