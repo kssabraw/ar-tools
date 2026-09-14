@@ -113,6 +113,47 @@ def test_resolve_target_cities_website_uses_canonical_locality_name(monkeypatch)
     assert "Roofing Fitzroy" not in names     # raw slug name is not surfaced
 
 
+def test_resolve_target_cities_max_cities_uncaps_and_caps(monkeypatch):
+    """max_cities overrides the shared cap: 0 = UNCAPPED (the Coverage Audit's
+    default so an audit returns every locality in the radius), a positive value
+    trims. None falls back to the shared `local_seo_max_target_cities`."""
+    async def _fake_geocode(queries, supabase=None):
+        out = {}
+        for q in queries:
+            low = q.lower()
+            pid = "seed" if "seedville" in low else low.split(",")[0].strip().replace(" ", "_")
+            out[q] = {"matched": True, "place_id": pid, "result_types": ["locality"],
+                      "lat": 0.0, "lng": 0.0, "bounds": None, "city": None,
+                      "admin_area": "ST", "country": "US"}
+        return out
+
+    async def _fake_nearby(lat, lng, radius_km, place_types=None):
+        return [{"name": f"Town{i}", "lat": 0.0, "lng": 0.0, "place": "town"} for i in range(5)]
+
+    monkeypatch.setattr(tc.settings, "google_maps_api_key", "x")
+    monkeypatch.setattr(tc.settings, "local_seo_max_target_cities", 3)
+    monkeypatch.setattr(tc.maps_geocode, "forward_geocode_places", _fake_geocode)
+    monkeypatch.setattr(tc.overpass, "nearby_cities", _fake_nearby)
+
+    # Uncapped (0): all 5 nearby towns returned, no cap note.
+    cities, notes = asyncio.run(tc.resolve_target_cities(
+        {}, "Seedville,ST,US", 1, None, max_cities=0,
+    ))
+    assert len(cities) == 5
+    assert not any("capped" in n for n in notes)
+
+    # Positive cap trims to that many + notes it.
+    cities2, notes2 = asyncio.run(tc.resolve_target_cities(
+        {}, "Seedville,ST,US", 1, None, max_cities=2,
+    ))
+    assert len(cities2) == 2
+    assert any("capped at 2" in n for n in notes2)
+
+    # None → the shared cap (monkeypatched to 3).
+    cities3, _ = asyncio.run(tc.resolve_target_cities({}, "Seedville,ST,US", 1, None))
+    assert len(cities3) == 3
+
+
 def test_resolve_target_cities_threads_place_types_to_overpass(monkeypatch):
     """The Coverage Audit passes a broadened OSM place-type set (incl. `suburb`) so
     a suburb-geography metro resolves; resolve_target_cities threads it to Overpass."""

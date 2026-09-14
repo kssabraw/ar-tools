@@ -86,6 +86,7 @@ async def resolve_target_cities(
     center: Optional[tuple[float, float]] = None,
     radius_km: Optional[float] = None,
     place_types: Optional[tuple[str, ...]] = None,
+    max_cities: Optional[int] = None,
 ) -> tuple[list[dict], list[str]]:
     """Return ``(additional_cities, degraded_notes)``. Each city is
     ``{name, lat, lng, bounds, place_id, state, country, source}`` and excludes the
@@ -101,7 +102,12 @@ async def resolve_target_cities(
     ``place_types`` overrides the OSM place types the nearby search enumerates
     (default: the shared `local_seo_overpass_place_types`, city/town). Callers on a
     suburb-geography metro (the Coverage Audit) pass a broader set incl. `suburb`;
-    the geocode filter below still keeps only real localities."""
+    the geocode filter below still keeps only real localities.
+
+    ``max_cities`` overrides the result cap; ``None`` uses the shared
+    `local_seo_max_target_cities`, and a value ``<= 0`` means UNCAPPED (the
+    Coverage Audit passes `coverage_max_target_cities`, which defaults to 0 so an
+    audit returns every locality within the radius)."""
     notes: list[str] = []
     seed_city, seed_state, seed_country = _parse_area(seed_location)
     if not seed_city:
@@ -247,8 +253,8 @@ async def resolve_target_cities(
     # 5) Order by intent (authoritative first, then by proximity) and cap.
     _rank = {"gbp": 0, "manual": 0, "website": 1, "nearby": 2}
     kept.sort(key=lambda c: (_rank.get(c["source"], 9), c["_dist"]))
-    cap = settings.local_seo_max_target_cities
-    if len(kept) > cap:
+    cap = settings.local_seo_max_target_cities if max_cities is None else max_cities
+    if cap and cap > 0 and len(kept) > cap:
         notes.append(f"Target cities capped at {cap} (found {len(kept)}).")
         kept = kept[:cap]
     for c in kept:
