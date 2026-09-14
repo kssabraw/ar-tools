@@ -175,6 +175,13 @@ PACE_CHANNEL_KINDS = frozenset({
     # client's own channel when a Blog/Service run, Local SEO page, Ecommerce
     # page, or Website Builder page finishes generating.
     "content_ready",
+    # Weekly board reports (services/board_reports/) — the department-head reports
+    # to the Monday L10. PACE's delivery board report → #pace; DORA's operating-
+    # model board report → #dora (it is also in DIRECTOR_CHANNEL_KINDS below, so a
+    # set DORA channel wins). The SerMaStr Client Health board report
+    # (`client_board_report`) is deliberately in NEITHER set — it is client-results
+    # / strategy, so it falls through to the strategy channel (slack_default_channel).
+    "pace_board_report", "ops_board_report",
 })
 
 # The client-scoped subset of the PACE kinds: each carries a real ``client_id``
@@ -232,7 +239,9 @@ _dm_scope_broken = False
 # Owner ruling 2026-08-29 (DORA gets its own surface). Kept a subset of
 # PACE_CHANNEL_KINDS on purpose: leaving these in PACE_CHANNEL_KINDS means an
 # unset DORA channel degrades to the PACE channel, never the strategy channel.
-DIRECTOR_CHANNEL_KINDS = frozenset({"ops_digest", "ops_seam", "ops_efficiency", "guide_sync"})
+DIRECTOR_CHANNEL_KINDS = frozenset(
+    {"ops_digest", "ops_seam", "ops_efficiency", "guide_sync", "ops_board_report"}
+)
 
 
 def resolve_slack_channel(

@@ -641,6 +641,7 @@ async def gsc_scheduler() -> None:
     from services.autonomy_executor import enqueue_due_autonomy_runs
     from services.director.reconcile import run_daily as run_director_reconcile
     from services.director.digest import run_weekly as run_ops_digest
+    from services.board_reports import run_weekly_board_reports
 
     interval = settings.gsc_scheduler_poll_interval_seconds
     hour = settings.gsc_ingest_hour_utc
@@ -654,6 +655,7 @@ async def gsc_scheduler() -> None:
     last_df_date = parse_marker_date(state.get("df_weekly"))
     last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
     last_ops_digest_date = parse_marker_date(state.get("ops_digest_weekly"))
+    last_board_reports_date = parse_marker_date(state.get("board_reports_weekly"))
     last_pace_intervention_report_date = parse_marker_date(state.get("pace_intervention_report_weekly"))
     last_strategist_date = parse_marker_date(state.get("strategist_daily"))
     last_rank_analysis_date = parse_marker_date(state.get("rank_analysis_weekly"))
@@ -897,6 +899,24 @@ async def gsc_scheduler() -> None:
                     # idempotent across a restart.
                     from services.director_agent import run_audit_narrative
                     await _safe_async("director_audit_narrative", run_audit_narrative, now.date())
+            # Weekly board reports (services/board_reports/) — the department-head
+            # reports (PACE / DORA / SerMaStr Client Health) to the Monday L10.
+            # Fires EVERY week on board_reports_weekday incl. all-green weeks (a
+            # board wants the whole picture). Off the event loop: the N-client
+            # Client Health scorecard + any LLM memo must not block the tick.
+            # Gated on the master flag so the marker only advances when enabled
+            # (flipping it on a Monday fires the first set that day). Marker on
+            # success — a transient failure retries next tick, bounded to the weekday.
+            if (
+                settings.board_reports_enabled
+                and now.weekday() == settings.board_reports_weekday
+                and should_run(now, last_board_reports_date, hour)
+            ):
+                if await _safe_async(
+                    "board_reports", asyncio.to_thread, run_weekly_board_reports, now.date()
+                ):
+                    last_board_reports_date = now.date()
+                    save_marker("board_reports_weekly", last_board_reports_date.isoformat())
             # PACE Proactive Interventions — weekly rollup (open + this week's
             # decisions/outcomes) to the PACE channel. Self-gated on the feature +
             # report flag; suppresses on a quiet week. Marker on success.
