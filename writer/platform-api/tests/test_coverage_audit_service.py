@@ -561,7 +561,7 @@ def test_run_tier_1_offloads_service_axis_planner_off_the_loop(monkeypatch):
 
     monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
 
-    async def _fake_scan(website, code, use_paid_fallback=True):
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
         return (["https://acme.example/roof-restoration/"], "sitemap")
 
     monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
