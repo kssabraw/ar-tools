@@ -496,6 +496,7 @@ async def _resolve_location_axis(
     location_code: Optional[int],
     center: Optional[tuple[float, float]] = None,
     radius_km: Optional[float] = None,
+    place_types: Optional[tuple[str, ...]] = None,
 ) -> tuple[list[dict], dict]:
     """Seed city + `resolve_target_cities`. Returns ``(axis, provenance)``. Surfaces
     the geocoding-unavailable degrade VISIBLY (plan §5) rather than a silent
@@ -519,7 +520,7 @@ async def _resolve_location_axis(
         try:
             cities, city_notes = await target_cities.resolve_target_cities(
                 client, seed_location, location_code, get_supabase(),
-                center=center, radius_km=radius_km,
+                center=center, radius_km=radius_km, place_types=place_types,
             )
             notes.extend(city_notes)
             for c in cities:
@@ -661,8 +662,16 @@ async def run_coverage_audit_tier(
         )
         place_vocab = list(city_vocab) + core._axis_names(location_axis)
     else:
+        # Broaden the nearby-locality search beyond city/town (config) so a
+        # suburb-geography metro (e.g. inner Melbourne, where the targets are
+        # `place=suburb`) resolves its surrounding localities; the geocode filter
+        # still keeps only real localities.
+        nearby_types = tuple(
+            t.strip() for t in settings.coverage_nearby_place_types.split(",") if t.strip()
+        ) or None
         location_axis, loc_prov = await _resolve_location_axis(
-            client, seed_location, location_code, center=center, radius_km=radius_km
+            client, seed_location, location_code, center=center, radius_km=radius_km,
+            place_types=nearby_types,
         )
         place_vocab = [row["name"] for row in location_axis]
     notes.extend(loc_prov.get("notes") or [])

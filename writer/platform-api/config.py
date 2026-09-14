@@ -2909,11 +2909,23 @@ class Settings(BaseSettings):
     # coverage_audit_usage). PLACEHOLDER — start conservative (like domain-intel),
     # raise once real DataForSEO spend is known. 0 disables the guard.
     coverage_audit_daily_call_budget: int = 200
-    # Minimum-demand FLOOR on cell gaps (plan §8 Major #4): a service×location
-    # gap with search volume below this is HIDDEN, not merely ranked last — this
-    # (not ranking) is what tames the Tier 3/4 (CDP × subservice) cross-product
-    # tail. PLACEHOLDER — calibrate from a first live run. 0 disables the floor.
-    coverage_cell_volume_min: int = 10
+    # Minimum-demand FLOOR on cell gaps: a service×location gap with search volume
+    # below this is HIDDEN, not merely ranked last. 0 disables the floor.
+    # Owner ruling 2026-09-14: DISABLED by default (0) — the audit returns ALL
+    # service×location cells (and all cities/services), demand-ranked but never
+    # hidden. Raise it only to tame a runaway Tier 3/4 (CDP × subservice)
+    # cross-product; the CDP axis cap (coverage_cdp_max) is the primary Tier-3/4
+    # guard now that the floor is off.
+    coverage_cell_volume_min: int = 0
+    # Nearby-locality OSM place types for the CITY-tier location axis (Tiers 1/2),
+    # broader than the shared `local_seo_overpass_place_types` (city,town) so a
+    # suburb-geography metro resolves its surrounding localities — inner-Melbourne
+    # suburbs (Fitzroy, Brunswick, …) are `place=suburb` in OSM, not city/town, and
+    # were being missed. The downstream geocode filter (locality/postal_town) still
+    # drops non-locality results, so US intra-city `place=suburb` neighborhoods
+    # (which geocode as `neighborhood`) are excluded — this only ADDS real nearby
+    # localities. Comma list; coverage-audit-scoped (does not affect Local SEO).
+    coverage_nearby_place_types: str = "city,town,suburb,neighbourhood,village"
     # Neighborhood decision gate (plan §0.4, Phase 5). Stage 1: drop a candidate
     # neighborhood below this "[main service] [neighborhood]" search volume before
     # spending a live SERP on it.
@@ -2933,9 +2945,9 @@ class Settings(BaseSettings):
     # CDP boundaries are static). 0 disables the freshness check (cache never re-pulled).
     coverage_cdp_cache_days: int = 365
     # Cap on the CDP location axis after footprint verification, so the Tier-3/4
-    # cross-product can't explode. Ordered by name; the demand floor on cells
-    # (coverage_cell_volume_min) does the real Tier-3/4 taming. Calibrate from a
-    # first live CDP run. 0 = uncapped.
+    # cross-product can't explode. Ordered by name. Now that the demand floor is
+    # off by default (coverage_cell_volume_min=0), this cap is the primary Tier-3/4
+    # guard. Calibrate from a first live CDP run. 0 = uncapped.
     coverage_cdp_max: int = 60
     # Sitemap-crawl caps for the whole-site audit — higher than the shared
     # `local_seo_sitemap_*` defaults (5000/30) because the audit's accuracy depends
