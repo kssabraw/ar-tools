@@ -2859,6 +2859,31 @@ class Settings(BaseSettings):
     guide_sync_recent_days: int = 30            # window for DORA's read-model `guide_sync` block
     guide_sync_max_body_bytes: int = 8_000_000  # inbound payload ceiling (checked before the body is parsed)
 
+    # ── Coverage Audit (services/coverage_audit.py) — plan
+    # docs/modules/coverage-audit-module-plan-v1_0.md ────────────────────────
+    # Whole-site location & service gap finder: scans the client's site as it
+    # stands, diffs the ideal service×location universe against what exists, and
+    # demand-ranks the gaps (per tier), then auto-seeds a Matrix (axes only).
+    coverage_audit_enabled: bool = True
+    # Daily ceiling on paid DataForSEO calls for this module (own meter:
+    # coverage_audit_usage). PLACEHOLDER — start conservative (like domain-intel),
+    # raise once real DataForSEO spend is known. 0 disables the guard.
+    coverage_audit_daily_call_budget: int = 200
+    # Minimum-demand FLOOR on cell gaps (plan §8 Major #4): a service×location
+    # gap with search volume below this is HIDDEN, not merely ranked last — this
+    # (not ranking) is what tames the Tier 3/4 (CDP × subservice) cross-product
+    # tail. PLACEHOLDER — calibrate from a first live run. 0 disables the floor.
+    coverage_cell_volume_min: int = 10
+    # Neighborhood decision gate (plan §0.4, Phase 5). Stage 1: drop a candidate
+    # neighborhood below this "[main service] [neighborhood]" search volume before
+    # spending a live SERP on it.
+    coverage_neighborhood_volume_min: int = 20
+    # Neighborhood gate Stage 2: a neighborhood earns its OWN page (vs. folding
+    # into the city page's "areas we serve") only when at least this many of the
+    # top organic SERP results are dedicated neighborhood pages (place token in
+    # URL/title) rather than city pages.
+    coverage_neighborhood_serp_dedicated_min: int = 3
+
     class Config:
         env_file = ".env"
 

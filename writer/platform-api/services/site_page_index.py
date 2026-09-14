@@ -153,6 +153,30 @@ def content_tokens(text: str) -> frozenset[str]:
     )
 
 
+def is_blog_url(url: str) -> bool:
+    """Whether a URL is blog/news/product/taxonomy/system content rather than a
+    service or location landing page.
+
+    True when any path segment is a known non-page segment (blog, post, article,
+    news, tag, category, product, shop, privacy, ...). Such a page may *mention* a
+    service or place without being its landing page, so callers that infer the
+    site's service/location coverage (e.g. the Coverage Audit) exclude these.
+    Formalizes the same exclusion `page_match_keys` already applies internally, so
+    the two stay in lockstep. Pure — no I/O.
+
+    "site.com/blog/why-roof-restoration/" → True;
+    "site.com/roof-restoration-melbourne/" → False."""
+    try:
+        path = urlparse(url or "").path or ""
+    except ValueError:
+        return False
+    for raw in path.split("/"):
+        seg = raw.strip()
+        if seg and slugify_place(seg) in _NON_PAGE_SEGMENTS:
+            return True
+    return False
+
+
 def page_match_keys(url: str) -> list[frozenset[str]]:
     """Content-word-set keys a live URL can be matched on, or ``[]`` when the URL is
     content/store (a non-page segment) or has no usable slug.
