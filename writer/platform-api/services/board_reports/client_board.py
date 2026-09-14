@@ -66,6 +66,57 @@ def client_line(row: dict) -> str:
     return " · ".join(bits) if bits else "no data yet"
 
 
+def _client_case(r: dict) -> dict:
+    """Compose the who/what/where/why/how case for one non-green client. Pure —
+    reads the enriched row fields (goals_detail, at_risk_keywords, top_decliner,
+    plan_items, episodes, competitors, market)."""
+    why: list[str] = []
+    if r.get("frozen"):
+        why.append(f"Frozen — {r.get('frozen_reason') or 'manual action / deindex'}.")
+    for g in (r.get("goals_detail") or []):
+        cur, tgt = g.get("current"), g.get("target")
+        bit = f"Goal “{g.get('label')}” {g.get('status')}"
+        if cur is not None and tgt is not None:
+            bit += f" (now {cur:g} vs target {tgt:g})"
+        if g.get("due"):
+            bit += f", due {str(g['due'])[:10]}"
+        why.append(bit + ".")
+    if r.get("at_risk_keywords"):
+        why.append("Deindex risk: " + ", ".join(f"“{k}”" for k in r["at_risk_keywords"]) + ".")
+    dec = r.get("top_decliner")
+    if dec and dec.get("delta"):
+        pos = f" to about #{round(dec['position'])}" if dec.get("position") is not None else ""
+        why.append(f"Biggest drop: “{dec.get('keyword')}” down ~{abs(dec['delta']):g}{pos}.")
+    for it in (r.get("plan_items") or [])[:2]:
+        if it.get("diagnosis"):
+            cls = f"[{it['classification']}] " if it.get("classification") else ""
+            kw = f"“{it['keyword']}” — " if it.get("keyword") else ""
+            why.append(f"{cls}{kw}{it['diagnosis']}")
+
+    doing: list[str] = []
+    for it in (r.get("plan_items") or [])[:3]:
+        if it.get("recommendation"):
+            kw = f"“{it['keyword']}”: " if it.get("keyword") else ""
+            doing.append(f"{kw}{it['recommendation']}")
+    for note in (r.get("episodes") or [])[:3]:
+        doing.append(f"Response open — {note}")
+
+    whowhere: list[str] = []
+    if r.get("competitors"):
+        whowhere.append("Competitors: " + ", ".join(r["competitors"]) + ".")
+    if r.get("market"):
+        whowhere.append(f"Market: {r['market']}.")
+
+    detail = [{"label": "Status", "text": r.get("line")}]
+    if why:
+        detail.append({"label": "Why", "text": " ".join(why)})
+    if doing:
+        detail.append({"label": "What's being done", "text": " ".join(doing)})
+    if whowhere:
+        detail.append({"label": "Who & where", "text": " ".join(whowhere)})
+    return {"name": r.get("name") or "Client", "rag": r.get("rag"), "detail": detail}
+
+
 def build_report(today: date, rows: list[dict]) -> dict:
     """Assemble the portfolio Client Health board report from per-client rows. Pure."""
     for r in rows:
@@ -106,6 +157,14 @@ def build_report(today: date, rows: list[dict]) -> dict:
     detail = sorted(rows, key=lambda r: (order.get(r["rag"], 3), (r.get("name") or "").lower()))
     row_items = [{"rag": r["rag"], "name": r.get("name") or "Client", "line": r["line"]} for r in detail]
 
+    # Detailed per-client cases for every non-green client (why / what's being
+    # done / who & where) — the depth beyond the one-line table.
+    nongreen = [r for r in detail if r["rag"] != "green"]
+    cases = {
+        "title": "Client cases — why / what's being done / who & where",
+        "items": [_client_case(r) for r in nongreen[:12]],
+    }
+
     # wins — biggest climbers across the portfolio
     movers = []
     for r in rows:
@@ -121,21 +180,9 @@ def build_report(today: date, rows: list[dict]) -> dict:
     if not reds and not yellows and total:
         wins.append("Every client green this week.")
 
-    # risks — red accounts with the reason + action
+    # The per-red detail now lives in `cases`; keep `risks` empty so the section
+    # isn't a redundant terse echo above the full write-ups.
     risks: list[dict] = []
-    for r in reds:
-        reasons = []
-        if r.get("frozen"):
-            reasons.append("frozen (manual action / deindex)")
-        if r.get("goals_overdue"):
-            reasons.append(f"{r['goals_overdue']} goal(s) overdue")
-        if r.get("at_risk"):
-            reasons.append(f"{r['at_risk']} keyword(s) at deindex risk")
-        risks.append({
-            "issue": f"{r.get('name')} — " + (", ".join(reasons) or "off track"),
-            "severity": "critical" if r.get("frozen") else None,
-            "action": "recovery plan / escalate" if r.get("frozen") else "reoptimize & re-scope",
-        })
 
     asks: list[str] = []
     if reds:
@@ -158,7 +205,8 @@ def build_report(today: date, rows: list[dict]) -> dict:
         "title": f"Client Health board report · week of {common.monday_of(today).isoformat()}",
         "verdict": verdict, "rag": rag, "as_of": today.isoformat(),
         "scorecard": scorecard,
-        "rows": {"title": "Clients", "items": row_items},
+        "rows": {"title": "All clients", "items": row_items},
+        "cases": cases,
         "wins": wins, "risks": risks, "asks": asks, "outlook": outlook,
     }
 
@@ -183,6 +231,13 @@ def _goals(supabase, cid: str, today: date, row: dict) -> None:
     row["goals_ok"] = sum(1 for g in measurable if g.get("status") in ("achieved", "on_track"))
     row["goals_behind"] = sum(1 for g in measurable if g.get("status") == "behind")
     row["goals_overdue"] = sum(1 for g in measurable if g.get("status") == "overdue")
+    # The specific behind/overdue goals with their numbers — the WHY for a case.
+    row["goals_detail"] = [
+        {"label": g.get("label") or g.get("goal_type"), "status": g.get("status"),
+         "current": g.get("current_value"), "target": g.get("effective_target"),
+         "due": g.get("due_date")}
+        for g in measurable if g.get("status") in ("behind", "overdue")
+    ][:4]
 
 
 def _organic(supabase, cid: str, today: date, row: dict) -> None:
@@ -224,6 +279,11 @@ def _organic(supabase, cid: str, today: date, row: dict) -> None:
     row["climbing"] = stats.get("climbing", 0)
     row["dropping"] = stats.get("dropping", 0)
     row["top_gainer"] = summ.get("top_gainer")
+    row["top_decliner"] = summ.get("top_decliner")
+    row["at_risk_keywords"] = [
+        s.get("keyword") for s in summaries
+        if s.get("status") == "deindex_risk" and s.get("keyword")
+    ][:6]
 
 
 def _maps(supabase, cid: str, today: date, row: dict) -> None:
@@ -290,16 +350,76 @@ def _alerts(supabase, cid: str, today: date, row: dict) -> None:
 def _frozen(supabase, cid: str, today: date, row: dict) -> None:
     from services import freeze
 
-    row["frozen"] = bool(freeze.is_frozen(cid))
+    fr = freeze.active_freeze(cid)
+    row["frozen"] = bool(fr)
+    if fr:
+        row["frozen_reason"] = (
+            fr.get("reason") or fr.get("freeze_type") or fr.get("kind")
+            or "manual action / deindex"
+        )
+
+
+def _plan(supabase, cid: str, today: date, row: dict) -> None:
+    """The client's latest Action Plan top items — the per-problem diagnosis +
+    recommendation (the WHY + HOW)."""
+    rows = (
+        supabase.table("reopt_plans").select("items, created_at")
+        .eq("client_id", cid).order("created_at", desc=True).limit(1).execute()
+    ).data or []
+    if not rows:
+        return
+    items = rows[0].get("items") or []
+    row["plan_items"] = [
+        {"kind": a.get("kind"), "keyword": a.get("keyword"),
+         "classification": a.get("classification"),
+         "diagnosis": (a.get("diagnosis") or "")[:280],
+         "recommendation": (a.get("recommendation") or "")[:280],
+         "severity": a.get("severity")}
+        for a in items[:3]
+    ]
+
+
+def _episodes(supabase, cid: str, today: date, row: dict) -> None:
+    """Open response episodes (the verify-loop clock) — what's in flight."""
+    rows = (
+        supabase.table("response_episodes")
+        .select("keyword, channel, status, opened_at")
+        .eq("client_id", cid).in_("status", ["open", "escalated"])
+        .order("opened_at", desc=True).limit(3).execute()
+    ).data or []
+    notes = []
+    for ep in rows:
+        opened = (ep.get("opened_at") or "")[:10]
+        notes.append(
+            f"{ep.get('keyword')} ({ep.get('channel')}) — {ep.get('status')}"
+            + (f", open since {opened}" if opened else "")
+        )
+    if notes:
+        row["episodes"] = notes
+
+
+def _competitors(supabase, cid: str, today: date, row: dict) -> None:
+    """Named competitors (the WHO) from the client's competitor registry."""
+    rows = (
+        supabase.table("client_competitors").select("name, domain, active")
+        .eq("client_id", cid).eq("active", True).limit(6).execute()
+    ).data or []
+    names = [(c.get("name") or c.get("domain")) for c in rows if (c.get("name") or c.get("domain"))]
+    if names:
+        row["competitors"] = names[:5]
 
 
 def _client_row(supabase, client: dict, today: date) -> dict:
     """Gather one client's scorecard row — every sub-read isolated."""
     cid = client["id"]
-    row: dict = {"client_id": cid, "name": client.get("name") or cid}
+    row: dict = {
+        "client_id": cid, "name": client.get("name") or cid,
+        "market": client.get("business_location"),
+    }
     for label, fn in (
         ("goals", _goals), ("organic", _organic), ("maps", _maps), ("ai", _ai),
         ("gbp_leads", _gbp_leads), ("alerts", _alerts), ("frozen", _frozen),
+        ("plan", _plan), ("episodes", _episodes), ("competitors", _competitors),
     ):
         _safe(label, lambda fn=fn: fn(supabase, cid, today, row))
     return row
@@ -310,7 +430,7 @@ def run(today: Optional[date] = None) -> dict:
     today = today or date.today()
     supabase = get_supabase()
     clients = (
-        supabase.table("clients").select("id, name")
+        supabase.table("clients").select("id, name, business_location")
         .eq("archived", False).order("name").execute()
     ).data or []
     rows = [_client_row(supabase, c, today) for c in clients]

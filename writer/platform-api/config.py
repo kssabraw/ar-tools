@@ -2905,7 +2905,7 @@ class Settings(BaseSettings):
     board_reports_narrative_enabled: bool = True
     board_reports_narrative_provider: str = "anthropic"
     board_reports_narrative_model: str = "claude-sonnet-4-6"
-    board_reports_narrative_max_tokens: int = 700
+    board_reports_narrative_max_tokens: int = 1500
     # Also publish each weekly board report as a PDF into this Google Drive folder
     # (in addition to Slack + the in-app feed) — owner ask 2026-09-14. Best-effort:
     # rendered via WeasyPrint (client_report.render_pdf) → the Apps Script webhook

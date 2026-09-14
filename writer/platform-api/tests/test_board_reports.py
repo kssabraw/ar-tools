@@ -100,9 +100,32 @@ def test_pace_build_report():
     assert labels["Completed (7d)"]["delta"] == "+4 (+50%)"
     assert labels["Team utilization (logged)"]["value"] == "80%"   # (120+40)/2
     assert labels["Over capacity"]["value"] == "1"
-    assert any("over capacity" in risk["issue"] for risk in r["risks"])
+    # The over-capacity person is now a detailed case, not a terse risk line.
+    assert any("Ivy — over capacity" in c["name"] for c in r["cases"]["items"])
     assert any("Ivy" in a for a in r["asks"])     # capacity ask names the over-capacity person
     assert r["outlook"] and "capacity" in r["outlook"]
+
+
+def _case_text(case: dict) -> str:
+    """Flatten a case's name + all detail text — for assertions. Pure test helper."""
+    return case.get("name", "") + " " + " ".join(d.get("text", "") for d in case.get("detail", []))
+
+
+def test_pace_cases_name_tasks_with_owner_and_client():
+    board = {"clients": [
+        {"client_id": "c1",
+         "stale": [{"name": "Fix GBP categories", "assignee_name": "Ivy",
+                    "status_key": "in_progress", "days": 9}],
+         "overdue": [{"name": "Publish blog", "assignee_name": "Sam", "due_date": "2026-09-01"}],
+         "month_pace": {"behind": True, "mode": "calendar", "pct_complete": 0.2, "pct_elapsed": 0.6}},
+    ]}
+    cases = pace_board._pace_cases(board, {"c1": "Acme"}, [])
+    stuck = next(c for c in cases if c["name"] == "Fix GBP categories")
+    txt = _case_text(stuck)
+    assert "Acme" in txt and "Ivy" in txt and "9d" in txt  # who / where / how-long
+    assert any("behind pace" in c["name"] for c in cases)
+    behind = next(c for c in cases if "behind pace" in c["name"])
+    assert "20%" in _case_text(behind) and "60%" in _case_text(behind)
 
 
 def test_pace_utilization_falls_back_to_estimate_label():
@@ -154,10 +177,14 @@ def test_dora_build_report_red_on_degraded_seam():
         "interventions": {"by_verdict": {"worked": 2, "partial": 0, "no_effect": 1}},
         "assignment": {"open_holds": [{"name": "t1", "client_id": "c1"}]},
     }
+    model["flow"]["flags"][0]["evidence"] = {"page": "roof-repair-tampa"}
     r = director_board.build_report(MON, model=model, names={"c1": "Acme"})
     assert r["rag"] == "red"                         # content_shipped_degraded is a red seam
-    assert any("content shipped off-brand" in risk["issue"] for risk in r["risks"])
-    assert any("Acme" in risk["issue"] for risk in r["risks"])
+    cases = r["cases"]["items"]
+    degraded = next(c for c in cases if c["name"] == "content shipped off-brand")
+    txt = _case_text(degraded)
+    assert "Acme" in txt and "roof-repair-tampa" in txt   # who + what (from evidence)
+    assert any(d["label"] == "Why it matters" for d in degraded["detail"])
     # autonomy proposed(6) >> executed(2) → a governance ask
     assert any("autonomy" in a.lower() for a in r["asks"])
     assert any("capacity hold" in a for a in r["asks"])
@@ -199,7 +226,14 @@ def test_client_line_only_includes_present_parts():
 
 def test_client_build_report_portfolio():
     rows = [
-        {"name": "Acme", "frozen": True, "goals_total": 2, "goals_ok": 0, "goals_overdue": 1,
+        {"name": "Acme", "frozen": True, "frozen_reason": "manual action",
+         "goals_total": 2, "goals_ok": 0, "goals_overdue": 1,
+         "goals_detail": [{"label": "roof repair top 3", "status": "overdue",
+                           "current": 8, "target": 3, "due": "2026-08-01"}],
+         "plan_items": [{"keyword": "roof repair", "classification": "B2 SERP shift",
+                         "diagnosis": "AI Overview now owns the top of the SERP.",
+                         "recommendation": "Rework the page for AEO extractability."}],
+         "competitors": ["RivalRoofing", "TopRoofers"], "market": "Tampa, FL",
          "page_one": 1, "at_risk": 0, "striking": 0, "alerts": 2, "climbing": 0, "dropping": 1},
         {"name": "Beta", "goals_total": 3, "goals_ok": 3, "page_one": 9, "avg_position": 6.2,
          "at_risk": 0, "striking": 4, "alerts": 0, "climbing": 3, "dropping": 0,
@@ -220,8 +254,15 @@ def test_client_build_report_portfolio():
     assert [it["name"] for it in r["rows"]["items"]] == ["Acme", "Gamma", "Beta"]
     # biggest climber surfaced as a win
     assert any("roof repair" in w for w in r["wins"])
-    # red account named in risks + asks
-    assert any("Acme" in risk["issue"] for risk in r["risks"])
+    # detailed cases: non-green clients only, worst-first, with who/what/why/how
+    assert [c["name"] for c in r["cases"]["items"]] == ["Acme", "Gamma"]
+    acme = r["cases"]["items"][0]
+    labels_c = {d["label"]: d["text"] for d in acme["detail"]}
+    assert "manual action" in labels_c["Why"]                 # frozen reason
+    assert "vs target 3" in labels_c["Why"]                   # overdue goal numbers
+    assert "AI Overview" in labels_c["Why"]                   # plan diagnosis
+    assert "AEO extractability" in labels_c["What's being done"]  # plan recommendation
+    assert "RivalRoofing" in labels_c["Who & where"] and "Tampa" in labels_c["Who & where"]
     assert any("Acme" in a for a in r["asks"])
     assert r["outlook"] and "striking distance" in r["outlook"]
 
@@ -291,6 +332,26 @@ def test_run_weekly_force_bypasses_disabled(monkeypatch):
     # On-demand path (force=True) runs all three regardless of the flag.
     out = br.run_weekly_board_reports(MON, force=True)
     assert out["emitted"] is True and set(out["reports"]) == {"pace", "director", "client"}
+
+
+def test_render_cases_in_md_and_html():
+    report = {
+        "title": "Client Health", "verdict": "1 red", "rag": "red", "as_of": "2026-09-14",
+        "cases": {"title": "Client cases", "items": [
+            {"name": "Acme", "rag": "red", "detail": [
+                {"label": "Why", "text": "Frozen — manual action."},
+                {"label": "What's being done", "text": "Rework the page for AEO."},
+                {"label": "Who & where", "text": "Competitors: Rival. Market: Tampa."},
+            ]},
+        ]},
+        "asks": [],
+    }
+    md = common.render_report(report)
+    assert "*Client cases*" in md and "*Acme*" in md
+    assert "_Why:_ Frozen — manual action." in md
+    html = common.render_html(report)
+    assert "Client cases" in html and "Acme" in html
+    assert "Why:" in html and "Rework the page for AEO." in html
 
 
 def test_maybe_publish_pdf_gated_off_when_unconfigured(monkeypatch):
