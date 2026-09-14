@@ -71,7 +71,20 @@ interface StatusResponse {
   latest: AuditRun | null
 }
 
-type Tier = 1 | 2 | 3
+type Tier = 1 | 2 | 3 | 4
+
+const tierLabel: Record<Tier, string> = {
+  1: 'main services',
+  2: 'subservices',
+  3: 'CDPs',
+  4: 'CDPs · subservices',
+}
+const tierTitle: Record<Tier, string> = {
+  1: 'City × main service',
+  2: 'City × subservice',
+  3: 'CDP × main service',
+  4: 'CDP × subservice',
+}
 
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
@@ -183,15 +196,18 @@ export function CoverageAudit() {
   const locationAxis = latest?.location_axis ?? []
   // Render off the RUN's own tier (a completed run may predate a tier switch).
   const reportTier = latest?.tier ?? tier
-  const isSubservice = reportTier === 2
-  // Tier 3's location axis is CDPs (Census Designated Places), not cities — the
-  // service axis stays main services, so only the location noun changes.
-  const isCdp = reportTier === 3
+  // Subservice tiers: T2 (city × subservice) + T4 (CDP × subservice).
+  const isSubservice = reportTier === 2 || reportTier === 4
+  // CDP location tiers: T3 (CDP × main service) + T4 (CDP × subservice) — the
+  // location axis is CDPs (Census Designated Places), not cities.
+  const isCdp = reportTier === 3 || reportTier === 4
   const locationNoun = isCdp ? 'CDP' : 'City'
   const locationNounPlural = isCdp ? 'CDPs' : 'Cities'
-  // Tier 2 drops the location-hub rows; Tiers 1 and 3 keep them. The server records
-  // the decision on the run; default off the tier when an older run lacks the flag.
-  const showLocations = latest?.provenance?.location_rows_shown ?? reportTier !== 2
+  // Subservice tiers (2/4) drop the location-hub rows; main-service tiers (1/3) keep
+  // them. The server records the decision on the run; default off the subservice
+  // tiers when an older run lacks the flag.
+  const showLocations =
+    latest?.provenance?.location_rows_shown ?? (reportTier !== 2 && reportTier !== 4)
   const serviceAxisLabel = isSubservice ? 'Subservice axis' : 'Service axis'
 
   const startEditing = () => {
@@ -216,7 +232,8 @@ export function CoverageAudit() {
         ranked by real search demand. <strong>Tier 1</strong> covers city × main service;{' '}
         <strong>Tier 2</strong> drills into city × subservice (each main service expanded into its
         variations); <strong>Tier 3</strong> widens to CDP × main service (the authoritative Census
-        Designated Places across the service area).
+        Designated Places across the service area); <strong>Tier 4</strong> crosses both — CDP ×
+        subservice, the widest net.
       </p>
 
       {disabled && (
@@ -224,10 +241,10 @@ export function CoverageAudit() {
       )}
 
       {/* Tier selector — switches the run + report between city×main-service (T1),
-          city×subservice (T2), and CDP×main-service (T3). Each tier keeps its own
-          latest run + in-flight job. */}
+          city×subservice (T2), CDP×main-service (T3), and CDP×subservice (T4). Each
+          tier keeps its own latest run + in-flight job. */}
       <div style={{ display: 'inline-flex', gap: 2, marginBottom: 16, background: '#f1f5f9', borderRadius: 8, padding: 3 }}>
-        {([1, 2, 3] as Tier[]).map((t) => (
+        {([1, 2, 3, 4] as Tier[]).map((t) => (
           <button
             key={t}
             style={t === tier ? tierBtnActive : tierBtn}
@@ -239,9 +256,9 @@ export function CoverageAudit() {
               setTier(t)
             }}
             disabled={running}
-            title={t === 1 ? 'City × main service' : t === 2 ? 'City × subservice' : 'CDP × main service'}
+            title={tierTitle[t]}
           >
-            Tier {t} · {t === 1 ? 'main services' : t === 2 ? 'subservices' : 'CDPs'}
+            Tier {t} · {tierLabel[t]}
           </button>
         ))}
       </div>
