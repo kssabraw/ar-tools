@@ -279,6 +279,20 @@ def test_emit_report_pdf_only_by_default(monkeypatch):
     assert calls == {"emit": 1, "pdf": 2}
 
 
+def test_run_weekly_force_bypasses_disabled(monkeypatch):
+    from services import board_reports as br
+    from services.board_reports import client_board, director_board, pace_board
+
+    monkeypatch.setattr(br.settings, "board_reports_enabled", False)
+    for m in (pace_board, director_board, client_board):
+        monkeypatch.setattr(m, "run", lambda today: {"emitted": True})
+    # Scheduled path (force=False) respects the disabled flag.
+    assert br.run_weekly_board_reports(MON, force=False)["reason"] == "disabled"
+    # On-demand path (force=True) runs all three regardless of the flag.
+    out = br.run_weekly_board_reports(MON, force=True)
+    assert out["emitted"] is True and set(out["reports"]) == {"pace", "director", "client"}
+
+
 def test_maybe_publish_pdf_gated_off_when_unconfigured(monkeypatch):
     monkeypatch.setattr(common.settings, "board_reports_drive_folder_id", "")
     monkeypatch.setattr(common.settings, "google_apps_script_url", "https://example/webhook")
