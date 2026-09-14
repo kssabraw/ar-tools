@@ -621,6 +621,7 @@ class _EnqueueFake:
         self._inflight = inflight
         self.audit_inserts = 0
         self.job_inserts = 0
+        self.job_row = None  # the last async_jobs row inserted (for priority asserts)
 
     def table(self, name):
         return _EnqueueQuery(self, name)
@@ -642,6 +643,7 @@ class _EnqueueQuery:
             self._fake.audit_inserts += 1
         elif self._table == "async_jobs":
             self._fake.job_inserts += 1
+            self._fake.job_row = row
         return self
 
     def eq(self, *a, **k):
@@ -709,6 +711,26 @@ def test_enqueue_no_inflight_creates_new(monkeypatch):
     audit_id, job_id = svc.enqueue_coverage_audit("client-1", 1, "user-1")
     assert (audit_id, job_id) == ("new-audit", "new-job")
     assert fake.audit_inserts == 1 and fake.job_inserts == 1
+
+
+def test_enqueue_fast_tier_is_interactive_priority(monkeypatch):
+    """Tiers 1/2 (fast, user-watched) enqueue at INTERACTIVE priority so the
+    dedicated coverage lane claims them ahead of any queued slow tier."""
+    for tier in (1, 2):
+        fake = _EnqueueFake(inflight=[])
+        monkeypatch.setattr(svc, "get_supabase", lambda f=fake: f)
+        svc.enqueue_coverage_audit("client-1", tier, "user-1")
+        assert fake.job_row["priority"] == svc.job_priority.INTERACTIVE
+
+
+def test_enqueue_slow_tier_is_background_priority(monkeypatch):
+    """Tiers 3/4 (CDP cross-products, minutes-long) enqueue at BACKGROUND priority
+    so a fast Tier 1/2 is always claimed ahead of them on the coverage lane."""
+    for tier in (3, 4):
+        fake = _EnqueueFake(inflight=[])
+        monkeypatch.setattr(svc, "get_supabase", lambda f=fake: f)
+        svc.enqueue_coverage_audit("client-1", tier, "user-1")
+        assert fake.job_row["priority"] == svc.job_priority.BACKGROUND
 
 
 def test_enqueue_unsupported_tier_rejected(monkeypatch):

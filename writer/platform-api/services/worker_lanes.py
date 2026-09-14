@@ -7,8 +7,8 @@ whether raising `bulk_lane_workers` is warranted). A few lightweight count
 queries per call.
 
 The lane shapes mirror the launcher in `main.py` (MAIN / INTERACTIVE / FANOUT /
-BULK, priority-fenced per `services/job_priority.py`). Keep this list in sync
-with that launcher.
+COVERAGE / BULK, priority-fenced per `services/job_priority.py`). Keep this list
+in sync with that launcher.
 """
 
 from __future__ import annotations
@@ -67,7 +67,18 @@ def lane_status() -> dict:
     supabase = get_supabase()
     fanout = list(settings.fanout_job_types)
     interactive = list(settings.interactive_job_types)
+    coverage = list(settings.coverage_job_types)
     bg = job_priority.BACKGROUND
+
+    # Mirror the launcher: coverage jobs are owned by the dedicated lane only when
+    # it runs (>0 workers). When off, they fall back to MAIN, so they must not be
+    # excluded there — the `dedicated` set drives MAIN/BULK exclusion exactly.
+    coverage_workers = (
+        max(1, settings.coverage_lane_workers)
+        if coverage and settings.coverage_lane_workers > 0
+        else 0
+    )
+    dedicated = fanout + (coverage if coverage_workers else [])
 
     def depth(**flt) -> dict:
         return {
@@ -77,8 +88,8 @@ def lane_status() -> dict:
 
     main_row = {
         "name": "main", "workers": 1,
-        "note": "catch-all + reaper; claims all non-fanout at any priority (overlaps other lanes)",
-        **depth(exclude=fanout),
+        "note": "catch-all + reaper; claims all non-dedicated at any priority (overlaps other lanes)",
+        **depth(exclude=dedicated),
     }
     interactive_row = {
         "name": "interactive", "workers": 1,
@@ -91,16 +102,25 @@ def lane_status() -> dict:
         "note": "Fanout pipeline jobs",
         **depth(job_types=fanout),
     }
+    coverage_row = {
+        "name": "coverage",
+        "workers": coverage_workers,
+        "note": (
+            "Coverage-audit jobs; fast tiers 1/2 (interactive priority) claimed "
+            f"ahead of slow tiers 3/4 (background). 0 workers => falls back to MAIN"
+        ),
+        **depth(job_types=coverage),
+    }
     bulk_row = {
         "name": "bulk", "workers": max(0, settings.bulk_lane_workers),
         "max_per_client": settings.bulk_lane_max_per_client,
         "note": f"background-priority batch items, priority <= {bg}",
-        **depth(exclude=fanout, priority_max=bg),
-        "per_client_running": _running_by_client(supabase, fanout, bg),
+        **depth(exclude=dedicated, priority_max=bg),
+        "per_client_running": _running_by_client(supabase, dedicated, bg),
     }
 
     return {
         "poll_interval_s": settings.job_worker_poll_interval_seconds,
         "priorities": {"interactive": job_priority.INTERACTIVE, "background": bg},
-        "lanes": [main_row, interactive_row, fanout_row, bulk_row],
+        "lanes": [main_row, interactive_row, fanout_row, coverage_row, bulk_row],
     }

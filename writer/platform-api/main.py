@@ -169,11 +169,27 @@ async def lifespan(app: FastAPI):
     except Exception as exc:  # pragma: no cover - startup best-effort
         logger.warning("wordpress_ssh_selftest_error error=%s", str(exc))
     # MAIN lane claims everything except the long, blocking Fanout pipeline jobs
-    # (issue #686) — those get a dedicated lane so a ~10-min expansion can't tie up
+    # (issue #686) and the Coverage-Audit jobs (2026-09-14) — both get their own
+    # dedicated lanes so a ~10-min expansion or a slow Tier 4 audit can't tie up
     # the reaper or other background work.
     _fanout_types = list(settings.fanout_job_types)
+    _coverage_types = list(settings.coverage_job_types)
+    # COVERAGE-AUDIT lane sizing (decided BEFORE the MAIN lane so its exclude list
+    # is correct): a dedicated, N-wide lane is the SOLE claimer of coverage_audit
+    # jobs when enabled. 0 workers (or an empty type list) → the lane is OFF and
+    # coverage jobs fall back to the MAIN lane, so they must NOT be excluded there.
+    _coverage_worker_count = (
+        max(1, settings.coverage_lane_workers)
+        if _coverage_types and settings.coverage_lane_workers > 0
+        else 0
+    )
+    # Types the MAIN + BULK lanes must NOT claim — each is owned by a dedicated
+    # lane below. Coverage is excluded ONLY when its dedicated lane is running
+    # (its Tier 3/4 are BACKGROUND priority, so without this the BULK lane would
+    # grab them; when the lane is off, MAIN must keep claiming them).
+    _dedicated_types = _fanout_types + (_coverage_types if _coverage_worker_count else [])
     worker_task = asyncio.create_task(
-        job_worker(exclude_types=_fanout_types or None)
+        job_worker(exclude_types=_dedicated_types or None)
     )
     interactive_worker_task = (
         asyncio.create_task(
@@ -194,6 +210,17 @@ async def lifespan(app: FastAPI):
         asyncio.create_task(job_worker(job_types=_fanout_types, lane="fanout"))
         for _ in range(_fanout_worker_count)
     ]
+    # COVERAGE-AUDIT lane (2026-09-14): a dedicated, N-wide lane that is the SOLE
+    # claimer of coverage_audit jobs (no priority fence, so it claims both the
+    # INTERACTIVE-priority fast tiers 1/2 and the BACKGROUND-priority slow tiers
+    # 3/4). Several audits run concurrently, and the claim's `priority DESC`
+    # ordering means a fast Tier 1 the user is watching is claimed ahead of any
+    # queued Tier 4 the moment a worker frees. The atomic claim keeps the workers
+    # from double-claiming a row. Sizing is decided above (before the MAIN lane).
+    coverage_worker_tasks = [
+        asyncio.create_task(job_worker(job_types=_coverage_types, lane="coverage"))
+        for _ in range(_coverage_worker_count)
+    ]
     # BULK lanes (2026-09-02): claim only background-priority rows (bulk-create /
     # matrix / reoptimize-bulk items), `bulk_lane_workers` wide, so a batch's
     # throughput is a config knob. The MAIN lane still picks a bulk row up when
@@ -201,7 +228,7 @@ async def lifespan(app: FastAPI):
     # never does, so a click stays fast while a batch grinds.
     bulk_worker_tasks = [
         asyncio.create_task(
-            job_worker(lane="bulk", exclude_types=_fanout_types or None,
+            job_worker(lane="bulk", exclude_types=_dedicated_types or None,
                        priority_max=job_priority.BACKGROUND,
                        max_per_client=settings.bulk_lane_max_per_client)
         )
@@ -240,7 +267,7 @@ async def lifespan(app: FastAPI):
     tasks = [
         t
         for t in (worker_task, interactive_worker_task, scheduler_task,
-                  *fanout_worker_tasks, *bulk_worker_tasks)
+                  *fanout_worker_tasks, *coverage_worker_tasks, *bulk_worker_tasks)
         if t
     ]
     for task in tasks:

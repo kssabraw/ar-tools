@@ -1,7 +1,7 @@
 """`worker_lanes.lane_status()` observability read — shape + fairness breakdown.
 
 Minimal fake Supabase: every count query returns the same count, the per-client
-`entity_id` query returns fixed rows. Asserts the assembled shape (main's four
+`entity_id` query returns fixed rows. Asserts the assembled shape (the five
 lanes), not live numbers.
 """
 
@@ -58,7 +58,7 @@ def test_lane_status_shape_and_fairness_breakdown(monkeypatch):
     out = worker_lanes.lane_status()
 
     lanes = {l["name"]: l for l in out["lanes"]}
-    assert set(lanes) == {"main", "interactive", "fanout", "bulk"}
+    assert set(lanes) == {"main", "interactive", "fanout", "coverage", "bulk"}
     assert lanes["bulk"]["pending"] == 4 and lanes["bulk"]["running"] == 4
     # Only the bulk lane carries the per-client breakdown + the fairness cap.
     assert lanes["bulk"]["per_client_running"] == {"A": 2, "B": 1}
