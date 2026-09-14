@@ -1263,7 +1263,29 @@ def diff_field(field: str, snapshot, live) -> bool:
         # Coverage is a SET of places (Google may re-order them on read-back), so
         # compare business type + region + the place-id set, order-insensitive.
         return _service_area_key(snapshot) != _service_area_key(live)
+    if field == "categories":
+        # Categories are identified by gcid, not display name, and Google re-orders
+        # the additional list on read-back (and can return its own canonical
+        # displayName) — so compare the primary id + the SET of additional ids,
+        # ignoring names and order. Without this the default _norm compare reports a
+        # false difference after Google ACCEPTS an edit, marking it `rejected`.
+        return _categories_key(snapshot) != _categories_key(live)
     return _norm(snapshot) != _norm(live)
+
+
+def _categories_key(value) -> tuple:
+    """The gcid identity of a categories value ``{primary: {id, name}, additional:
+    [{id, name}]}`` — primary id + the SET of additional ids, name-independent and
+    order-insensitive. Pure."""
+    value = value or {}
+    primary = value.get("primary") or {}
+    pid = (primary.get("id") or "").strip() if isinstance(primary, dict) else ""
+    additional = frozenset(
+        (c.get("id") or "").strip()
+        for c in (value.get("additional") or [])
+        if isinstance(c, dict) and (c.get("id") or "").strip()
+    )
+    return (pid, additional)
 
 
 def _service_area_key(value) -> tuple:
