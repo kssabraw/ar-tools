@@ -374,6 +374,17 @@ def test_fetch_sitemap_truncates_at_url_cap(monkeypatch):
     assert truncated is True
 
 
+def test_fetch_sitemap_exact_cap_is_not_truncated(monkeypatch):
+    # A complete crawl that lands on EXACTLY max_urls unique pages (empty queue,
+    # nothing dropped) must NOT report truncated — no false "pages weren't scanned".
+    _install_fetch(monkeypatch, {"https://acme.com/map.xml": _URLSET})  # 2 URLs
+    urls, truncated = asyncio.run(
+        spi._fetch_sitemap_urls("https://acme.com", seed_sitemaps=["https://acme.com/map.xml"], max_urls=2)
+    )
+    assert urls == ["https://acme.com/a", "https://acme.com/b"]
+    assert truncated is False
+
+
 def test_discover_site_urls_sitemap_url_override_and_truncated_source(monkeypatch):
     _install_fetch(monkeypatch, {"https://acme.com/hidden/map.xml": _URLSET})
     # Even with an unusable website URL, an explicit sitemap URL drives the crawl.

@@ -398,9 +398,13 @@ async def _fetch_sitemap_urls(
                 if ch not in seen_sitemaps:
                     queue.append(ch)
 
-        # A cap stopped the crawl while sitemaps/URLs remained → the scan is partial.
-        hit_file_cap = bool(queue) and len(seen_sitemaps) >= max_files
-        hit_url_cap = len(page_urls) >= max_urls
+        # Truncated only with real evidence that a cap left content unfetched:
+        #  - we collected MORE raw URLs than the cap (so the trim below drops some), or
+        #  - a cap stopped the loop while sitemaps were still queued (unfetched).
+        # A complete crawl that lands on exactly `max_urls` unique pages with an empty
+        # queue is NOT truncated (avoids a false "some pages weren't scanned" warning).
+        stopped_by_cap = len(seen_sitemaps) >= max_files or len(page_urls) >= max_urls
+        truncated = (len(page_urls) > max_urls) or (bool(queue) and stopped_by_cap)
 
     # De-dupe while preserving order; trim to the cap.
     deduped: list[str] = []
@@ -411,7 +415,6 @@ async def _fetch_sitemap_urls(
             deduped.append(u)
         if len(deduped) >= max_urls:
             break
-    truncated = hit_file_cap or hit_url_cap or len(deduped) >= max_urls
     return deduped, truncated
 
 
