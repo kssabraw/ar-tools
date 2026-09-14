@@ -132,6 +132,8 @@ async def edit_service_axis(
     services = [s.strip() for s in body.services if s and s.strip()]
     if not services:
         raise HTTPException(status_code=400, detail="coverage_audit_service_axis_empty")
+    if svc.budget_remaining() <= 0:
+        raise HTTPException(status_code=429, detail="budget_exceeded")
     try:
         new_audit_id, job_id = svc.enqueue_coverage_audit(
             str(client_id), run.get("tier") or 1, auth["user_id"], service_axis=services,
