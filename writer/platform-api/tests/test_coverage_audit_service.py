@@ -24,10 +24,14 @@ def _no_nav_network(monkeypatch):
     monkeypatch.setattr(svc.website_scraper, "scrapeowl_fetch", _empty)
 
 
-# --- _derive_service_axis (planner merge + provenance) ------------------------
-def test_derive_service_axis_merges_planner_and_site(monkeypatch):
+# --- _derive_service_axis (planner-trusted axis + provenance) -----------------
+def test_derive_service_axis_trusts_planner_and_drops_slug_leftovers(monkeypatch):
+    # The planner ran → its cleaned list IS the axis. A raw URL-slug service the
+    # planner didn't echo (here "Gutter Cleaning") is NOT appended — that append is
+    # what inflated FCR's axis to 48 with chrome/place/fragment junk — though it
+    # stays recorded in provenance for transparency.
     monkeypatch.setattr(
-        svc, "_plan_service_axis", lambda site, gbp, name: (["Roof Restoration", "Roof Repair"], None)
+        svc, "_plan_service_axis", lambda observed, gbp, name: (["Roof Restoration", "Roof Repair"], None)
     )
     client = {"name": "Acme", "gbp": {"gbp_category": "Roofing Contractor"}}
     classified = {
@@ -36,13 +40,12 @@ def test_derive_service_axis_merges_planner_and_site(monkeypatch):
     }
     axis, prov = svc._derive_service_axis(client, classified, ["Melbourne"])
     labels = [a["label"] for a in axis]
-    # Planner order first, then any site service the planner didn't emit.
-    assert labels == ["Roof Restoration", "Roof Repair", "Gutter Cleaning"]
+    assert labels == ["Roof Restoration", "Roof Repair"]  # planner list only
+    assert "Gutter Cleaning" not in labels                # slug leftover dropped
+    assert "Gutter Cleaning" in prov["site_services"]     # still recorded
     by_label = {a["label"]: a["sources"] for a in axis}
-    assert "planner" in by_label["Roof Restoration"]
-    assert "site" in by_label["Roof Restoration"]      # also observed on the site
-    assert by_label["Roof Repair"] == ["planner"]      # planner-only
-    assert by_label["Gutter Cleaning"] == ["site"]     # site-only (planner missed it)
+    assert set(by_label["Roof Restoration"]) == {"planner", "site"}  # also on the site
+    assert by_label["Roof Repair"] == ["planner"]         # planner-only
     assert prov["confirmed"] is False
     assert prov["planner_used"] is True
 

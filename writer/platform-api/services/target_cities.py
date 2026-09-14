@@ -221,8 +221,19 @@ async def resolve_target_cities(
             continue
         if pid:
             seen_pids.add(pid)
+        # For a WEBSITE candidate, use the geocoder's canonical locality name, not
+        # the raw slug. A local site's service-area page slugs are "<service>
+        # <place>" ("/roofing-fitzroy/" → "Roofing Fitzroy"), which Google still
+        # resolves to the real locality (Fitzroy) by ignoring the service word — so
+        # the raw slug would surface as a garbage "location" name. The canonical
+        # `city` (the locality address-component) strips it back to "Fitzroy", and
+        # the place_id dedupe above then collapses it against the same suburb found
+        # via the nearby search. Other sources keep their authored/clean names.
+        display_name = _names[key]
+        if source == "website" and cg.get("city"):
+            display_name = cg["city"]
         kept.append({
-            "name": _names[key],
+            "name": display_name,
             "lat": lat,
             "lng": lng,
             "bounds": cg.get("bounds"),
