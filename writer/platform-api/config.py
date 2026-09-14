@@ -234,6 +234,17 @@ class Settings(BaseSettings):
         # min keeps the reaper a genuine backstop without firing on a healthy run.
         # (Tiers 1–2 finish well within the default; the override is harmless for them.)
         "coverage_audit": 60,
+        # A whole-client DataForSEO rank refresh fetches one live SERP per keyword
+        # GSC can't cover — a client with ~100 keywords is a ~1h run at healthy
+        # SERP latency, and a DataForSEO degradation (a burst of transient 40101
+        # "Internal SE Server Error"s, each retried with backoff) stretches it well
+        # past the 30-min default. Reaping mid-run requeues from scratch (the
+        # refresh isn't resumable) and re-spends on the keywords already fetched,
+        # and a big keyword set can be reaped before it ever reaches the tail —
+        # observed live on a 96-keyword UMH run. 120 min keeps the reaper a genuine
+        # orphan backstop without firing on a healthy-but-large or briefly-degraded
+        # run. (The durable fix — per-keyword jobs / resume — is a separate change.)
+        "dataforseo_rank": 120,
     }
     # Dedicated worker lane for the (long, blocking) Fanout pipeline jobs, so a
     # ~10-min expansion can't tie up the MAIN lane — which owns the stale-job

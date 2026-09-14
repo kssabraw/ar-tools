@@ -191,6 +191,15 @@ def test_stale_timeout_for_prefers_override(monkeypatch):
     assert job_worker.stale_timeout_for(None) == 30
 
 
+def test_dataforseo_rank_has_stale_timeout_override():
+    # The whole-client DataForSEO rank refresh legitimately runs well past the
+    # 30-min default (one live SERP per keyword; slower during a DataForSEO
+    # degradation), so it must carry an override or the reaper requeues it from
+    # scratch mid-run. Assert the shipped config (not a monkeypatched one).
+    assert settings.job_stale_timeout_overrides.get("dataforseo_rank") == 120
+    assert job_worker.stale_timeout_for("dataforseo_rank") == 120
+
+
 def test_past_timeout_parsing():
     from datetime import datetime, timedelta, timezone
 
