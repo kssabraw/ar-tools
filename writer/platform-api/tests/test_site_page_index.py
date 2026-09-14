@@ -110,6 +110,19 @@ def test_page_match_keys_excludes_content_urls():
     assert spi.page_match_keys("https://fcr.com/") == []
 
 
+def test_is_blog_url_detects_non_page_segments():
+    assert spi.is_blog_url("https://fcr.com/blog/why-roof-restoration-melbourne/") is True
+    assert spi.is_blog_url("https://fcr.com/news/2026/update/") is True
+    assert spi.is_blog_url("https://fcr.com/product/roof-tiles/") is True
+    assert spi.is_blog_url("https://fcr.com/category/roofing/") is True
+    assert spi.is_blog_url("https://fcr.com/privacy/") is True
+    # Genuine service/location landing pages and the homepage are NOT blog URLs.
+    assert spi.is_blog_url("https://fcr.com/roof-restoration-melbourne/") is False
+    assert spi.is_blog_url("https://fcr.com/melbourne/") is False
+    assert spi.is_blog_url("https://fcr.com/") is False
+    assert spi.is_blog_url("") is False
+
+
 # ---------------------------------------------------------------------------
 # build_page_token_index + match_site_page_for_keyword
 # ---------------------------------------------------------------------------
