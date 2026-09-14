@@ -26,12 +26,14 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 
-def run_weekly_board_reports(today: Optional[date] = None) -> dict:
+def run_weekly_board_reports(today: Optional[date] = None, force: bool = False) -> dict:
     """Build + emit all three board reports. Self-gated on
-    ``board_reports_enabled``; each report is isolated so one failing never
-    stops the others. Best-effort — returns a per-report summary, never raises."""
+    ``board_reports_enabled`` for the scheduled path; ``force=True`` (the
+    on-demand "generate now" endpoint) runs regardless of the schedule flag.
+    Each report is isolated so one failing never stops the others. Best-effort —
+    returns a per-report summary, never raises."""
     today = today or date.today()
-    if not settings.board_reports_enabled:
+    if not force and not settings.board_reports_enabled:
         return {"emitted": False, "reason": "disabled"}
 
     from services.board_reports import client_board, director_board, pace_board

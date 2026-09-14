@@ -106,6 +106,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
     queryFn: () => api.get<{ enabled: boolean }>('/strategist/status'),
     staleTime: 5 * 60_000,
   })
+  // Board reports (on-demand "generate now" + the weekly Monday run) — admin-only,
+  // shown once the feature is enabled server-side.
+  const { data: boardReportsStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['board-reports-status-nav'],
+    queryFn: () => api.get<{ enabled: boolean }>('/board-reports/status'),
+    staleTime: 5 * 60_000,
+  })
 
   // Team management is admin-only (matches the /team AdminRoute guard). The PACE
   // action log is admin-only too (it names actors + before/after state) and only
@@ -121,6 +128,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
       : []),
     ...(isAdmin && strategistStatus?.enabled
       ? [{ label: 'SerMaStr Log', to: '/strategist/log', icon: <ScrollText size={18} /> }]
+      : []),
+    ...(isAdmin && boardReportsStatus?.enabled
+      ? [{ label: 'Board Reports', to: '/board-reports', icon: <FileText size={18} /> }]
       : []),
   ]
 

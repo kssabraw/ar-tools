@@ -17,6 +17,7 @@ from routers.activity import router as activity_router
 from routers.asana import router as asana_router
 from routers.assistant import router as assistant_router
 from routers.backlinks import router as backlinks_router
+from routers.board_reports import router as board_reports_router
 from routers.brand import router as brand_router
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
@@ -350,6 +351,7 @@ app.include_router(activity_router)
 app.include_router(asana_router)
 app.include_router(assistant_router)
 app.include_router(backlinks_router)
+app.include_router(board_reports_router)
 app.include_router(brand_router)
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)

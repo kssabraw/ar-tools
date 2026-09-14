@@ -10,6 +10,7 @@ import { Pace } from './pages/Pace'
 import { PaceLog } from './pages/PaceLog'
 import { SermastrLog } from './pages/SermastrLog'
 import { Director } from './pages/Director'
+import { BoardReports } from './pages/BoardReports'
 import { Qa } from './pages/Qa'
 import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
@@ -94,6 +95,7 @@ export default function App() {
                       <Route path="/pace" element={<Pace />} />
                       <Route path="/pace/log" element={<AdminRoute><PaceLog /></AdminRoute>} />
                       <Route path="/strategist/log" element={<AdminRoute><SermastrLog /></AdminRoute>} />
+                      <Route path="/board-reports" element={<AdminRoute><BoardReports /></AdminRoute>} />
                       <Route path="/director" element={<Director />} />
                       <Route path="/qa" element={<Qa />} />
                       <Route path="/backlinks" element={<Backlinks />} />
