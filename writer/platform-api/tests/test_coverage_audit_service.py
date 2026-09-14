@@ -295,6 +295,10 @@ def test_tier_3_is_supported():
     assert 3 in svc.SUPPORTED_TIERS
 
 
+def test_tier_4_is_supported():
+    assert 4 in svc.SUPPORTED_TIERS
+
+
 # --- run_coverage_audit_tier (Tier 3 — CDP location axis wiring) ----------------
 class _FakeQuery:
     """Minimal chainable Supabase query stub that records the coverage_audits update."""
@@ -403,6 +407,136 @@ def test_run_tier_3_uses_cdp_location_axis_and_keeps_location_rows(monkeypatch):
     assert "Roof Restoration Kearny" in hub_keywords
     # The CDP note is surfaced in the degraded-notes banner.
     assert "CDP note" in row["provenance"]["degraded_notes"]
+
+
+# --- run_coverage_audit_tier (Tier 4 — CDP axis × subservice axis wiring) -------
+def test_run_tier_4_uses_cdp_axis_and_subservice_axis_and_drops_location_rows(monkeypatch):
+    """Tier 4 crosses the two existing axes: the census CDP location axis (like Tier
+    3) AND the subservice service axis (like Tier 2). Like Tier 2, it DROPS the
+    location-hub rows (a location-hub gap is a main-service concern), so
+    `location_rows_shown` is False and `missing_locations` is empty. The seed city
+    from the CDP provenance is threaded as the subservice planner's representative
+    city, and the footprint cities are the classifier place vocabulary. Everything
+    external is mocked."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme Roofing", "business_location": "Metropolis,New York,United States",
+                     "gbp": {"website": "https://acme.example"}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
+
+    # CDP location axis + city place-vocab (census_cdp mocked wholesale, like Tier 3).
+    async def _fake_cdp(client, seed_location, code, sb):
+        return (
+            [{"name": "Harrison", "source": "census_cdp"}, {"name": "Kearny", "source": "census_cdp"}],
+            {"kind": "cdp", "seed_city": "Metropolis", "notes": ["CDP note"], "states": ["34"]},
+            ["Metropolis", "Newark"],
+        )
+
+    monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
+
+    async def _fake_scan(website, code, use_paid_fallback=True):
+        return (["https://acme.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+
+    # Main-service derivation (feeds the subservice planner). Capture the place vocab
+    # to prove the footprint cities + CDP names are threaded in.
+    captured: dict = {}
+
+    def _fake_main(client, classified, place_vocab):
+        captured["place_vocab"] = list(place_vocab)
+        return (
+            [{"label": "Roof Restoration", "sources": ["site"]}],
+            {"confirmed": False, "kind": "main_service", "notes": []},
+        )
+
+    monkeypatch.setattr(svc, "_derive_service_axis", _fake_main)
+
+    # Subservice expansion (like Tier 2). Capture the representative city.
+    async def _fake_sub(client, main_axis, representative_city):
+        captured["representative_city"] = representative_city
+        return (
+            [{"label": "Leak Repair", "sources": ["planner"]}, {"label": "Tile Replacement", "sources": ["planner"]}],
+            {"kind": "subservice", "main_services": ["Roof Restoration"], "planned_services": ["Roof Restoration"],
+             "failed_services": [], "notes": []},
+        )
+
+    monkeypatch.setattr(svc, "_derive_subservice_axis", _fake_sub)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 4))
+    assert result["status"] == "complete"
+
+    row = store["audit_update"]
+    assert row["tier"] == 4
+    # Location axis is the CDP list (like Tier 3), not cities.
+    assert [l["name"] for l in row["location_axis"]] == ["Harrison", "Kearny"]
+    assert all(l["source"] == "census_cdp" for l in row["location_axis"])
+    # Service axis is the SUBSERVICE expansion (like Tier 2), not main services.
+    assert [s["label"] for s in row["service_axis"]] == ["Leak Repair", "Tile Replacement"]
+    assert row["provenance"]["service_axis"]["kind"] == "subservice"
+    # Location-hub rows are DROPPED (like Tier 2 — a subservice audit).
+    assert row["provenance"]["location_rows_shown"] is False
+    assert row["gaps"]["missing_locations"] == []
+    # The subservice × CDP cells are still built + seeded (2 subservices × 2 CDPs).
+    assert row["gaps"]["counts"]["cells_total"] == 4
+    # The CDP seed city is the subservice planner's representative city.
+    assert captured["representative_city"] == "Metropolis"
+    # Footprint cities + CDP names are the classifier place vocabulary.
+    assert "Metropolis" in captured["place_vocab"]
+    assert "Newark" in captured["place_vocab"]
+    assert "Harrison" in captured["place_vocab"]
+    # The CDP note is surfaced in the degraded-notes banner.
+    assert "CDP note" in row["provenance"]["degraded_notes"]
+
+
+def test_run_tier_4_override_axis_is_confirmed_subservice(monkeypatch):
+    """An edited (override) service axis is used verbatim for Tier 4 and tagged as a
+    confirmed SUBSERVICE axis (not main_service), mirroring Tier 2."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "Acme Roofing", "business_location": "Metropolis,New York,United States",
+                     "gbp": {"website": "https://acme.example"}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2840)
+
+    async def _fake_cdp(client, seed_location, code, sb):
+        return ([{"name": "Harrison", "source": "census_cdp"}], {"kind": "cdp", "seed_city": "Metropolis", "notes": []}, ["Metropolis"])
+
+    monkeypatch.setattr(svc.census_cdp, "resolve_cdp_axis", _fake_cdp)
+
+    async def _fake_scan(website, code, use_paid_fallback=True):
+        return (["https://acme.example/leak-repair-metropolis/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+
+    result = asyncio.run(
+        svc.run_coverage_audit_tier("audit-1", "client-1", 4, service_axis_override=["Leak Repair", "Tile Replacement"])
+    )
+    assert result["status"] == "complete"
+    row = store["audit_update"]
+    assert [s["label"] for s in row["service_axis"]] == ["Leak Repair", "Tile Replacement"]
+    assert row["provenance"]["service_axis"]["kind"] == "subservice"
+    assert row["provenance"]["service_axis"]["confirmed"] is True
+    # Override tier 4 still drops the location-hub rows.
+    assert row["provenance"]["location_rows_shown"] is False
+    assert row["gaps"]["missing_locations"] == []
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -59,7 +59,9 @@ TIER_MIN = 1
 TIER_MAX = 4
 # Phase 1: Tier 1 (city × main-service). Phase 2: Tier 2 (city × subservice).
 # Phase 3: Tier 3 (CDP × main-service — the census CDP location axis).
-SUPPORTED_TIERS = (1, 2, 3)
+# Phase 4: Tier 4 (CDP × subservice — the CDP location axis crossed with the
+# subservice axis; the largest cross-product, where the demand floor earns its keep).
+SUPPORTED_TIERS = (1, 2, 3, 4)
 
 _AUDIT_COLS = (
     "id, client_id, status, tier, service_axis, location_axis, gaps, provenance, "
@@ -477,16 +479,19 @@ async def run_coverage_audit_tier(
     row with the caches warm.
 
     Tier 1 = city × main-service; Tier 2 = city × subservice; Tier 3 = CDP ×
-    main-service. Tiers 1 and 3 share the MAIN-service axis + the identical grid /
-    diff / demand-rank / matrix-seed path; the ONLY Tier-3 delta is the LOCATION
-    axis — the authoritative Census CDP list for the service area
-    (`census_cdp.resolve_cdp_axis`) instead of `resolve_target_cities`' cities.
-    Tier 2 instead swaps the SERVICE axis (main → subservices) and DROPS the
-    location-hub ("missing cities") rows — a city-hub gap is a Tier-1 question
-    (measured against the MAIN service axis); re-reporting it in a subservice audit
-    would double-count Tier 1 and rank against a keyword absent from this tier's
-    axis. Tiers 1 and 3 KEEP the location-hub rows (a CDP hub IS a main-service
-    concept, so that Tier-1 rationale does not apply)."""
+    main-service; Tier 4 = CDP × subservice. Two orthogonal axes:
+      * LOCATION axis — cities (`resolve_target_cities`) for tiers 1/2, or the
+        authoritative Census CDP list for the service area
+        (`census_cdp.resolve_cdp_axis`) for tiers 3/4.
+      * SERVICE axis — main services for tiers 1/3, or their city-agnostic
+        subservice expansion for tiers 2/4.
+    The location-hub ("missing locations") rows are KEPT for main-service tiers
+    (1/3 — a location hub IS a main-service concept: does a city/CDP have a
+    "<primary main service> <location>" landing page) and DROPPED for subservice
+    tiers (2/4 — a location-hub gap is a Tier-1/3 question measured against the
+    MAIN service axis; re-reporting it in a subservice audit would double-count and
+    rank against a keyword absent from this tier's axis). The grid / diff /
+    demand-rank / matrix-seed path is otherwise identical across every tier."""
     if tier not in SUPPORTED_TIERS:
         raise ValueError(f"unsupported_tier: {tier}")
     supabase = get_supabase()
@@ -498,11 +503,12 @@ async def run_coverage_audit_tier(
 
     # 1) Location axis first — its names are the place vocabulary the classifier
     #    uses to split service vs place tokens.
-    #    Tier 3 swaps cities → the census CDP list, but STILL uses the city names as
-    #    the classifier's place vocabulary (a Tier-3 service page is still
-    #    "/service-city/", so cities — not CDPs — strip its place tokens); the CDP
-    #    names are added to the vocabulary too. All census/geocode — no paid calls.
-    if tier == 3:
+    #    Tiers 3/4 swap cities → the census CDP list, but STILL use the city names as
+    #    the classifier's place vocabulary (a Tier-3/4 service page is still
+    #    "/service-city/" or "/subservice-city/", so cities — not CDPs — strip its
+    #    place tokens); the CDP names are added to the vocabulary too. All
+    #    census/geocode — no paid calls.
+    if tier in (3, 4):
         location_axis, loc_prov, city_vocab = await census_cdp.resolve_cdp_axis(
             client, seed_location, location_code, supabase
         )
@@ -533,12 +539,13 @@ async def run_coverage_audit_tier(
             notes.append("No pages discovered on the site — results may over-report gaps.")
 
     # 3) Classify + derive/confirm the service axis (tier-specific).
-    #    An edited axis (override) is used verbatim for either tier — for Tier 2 the
+    #    An edited axis (override) is used verbatim for any tier — for Tiers 2/4 the
     #    supplied list is the confirmed SUBSERVICE axis. A fresh Tier-1 or Tier-3 run
     #    derives main services (Tier 3 differs only in its LOCATION axis); a fresh
-    #    Tier-2 run derives main services, then expands each into a city-agnostic
-    #    subservice axis (degrading to the main services if the planner is unavailable
-    #    — never aborting).
+    #    Tier-2 or Tier-4 run derives main services, then expands each into a
+    #    city-agnostic subservice axis (Tier 4 differs from Tier 2 only in its LOCATION
+    #    axis), degrading to the main services if the planner is unavailable — never
+    #    aborting.
     classified = core.classify_site_pages(urls, place_vocab)
     seed_city = loc_prov.get("seed_city") or ""
     if service_axis_override is not None:
@@ -549,12 +556,12 @@ async def run_coverage_audit_tier(
         ]
         svc_prov: dict = {
             "confirmed": True,
-            "kind": "subservice" if tier == 2 else "main_service",
+            "kind": "subservice" if tier in (2, 4) else "main_service",
             "notes": ["Service axis edited and confirmed by the team."],
         }
     elif tier in (1, 3):
         service_axis, svc_prov = _derive_service_axis(client, classified, place_vocab)
-    else:  # tier == 2 — expand main services into a city-agnostic subservice axis
+    else:  # tiers 2/4 — expand main services into a city-agnostic subservice axis
         main_axis, main_prov = _derive_service_axis(client, classified, place_vocab)
         sub_axis, sub_prov = await _derive_subservice_axis(client, main_axis, seed_city)
         combined_notes = list(main_prov.get("notes") or []) + list(sub_prov.get("notes") or [])
@@ -584,15 +591,16 @@ async def run_coverage_audit_tier(
     notes.extend(svc_prov.get("notes") or [])
 
     # 4) Build the AXES-ONLY report grid + diff.
-    #    The location-hub keyword uses the primary MAIN service for Tier 1; Tier 2
-    #    drops location rows entirely (below), so it needs no primary and passes None.
+    #    The location-hub keyword uses the primary MAIN service for the main-service
+    #    tiers (1/3); the subservice tiers (2/4) drop location rows entirely (below),
+    #    so they need no primary and pass None.
     site_index = {
         "token_index": site_page_index.build_page_token_index(urls),
         "location_index": site_page_index.build_location_slug_index(urls),
     }
     in_tool_index = _in_tool_index(client_id)
     # Tiers 1 and 3 carry location-hub rows keyed on the primary MAIN service
-    # ("<primary service> <location>"); Tier 2 drops them (below) and passes None.
+    # ("<primary service> <location>"); Tiers 2/4 drop them (below) and pass None.
     primary_service = (
         str(service_axis[0]["label"]) if (tier in (1, 3) and service_axis) else None
     )
@@ -600,13 +608,14 @@ async def run_coverage_audit_tier(
         service_axis, location_axis, site_index, in_tool_index, primary_service=primary_service
     )
     diff = core.diff_coverage(grid)
-    if tier == 2:
-        # Location-hub rows are a Tier-1 concern (does a city have a main-service
-        # landing page), measured against the MAIN service axis — so a subservice
-        # audit drops them (re-reporting would double-count Tier 1 and rank against a
-        # keyword absent from this tier's axis). Dropping them also keeps the demand
-        # fetch from spending on hub keywords this tier won't show. Tier 3 KEEPS them
-        # (a CDP hub IS a main-service concept). Decision recorded in provenance.
+    if tier in (2, 4):
+        # Location-hub rows are a main-service concern (does a city/CDP have a
+        # main-service landing page), measured against the MAIN service axis — so a
+        # subservice audit (Tier 2 = city, Tier 4 = CDP) drops them (re-reporting
+        # would double-count the Tier-1/3 audit and rank against a keyword absent from
+        # this tier's axis). Dropping them also keeps the demand fetch from spending on
+        # hub keywords this tier won't show. Tiers 1/3 KEEP them (a location hub IS a
+        # main-service concept). Decision recorded in provenance.
         diff["missing_locations"] = []
 
     # 5) Demand — reserve before spend, cache-idempotent.
@@ -646,9 +655,10 @@ async def run_coverage_audit_tier(
         "location_axis": loc_prov,
         "scan": {"url_count": len(urls), "source": source, "website": website},
         "demand": {"available": demand_available, "location_code": location_code},
-        # Tier 2 shows subservice + subservice×city gaps only; the location-hub
-        # ("missing cities") rows are a Tier-1 concern (plan §7 / handoff open item,
-        # resolved in Phase 2). Tiers 1 and 3 keep them (a CDP hub IS a main-service
+        # Subservice tiers (2/4) show subservice + subservice×location cell gaps only;
+        # the location-hub ("missing locations") rows are a main-service concern (plan
+        # §7 / handoff open item, resolved in Phase 2 for Tier 2 and mirrored for Tier
+        # 4 in Phase 4). Tiers 1 and 3 keep them (a location hub IS a main-service
         # concept). The frontend keys the location stat + table off this.
         "location_rows_shown": tier in (1, 3),
         "degraded_notes": degraded_notes,

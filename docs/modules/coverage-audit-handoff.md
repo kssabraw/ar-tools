@@ -2,7 +2,7 @@
 
 **Module slug:** `coverage_audit` · **Authoritative plan:** `docs/modules/coverage-audit-module-plan-v1_0.md` (design authority; owner decisions §0; adversarial-review findings + resolutions §8).
 
-**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green). **Phase 3 (Tier 3: CDP × main-service) MERGED** (PR #1076 — all CI green: platform-api tests + lint & typecheck + Netlify; squash-merged to `main` as `fc1afa5`; the new census CDP integration, worker-only; migration `20260914130000_coverage_audit_cdp_cache.sql` applied live). **Next step is Phase 4 (Tier 4: CDP × subservice — cross the CDP axis with the subservice axis).**
+**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green). **Phase 3 (Tier 3: CDP × main-service) MERGED** (PR #1076 — all CI green: platform-api tests + lint & typecheck + Netlify; squash-merged to `main` as `fc1afa5`; the new census CDP integration, worker-only; migration `20260914130000_coverage_audit_cdp_cache.sql` applied live). **Phase 4 (Tier 4: CDP × subservice) BUILT — draft PR open.** **The module is FEATURE-COMPLETE — all four tiers ship.** Remaining work is calibration + one live worker verification (see "Feature-complete — remaining follow-ups" below).
 
 > ⚠️ **The live TIGERweb CDP query is UNVERIFIED from the sandbox** (census.gov is egress-blocked, same as `census_demand.py` / `leadoff_geocode.py`). The pure decision helpers around it are unit-tested; the enumeration query itself must be confirmed on the deployed Railway worker now that it's merged — run a Tier-3 audit on a US client with a `business_location` + `GOOGLE_MAPS_API_KEY` set, and check the run's `provenance.location_axis` (for a Tier-3 run this is the CDP provenance: `kind:"cdp"` + states / counties / candidate+verified counts + notes) and the `census_cdp_cache` rows (one per state). If `pick_cdp_layer` mis-selects the layer or the `STATE='SS'` query shape is wrong, the tier degrades with a visible note (never aborts) — check `census_cdp.*` logs on the worker.
 
@@ -131,21 +131,39 @@ CDP enumeration is **genuinely new engineering** (plan §0.3 / §3.2 / §8 Major
 
 Did NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
 
-## Phase 4 scope (the next chat's job) — Tier 4: CDP × subservice
+## Phase 4 — BUILT (Tier 4: CDP × subservice — the last tier)
 
-The last tier, and where the demand floor earns its keep — the CDP × subservice cross-product is the largest of the four. The two axes both already exist; Phase 4 just crosses them:
+The largest cross-product, and where the demand floor earns its keep. **Pure wiring — no new census integration, no new engineering, no new migration.** Tier 4 crosses the two axes that both already exist: the CDP location axis (Tier 3) × the subservice service axis (Tier 2). Verified against the full live constraint set: `coverage_audits.tier` has no CHECK, `async_jobs` job_type already includes `coverage_audit`, and Tier 4 reuses the Tier-3 `census_cdp_cache` + the Phase-0 `coverage_audits`/`coverage_audit_usage`/`reserve_coverage_audit_calls` RPC — no migration applied.
 
-1. **Location axis = CDPs** (reuse `census_cdp.resolve_cdp_axis` exactly as Tier 3 — no census change).
-2. **Service axis = subservices** (reuse `_derive_subservice_axis` exactly as Tier 2 — expand each main service into its city-agnostic variations).
-3. **Add `4` to `SUPPORTED_TIERS`** and branch `run_coverage_audit_tier`: tier 4 = the CDP location branch (like tier 3) + the subservice service branch (like tier 2). The location-hub decision follows **Tier 2's** rationale, not Tier 3's — a subservice audit drops the location-hub ("missing CDPs") rows (measured against the main-service axis, a different tier), so `location_rows_shown` should be `False` for tier 4 and `diff["missing_locations"] = []` (the current `if tier == 2:` guard becomes `if tier in (2, 4):`). Confirm this — it's the mirror of the Tier-2 decision, applied to the CDP location universe.
-4. **The demand floor (`coverage_cell_volume_min`) is the primary defense** against the CDP × subservice tail — it's already wired on cells; calibrate it (and `coverage_cdp_max`) from the first live Tier-3/4 CDP runs.
-5. **Frontend:** add a **T4** tier selector chip; the report is already tier-agnostic (subservice labels come from `isSubservice = reportTier === 2` — extend to `reportTier % 2 === 0` or `reportTier in (2, 4)`; CDP location noun comes from `isCdp = reportTier === 3` — extend to `reportTier in (3, 4)`).
+**Backend (`services/coverage_audit_service.py`, `run_coverage_audit_tier`):**
+- `SUPPORTED_TIERS = (1, 2, 3, 4)`.
+- **Location axis** — the CDP branch extended `if tier == 3:` → `if tier in (3, 4):`, so tier 4 resolves the census CDP axis exactly like tier 3 (`census_cdp.resolve_cdp_axis`, `place_vocab = city_vocab + CDP names`). Cities stay the classifier place-vocab (a Tier-4 subservice page is still `/<subservice>-<city>/`).
+- **Service axis** — the fresh-derive subservice branch (`else:`) now runs for tiers 2/4: it derives main services, then `_derive_subservice_axis(client, main_axis, representative_city=seed_city)` where `seed_city = loc_prov.get("seed_city")` — for tier 4 that comes from `census_cdp`'s provenance (confirmed it carries `seed_city`). The main-service branch stays `elif tier in (1, 3):`. The override (edited-axis) kind extended `"subservice" if tier == 2` → `tier in (2, 4)`, so an edited Tier-4 axis is tagged `subservice` + `confirmed`.
+- **Location-hub rows DROPPED** (follows Tier 2's rationale, not Tier 3's): a subservice audit measures against the main-service axis, so the `if tier == 2:` guard that sets `diff["missing_locations"] = []` extended to `if tier in (2, 4):`. `location_rows_shown = tier in (1, 3)` (tier 4 → False, unchanged) and `primary_service` set only for `tier in (1, 3)` (tier 4 → None, unchanged) — both already excluded tier 4, so only verified.
 
-No new census integration, no new migration expected (Tier 4 reuses the Tier-3 `census_cdp_cache` + the Phase-0 tables/RPC/`coverage_audit` job type — re-verify against the live constraint set as always). Do NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
+**Router** — no change (validation reads `SUPPORTED_TIERS`; start / edit-axis re-run / seed-matrix already thread the run's tier).
+
+**Frontend (`pages/CoverageAudit.tsx`):** a **T4** tier selector chip (label "CDPs · subservices", title "CDP × subservice", via new `tierLabel`/`tierTitle` maps); `isSubservice = reportTier === 2 || reportTier === 4`; `isCdp = reportTier === 3 || reportTier === 4`; `showLocations` default off for tiers 2/4; description paragraph gained the Tier-4 line. So T4 composes "Subservice × CDP cells", "Missing subservices", CDP location nouns, and drops the missing-locations table.
+
+**Guardrails held (not touched):** the demand FLOOR (`coverage_cell_volume_min`) — the primary defense against the CDP × subservice tail, matters most at this tier — is still wired on cells; the axes-only seed contract; the per-tier job decomposition (one `coverage_audit` job per tier, the 60-min stale-timeout override already covers CDP geocoding); reserve-before-spend + cache-idempotent (CDP resolution has no paid calls; the demand fetch is the only metered step); best-effort/degrade-never-abort.
+
+**Tests:** `tests/test_coverage_audit_service.py` — `test_tier_4_is_supported`, `test_run_tier_4_uses_cdp_axis_and_subservice_axis_and_drops_location_rows` (CDP location axis, SUBSERVICE service axis, location-hub rows DROPPED + `missing_locations == []`, `location_rows_shown` False, seed city threaded as the subservice representative city, footprint cities + CDP names in the place-vocab, subservice × CDP cells built), and `test_run_tier_4_override_axis_is_confirmed_subservice`.
+
+> ⚠️ Tier 4 reuses Tier 3's `census_cdp.py`, whose live TIGERweb CDP enumeration query is **still unverified from the sandbox** (census.gov egress-blocked). It needs the same deployed-worker check as Tier 3 — run a Tier-3 or Tier-4 audit on a US client with `business_location` + `GOOGLE_MAPS_API_KEY` and inspect `provenance.location_axis` + the `census_cdp_cache` rows.
 
 ---
 
-## Open items (plan §7 — none block Phase 3)
+## Feature-complete — remaining follow-ups (calibration + one live check; none blocked build)
+
+All four tiers ship. What's left is measurement, not engineering:
+
+- **Live TIGERweb CDP-query worker check** (inherited from Phase 3, still open) — the census CDP enumeration is not sandbox-verifiable. Confirm on the deployed worker (a Tier-3/4 run on a US client with `business_location` + `GOOGLE_MAPS_API_KEY`); check `census_cdp.*` logs + the `census_cdp_cache` rows if the axis degrades.
+- **Calibrate the placeholders from a first live CDP run:** `coverage_cell_volume_min` (10 — matters MOST at Tier 4, the largest cross-product), `coverage_cdp_max` (60), `coverage_cdp_cache_days` (365), and the daily ceiling `coverage_audit_daily_call_budget` (200). All are `config.py` env-tunable — recalibrate, don't change defaults blindly.
+- **Refresh cadence** — still on-demand only (no scheduled monthly re-audit yet). A deliberate v1 scope choice.
+
+---
+
+## Open items (plan §7)
 
 - Module name (kept "Coverage Audit").
 - ~~Location-hub keyword~~ — **RESOLVED (Phase 1):** `"<primary main service> <city>"`.
@@ -153,6 +171,7 @@ No new census integration, no new migration expected (Tier 4 reuses the Tier-3 `
 - ~~Tier-2 location-row question~~ — **RESOLVED (Phase 2):** subservice audits show subservice + cell gaps only; location-hub rows dropped (a Tier-1 concern). See the Phase 2 section.
 - ~~CDP county scope~~ — **RESOLVED (Phase 3):** city-anchored (Scope B) — the counties the resolved footprint cities sit in scope which states are enumerated; the geocode-verified footprint containment decides membership. See the Phase 3 "Decisions made this phase".
 - ~~Tier-3 location-row question~~ — **RESOLVED (Phase 3):** KEPT (like Tier 1 — a CDP hub is a main-service concept). See the Phase 3 section.
+- ~~Tier-4 location-row question~~ — **RESOLVED (Phase 4):** DROPPED (mirrors Tier 2 — a CDP × subservice audit measures against the main-service axis, so re-reporting a location-hub gap would double-count Tier 3 and rank against a keyword absent from this tier's axis). `location_rows_shown = False`, `diff["missing_locations"] = []`. See the Phase 4 section.
 - Refresh cadence (on-demand v1 vs. monthly scheduled re-audit) — still on-demand only.
 - Calibrate `coverage_cell_volume_min` + the daily ceiling + `coverage_cdp_max`/`coverage_cdp_cache_days` from a first live run (all placeholders — 10 / 200 / 60 / 365).
 
