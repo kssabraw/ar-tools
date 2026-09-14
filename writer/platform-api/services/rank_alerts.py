@@ -31,6 +31,7 @@ from datetime import date, timedelta
 from statistics import mean
 from typing import Optional, Sequence
 
+from config import settings
 from services.rank_status import DatePoint, _sorted_points, _to_date
 
 logger = logging.getLogger(__name__)
@@ -248,13 +249,28 @@ def detect_alerts(
     """
     signals: list[AlertSignal] = []
 
-    # deindexed — reuse the established deindex_risk signal (GSC-only by nature).
+    # deindexed — the sustained-null presence signal from rank_status. Word it by
+    # the keyword's PRIMARY source: a GSC-covered keyword disappeared from GSC
+    # impressions; a DataForSEO-only keyword (no verified GSC property) stopped
+    # appearing in the fetched SERP, so say THAT rather than blaming GSC
+    # impressions the client doesn't have (source is set to the real source too).
     if status == "deindex_risk":
+        if primary == "gsc":
+            deindex_source = "gsc"
+            deindex_message = (
+                f'"{keyword}" may be deindexed — sustained days with no GSC impressions.'
+            )
+        else:
+            deindex_source = primary if primary == "dataforseo" else "dataforseo"
+            deindex_message = (
+                f'"{keyword}" may be deindexed — not appearing in the top '
+                f"{settings.dataforseo_serp_depth} Google results over multiple consecutive checks."
+            )
         signals.append(
             AlertSignal(
                 alert_type="deindexed",
-                source="gsc",
-                message=f'"{keyword}" may be deindexed — sustained days with no GSC impressions.',
+                source=deindex_source,
+                message=deindex_message,
             )
         )
 

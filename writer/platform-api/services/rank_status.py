@@ -12,11 +12,18 @@ deliberately conservative tunables (PRD §12).
 from __future__ import annotations
 
 from datetime import date
-from statistics import mean
+from statistics import mean, median
 from typing import Optional, Sequence, Union
 
 # --- Tunable thresholds (start conservative; expose as config later) --------
-DEINDEX_CONSECUTIVE_DAYS = 7   # trailing NULL days that trip deindex_risk
+DEINDEX_CONSECUTIVE_DAYS = 7   # trailing NULL days that trip deindex_risk (daily/GSC cadence)
+# Sparse (e.g. weekly DataForSEO) series are null on most calendar days BY
+# DESIGN — one real observation per fetch cycle — so a flat 7-calendar-day rule
+# trips deindex_risk off a single missed/failed weekly check. Instead require
+# this many consecutive MISSED observations (the trailing null run must span
+# ≥ observed-interval × this), so a weekly keyword needs ~2 null weekly checks,
+# while a daily GSC keyword (interval 1) still needs 7 (the floor above wins).
+DEINDEX_MIN_MISSED_OBSERVATIONS = 2
 BASELINE_MIN_DAYS = 5          # non-null days required to count as "established"
 TREND_THRESHOLD = 3.0          # avg-position delta (positions) for climb/drop
 VOLATILE_RANGE_THRESHOLD = 10.0  # recent peak-to-trough swing → volatile
@@ -41,6 +48,28 @@ def _trailing_null_count(points: Sequence[tuple[date, Optional[float]]]) -> int:
         else:
             break
     return count
+
+
+def observation_interval(points: Sequence[tuple[date, Optional[float]]]) -> int:
+    """Typical day-gap between consecutive non-null observations (>=1).
+
+    Self-calibrates the deindex threshold to a keyword's real fetch cadence
+    without threading config: ~1 for daily GSC, ~7 for a weekly DataForSEO
+    fallback. Uses the median gap so a couple of irregular spacings don't skew
+    it. Returns 1 when there are fewer than two non-null points."""
+    dates = [d for d, p in _sorted_points(points) if p is not None]
+    if len(dates) < 2:
+        return 1
+    gaps = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
+    gaps = [g for g in gaps if g > 0]
+    return max(1, int(median(gaps))) if gaps else 1
+
+
+def _deindex_threshold_days(points: Sequence[tuple[date, Optional[float]]]) -> int:
+    """Trailing-null days that trip deindex_risk, cadence-aware: the larger of
+    the daily floor and (observed interval × the missed-observation count)."""
+    interval = observation_interval(points)
+    return max(DEINDEX_CONSECUTIVE_DAYS, interval * DEINDEX_MIN_MISSED_OBSERVATIONS)
 
 
 DIRECTION_THRESHOLD = 0.5  # min net move (positions) before the arrow tilts up/down
@@ -83,9 +112,11 @@ def _special_status(series: Sequence[DatePoint]) -> Optional[str]:
     if not non_null:
         return "no_data"
     # Sustained disappearance after an established baseline = deindex signature.
+    # The threshold is cadence-aware (see _deindex_threshold_days): a sparse
+    # weekly series needs ~2 consecutive null weekly checks, not 7 calendar days.
     if (
         len(non_null) >= BASELINE_MIN_DAYS
-        and _trailing_null_count(points) >= DEINDEX_CONSECUTIVE_DAYS
+        and _trailing_null_count(points) >= _deindex_threshold_days(points)
     ):
         return "deindex_risk"
     return None

@@ -38,6 +38,47 @@ def test_status_not_deindex_without_baseline():
     assert rank_status.compute_status(series) == "no_data" or rank_status.compute_status(series) == "stable"
 
 
+def _weekly_series(num_obs, trailing_null_days, rank=6, end=date(2026, 6, 22)):
+    """Daily axis with a non-null rank every 7th day (weekly DataForSEO cadence),
+    null on the days between, then `trailing_null_days` trailing null days.
+
+    Mirrors the materialized axis: a row per calendar day, non-null only on the
+    weekly fetch days."""
+    last_obs = end - timedelta(days=trailing_null_days)
+    first_obs = last_obs - timedelta(days=7 * (num_obs - 1))
+    points = []
+    d = first_obs
+    while d <= end:
+        offset = (d - first_obs).days
+        points.append((d, rank if (d <= last_obs and offset % 7 == 0) else None))
+        d += timedelta(days=1)
+    return points
+
+
+def test_observation_interval_infers_cadence():
+    daily = _series([5] * 10)
+    assert rank_status.observation_interval(daily) == 1
+    weekly = _weekly_series(6, 0)  # six weekly observations, no trailing nulls
+    assert rank_status.observation_interval(weekly) == 7
+
+
+def test_weekly_deindex_needs_two_missed_checks_not_one():
+    # One missed weekly check (7 trailing null days) must NOT trip deindex_risk
+    # for a weekly-cadence keyword — that is a single not-found/failed fetch, and
+    # the old 7-calendar-day rule false-positived on exactly this (UMH inkerman).
+    one_missed = _weekly_series(6, 7)
+    assert rank_status.compute_status(one_missed) != "deindex_risk"
+    # Two consecutive missed weekly checks (14 trailing null days) does trip it.
+    two_missed = _weekly_series(6, 14)
+    assert rank_status.compute_status(two_missed) == "deindex_risk"
+
+
+def test_daily_deindex_unchanged_by_cadence_awareness():
+    # A daily (GSC) keyword's threshold is still the 7-day floor.
+    assert rank_status.compute_status(_series([10] * 20 + [None] * 7)) == "deindex_risk"
+    assert rank_status.compute_status(_series([10] * 20 + [None] * 6)) != "deindex_risk"
+
+
 def test_status_climbing():
     # Positions improving from ~20 down to ~5 (lower is better).
     series = _series([20, 19, 18, 16, 14, 12, 10, 8, 6, 5])

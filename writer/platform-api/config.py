@@ -744,6 +744,15 @@ class Settings(BaseSettings):
     dataforseo_serp_depth: int = 100  # find rank within the top 100, else "not ranking"
     dataforseo_default_location_code: int = 2840  # United States
     dataforseo_default_language_code: str = "en"
+    # DataForSEO fallback fetch reliability. The live SERP endpoint intermittently
+    # returns a task-level error inside an HTTP 200 (throttle/limit/server), which
+    # would otherwise drop that keyword for the whole run with no retry. Retry such
+    # transient failures per keyword with bounded exponential backoff before
+    # giving up. `max_retries` is retries AFTER the first attempt (2 ⇒ up to 3
+    # tries). Auth/payment task errors are terminal and abort the run instead.
+    dataforseo_rank_max_retries: int = 2
+    dataforseo_rank_retry_base_seconds: float = 2.0
+    dataforseo_rank_retry_cap_seconds: float = 20.0
     # Keyword market data (CPC / volume / competition): Google Ads numbers
     # refresh monthly, so re-fetch only when a keyword's cached row is older
     # than this many days (or missing).

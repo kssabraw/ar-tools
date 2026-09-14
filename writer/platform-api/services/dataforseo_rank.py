@@ -12,9 +12,11 @@ gsc_position — the two columns are never reconciled (PRD §2/§5).
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import calendar
 import logging
+from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 from urllib.parse import urlparse
@@ -45,6 +47,135 @@ def _auth_header() -> dict[str, str]:
     creds = f"{settings.dataforseo_login}:{settings.dataforseo_password}"
     encoded = base64.b64encode(creds.encode()).decode()
     return {"Authorization": f"Basic {encoded}", "Content-Type": "application/json"}
+
+
+# ----------------------------------------------------------------------------
+# Transient-error classification + per-keyword retry.
+#
+# The live SERP endpoint returns a task-level error INSIDE an HTTP 200 body
+# (observed live 2026-09-13: ~42% of a client's keywords failed this way in one
+# run, spread evenly across it — i.e. intermittent throttle/limit, not a hard
+# quota wall). Without a retry each such keyword is dropped for the whole run,
+# which — for a weekly-cadence keyword that's null 6/7 days by design — reads
+# downstream as a full null week and can trip a false deindex signal. So retry
+# transient failures per keyword; fail fast (and abort the run) only on the
+# auth/payment codes that will hit every keyword.
+# ----------------------------------------------------------------------------
+# DataForSEO task status_codes that mean "this will fail for EVERY keyword"
+# (bad credentials / no balance). Aborting the run on these is cheaper and
+# clearer than failing 96 keywords one at a time.
+_TERMINAL_TASK_CODES = frozenset({
+    40100, 40101, 40102, 40103,  # authentication / access denied
+    40200, 40201,                # payment required / insufficient funds
+})
+# HTTP statuses worth retrying (rate limit + transient server errors).
+_RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
+
+
+class DataForSeoTaskError(RuntimeError):
+    """A DataForSEO task-level error (HTTP 200 body, task status_code >= 40000).
+
+    Subclasses RuntimeError so existing broad `except`s keep working; carries the
+    task `status_code`/`status_message` so the caller can classify + surface it.
+    """
+
+    def __init__(self, status_code: int, status_message: str = ""):
+        self.status_code = int(status_code or 0)
+        self.status_message = status_message or ""
+        super().__init__(f"dataforseo_serp_error {self.status_code}: {self.status_message}")
+
+
+class DataForSeoTerminalError(DataForSeoTaskError):
+    """An auth/payment task error — it will hit every keyword, so abort the run."""
+
+
+def is_terminal_task_code(code: int) -> bool:
+    """True for auth/payment task codes that should abort the whole run."""
+    return int(code or 0) in _TERMINAL_TASK_CODES
+
+
+def is_retryable_exc(exc: Exception) -> bool:
+    """Whether a fetch failure is transient (retry) vs terminal/permanent (skip).
+
+    Non-terminal task errors (throttle/limit/generic/5xxxx server) and httpx
+    transport / 429 / 5xx are transient; a terminal task error, a non-retryable
+    HTTP status, or any other exception is not.
+    """
+    if isinstance(exc, DataForSeoTerminalError):
+        return False
+    if isinstance(exc, DataForSeoTaskError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in _RETRYABLE_HTTP_STATUS
+    if isinstance(exc, httpx.TransportError):  # timeouts, connect/read/protocol errors
+        return True
+    return False
+
+
+def retry_delay_seconds(attempt: int, base: float, cap: float) -> float:
+    """Exponential backoff for a 1-based attempt: ``base * 2**(attempt-1)``,
+    clamped to ``[base, cap]``. Pure."""
+    base_f = max(0.1, float(base))
+    cap_f = max(base_f, float(cap))
+    n = max(1, int(attempt))
+    shift = min(n - 1, 20)  # bound the exponent; the min() clamps anyway
+    return min(cap_f, base_f * (2 ** shift))
+
+
+def build_failure_summary(failed: list[dict], *, sample: int = 10) -> dict:
+    """Compact per-run fetch-failure summary for the job result / observability.
+
+    `failed` is a list of ``{keyword, status_code, error}``. Returns the failure
+    count, the dominant status codes (count-desc), and a bounded keyword sample —
+    so a run that dropped a large fraction of keywords is visible in the job
+    record, not only in the logs. Pure.
+    """
+    codes = Counter(int(f.get("status_code") or 0) for f in failed)
+    return {
+        "count": len(failed),
+        "status_codes": {str(code): n for code, n in codes.most_common()},
+        "sample": [
+            {"keyword": f.get("keyword"), "status_code": int(f.get("status_code") or 0)}
+            for f in failed[: max(0, sample)]
+        ],
+    }
+
+
+async def fetch_serp_rank_with_retry(
+    keyword: str,
+    domain: str,
+    location_code: int,
+    *,
+    max_retries: Optional[int] = None,
+    fetch=None,
+    sleep=None,
+) -> Optional[int]:
+    """`fetch_serp_rank` with bounded exponential backoff on transient errors.
+
+    Retries transient DataForSEO task errors (throttle/limit/server) and httpx
+    transport / 429 / 5xx failures up to `max_retries` times (default from
+    config). A terminal (auth/payment) task error or any other non-transient
+    failure re-raises immediately. `fetch`/`sleep` are injectable for tests.
+    """
+    fetch = fetch or fetch_serp_rank
+    sleep = sleep or asyncio.sleep
+    retries = settings.dataforseo_rank_max_retries if max_retries is None else max_retries
+    base = settings.dataforseo_rank_retry_base_seconds
+    cap = settings.dataforseo_rank_retry_cap_seconds
+    attempt = 0
+    while True:
+        try:
+            return await fetch(keyword, domain, location_code)
+        except Exception as exc:  # noqa: BLE001 — classify, re-raise if terminal
+            attempt += 1
+            if attempt > retries or not is_retryable_exc(exc):
+                raise
+            delay = retry_delay_seconds(attempt, base, cap)
+            logger.warning(
+                "dataforseo_rank_retry keyword=%s attempt=%s delay_s=%s error=%s",
+                keyword, attempt, round(delay, 1), str(exc)[:200],
+            )
+            await sleep(delay)
 
 
 # ----------------------------------------------------------------------------
@@ -183,9 +314,16 @@ async def fetch_serp_rank(keyword: str, domain: str, location_code: int) -> Opti
         body = resp.json()
 
     tasks = body.get("tasks") or []
-    if not tasks or (tasks[0].get("status_code") or 0) >= 40000:
-        raise RuntimeError(f"dataforseo_serp_error: {tasks[0].get('status_message') if tasks else 'no tasks'}")
-    items = (tasks[0].get("result") or [{}])[0].get("items") or []
+    if not tasks:
+        raise DataForSeoTaskError(0, "no tasks in response")
+    task = tasks[0]
+    code = int(task.get("status_code") or 0)
+    if code >= 40000:
+        msg = task.get("status_message") or ""
+        if is_terminal_task_code(code):
+            raise DataForSeoTerminalError(code, msg)
+        raise DataForSeoTaskError(code, msg)
+    items = (task.get("result") or [{}])[0].get("items") or []
     return find_rank_in_items(items, domain)
 
 
@@ -336,6 +474,8 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
         by_keyword.setdefault(row["keyword_id"], []).append(row)
 
     fetched = skipped = failed = 0
+    failed_details: list[dict] = []
+    terminal_error: Optional[dict] = None
     for kw in keywords:
         covered = gsc_available and is_gsc_covered(
             by_keyword.get(kw["id"], []), today, settings.rank_gsc_coverage_days
@@ -344,10 +484,26 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
             skipped += 1
             continue
         try:
-            rank = await fetch_serp_rank(kw["keyword"], domain, location_code)
-        except Exception as exc:
+            rank = await fetch_serp_rank_with_retry(kw["keyword"], domain, location_code)
+        except DataForSeoTerminalError as exc:
+            # Auth/payment: every remaining keyword would fail the same way — stop
+            # now, and leave the fetch clock untouched so the next tick retries.
+            terminal_error = {"status_code": exc.status_code, "error": exc.status_message[:200]}
+            logger.error(
+                "dataforseo_rank_terminal client_id=%s keyword=%s status_code=%s error=%s aborting_run",
+                client_id, kw["keyword"], exc.status_code, exc.status_message[:200],
+            )
+            break
+        except Exception as exc:  # noqa: BLE001 — transient exhausted / non-retryable: skip this keyword
             failed += 1
-            logger.warning("dataforseo_rank_failed", extra={"keyword": kw["keyword"], "error": str(exc)})
+            code = int(getattr(exc, "status_code", 0) or 0)
+            failed_details.append({"keyword": kw["keyword"], "status_code": code, "error": str(exc)[:200]})
+            # Inline (not extra=): basicConfig formats only %(message)s, so anything
+            # passed via extra never reaches the logs — name the keyword + code here.
+            logger.warning(
+                "dataforseo_rank_failed keyword=%s status_code=%s error=%s",
+                kw["keyword"], code, str(exc)[:200],
+            )
             continue
         supabase.table("rank_keyword_metrics").upsert(
             {"keyword_id": kw["id"], "date": today.isoformat(), "tracked_rank": rank},
@@ -359,21 +515,34 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
     # since the last real pull" and a weekly/monthly fetch can't double-fire the
     # same day — whether triggered by the scheduler or a manual refresh. Skip the
     # stamp when EVERY attempt errored (transient DataForSEO outage — nothing
-    # fetched): leaving last_fetched_at unchanged lets the next interval tick
-    # retry instead of waiting a full cycle on a bad day. (fetched>0, or a pull
-    # with nothing to do because all keywords are GSC-covered, both stamp.)
-    if not (fetched == 0 and failed > 0):
+    # fetched) or the run aborted on a terminal error: leaving last_fetched_at
+    # unchanged lets the next interval tick retry instead of waiting a full cycle
+    # on a bad day. (fetched>0, or a pull with nothing to do because all keywords
+    # are GSC-covered, both stamp.)
+    if terminal_error is None and not (fetched == 0 and failed > 0):
         now_iso = datetime.now(timezone.utc).isoformat()
         supabase.table("rank_fetch_config").upsert(
             {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso},
             on_conflict="client_id",
         ).execute()
 
+    result: dict = {
+        "status": "failed" if terminal_error else "ok",
+        "fetched": fetched,
+        "skipped": skipped,
+        "failed": failed,
+    }
+    if failed_details:
+        result["failures"] = build_failure_summary(failed_details)
+    if terminal_error:
+        result["error"] = f"dataforseo_terminal_{terminal_error['status_code']}"
+        result["terminal"] = terminal_error
+
     logger.info(
-        "dataforseo_rank_complete",
-        extra={"client_id": client_id, "fetched": fetched, "skipped": skipped, "failed": failed},
+        "dataforseo_rank_complete client_id=%s fetched=%s skipped=%s failed=%s terminal=%s",
+        client_id, fetched, skipped, failed, bool(terminal_error),
     )
-    return {"status": "ok", "fetched": fetched, "skipped": skipped, "failed": failed}
+    return result
 
 
 def enqueue_dataforseo_rank(client_id: str) -> str:
