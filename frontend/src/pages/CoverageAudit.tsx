@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ArrowRight, LayoutGrid, RefreshCw, AlertTriangle, Download, Pencil } from 'lucide-react'
@@ -127,6 +127,15 @@ export function CoverageAudit() {
   const [axisDraft, setAxisDraft] = useState('')
   const [seedError, setSeedError] = useState<string | null>(null)
   const [sitemapUrl, setSitemapUrl] = useState('')
+
+  // Seed the sitemap-override field from the latest run's setting so a plain
+  // "Re-run" preserves the override (clearing it opts back into auto-discovery).
+  // Re-seeds when a new run lands (id changes) or the tier switches.
+  const latestSitemap = status?.latest?.sitemap_url ?? ''
+  const latestRunId = status?.latest?.id
+  useEffect(() => {
+    setSitemapUrl(latestSitemap)
+  }, [latestRunId, latestSitemap, tier])
 
   // The audit runs as a background async_jobs job (one per tier). The in-flight
   // job id is persisted per tier so navigating away — or switching tiers — and back
