@@ -200,6 +200,29 @@ async def _resolve_center(client: dict, supabase) -> Optional[tuple[float, float
     return None
 
 
+async def _seed_from_center(center: tuple[float, float], supabase) -> Optional[str]:
+    """Reverse-geocode the business center to a clean ``"City, State"`` seed string,
+    so the location axis is driven by the coordinates rather than by parsing the
+    ``business_location`` text — a full street address (e.g. "117 Newry St, Carlton
+    North VIC 3054, Australia") misparses into a garbage seed city ("117 Newry St")
+    that then poisons the nearby-suburb geocoding. Reuses the cached
+    ``maps_geocode.reverse_geocode_points``. Returns None when reverse-geocoding
+    yields no locality (→ keep the raw seed)."""
+    try:
+        pts = await maps_geocode.reverse_geocode_points(
+            [{"lat": center[0], "lng": center[1]}], supabase=supabase
+        )
+    except Exception as exc:  # noqa: BLE001 — best-effort; falls back to the raw seed
+        logger.warning("coverage_audit.seed_reverse_geocode_failed", extra={"error": str(exc)})
+        return None
+    p = (pts or [{}])[0]
+    city = (p.get("city") or "").strip()
+    if not city:
+        return None
+    admin = (p.get("admin_area") or "").strip()
+    return f"{city}, {admin}" if admin else city
+
+
 def _gbp_categories(client: dict) -> list[str]:
     """The client's GBP categories (primary + additional) — the SEED the planner
     expands into service phrases. Never the service axis itself (plan §0.2)."""
@@ -608,6 +631,17 @@ async def run_coverage_audit_tier(
                 f"Scoped to a {radius_miles}-mile radius of the business "
                 f"({'GBP location' if resolved[2] == 'gbp' else 'business address'})."
             )
+            # Coordinate-driven seed: reverse-geocode the center to a clean
+            # "City, State" so the whole location axis is derived from the
+            # coordinates, not from parsing the business_location string (a street
+            # address misparses into a garbage seed city + a polluted state that
+            # then drops every real nearby suburb). Best-effort — a miss keeps the
+            # raw seed (prior behaviour).
+            clean_seed = await _seed_from_center(center, supabase)
+            if clean_seed:
+                if clean_seed.strip().lower() != seed_location.strip().lower():
+                    notes.append(f"Location axis seeded from the business coordinates: {clean_seed}.")
+                seed_location = clean_seed
         else:
             notes.append(
                 "Couldn't resolve the business center — the radius wasn't applied "

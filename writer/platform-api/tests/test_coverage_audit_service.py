@@ -848,5 +848,82 @@ def test_run_tier_threads_center_and_radius_into_location_axis(monkeypatch):
     assert abs(seen["radius_km"] - 5 * svc._MILES_TO_KM) < 1e-6
 
 
+# --- coordinate-driven seed (reverse-geocode) ---------------------------------
+def test_seed_from_center_reverse_geocodes_to_city_state(monkeypatch):
+    async def _fake_reverse(points, supabase=None):
+        return [{**points[0], "city": "Carlton North", "admin_area": "Victoria"}]
+
+    monkeypatch.setattr(svc.maps_geocode, "reverse_geocode_points", _fake_reverse)
+    got = asyncio.run(svc._seed_from_center((-37.789839, 144.9713263), None))
+    assert got == "Carlton North, Victoria"
+
+
+def test_seed_from_center_city_only_when_no_admin(monkeypatch):
+    async def _fake_reverse(points, supabase=None):
+        return [{**points[0], "city": "Springfield", "admin_area": None}]
+
+    monkeypatch.setattr(svc.maps_geocode, "reverse_geocode_points", _fake_reverse)
+    assert asyncio.run(svc._seed_from_center((1.0, 2.0), None)) == "Springfield"
+
+
+def test_seed_from_center_none_when_no_locality(monkeypatch):
+    async def _fake_reverse(points, supabase=None):
+        return [{**points[0], "city": None, "admin_area": None}]
+
+    monkeypatch.setattr(svc.maps_geocode, "reverse_geocode_points", _fake_reverse)
+    assert asyncio.run(svc._seed_from_center((1.0, 2.0), None)) is None
+
+
+def test_run_tier_uses_coordinate_derived_clean_seed(monkeypatch):
+    """A street-address business_location is replaced by the clean reverse-geocoded
+    seed before the location axis is built — so the axis is coordinate-driven."""
+    store: dict = {}
+    monkeypatch.setattr(svc, "get_supabase", lambda: _FakeSupabase(store))
+    monkeypatch.setattr(
+        svc.local_seo_silo, "_get_client",
+        lambda cid: {"name": "FCR",
+                     "business_location": "117 Newry St, Carlton North VIC 3054, Australia",
+                     "gbp": {"website": "https://fcr.example", "latitude": -37.789839, "longitude": 144.9713263}},
+    )
+    monkeypatch.setattr(svc, "location_code_for", lambda client: 2036)
+
+    async def _fake_reverse(points, supabase=None):
+        return [{**points[0], "city": "Carlton North", "admin_area": "Victoria"}]
+
+    monkeypatch.setattr(svc.maps_geocode, "reverse_geocode_points", _fake_reverse)
+
+    seen: dict = {}
+
+    async def _fake_loc(client, seed_location, code, center=None, radius_km=None):
+        seen["seed_location"] = seed_location
+        seen["center"] = center
+        return [{"name": "Carlton North", "source": "seed"}], {"seed_city": "Carlton North", "notes": []}
+
+    monkeypatch.setattr(svc, "_resolve_location_axis", _fake_loc)
+
+    async def _fake_scan(website, code, use_paid_fallback=True, **_kwargs):
+        return (["https://fcr.example/roof-restoration/"], "sitemap")
+
+    monkeypatch.setattr(svc.site_page_index, "discover_site_urls", _fake_scan)
+    monkeypatch.setattr(svc, "_in_tool_index", lambda cid: {"token_index": {}, "location_index": {}})
+
+    async def _fake_demand(keywords, code):
+        return {}, False, []
+
+    monkeypatch.setattr(svc, "_fetch_demand", _fake_demand)
+    monkeypatch.setattr(
+        svc, "_derive_service_axis",
+        lambda client, classified, place_vocab: (
+            [{"label": "Roof Restoration", "sources": ["site"]}], {"confirmed": False, "notes": []}
+        ),
+    )
+
+    result = asyncio.run(svc.run_coverage_audit_tier("audit-1", "client-1", 1, radius_miles=5))
+    assert result["status"] == "complete"
+    # The garbage street-address seed was replaced by the clean coordinate seed.
+    assert seen["seed_location"] == "Carlton North, Victoria"
+    assert seen["center"] == (-37.789839, 144.9713263)
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
