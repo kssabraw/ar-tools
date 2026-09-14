@@ -70,7 +70,7 @@ async def get_coverage_audit(
 async def start_coverage_audit(
     client_id: UUID, body: StartAuditRequest, auth: dict = Depends(require_auth)
 ) -> dict:
-    """Enqueue a Tier-1 coverage audit (poll the job, then GET the run)."""
+    """Enqueue a coverage audit at the requested tier (poll the job, then GET the run)."""
     _require_enabled()
     if body.tier not in svc.SUPPORTED_TIERS:
         raise HTTPException(status_code=400, detail="coverage_audit_tier_unsupported")

@@ -2,7 +2,9 @@
 
 **Module slug:** `coverage_audit` · **Authoritative plan:** `docs/modules/coverage-audit-module-plan-v1_0.md` (design authority; owner decisions §0; adversarial-review findings + resolutions §8).
 
-**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green: platform-api tests + lint & typecheck + Netlify). **No new migration** (the subservice axis rides the run's jsonb, same as the Tier-1 service axis — re-verified: Phase 0's tables/RPC/`coverage_audit` per-tier job type already cover it). **Next step is Phase 3 (Tier 3: CDP × main-service — the NEW census integration, worker-only).**
+**Status (2026-09-14):** **Phase 0 MERGED** (PR #1069 — pure core + tables/RPC/per-tier job type, applied live). **Phase 1 (Tier 1: city × main-service) MERGED** (PR #1070). **Phase 2 (Tier 2: city × subservice) MERGED** (PR #1072 — all CI green). **Phase 3 (Tier 3: CDP × main-service) BUILT** (draft PR — the new census CDP integration, worker-only; migration `20260914130000_coverage_audit_cdp_cache.sql` applied live). **Next step is Phase 4 (Tier 4: CDP × subservice — cross the CDP axis with the subservice axis).**
+
+> ⚠️ **The live TIGERweb CDP query is UNVERIFIED from the sandbox** (census.gov is egress-blocked, same as `census_demand.py` / `leadoff_geocode.py`). The pure decision helpers around it are unit-tested; the enumeration query itself must be confirmed on the deployed Railway worker after merge — run a Tier-3 audit on a US client with a `business_location` + `GOOGLE_MAPS_API_KEY` set, and check the run's `provenance.location_axis` (for a Tier-3 run this is the CDP provenance: `kind:"cdp"` + states / counties / candidate+verified counts + notes) and the `census_cdp_cache` rows (one per state). If `pick_cdp_layer` mis-selects the layer or the `STATE='SS'` query shape is wrong, the tier degrades with a visible note (never aborts) — check `census_cdp.*` logs on the worker.
 
 ---
 
@@ -105,22 +107,41 @@ The delta from Tier 1 was the **subservice axis** + threading `tier=2` end-to-en
 
 ---
 
-## Phase 3 scope (the next chat's job) — Tier 3: CDP × main-service (NEW census integration, worker-only)
+## Phase 3 — BUILT (Tier 3: CDP × main-service — NEW census integration, worker-only)
 
-This is where the reuse stops being near-total — CDP enumeration is **genuinely new engineering** (plan §0.3 / §3.2 / §8 Major #2). **census.gov is egress-blocked from the sandbox** (as with `census_demand.py` / `leadoff_geocode.py`), so `census_cdp.py` is built + tested **on the deployed worker only** — the pure decision helpers around it can still be sandbox-unit-tested, but the live TIGERweb query cannot.
+CDP enumeration is **genuinely new engineering** (plan §0.3 / §3.2 / §8 Major #2), not reuse — `census_demand.py` queries only the TIGERweb *block-group* layer. The delta from Tier 1 is the **location axis**: the authoritative Census CDP list for the service area, instead of `resolve_target_cities`' cities. The service axis stays main services (the runner reuses the Tier-1 path verbatim).
 
-1. **`services/census_cdp.py` (new, worker-only).** Three steps:
-   - **(a) service-area → county FIPS.** Reverse-geocode each resolved city/anchor from the location universe (`resolve_target_cities`) → county via the census geocoder (`geographies/coordinates`, the same census.gov family `census_demand.py`/`leadoff_geocode.py`/`leadoff_counties.py` use) → the county-FIPS set.
-   - **(b) TIGERweb Places / CDP-layer query.** A **different** ArcGIS-REST layer than `census_demand.py`'s block-group layer (same `tigerweb.geo.census.gov` host) — enumerate CDPs in those counties. This is the new query; there is no existing CDP enumeration to reuse.
-   - **(c) geocode-verify containment** within the service-area footprint (reuse `maps_geocode.forward_geocode_places` + `place_is_within_city`), cached like `geocode_forward_cache` (a `census_cdp_cache` table or a keyed reuse of the forward cache; freshness-bounded).
-   - **Best-effort:** no key / dead source / no counties resolved → the CDP tiers degrade with a visible note, never abort (mirror the `resolve_target_cities` geocoding-unavailable pattern).
-2. **Location axis = CDPs.** Tier 3's location axis is the verified CDP list (distinct from cities and from neighborhoods); the service axis is the **main services** (reuse `_derive_service_axis` exactly as Tier 1). Add `3` to `SUPPORTED_TIERS`; the `run_coverage_audit_tier` branch swaps the location-axis source (CDPs instead of `resolve_target_cities`) and otherwise reuses the Tier-1 path. The location-hub decision is a real question again here (a CDP hub IS a main-service concept, unlike Tier 2's subservice case) — likely **keep** location-hub rows for Tier 3 (the Tier-1 rationale for dropping them does not apply), but confirm.
-3. **The demand floor matters most at Tier 3/4** (CDP × subservice in Phase 4) — the CDP cross-product is the largest. `coverage_cell_volume_min` is already wired; no change needed, but calibrate it from the first live CDP run.
-4. **Job:** still one `coverage_audit` job per tier (a Tier-3 run that geocodes many CDPs may approach the 30-min reaper — if so, add a `stale_timeout_for` override for tier 3 rather than splitting the job). Every census/geocode step cached + (where paid) metered before spend.
+**New: `services/census_cdp.py` (worker-only).** Three steps, each best-effort/degrade-never-abort:
+- **(a) service area → county FIPS.** Forward-geocode the seed city (cache-served) + `resolve_target_cities` → the footprint city geos; reverse-geocode each footprint centre → its county via the census `geographies/coordinates` endpoint (reuses `leadoff_counties._county_for_coord`, the same census.gov family). The **states** those counties belong to are the TIGERweb enumeration unit; counties record the scope.
+- **(b) TIGERweb CDP-layer query.** `pick_cdp_layer` resolves the **Census Designated Places** polygon layer by name from the service metadata (excludes label + tribal layers, mirrors `census_demand.pick_bg_layer`). Per state, `_fetch_state_cdps` enumerates every CDP (`where=STATE='SS'`, paginated, name + centroid) — a static, deterministic pull **cached per state in `census_cdp_cache`** (migration `20260914130000`, applied live) and shared across every client in that state. Candidates are then pre-filtered to the service-area footprint bbox (pure `footprint_bbox` + `point_in_bbox`, free).
+- **(c) geocode-verify containment.** Forward-geocode each surviving candidate (`maps_geocode.forward_geocode_places`, cached in `geocode_forward_cache`) and keep it only when it falls inside a resolved footprint city (`place_is_within_city` against any footprint city — the exact neighborhood-verification pattern). `assemble_cdp_axis` dedupes / sorts by name / caps at `coverage_cdp_max` (60).
 
-**Decide before Phase 3 (plan §7):** CDP county scope — all counties the service area touches, or only counties with a geocode-verified CDP inside the footprint (bounds the census pulls)?
+**No paid DataForSEO calls** happen in CDP resolution — it's all keyless census + Google-geocode (both cached) — so the `coverage_audit_usage` meter is untouched by the location axis (the demand fetch on the resulting gap keywords is the only metered step, unchanged). Idempotent: a reaper requeue finds the per-state CDP cache + the forward-geocode cache warm and re-bills nothing.
 
-Do NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
+**Runner/router/frontend wiring:** `SUPPORTED_TIERS = (1, 2, 3)`. `run_coverage_audit_tier` branches for tier 3: location axis = `census_cdp.resolve_cdp_axis(...)`; the place vocabulary for classification/service-derivation is the **cities** (+ CDP names) — a Tier-3 service page is still `/service-city/`, so cities (not CDPs) strip its place tokens, keeping the MAIN-service derivation clean even if the CDP axis degrades. Tiers 1 and 3 share: `_derive_service_axis` (main), `primary_service` set, location-hub rows KEPT. `pages/CoverageAudit.tsx` gained a **T3** tier selector chip + CDP-aware location nouns (Stats / Location axis / Missing-CDPs table / cell column read "CDP" for tier 3).
+
+**Config:** `coverage_cdp_cache_days` (365 — per-state cache freshness; TIGER vintage is ~yearly), `coverage_cdp_max` (60 — axis cap). Plus a `job_stale_timeout_overrides["coverage_audit"] = 60` (a Tier-3 run's cold-cache geocoding can graze the 30-min reaper; the requeue re-runs the tier cheaply since every step is cached).
+
+**Tests:** `tests/test_census_cdp.py` (22 — every pure helper: layer pick / feature parse / footprint bbox / containment pre-filter / county scope / axis assembly / staleness, plus `resolve_cdp_axis` happy path + the no-seed / no-maps-key / no-counties / no-CDPs degrade paths, all with the network mocked) + a Tier-3 runner wiring test in `tests/test_coverage_audit_service.py` (CDP location axis, main-service axis, location-hub rows kept, cities threaded into the place vocab). **The live TIGERweb query is NOT sandbox-verifiable — see the ⚠️ note at the top; confirm on the worker.**
+
+### Decisions made this phase (plan §7)
+
+- **CDP county scope → the counties the resolved service-area cities sit in (city-anchored, "Scope B").** The counties merely scope which **states** we enumerate CDPs from (a state is the cacheable TIGERweb unit) and are recorded in provenance; the geocode-verified footprint containment (step c) is what actually decides a CDP's membership. This bounds the census pulls to the counties the client demonstrably operates in — never a broad radius-edge probe — while the containment gate keeps far CDPs out. It won't miss obvious CDPs because the resolved footprint (seed + `resolve_target_cities`' nearby/GBP/manual/site cities) already spans where the client operates, and a state's whole CDP set is enumerated (then footprint-filtered), so a CDP straddling into an adjacent county still surfaces if it's inside the footprint.
+- **Tier-3 location-hub rows → KEPT** (like Tier 1). A CDP hub IS a main-service concept (does a CDP have a `"<primary main service> <CDP>"` landing page), so the Tier-1 rationale applies and the Tier-2 "drop it, it double-counts Tier 1" rationale does not — Tier 3 measures against the CDP axis, a different location universe than Tier 1's cities. `location_rows_shown = tier in (1, 3)`; `primary_service` set for tiers 1 and 3.
+
+Did NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
+
+## Phase 4 scope (the next chat's job) — Tier 4: CDP × subservice
+
+The last tier, and where the demand floor earns its keep — the CDP × subservice cross-product is the largest of the four. The two axes both already exist; Phase 4 just crosses them:
+
+1. **Location axis = CDPs** (reuse `census_cdp.resolve_cdp_axis` exactly as Tier 3 — no census change).
+2. **Service axis = subservices** (reuse `_derive_subservice_axis` exactly as Tier 2 — expand each main service into its city-agnostic variations).
+3. **Add `4` to `SUPPORTED_TIERS`** and branch `run_coverage_audit_tier`: tier 4 = the CDP location branch (like tier 3) + the subservice service branch (like tier 2). The location-hub decision follows **Tier 2's** rationale, not Tier 3's — a subservice audit drops the location-hub ("missing CDPs") rows (measured against the main-service axis, a different tier), so `location_rows_shown` should be `False` for tier 4 and `diff["missing_locations"] = []` (the current `if tier == 2:` guard becomes `if tier in (2, 4):`). Confirm this — it's the mirror of the Tier-2 decision, applied to the CDP location universe.
+4. **The demand floor (`coverage_cell_volume_min`) is the primary defense** against the CDP × subservice tail — it's already wired on cells; calibrate it (and `coverage_cdp_max`) from the first live Tier-3/4 CDP runs.
+5. **Frontend:** add a **T4** tier selector chip; the report is already tier-agnostic (subservice labels come from `isSubservice = reportTier === 2` — extend to `reportTier % 2 === 0` or `reportTier in (2, 4)`; CDP location noun comes from `isCdp = reportTier === 3` — extend to `reportTier in (3, 4)`).
+
+No new census integration, no new migration expected (Tier 4 reuses the Tier-3 `census_cdp_cache` + the Phase-0 tables/RPC/`coverage_audit` job type — re-verify against the live constraint set as always). Do NOT touch: the axes-only seed contract, the per-tier job decomposition, the reserve-before-spend/idempotency, or the demand floor.
 
 ---
 
@@ -130,9 +151,10 @@ Do NOT touch: the axes-only seed contract, the per-tier job decomposition, the r
 - ~~Location-hub keyword~~ — **RESOLVED (Phase 1):** `"<primary main service> <city>"`.
 - ~~Service-axis confirmation UX~~ — **RESOLVED (Phase 1):** run-on-auto-derived + confirm-to-refine banner.
 - ~~Tier-2 location-row question~~ — **RESOLVED (Phase 2):** subservice audits show subservice + cell gaps only; location-hub rows dropped (a Tier-1 concern). See the Phase 2 section.
+- ~~CDP county scope~~ — **RESOLVED (Phase 3):** city-anchored (Scope B) — the counties the resolved footprint cities sit in scope which states are enumerated; the geocode-verified footprint containment decides membership. See the Phase 3 "Decisions made this phase".
+- ~~Tier-3 location-row question~~ — **RESOLVED (Phase 3):** KEPT (like Tier 1 — a CDP hub is a main-service concept). See the Phase 3 section.
 - Refresh cadence (on-demand v1 vs. monthly scheduled re-audit) — still on-demand only.
-- CDP county scope (all touched counties vs. only those with a verified CDP inside the footprint) — **decide before Phase 3** (above §3).
-- Calibrate `coverage_cell_volume_min` + the daily ceiling from a first live run (both still placeholders — 10 / 200).
+- Calibrate `coverage_cell_volume_min` + the daily ceiling + `coverage_cdp_max`/`coverage_cdp_cache_days` from a first live run (all placeholders — 10 / 200 / 60 / 365).
 
 ---
 

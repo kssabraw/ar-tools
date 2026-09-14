@@ -71,7 +71,7 @@ interface StatusResponse {
   latest: AuditRun | null
 }
 
-type Tier = 1 | 2
+type Tier = 1 | 2 | 3
 
 const num = (n: number | null | undefined, digits = 0) =>
   n === null || n === undefined ? '—' : n.toLocaleString(undefined, { maximumFractionDigits: digits })
@@ -184,9 +184,14 @@ export function CoverageAudit() {
   // Render off the RUN's own tier (a completed run may predate a tier switch).
   const reportTier = latest?.tier ?? tier
   const isSubservice = reportTier === 2
-  // Tier 2 drops the location-hub ("missing cities") rows — the server records the
-  // decision on the run; default to the tier when an older run lacks the flag.
-  const showLocations = latest?.provenance?.location_rows_shown ?? reportTier === 1
+  // Tier 3's location axis is CDPs (Census Designated Places), not cities — the
+  // service axis stays main services, so only the location noun changes.
+  const isCdp = reportTier === 3
+  const locationNoun = isCdp ? 'CDP' : 'City'
+  const locationNounPlural = isCdp ? 'CDPs' : 'Cities'
+  // Tier 2 drops the location-hub rows; Tiers 1 and 3 keep them. The server records
+  // the decision on the run; default off the tier when an older run lacks the flag.
+  const showLocations = latest?.provenance?.location_rows_shown ?? reportTier !== 2
   const serviceAxisLabel = isSubservice ? 'Subservice axis' : 'Service axis'
 
   const startEditing = () => {
@@ -210,17 +215,19 @@ export function CoverageAudit() {
         Scans the whole site as it stands and finds the location & service pages that don't exist yet,
         ranked by real search demand. <strong>Tier 1</strong> covers city × main service;{' '}
         <strong>Tier 2</strong> drills into city × subservice (each main service expanded into its
-        variations).
+        variations); <strong>Tier 3</strong> widens to CDP × main service (the authoritative Census
+        Designated Places across the service area).
       </p>
 
       {disabled && (
         <div style={errBox}>Coverage Audit is disabled for this environment.</div>
       )}
 
-      {/* Tier selector — switches the run + report between city×main-service (T1)
-          and city×subservice (T2). Each tier keeps its own latest run + in-flight job. */}
+      {/* Tier selector — switches the run + report between city×main-service (T1),
+          city×subservice (T2), and CDP×main-service (T3). Each tier keeps its own
+          latest run + in-flight job. */}
       <div style={{ display: 'inline-flex', gap: 2, marginBottom: 16, background: '#f1f5f9', borderRadius: 8, padding: 3 }}>
-        {([1, 2] as Tier[]).map((t) => (
+        {([1, 2, 3] as Tier[]).map((t) => (
           <button
             key={t}
             style={t === tier ? tierBtnActive : tierBtn}
@@ -232,9 +239,9 @@ export function CoverageAudit() {
               setTier(t)
             }}
             disabled={running}
-            title={t === 1 ? 'City × main service' : 'City × subservice'}
+            title={t === 1 ? 'City × main service' : t === 2 ? 'City × subservice' : 'CDP × main service'}
           >
-            Tier {t} · {t === 1 ? 'main services' : 'subservices'}
+            Tier {t} · {t === 1 ? 'main services' : t === 2 ? 'subservices' : 'CDPs'}
           </button>
         ))}
       </div>
@@ -292,10 +299,10 @@ export function CoverageAudit() {
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
             <Stat label={isSubservice ? 'Subservices' : 'Services'} present={counts?.services_present} absent={counts?.services_absent} />
             {showLocations && (
-              <Stat label="Cities" present={counts?.locations_present} absent={counts?.locations_absent} />
+              <Stat label={locationNounPlural} present={counts?.locations_present} absent={counts?.locations_absent} />
             )}
             <Stat
-              label={isSubservice ? 'Subservice × City cells' : 'Service × City cells'}
+              label={`${isSubservice ? 'Subservice' : 'Service'} × ${locationNoun} cells`}
               present={counts?.cells_present}
               absent={counts?.cells_absent}
             />
@@ -354,7 +361,11 @@ export function CoverageAudit() {
                 <span key={l.name} style={axisChip} title={l.source}>{l.name}</span>
               ))}
               {locationAxis.length === 0 && (
-                <span style={{ color: '#94a3b8', fontSize: 13 }}>No cities — set the client's business location + geocoding.</span>
+                <span style={{ color: '#94a3b8', fontSize: 13 }}>
+                  {isCdp
+                    ? "No CDPs — set the client's business location + geocoding (GOOGLE_MAPS_API_KEY)."
+                    : "No cities — set the client's business location + geocoding."}
+                </span>
               )}
             </div>
           </section>
@@ -387,25 +398,28 @@ export function CoverageAudit() {
             newHref={localSeoNew}
           />
           {/* Tier 2 drops the location-hub rows — a city-hub gap is a Tier-1 concern
-              (measured against the main-service axis), not a subservice one. */}
+              (measured against the main-service axis), not a subservice one. Tiers 1
+              and 3 keep them (a CDP hub IS a main-service concept). */}
           {showLocations && (
             <GapTable
-              title="Missing cities"
-              subtitle="Cities with no dedicated page (ranked by the primary service's demand there)."
+              title={`Missing ${locationNounPlural.toLowerCase()}`}
+              subtitle={`${locationNounPlural} with no dedicated page (ranked by the primary service's demand there).`}
               rows={gaps.missing_locations}
               kind="location"
+              locationLabel={locationNoun}
               newHref={localSeoNew}
             />
           )}
           <GapTable
-            title={isSubservice ? 'Missing subservice × city pages' : 'Missing service × city pages'}
+            title={`Missing ${isSubservice ? 'subservice' : 'service'} × ${locationNoun.toLowerCase()} pages`}
             subtitle={
               counts?.cell_floor
                 ? `Demand-ranked; ${num(counts.cells_below_floor)} sub-floor combos (< ${num(counts.cell_floor)} searches/mo) hidden.`
-                : `${isSubservice ? 'Subservice' : 'Service'} × city combinations the site is missing.`
+                : `${isSubservice ? 'Subservice' : 'Service'} × ${locationNoun.toLowerCase()} combinations the site is missing.`
             }
             rows={gaps.missing_cells}
             kind="cell"
+            locationLabel={locationNoun}
             newHref={localSeoNew}
           />
         </>
@@ -430,13 +444,14 @@ function Stat({ label, present, absent }: { label: string; present?: number; abs
 }
 
 function GapTable({
-  title, subtitle, rows, kind, newHref,
+  title, subtitle, rows, kind, newHref, locationLabel = 'City',
 }: {
   title: string
   subtitle: string
   rows: Gap[]
   kind: 'service' | 'location' | 'cell'
   newHref: string
+  locationLabel?: string
 }) {
   const exportCsv = () => {
     const header = kind === 'cell'
@@ -466,7 +481,7 @@ function GapTable({
             <thead>
               <tr>
                 {kind === 'cell' && <th style={th}>Service</th>}
-                {kind === 'cell' && <th style={th}>City</th>}
+                {kind === 'cell' && <th style={th}>{locationLabel}</th>}
                 <th style={th}>Keyword</th>
                 <th style={{ ...th, textAlign: 'right' }}>Volume</th>
                 <th style={{ ...th, textAlign: 'right' }}>CPC</th>

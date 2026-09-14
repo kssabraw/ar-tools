@@ -226,6 +226,14 @@ class Settings(BaseSettings):
         "fanout_regate": 45,
         "fanout_fanout": 45,
         "fanout_architecture": 45,
+        # A Tier-3 Coverage Audit (CDP × main-service) reverse-geocodes the
+        # service-area counties and forward-geocodes every candidate CDP for
+        # containment verification — on a cold geocode cache that can graze the
+        # 30-min default. The reaper requeue re-runs the tier, but every census /
+        # geocode / demand step is cached + idempotent, so a requeue is cheap; 60
+        # min keeps the reaper a genuine backstop without firing on a healthy run.
+        # (Tiers 1–2 finish well within the default; the override is harmless for them.)
+        "coverage_audit": 60,
     }
     # Dedicated worker lane for the (long, blocking) Fanout pipeline jobs, so a
     # ~10-min expansion can't tie up the MAIN lane — which owns the stale-job
@@ -2883,6 +2891,20 @@ class Settings(BaseSettings):
     # top organic SERP results are dedicated neighborhood pages (place token in
     # URL/title) rather than city pages.
     coverage_neighborhood_serp_dedicated_min: int = 3
+    # Tier 3 (CDP × main-service, services/census_cdp.py — NEW census integration,
+    # worker-only). CDPs are enumerated from the TIGERweb Census-Designated-Places
+    # layer per state (cached in census_cdp_cache), pre-filtered to the service-area
+    # footprint bbox, then geocode-verified for containment. All census.gov +
+    # Google-geocode work — NO paid DataForSEO calls in CDP resolution — so the
+    # coverage_audit_usage meter is untouched by the location axis.
+    # Freshness of the per-state CDP enumeration cache (TIGER vintage updates ~yearly;
+    # CDP boundaries are static). 0 disables the freshness check (cache never re-pulled).
+    coverage_cdp_cache_days: int = 365
+    # Cap on the CDP location axis after footprint verification, so the Tier-3/4
+    # cross-product can't explode. Ordered by name; the demand floor on cells
+    # (coverage_cell_volume_min) does the real Tier-3/4 taming. Calibrate from a
+    # first live CDP run. 0 = uncapped.
+    coverage_cdp_max: int = 60
 
     class Config:
         env_file = ".env"
