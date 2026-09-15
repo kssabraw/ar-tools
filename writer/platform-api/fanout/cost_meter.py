@@ -40,6 +40,12 @@ _LLM_RATES: dict[str, tuple[float, float]] = {
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
     "gpt-5.4": (5.0, 15.0),
+    # OpenAI content-writer prose ("Luna"). Confirmed against OpenAI's published
+    # API pricing as of 2026-09-14 ($0.20/1M in, $1.20/1M out; cached input
+    # $0.02 is not modelled here). Exact key — "gpt-5.6-luna" does NOT prefix-
+    # match "gpt-5.4", so without this row it fell through to the $5/$15 default
+    # and overstated Luna cost by ~20x.
+    "gpt-5.6-luna": (0.20, 1.20),
 }
 _DEFAULT_LLM_RATE = (5.0, 15.0)
 

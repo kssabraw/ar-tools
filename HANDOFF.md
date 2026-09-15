@@ -13,6 +13,18 @@ Continues the module (#1107 shared core + Phase 1, now merged). All four remaini
 
 **⚠️ ACTIVATION unchanged + extended:** the live DataForSEO shape is STILL unverified (owner confirmed the Railway `verify_google_trends.py` run has **not** been done). Before flipping `GOOGLE_TRENDS_ENABLED=true`, run it from Railway PLATFORM for BOTH the rising-queries shape (`--keyword "collagen peptides"`) AND the Phase-4 interest_over_time slice; reconcile `parse_rising_queries` / `parse_interest_over_time` + `tests/test_google_trends.py` together if either differs. Phase 3's weekly digest + Phase 4's endpoint are inert until the flag is on.
 
+## ⏩ Update — 2026-09-15 · **PAA → SEO Neo — external methodology READ + ANALYZED, de-branded master reference committed (docs-only, PR [#1110](https://github.com/kssabraw/ar-tools/pull/1110), draft)**
+
+An external local-SEO agency methodology (a two-layer "PAA content → authority" system) was **read and analyzed** to inform a future suite plan — **no code, no PRD, no build yet.** The single kept deliverable is a **de-branded master synthesis** so the initiative has one durable domain reference.
+
+**Committed (documentation only):**
+- **`docs/reference/paa-seo-neo-master-reference.md`** — one master document synthesizing the whole methodology (the two layers, the PAA string as universal join key, the prep-sheet hand-off, the seam bolts + fixed content→authority order, the authority supply chain, the confidence/risk map, a source-doc index). **All branding removed** (person/group/source names stripped; the `[PROVEN]`/`[THEORY]`/`[BELIEF]` confidence tags + the gray/black-hat caveat preserved). Placed in `docs/reference/` **deliberately** so no agent loader (`sop_library`) ingests it.
+- **`docs/modules/paa-seo-neo/CLAUDE.md` + `HANDOFF.md`** — module scaffolding: read-order, the suite-reuse candidate map (Keyword Research PAA / Blog Writer / GBP Posts / Content Syndication / Local SEO matrix gates / Maps geo-grid / Recipe Engine), the load-bearing guardrails (the suite **NEVER** executes link blasts; gray/black-hat out of scope; audio/video syndication stays manual; carry the confidence tags), and the four open scope decisions blocking the plan.
+
+**Deliberately NOT committed (owner ruling "we just need the one master document"):** the numbered source SOPs (01–15, 07b, 13b) and the `AI-CONTEXT_why-*` reasoning docs. They were briefly added to `docs/sops/` + `docs/agents/reasoning/` this session, then **erased** — do not re-add without an explicit ask.
+
+**Next:** owner settles v1 scope + the off-platform boundary (see the module `HANDOFF.md`), then a PRD/plan is written. **Note:** PR #1110's red `pytest` is the pre-existing date-bomb flake in `test_pace_interventions.py` (fails on `main` + every PR from 2026-09-15), unrelated to these docs; its one-line fix was intentionally not bundled (docs-only PR).
+
 ## ⏩ Update — 2026-09-15 · **Google Trends Discovery — shared core + Phase 1 (ecommerce) BUILT, ships DARK (PR [#1107](https://github.com/kssabraw/ar-tools/pull/1107))**
 
 The suite's demand-discovery front door: pull **rising** related queries from Google Trends (via DataForSEO), **qualify** each with the volume/CPC data the suite already buys, score by velocity × the existing opportunity model, and persist a run. An **input source, not a new pipeline** — everything downstream (cluster / draft / "Write this post") reuses existing modules. Prompted by the owner's "how can we automate this?" about the viral Google-Trends-category workflow; scoped + adversarially reviewed first (`docs/modules/google-trends-discovery-plan-v1_0.md` is the authority).
