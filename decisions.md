@@ -491,3 +491,56 @@ routine `revisions` bounce still bumps (it's a real redo). Behavior change is
 scoped to the QA critical-fail path only; every other `update_task` caller is
 unchanged. Tests: `test_task_manager.py` (bump fires by default into
 for_revision; suppressed with the flag). No migration, no API change.
+
+## Brand Guide Generator — no headless browser for visual extraction (reverses PRD D4)
+
+**Status: DECIDED** (owner, 2026-09-15, via the Brand Guide PRD design grill; recorded in PRD
+`docs/modules/brand-guide-generator-prd-v1_0.md` §2 D4 / §4.1 / §8).
+
+**Context.** The Brand Guide module needs a client site's visual identity — palette, fonts, type
+scale, logo candidates — plus a screenshot for the aesthetic/"vibe" read. The PRD's original D4
+chose a **hosted headless browser (Browserless over CDP)** to collect *true computed styles*
+(cascade-resolved, area-weighted via `getBoundingClientRect`), on the reasoning that Chromium
+shouldn't bloat any suite image at ~1–3 guides/month.
+
+**Decision.** **No headless browser anywhere.** Capture instead reuses paths the suite already
+runs in production:
+- **Exact declared hex** parsed from CSS scraped via the existing **ScrapeOwl** path
+  (`scrapeowl_fetch(url, render_js=True)`), **ranked/area-weighted by screenshot-pixel dominance**
+  (Pillow quantization over the **DataForSEO `page_screenshot`** — the same screenshot path
+  `qa_visual` already uses).
+- Fonts / type scale / logo candidates from the same scraped HTML.
+- The vibe read = one Claude-vision call over that DataForSEO screenshot (the established
+  `qa_visual` pattern).
+
+**Why (the real trade-off).** Three facts, verified against the live code during the grill,
+removed every reason to add a browser:
+1. **Visual extraction is a best-effort *garnish* layer** (owner ruling), not the module's value —
+   the moat is the existing voice/ICP/differentiator assets. True computed styles don't justify
+   new infrastructure for a garnish.
+2. **Pixel-dominance over the rendered screenshot is a *truer* "what dominates the page" signal**
+   than area-weighted computed styles, and exact hex still comes from the CSS (so JPEG/anti-alias
+   drift never touches the reported numbers).
+3. **The census machinery was never a drop-in reuse regardless.** `website_theme_precompile.py`'s
+   `census_styles`/`TokenCensus` are count-only and hard-wired to the Claude-Design *upload*
+   format (regex over inline `style=`), with no per-item weight seam — so a new weight-aware
+   census had to be written whether the style data came from a browser or from scraped CSS.
+
+Bundling Chromium into platform-api (~400MB, ~3× the `python:3.11-slim` image) hits every deploy
+of the busiest service; Browserless adds an external vendor holding an API key, client-URL egress
+to a third party, and a new point of failure — all for ~1–3 guides/month. The suite's own code
+repeatedly documents the deliberate "no Chromium — heavy, memory-hungry, deploy-risky on Railway"
+posture (`qa_visual.py`), and production already fetches arbitrary client sites (ScrapeOwl, QA's
+SSRF-guarded httpx, DataForSEO screenshots), so nothing here needs a browser.
+
+**Considered and rejected.** (a) Bundle Playwright+Chromium in platform-api — real one-time-per-
+deploy image cost, honest but unnecessary once extraction is garnish. (b) Browserless over CDP
+(the original D4) — external vendor + key + client-URL egress + failure point for negligible
+volume. (c) A fourth Railway service owning Chromium — new topology, disallowed without owner
+sign-off. All rejected in favor of the no-browser assembly above.
+
+**Consequences.** No `BRANDGUIDE_BROWSER_WS_URL`, no Browserless account, no Playwright dep, no
+Chromium in any image, no topology change. The one thing given up — cascade-resolved area
+weighting — is replaced by screenshot-pixel dominance. **Revisit trigger:** if the no-browser
+palette proves unacceptably wrong against a manual eyedropper on ≥3 real client sites (PRD §11
+acceptance #1), reopen this decision.
