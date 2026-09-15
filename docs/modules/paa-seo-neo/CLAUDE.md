@@ -4,8 +4,11 @@
 > `/CLAUDE.md` remains the suite's authoritative context and conventions — read
 > it first. This file orients work on the **PAA → SEO Neo** initiative: adapting
 > an external local-SEO content methodology into suite tooling. The initiative is
-> **at the analysis/planning stage — there is no PRD, no build, and no code yet.**
-> Current state + open decisions live in the module `HANDOFF.md` next to this file.
+> **at the planning stage — the PRD is written and merged, the v1 scope + all four
+> §8 design forks are owner-locked, but there is still no build and no code.** The
+> only remaining gate is the owner's greenlight of the PRD's §10 build order.
+> Current state + the locked decisions live in the module `HANDOFF.md` next to this
+> file.
 
 ## Read these first, in order
 
@@ -15,11 +18,15 @@
    synthesis** of the whole methodology (the two layers, the PAA join key, the
    seven seam bolts, the fixed order, the authority supply chain, the
    confidence/risk map, and a source-doc index). This is the domain authority for
-   the initiative. Committed in PR [#1110](https://github.com/kssabraw/ar-tools/pull/1110) (draft).
-3. **`docs/modules/paa-seo-neo/HANDOFF.md`** (next to this file) — current state,
-   open decisions blocking the plan, and next action.
-4. **The suite-mapping** below — which existing suite modules already cover parts
-   of the methodology (so a plan reuses, not rebuilds).
+   the initiative. On `main` (PR [#1110](https://github.com/kssabraw/ar-tools/pull/1110)).
+3. **`docs/modules/paa-seo-neo-prd-v1_0.md`** — **the plan** (v1 = the content half;
+   the reuse map verified against code in §7; the four §8 design forks now locked).
+   This is the authority for *what v1 builds*. On `main` (PRs #1110 + [#1112](https://github.com/kssabraw/ar-tools/pull/1112)).
+4. **`docs/modules/paa-seo-neo/HANDOFF.md`** (next to this file) — current state, the
+   locked decisions, and the next action (owner greenlight of §10).
+5. **The suite-mapping** below — which existing suite modules already cover parts
+   of the methodology (verified against code in PRD §7 — the table below is the
+   quick orientation; PRD §7 carries the verified anchors).
 
 > ⚠️ The methodology's **source corpus** (the numbered SOPs 01–15, 07b/13b, and
 > the `AI-CONTEXT_why-*` reasoning docs) is **NOT in this repo** — it lives in the
@@ -36,15 +43,18 @@ methodology**: a **PAA content layer** (answer the exact question a buyer types,
 one page per question, link high to the service page, syndicate across formats)
 and an **SEO Neo authority layer** (links/trust that make the content rank). The
 suite already automates large parts of the content layer; the authority layer is
-mostly **off-platform, third-party, and partly gray/black-hat**. The scope of what
-the suite should actually *build* is **not yet decided** — that is what the plan
-(next) settles. See the master reference for the full system; see the HANDOFF for
-the open scope decisions.
+mostly **off-platform, third-party, and partly gray/black-hat**. The scope is now
+**decided**: v1 = the **content half** (a first-class PAA Set + the three writing
+rules as reused writer constraints); the authority layer is **track / cost / QA /
+manifest only, never executed**, and lands in a later phase. See the master
+reference for the full system, the **PRD** for what v1 builds, and the HANDOFF for
+the locked decisions.
 
-## Suite-mapping (candidates for reuse — NOT yet verified against code)
+## Suite-mapping (candidates for reuse — VERIFIED against code in PRD §7)
 
-The methodology's steps map onto existing suite modules. A plan should reuse these
-rather than rebuild. (Verify each against current code before relying on it.)
+The methodology's steps map onto existing suite modules; v1 reuses these rather than
+rebuild. The table below is quick orientation — **PRD §7 carries the verified code
+anchors** (each row was checked against the current tree, 2026-09-15).
 
 | Methodology step | Existing suite module (candidate) |
 |---|---|
@@ -81,8 +91,9 @@ rather than rebuild. (Verify each against current code before relying on it.)
 
 - Don't re-add the source SOPs (07b/13b, 01–15) or the `AI-CONTEXT_why-*` reasoning
   docs to the repo — they were deliberately erased; only the master reference stays.
-- Don't build anything before the plan/PRD exists and the scope + off-platform
-  boundary are owner-confirmed (this file is scaffolding, not a green light).
+- Don't build anything until the owner **greenlights the PRD's §10 build order.**
+  The PRD, the v1 scope, and the four §8 design forks are settled — but a merged
+  plan is not a build green light. No code, migration, or agent wiring before that.
 - Don't wire this into any agent loader — the master reference lives in
   `docs/reference/` precisely so `sop_library` never ingests it.
 - Don't design the suite to run or "automate" the link-layer blasts.

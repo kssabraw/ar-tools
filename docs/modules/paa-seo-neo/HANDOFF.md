@@ -4,25 +4,27 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — SCOPE SETTLED · PLAN WRITTEN · STILL NO CODE
+## Status (2026-09-15) — PLAN MERGED · DECISIONS LOCKED · AWAITING BUILD GREENLIGHT
 
 - **The whole external corpus has been read and analyzed** (except SOP 07c, Video —
   not provided). A complete "how it all works together" synthesis exists.
-- **The master reference is committed:** `docs/reference/paa-seo-neo-master-reference.md`
+- **The master reference is on `main`:** `docs/reference/paa-seo-neo-master-reference.md`
   — a single **de-branded** synthesis (all source/person/group names removed;
-  confidence tags + gray-hat caveat preserved). In **PR [#1110](https://github.com/kssabraw/ar-tools/pull/1110)** (draft, **unmerged**).
-- **The four open decisions are settled** (owner, 2026-09-15) — see below.
-- **The plan is written:** `docs/modules/paa-seo-neo-prd-v1_0.md` — reuse-verified
+  confidence tags + gray-hat caveat preserved). Merged in **PR [#1110](https://github.com/kssabraw/ar-tools/pull/1110)**.
+- **The plan is on `main`:** `docs/modules/paa-seo-neo-prd-v1_0.md` — reuse-verified
   against current code (§7), v1 = the content half, link layer track/cost/QA only,
-  audio/video checklist-only, confidence tags carried.
+  audio/video checklist-only, confidence tags carried. Merged in **PR #1110**.
+- **The four §8 design forks are settled** (owner, 2026-09-15) and reflected in the
+  PRD (§4.1/§4.2/§8) — merged in **PR [#1112](https://github.com/kssabraw/ar-tools/pull/1112)**. See "§8 design forks — LOCKED" below.
 - There is still **no schema, no code, no config, no migration** — the PRD is a plan,
   not a build. Nothing is wired into any agent (`sop_library` still never reads the
-  reference).
+  reference). The one remaining gate is the owner's **greenlight of the §10 build order**.
 
 ## What exists vs. what's missing
 
-**In the repo:**
+**In the repo (all on `main`):**
 - `docs/reference/paa-seo-neo-master-reference.md` — the master synthesis.
+- `docs/modules/paa-seo-neo-prd-v1_0.md` — the plan (v1 = content half; §8 forks locked).
 - `docs/modules/paa-seo-neo/CLAUDE.md` + this `HANDOFF.md` — scaffolding.
 
 **NOT in the repo (owner's uploads only — deliberately not committed):**
