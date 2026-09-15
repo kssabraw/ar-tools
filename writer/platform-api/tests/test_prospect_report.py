@@ -1,10 +1,11 @@
 import sys
+from datetime import date
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from services import client_report  # noqa: E402
+from services import client_report, competitor_intel, domain_intel  # noqa: E402
 
 
 # ── Organic section ──────────────────────────────────────────────────────────
@@ -95,3 +96,54 @@ def test_gather_geogrid_any_none_without_scan():
     supabase = MagicMock()
     supabase.table.return_value.select.return_value.eq.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
     assert client_report._gather_geogrid_any(supabase, "c1") is None
+
+
+# ── Auto-run organic overview during snapshot generation ─────────────────────
+
+def _clients_supabase():
+    """Supabase mock serving only the clients row _build_prospect_report reads."""
+    supabase = MagicMock()
+    t = supabase.table.return_value
+    t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+        data=[{"id": "c1", "name": "Acme", "website_url": "https://acme.test",
+               "logo_url": None, "business_location": None}]
+    )
+    return supabase
+
+
+def _build(auto: bool, run_overview_mock):
+    """Run _build_prospect_report with the four gatherers stubbed and the flag set."""
+    with patch.object(client_report, "get_supabase", return_value=_clients_supabase()), \
+         patch.object(client_report.settings, "prospect_snapshot_auto_organic", auto), \
+         patch.object(domain_intel, "_client_domain", return_value="acme.test"), \
+         patch.object(domain_intel, "run_domain_overview", run_overview_mock), \
+         patch.object(domain_intel, "get_latest_overview", return_value=None), \
+         patch.object(client_report, "_gather_geogrid_any", return_value=None), \
+         patch.object(client_report, "_gather_ai_visibility", return_value=None), \
+         patch.object(competitor_intel, "build_profiles", return_value={"competitors": []}):
+        return client_report._build_prospect_report("c1", date(2026, 9, 1), date(2026, 9, 15))
+
+
+def test_prospect_report_autoruns_organic_when_enabled():
+    run = AsyncMock(return_value={"cached": False})
+    html, title = _build(True, run)
+    run.assert_awaited_once()
+    args, kwargs = run.call_args
+    assert args[0] == "c1" and args[1] == "acme.test" and kwargs.get("role") == "prospect"
+    assert "Prospect Snapshot" in title
+    # No stored overview after the (mocked) run → organic section still prompts.
+    assert "Domain Intelligence" in html
+
+
+def test_prospect_report_skips_autorun_when_disabled():
+    run = AsyncMock(return_value={"cached": True})
+    _build(False, run)
+    run.assert_not_awaited()
+
+
+def test_prospect_report_swallows_budget_exceeded():
+    run = AsyncMock(side_effect=domain_intel.BudgetExceeded("cap"))
+    # Must not raise — a refused reservation falls back to the prompt.
+    html, _ = _build(True, run)
+    run.assert_awaited_once()
+    assert "Organic search" in html

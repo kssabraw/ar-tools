@@ -1029,6 +1029,12 @@ class Settings(BaseSettings):
     client_report_health_max_tokens: int = 1100
     # White-label: the agency name shown in the client-facing report footer.
     client_report_agency_name: str = "Amazing Rankings"
+    # Prospect Snapshot: when a prospect has no Domain Intelligence overview yet,
+    # auto-run the website-only overview (one budget-gated paid pull) during
+    # snapshot generation so the organic section is populated on first build.
+    # Off → the organic section prompts to run it manually. Maps/AI/CI are never
+    # auto-run (they need setup a website alone can't provide).
+    prospect_snapshot_auto_organic: bool = True
     # GBP reviews this-period-vs-last-period: fetch the dated review list (one paid
     # Outscraper call per report) to count new reviews per period + surface recent
     # highlights. Off → the report falls back to the review-count snapshot series.
