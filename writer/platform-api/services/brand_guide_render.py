@@ -837,7 +837,7 @@ async def _deliver_client_pdf(client: dict, ctx: dict, pdf: bytes) -> dict:
     except Exception as exc:  # incl. GoogleDocError
         out["drive"] = "failed"
         out["drive_error"] = str(exc)[:200]
-        logger.warning("brand_guide_render.drive_failed", extra={"name": ctx.get("name"), "error": str(exc)})
+        logger.warning("brand_guide_render.drive_failed", extra={"client_name": ctx.get("name"), "error": str(exc)})
     return out
 
 
