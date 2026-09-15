@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, FileText, Flame, Search, Sparkles, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Flame, Search, Share2, Sparkles, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import { toCsv, downloadCsv } from '../lib/csv'
@@ -111,6 +111,21 @@ function composeTrendWriterNotes(k: TrendKeyword, run: RunResponse['run']): stri
   return lines.join('\n')
 }
 
+// Phase B (#1129): the angle threaded into the social fan-out — frames the post
+// around a search that's surging NOW, with the classifier's suggested short-form
+// format. The fan-out reuses source_type='topic', so this rides as the angle.
+function composeSocialAngle(k: TrendKeyword): string {
+  const velocity = k.is_breakout
+    ? 'a breakout trending search (interest is surging right now)'
+    : k.rising_value != null
+      ? `a fast-rising search, up +${Math.round(k.rising_value)}% in interest`
+      : 'a rising search'
+  const fmt = k.suggested_format ? ` Make it a ${k.suggested_format}.` : ''
+  return `Ride the trend: "${k.query}" is ${velocity}. Create a timely, native social post that hooks viewers on what's new / why it's taking off.${fmt} Punchy and shareable — this is trend-jacking, not an explainer.`
+}
+
+interface SocialAccountLite { account_id: string; platform: string; handle?: string | null }
+
 export function GoogleTrends() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -133,6 +148,16 @@ export function GoogleTrends() {
   const [writeNotes, setWriteNotes] = useState('')
   const [writeError, setWriteError] = useState<string | null>(null)
   const [createdRunId, setCreatedRunId] = useState<string | null>(null)
+
+  // "Draft social post" (#1129 Phase B) — fan a trending query out into reviewable
+  // social drafts via the existing social module (source_type='topic').
+  const [socialRow, setSocialRow] = useState<TrendKeyword | null>(null)
+  const [socialTopic, setSocialTopic] = useState('')
+  const [socialAngle, setSocialAngle] = useState('')
+  const [socialPlatforms, setSocialPlatforms] = useState<string[]>([])
+  const [socialError, setSocialError] = useState<string | null>(null)
+  const [socialJobId, setSocialJobId] = useState<string | null>(null)
+  const [socialDone, setSocialDone] = useState(false)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -254,6 +279,55 @@ export function GoogleTrends() {
         : 'Could not create the draft. Please try again.')
     },
   })
+
+  // Phase B — the client's connected social accounts (only when the modal opens)
+  // → the platforms they can actually draft for.
+  const { data: socialAccounts, isLoading: socialAccountsLoading } = useQuery<SocialAccountLite[]>({
+    queryKey: ['social-accounts', id],
+    queryFn: () => api.get<SocialAccountLite[]>(`/clients/${id}/social/accounts`),
+    enabled: Boolean(id && socialRow),
+  })
+  const socialPlatformOptions = useMemo(
+    () => Array.from(new Set((socialAccounts ?? []).map((a) => a.platform.toLowerCase()))),
+    [socialAccounts],
+  )
+
+  function openSocial(k: TrendKeyword) {
+    setSocialRow(k)
+    setSocialTopic(k.query)
+    setSocialAngle(composeSocialAngle(k))
+    setSocialPlatforms([])
+    setSocialError(null)
+    setSocialJobId(null)
+    setSocialDone(false)
+  }
+  function socialErrorText(detail: string): string {
+    if (detail.includes('social_not_enabled')) return 'The Social module isn’t enabled for this workspace yet.'
+    if (detail === 'client_frozen') return 'This client is frozen — content creation is paused.'
+    return 'Could not create the social drafts. Please try again.'
+  }
+  const startFanout = useMutation({
+    mutationFn: () => api.post<{ angle_set_id: string; job_id: string }>(`/clients/${id}/social/fan-out`, {
+      source_type: 'topic', text: socialTopic.trim(), angle: socialAngle.trim(),
+      angle_title: socialRow?.query, platforms: socialPlatforms, format: 'feed',
+      include_image: false, include_hashtags: true,
+    }),
+    onSuccess: (r) => { setSocialError(null); setSocialJobId(r.job_id) },
+    onError: (e: unknown) => setSocialError(socialErrorText(e instanceof Error ? e.message : '')),
+  })
+  // Poll the fan-out job; the drafts land on the Social page for review + publish.
+  useQuery({
+    queryKey: ['social-fanout-job', id, socialJobId],
+    queryFn: async () => {
+      const j = await api.get<{ status: string; error?: string | null }>(`/clients/${id}/social/fan-out/${socialJobId}`)
+      if (j.status === 'complete') { setSocialJobId(null); setSocialDone(true) }
+      else if (j.status === 'failed') { setSocialJobId(null); setSocialError(socialErrorText(j.error || '')) }
+      return j
+    },
+    enabled: Boolean(socialJobId),
+    refetchInterval: 3000,
+  })
+  const socialBusy = startFanout.isPending || Boolean(socialJobId)
 
   const socialFloor = runData?.social_velocity_floor ?? 100
   // The "Trending / social" lane (#1129): social-shaped, no-demand queries surging
@@ -536,6 +610,12 @@ export function GoogleTrends() {
                                 <FileText size={12} /> Write
                               </button>
                             )}
+                            {resultView === 'social' && (
+                              <button onClick={() => openSocial(k)} title="Draft social posts from this trending search"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7, border: '1px solid #e9d5ff', background: '#faf5ff', color: '#7c3aed', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                <Share2 size={12} /> Draft social post
+                              </button>
+                            )}
                           </td>
                         </tr>
                       ))}
@@ -609,6 +689,83 @@ export function GoogleTrends() {
                       {createDraft.isPending ? 'Creating…' : 'Create draft'}
                     </button>
                     <button disabled={createDraft.isPending} onClick={() => setWriteRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {socialRow && (
+        <div onClick={() => !socialBusy && setSocialRow(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 12, maxWidth: 560, width: '100%', maxHeight: '85vh', overflow: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Share2 size={16} color="#7c3aed" />
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Draft a social post</div>
+            </div>
+            <div style={{ padding: 20 }}>
+              {socialDone ? (
+                <div>
+                  <div style={{ fontSize: 14, color: '#0f172a', marginBottom: 6 }}>✅ Drafts created.</div>
+                  <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+                    Platform-native drafts for <strong>{socialRow.query}</strong> are ready to review, edit, and publish on the Social page.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button onClick={() => navigate(`/clients/${id}/social`)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#7c3aed', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Review drafts</button>
+                    <button onClick={() => setSocialRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Close</button>
+                  </div>
+                </div>
+              ) : socialAccountsLoading ? (
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>Loading your connected accounts…</div>
+              ) : socialPlatformOptions.length === 0 ? (
+                <div>
+                  <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+                    No connected social accounts for this client yet. Connect them on the Social page, then come back to draft from this trend.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button onClick={() => navigate(`/clients/${id}/social`)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#7c3aed', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Open Social page</button>
+                    <button onClick={() => setSocialRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Close</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12.5, color: '#64748b', marginTop: 0 }}>
+                    Fans this trending search out into platform-native drafts (via the Social module) — review and publish them on the Social page. Nothing is posted automatically.
+                  </p>
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '12px 0 4px' }}>Topic</label>
+                  <textarea value={socialTopic} onChange={(e) => setSocialTopic(e.target.value)} rows={2} maxLength={500}
+                    style={{ width: '100%', fontSize: 12.5, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '14px 0 4px' }}>Angle {socialRow.suggested_format && <span style={{ textTransform: 'none', color: '#7c3aed' }}>· {socialRow.suggested_format}</span>}</label>
+                  <textarea value={socialAngle} onChange={(e) => setSocialAngle(e.target.value)} rows={5} maxLength={2000}
+                    style={{ width: '100%', fontSize: 12.5, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '14px 0 6px' }}>Platforms</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {socialPlatformOptions.map((p) => {
+                      const on = socialPlatforms.includes(p)
+                      return (
+                        <button key={p} onClick={() => setSocialPlatforms((cur) => on ? cur.filter((x) => x !== p) : [...cur, p])}
+                          style={{ textTransform: 'capitalize', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 999, cursor: 'pointer', border: on ? '1px solid #7c3aed' : '1px solid #cbd5e1', background: on ? '#7c3aed' : '#fff', color: on ? '#fff' : '#475569' }}>
+                          {p}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {socialError && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 10 }}>{socialError}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button disabled={!socialTopic.trim() || !socialAngle.trim() || socialPlatforms.length === 0 || socialBusy}
+                      onClick={() => startFanout.mutate()}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#7c3aed', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', opacity: (!socialTopic.trim() || !socialAngle.trim() || socialPlatforms.length === 0 || socialBusy) ? 0.6 : 1 }}>
+                      {socialBusy ? 'Creating drafts…' : `Create ${socialPlatforms.length || ''} draft${socialPlatforms.length === 1 ? '' : 's'}`.trim()}
+                    </button>
+                    <button disabled={socialBusy} onClick={() => setSocialRow(null)}
                       style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Cancel</button>
                   </div>
                 </>
