@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, Flame, Search, TrendingUp } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ArrowLeft, Download, FileText, Flame, Search, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import { toCsv, downloadCsv } from '../lib/csv'
@@ -50,9 +50,41 @@ function velocityLabel(k: TrendKeyword): string {
   return `+${Math.round(k.rising_value)}%`
 }
 
+// The seed keyword for a Blog Writer run from a rising query: the query itself
+// (the term the brief/outline is built on). Capped to the run keyword's 150-char limit.
+function trendSeedKeyword(k: TrendKeyword): string {
+  return (k.query || '').slice(0, 150)
+}
+
+// The per-run editorial guidance threaded into the Writer — carries the trend's
+// angle (rising/breakout velocity, intent, demand) so the post is framed around a
+// search that is climbing now. The brief stays keyword-driven; the angle rides here.
+function composeTrendWriterNotes(k: TrendKeyword, run: RunResponse['run']): string {
+  const lines: string[] = []
+  lines.push(`Working title angle: ${k.query}`)
+  const velocity = k.is_breakout
+    ? 'a BREAKOUT rising search (surging demand — very new interest)'
+    : k.rising_value != null
+      ? `a rising search, up +${Math.round(k.rising_value)}% in interest`
+      : 'a rising search'
+  lines.push(`This is ${velocity} on Google Trends${run.category_name ? ` in ${run.category_name}` : ''}. Write to capture the momentum while it's climbing — lead with what's new / why interest is spiking.`)
+  const meta = [
+    k.search_intent && `intent: ${k.search_intent}`,
+    k.volume != null && `~${k.volume.toLocaleString()} monthly searches`,
+    k.cpc_usd != null && `$${k.cpc_usd.toFixed(2)} CPC`,
+  ].filter(Boolean).join(' · ')
+  if (meta) lines.push(meta)
+  if (k.is_question) lines.push('This is a question — answer it directly and early (AEO-friendly).')
+  const seeds = run.seeds?.length ? run.seeds.join(', ') : ''
+  if (seeds) lines.push(`Related to the client's seed topic(s): ${seeds}.`)
+  lines.push('Source: Google Trends Discovery. Write as an authoritative, buyer-focused blog post.')
+  return lines.join('\n')
+}
+
 export function GoogleTrends() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
 
   const [seeds, setSeeds] = useState('')
   const [categoryCode, setCategoryCode] = useState<string>('')
@@ -60,6 +92,13 @@ export function GoogleTrends() {
   const [runId, setRunId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [qualifiedOnly, setQualifiedOnly] = useState(true)
+
+  // "Write this post" — create a Blog Writer run seeded from a rising query.
+  const [writeRow, setWriteRow] = useState<TrendKeyword | null>(null)
+  const [writeKeyword, setWriteKeyword] = useState('')
+  const [writeNotes, setWriteNotes] = useState('')
+  const [writeError, setWriteError] = useState<string | null>(null)
+  const [createdRunId, setCreatedRunId] = useState<string | null>(null)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -123,6 +162,31 @@ export function GoogleTrends() {
       return r.job_id
     }, undefined)
   }
+
+  function openWrite(k: TrendKeyword) {
+    if (!runData) return
+    const seed = trendSeedKeyword(k)
+    setWriteRow(k)
+    setWriteKeyword(seed)
+    setWriteNotes(composeTrendWriterNotes(k, runData.run))
+    setWriteError(null)
+    setCreatedRunId(null)
+  }
+  const createDraft = useMutation({
+    mutationFn: (body: { client_id: string; keyword: string; content_type: string; writer_notes?: string }) =>
+      api.post<{ run_id: string; status: string }>('/runs', body),
+    onSuccess: (resp) => {
+      setCreatedRunId(resp.run_id)
+      queryClient.invalidateQueries({ queryKey: ['runs'] })
+    },
+    onError: (e: unknown) => {
+      const detail = e instanceof Error ? e.message : ''
+      setWriteError(
+        detail === 'concurrency_limit' ? 'Too many drafts are generating right now (max 5). Try again shortly.'
+        : detail === 'client_frozen' ? 'This client is frozen — content creation is paused.'
+        : 'Could not create the draft. Please try again.')
+    },
+  })
 
   const rows = useMemo(() => {
     const ks = runData?.keywords ?? []
@@ -247,6 +311,7 @@ export function GoogleTrends() {
                         <th style={{ padding: '8px 10px' }}>KD</th>
                         <th style={{ padding: '8px 10px' }}>Intent</th>
                         <th style={{ padding: '8px 10px' }}>Trend score</th>
+                        <th style={{ padding: '8px 10px' }}></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -263,6 +328,14 @@ export function GoogleTrends() {
                           <td style={{ padding: '8px 10px' }}>{k.keyword_difficulty ?? '—'}</td>
                           <td style={{ padding: '8px 10px' }}>{k.search_intent ?? '—'}</td>
                           <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.trend_score ?? '—'}</td>
+                          <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
+                            {k.qualified && (
+                              <button onClick={() => openWrite(k)} title="Create a Blog Writer draft from this rising query"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7, border: '1px solid #ddd6fe', background: '#f5f3ff', color: '#6d28d9', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                <FileText size={12} /> Write
+                              </button>
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -289,6 +362,59 @@ export function GoogleTrends() {
             </div>
           ) : null}
         </>
+      )}
+
+      {writeRow && (
+        <div onClick={() => !createDraft.isPending && setWriteRow(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 12, maxWidth: 560, width: '100%', maxHeight: '85vh', overflow: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <FileText size={16} color="#6d28d9" />
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Write this post</div>
+            </div>
+            <div style={{ padding: 20 }}>
+              {createdRunId ? (
+                <div>
+                  <div style={{ fontSize: 14, color: '#0f172a', marginBottom: 6 }}>✅ Draft queued.</div>
+                  <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+                    The Blog Writer is generating <strong>{writeKeyword}</strong>. It’ll appear in Runs when ready.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button onClick={() => navigate(`/runs/${createdRunId}`)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#6d28d9', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>View the draft</button>
+                    <button onClick={() => setWriteRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Close</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12.5, color: '#64748b', marginTop: 0 }}>
+                    Creates a blog post in the Blog Writer for this client — seeded with the rising query below, with its trend angle as writer guidance.
+                  </p>
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '12px 0 4px' }}>
+                    Seed keyword <span style={{ textTransform: 'none', color: '#cbd5e1' }}>(drives the outline)</span>
+                  </label>
+                  <input value={writeKeyword} onChange={(e) => setWriteKeyword(e.target.value)} maxLength={150}
+                    style={{ width: '100%', fontSize: 13, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, boxSizing: 'border-box' }} />
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '14px 0 4px' }}>Writer guidance (angle)</label>
+                  <textarea value={writeNotes} onChange={(e) => setWriteNotes(e.target.value)} rows={9} maxLength={4000}
+                    style={{ width: '100%', fontSize: 12.5, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                  {writeError && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 8 }}>{writeError}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button disabled={!writeKeyword.trim() || createDraft.isPending}
+                      onClick={() => id && createDraft.mutate({ client_id: id, keyword: writeKeyword.trim().slice(0, 150), content_type: 'blog_post', writer_notes: writeNotes.trim() || undefined })}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#6d28d9', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', opacity: (!writeKeyword.trim() || createDraft.isPending) ? 0.6 : 1 }}>
+                      {createDraft.isPending ? 'Creating…' : 'Create draft'}
+                    </button>
+                    <button disabled={createDraft.isPending} onClick={() => setWriteRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
