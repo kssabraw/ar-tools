@@ -541,6 +541,21 @@ sign-off. All rejected in favor of the no-browser assembly above.
 
 **Consequences.** No `BRANDGUIDE_BROWSER_WS_URL`, no Browserless account, no Playwright dep, no
 Chromium in any image, no topology change. The one thing given up — cascade-resolved area
-weighting — is replaced by screenshot-pixel dominance. **Revisit trigger:** if the no-browser
-palette proves unacceptably wrong against a manual eyedropper on ≥3 real client sites (PRD §11
-acceptance #1), reopen this decision.
+weighting — is replaced by screenshot-pixel dominance.
+
+**Adversarial-review caveat (2026-09-15, added after this ADR).** One half of the method is
+NOT yet proven: "exact declared hex from scraped CSS." `scrapeowl_fetch` returns rendered DOM
+markup, not inlined external stylesheets, so colors defined in linked CSS, `var(--x)` custom
+properties, or utility classes (Tailwind) may not surface as inline `color:`/`background-color:`
+declarations — the common case on templated SMB sites. There is also no live-scraped-site color
+extractor in the suite today (the only census, `website_theme_precompile.py`, assumes all-inline
+CSS from an uploaded `.dc.html`), and the "truer signal than area-weighted computed styles" claim
+was never measured (the sandbox is egress-blocked). So screenshot-pixel dominance is the *primary*
+signal and CSS hex is a best-effort refinement with a pixel-sampled fallback (PRD §4.2).
+
+**Revisit trigger.** A **Phase-0 spike** (PRD §10) must run the real ScrapeOwl-CSS + DataForSEO-
+screenshot + Pillow path against ≥3 live client sites on the worker and measure the palette vs a
+manual eyedropper (PRD §11 acceptance #1, within a stated tolerance) **before Phase 1 builds on
+D4.** If declared-hex-from-scraped-CSS doesn't recover real brand colors and the pixel-sampled
+palette is unacceptably wrong, reopen this decision (the fallbacks then in play: parse linked
+stylesheets / resolve `var()` ourselves, or reconsider a headless render after all).
