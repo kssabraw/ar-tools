@@ -2537,6 +2537,24 @@ def resolve_content_writer_provider(requested: Optional[str]) -> str:
     return choice
 
 
+def _effective_prose_model(requested: Optional[str]) -> str:
+    """The concrete model id that actually wrote a page's DRAFT prose, given the
+    request's provider choice — CONTENT_WRITER_OPENAI_MODEL ("gpt-5.6-luna") when
+    the resolved provider is openai, else GENERATION_MODEL (Claude Sonnet).
+
+    Used to price the main prose token record: passing a hardcoded GENERATION_MODEL
+    would bill Luna prose at the Sonnet rate ($3/$15) instead of Luna's $0.20/$1.20
+    (the reason _MODEL_PRICING carries a "gpt-5.6-luna" key). Reuses
+    resolve_content_writer_provider so the recorded model always matches what ran —
+    an openai request with no key degrades to Claude here exactly as it does in
+    _generate_prose."""
+    return (
+        CONTENT_WRITER_OPENAI_MODEL
+        if resolve_content_writer_provider(requested) == "openai"
+        else GENERATION_MODEL
+    )
+
+
 class _ProseMsg:
     """Anthropic-message-shaped result so the OpenAI path is a drop-in at the
     existing call sites: exposes `.content[0].text` and
@@ -9181,7 +9199,7 @@ Full location: {body.location}
             logger.exception("Content generation error")
             raise Exception("Content generation failed. Please try again.")
 
-        token_rec = _token_record("generate-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        token_rec = _token_record("generate-page", _effective_prose_model(body.content_writer_provider), claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
         raw = claude_msg.content[0].text.strip()
         if raw.startswith("```"):
             raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
@@ -9837,7 +9855,7 @@ EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT inve
             logger.exception("Content reoptimize error")
             raise Exception("Content generation failed. Please try again.")
 
-        token_rec = _token_record("reoptimize-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        token_rec = _token_record("reoptimize-page", _effective_prose_model(body.content_writer_provider), claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
         raw = claude_msg.content[0].text.strip()
         if raw.startswith("```"):
             raw = re.sub(r'^```[a-zA-Z]*\n?', '', raw)
@@ -12324,7 +12342,7 @@ Primary keyword: {body.keyword}
             logger.exception("Content ecommerce generation error")
             raise Exception("Content generation failed. Please try again.")
 
-        token_rec = _token_record("generate-ecommerce-page", GENERATION_MODEL, claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
+        token_rec = _token_record("generate-ecommerce-page", _effective_prose_model(body.content_writer_provider), claude_msg.usage.input_tokens, claude_msg.usage.output_tokens)
         token_rec["input_tokens"]  += research_tok["input_tokens"]
         token_rec["output_tokens"] += research_tok["output_tokens"]
         token_rec["cost_usd"]       = round(token_rec["cost_usd"] + research_tok["cost_usd"], 6)
@@ -12609,7 +12627,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
                 if best is None:
                     raise Exception("Content generation failed. Please try again.")
                 break
-            _accumulate(_token_record("reoptimize-ecommerce-page", GENERATION_MODEL,
+            _accumulate(_token_record("reoptimize-ecommerce-page", _effective_prose_model(body.content_writer_provider),
                                       claude_msg.usage.input_tokens, claude_msg.usage.output_tokens))
             pass_html, pass_schema, pass_title, pass_gaps = _parse_generated_ecommerce(claude_msg.content[0].text)
             if not pass_html:
