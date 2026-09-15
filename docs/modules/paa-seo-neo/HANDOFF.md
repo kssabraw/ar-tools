@@ -4,7 +4,43 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — v1 (content half) BUILT · MERGED (PR #1117) · LIVE in production
+## Status (2026-09-15) — Phase 2 (prep-sheet manifest) BUILT · draft PR · migration applied live
+
+> **Phase 2 — the prep-sheet manifest + link-layer track/cost/QA (the "seam")** is
+> built to the PRD §11 build order on branch `claude/paa-seo-neo-phase2-manifest`
+> (draft PR). The owner settled the four Phase-2 design forks and greenlit the build
+> (2026-09-15). What shipped:
+> - **Data model** (migration `20260915160000_paa_manifests.sql`, **applied live +
+>   verified**): `paa_manifests` (one per `paa_set`, unique `set_id`; roll-up
+>   `cost_summary`/`qa_summary` + Sheet-export refs) + `paa_manifest_assets` (assets
+>   first-class: `category` content/authority/media, `source` auto/seed/manual,
+>   `qa_verdict`/`qa_review`, `cost_task_type`, `confidence_tag`). New `async_jobs`
+>   type `paa_manifest_qa` (drift-proof CHECK widen). Both RLS-on, service-role.
+> - **Pure core** `services/paa_manifest.py` (unit-tested `tests/test_paa_manifest.py`):
+>   the seeded authority bundle (the 7 seam bolts, tracked-only, confidence-tagged),
+>   the audio/video/influencer manual rows, content-row assembly from resolved v1
+>   linkage, rebuild reconciliation (`merge_rows` — refresh auto rows, preserve
+>   operator edits), the reused Recipe-Engine cost rollup (honest "not estimated"
+>   for off-menu RD 100), the QA rollup, and the CSV/Sheet/JSON export rendering.
+> - **I/O** `services/paa_manifest_service.py` (`tests/test_paa_manifest_service.py`):
+>   build/refresh (resolves `runs.published_url` / `gbp_posts.search_url` /
+>   syndication copies), asset CRUD, the `paa_manifest_qa` async job (reuses
+>   `qa_service.review_url` per live content URL, gated on `qa_enabled` with v1's
+>   deterministic checks as the free fallback), and the Google-Sheet export
+>   (`google_docs.create_google_sheet` into the client's Drive folder).
+> - **API** `routers/paa.py` (+ `models/paa.py`): build/get manifest, QA enqueue,
+>   asset add/patch/delete, CSV/JSON export, Sheet export. **Frontend:** a **Prep
+>   Sheet** section on the PAA-set detail expander (`pages/PaaSets.tsx`) — build/
+>   rebuild, cost + QA summaries, the asset table grouped by category with editable
+>   status on authority/media rows, Run QA, and the three export buttons.
+> - **Guardrails held (§9):** no execute affordance on any authority row (status is
+>   human-set only); no audio/video generator; the master reference is not wired into
+>   `sop_library`; confidence tags carried into the UI + the export.
+>
+> **Not built (Phase 3):** the Service PAA Campaign object + the automated
+> single-variable gate/verify state machine. Needs its own owner greenlight.
+
+## Prior status (2026-09-15) — v1 (content half) BUILT · MERGED (PR #1117) · LIVE in production
 
 > v1 is built to PRD §10, **merged to `main`** (PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), squash `9baaaa1`),
 > and **verified live in production**: the `paa_sets` (11 cols) + `paa_items` (15
@@ -84,21 +120,12 @@
 
 (Item 5 — the `keyword_research_serp` per-run PAA cap/cost — stays a build-time confirm.)
 
-## Next action — v1 SHIPPED; the next build is Phase 2 (needs its own owner greenlight)
+## Next action — Phase 2 SHIPPED (draft PR); the next build is Phase 3 (needs its own owner greenlight)
 
-v1 (the content half) is done, merged (PR #1117), and live in production. **A merged
-v1 is not a greenlight for the next phase** — each deferred phase is its own scoped
-build the owner greenlights separately (PRD §6). Do NOT start Phase 2/3 unprompted.
-
-**Phase 2 — the prep-sheet manifest + link-layer track/cost/QA (the "seam").** The
-methodology's physical hand-off (reference §3, §5): a per-campaign **manifest** that
-auto-collects the URLs of assets the suite already produced (the PAA posts + their
-GBP posts + syndication copies + hosted images) plus manual checklist rows for
-human-produced assets (audio/video/influencer — **tracked, never generated**). The
-link layer becomes **track / cost / QA / hand-off ONLY** — reuse the **Recipe
-Engine** to cost the authority bundle, the **QA Agent** to QA it, and export the
-manifest for a human/vendor operator. **The suite still executes NOTHING at the
-authority layer** (permanent guardrail, PRD §9).
+Phase 2 (the prep-sheet manifest) is built to PRD §11 on
+`claude/paa-seo-neo-phase2-manifest` (draft PR; migration applied live). **A merged
+phase is not a greenlight for the next** — Phase 3 is its own scoped build the owner
+greenlights separately (PRD §6). Do NOT start Phase 3 unprompted.
 
 **Phase 3 — the Service PAA Campaign object + the automated single-variable gate.**
 The full orchestration: target service → PAA set → blog runs → GBP posts →
