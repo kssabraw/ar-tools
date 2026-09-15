@@ -1,6 +1,7 @@
 # Topic-Vector Centering + Information Gain — Module Plan v1.0
 
 **Status:** Design locked, not built. This doc is the design authority; nothing here has shipped.
+**Review:** Adversarially reviewed 2026-09-15; corrections folded in — the 11–20 tier is already-scraped (not an extra fetch), the site claim index is a cross-service platform→nlp integration, the measure runs *beside* the deterministic engine (not folded in) and is gated on `GEMINI_API_KEY`, plus empty-state / absent-AIO handling and acceptance criteria (§14).
 **Origin:** A reoptimize discussion on the Nova Life Peptides "buy retatrutide" page (page `22c93b10-…`, 2026-09-15, composite 58.8/fail) surfaced two blind spots in ecommerce page scoring: (1) we don't measure whether a page is *semantically about the right thing*, and (2) we don't measure whether it *adds anything the ranking set doesn't*. This module adds both, on top of the existing MCS embedding machinery.
 
 ---
@@ -25,7 +26,7 @@ Four signals, three from a shared embedding pass, one from an LLM rubric:
 
 ## 3. The competitor corpus — three tiers
 
-All from the SERP we already fetch (DataForSEO usually returns 20+ URLs). Pulling 11–20 roughly doubles the scrape for the analysis; mitigate with a **headings-only, no-JS light fetch** for that tier.
+All three tiers come from the SERP **we already scrape today** — there is **no extra fetch**. `SERP_RESULT_COUNT = 20` (`main.py:1208`) and `_run_serp_analysis` scrapes every returned URL, so positions 11–20 are already fetched and already folded into today's competitor targets. The current pipeline just doesn't *retain SERP rank position*: `competitor_headings` and entity targets are aggregated across all ~20 pages with no tier (`main.py:2824-2846`). So the real (cheap) work is **retaining each scraped page's rank and partitioning the already-scraped set** — not a second scrape. (Corollary: today's targets already span ~20 pages, so anchoring the centroid on the **top-10 only (§4) is a deliberate *narrowing* of current behavior** for a cleaner consensus signal, not an addition.)
 
 | Tier | What it is | Role |
 |---|---|---|
@@ -41,6 +42,8 @@ All from the SERP we already fetch (DataForSEO usually returns 20+ URLs). Pullin
 
 **The implied query is deliberately NOT in the centroid.** It lives one layer down (§5), as coverage checklist items only. This is the load-bearing decision: it makes the implied/emotional layer structurally incapable of pulling the vector off "where to buy." A mechanism essay with no commercial core scores *low* on centering, correctly.
 
+**AIO is often absent — the centroid must degrade explicitly.** Many commercial SERPs return no AI Overview (`aio_present` is a real boolean; `_run_serp_analysis` sets AIO empty when URLs are supplied manually — `main.py:2668`). When AIO is missing the centroid falls back to *explicit query + top-10 headings*. A centering score is therefore only comparable across pages with the **same AIO availability** — never rank an AIO-present score against an AIO-absent one on one scale.
+
 **Score:** `cosine(page_embedding, centroid)`. Reported as a drift alarm ("this page slid toward vendor-trust and off the commercial vector"). Because whole-doc cosine saturates and is forgiving (the lesson already burned into the Fan-out source guard and Keyword Research relevance gate — cosine alone drifts), this single number is a coarse gauge; the actionable detail comes from §5.
 
 **Related finding (adjacent, separately fixable):** `_compute_serp_signal_coverage` has no `never_use_terms` awareness, so it scores the page against `retatrutide` (34 kw + 66 bold shortfall) and its recommendations literally say "add retatrutide" — which voice enforcement then strips, every pass. Excluding `never_use_terms` from the coverage targets is a small, separate change worth doing regardless of this module.
@@ -50,7 +53,7 @@ All from the SERP we already fetch (DataForSEO usually returns 20+ URLs). Pullin
 The `<title>` carries disproportionate weight for both Google and the embedder, and for a "buy" query it is the most important element on the page. The plan treats it explicitly:
 
 - **Weight the title zone in the centering score.** A generic or off-vector title under-centers the whole page regardless of body coverage. (Live example: Nova's `Buy GLP-3RT Research Peptide | Nova Life Peptides` — leads with "Buy" correctly, but carries the coded name instead of the entity every competitor titles with, and none of Nova's own verification edge.)
-- **Capture competitor titles as a first-class signal.** Today we surface competitor *headings* (H2/H3) but not competitor *titles* — so the writer gets per-keyword title-zone counts, never "here's how the top-10 title their pages." Capture the top-10 `<title>` strings (already in the DataForSEO SERP results — no extra scrape) and surface them as a pattern target alongside headings, and fold their tokens into the centroid.
+- **Capture competitor titles as a first-class signal.** Today we surface competitor *headings* (H2/H3) but not competitor *titles* — so the writer gets per-keyword title-zone counts, never "here's how the top-10 title their pages." No extra network is needed (titles ride in the same DataForSEO SERP response), but note they're currently *parsed then discarded*: `fetch_serp_urls` uses titles only for bold-term extraction and returns `(urls, bold_terms, aio)` (`main.py:1294-1298`), so capturing them is a small return-shape change threaded through `serp_analysis`, not a free read. Surface them as a pattern target alongside headings, and fold their tokens into the centroid.
 - **The `never_use_terms` cap bites hardest here.** The title is the one place the entity matters most and the one place it's forbidden. There's no full fix; the coded-name title will under-perform for the branded query. The available lever is to win the title on the **commercial + differentiation axis** (buy · sizes · purity · COA/verified) rather than the entity name — the information-gain edge (§6) applied to the title.
 
 ## 5. Measure 2 — Per-subtopic coverage
@@ -77,65 +80,88 @@ Guard #3 is the anti-fabrication mechanism. Without it, scoring information gain
 
 **Weighting decision (locked):** Information Gain is a **separate, prominent score, coached into the reopt loop as guidance ("add these specific site-grounded facts; cover these under-served subtopics"), with LOW-or-ZERO composite weight.** Reason: if gain were heavily weighted *and* the reopt loop optimizes the composite, we'd rebuild the fabrication incentive as a gain *quota* the model strains to fill. A solid table-stakes PDP with a real offer must be allowed to score fine without heroic novelty; gain is the edge, surfaced and coached — not a gate that forces invention.
 
+**Empty-state + cross-vocabulary handling (post-review):**
+- **Thin/absent site index → suppress, don't zero.** When the site claim index is empty or thin (new client, or a JS-only / sitemap-less site — `site_page_index` degrades to an empty index best-effort), *every* page claim is ungroundable, so gain would read a misleading `0` and the coaching would have nothing to draw from. In that state, **suppress the gain score ("not measured")** rather than report 0, and don't coach ungroundable additions.
+- **Coded-name ≠ competitor-name in the rarity test.** The "rare in top-10" check compares the page's claims (using "GLP-3RT") to competitor claims (using "retatrutide"). Rarity **must** be judged on the claim *predicate* via embedding, not surface tokens — otherwise a coded-name claim looks absent from competitors and is falsely credited as novel. Validate on the Nova pair ("GLP-3RT is a triple-agonist" vs "retatrutide is a triple-agonist" must read as the *same* claim); name-agnostic matching is the module's whole premise, so this is a build-time must-verify, not an assumption.
+
 **Properties to remember:** gain is corpus-relative (a snapshot — re-running over time shows an eroding edge as competitors catch up) and only credits *rare* claims (claim-level page-spread).
 
-## 7. The site claim index — the one genuinely new artifact
+## 7. The site claim index — the module's primary integration
 
 The grounding corpus. Per-client, cached, refreshed periodically.
 
+- **Cross-service (load-bearing):** `site_page_index` lives in **platform-api** (`writer/platform-api/services/site_page_index.py`); the scorer that needs the index lives in **nlp-api**, which has *no* access to it (nlp is private/auth-less and receives its inputs — e.g. `serp_analysis` — from platform-api in the request body). So the index is **built and cached in platform-api and passed to nlp in the score/reopt request payload**, the same way `serp_analysis` already is. This cross-service data flow — not the `discover_site_urls` call — is the bulk of the real work.
 - **Discovery:** reuse `site_page_index.discover_site_urls` (sitemap → DataForSEO `site:` fallback).
 - **Granularity (locked): STRUCTURED FACTS**, not claim-sentences. A per-fact extractor pulls typed facts from the site (price, purity, COA presence/access, molecular identifiers, shipping/returns terms, policies, product identity). Stronger grounding than fuzzy sentence-cosine; a page claim is credited only when it matches a structured fact the site actually asserts.
 - **Matching:** a page claim → the index by fact-type + value agreement (embedding cosine assists fuzzy matches; typed comparison for numerics/prices).
 - **Name-agnostic:** the site says "GLP-3RT" and carries its specs, so grounding credits the coded-name facts fine.
 
-This is the piece to design most carefully (extractor coverage, refresh cadence, staleness). Everything else is reuse.
+This is the module's **primary integration**, not a reuse line — design it most carefully (extractor coverage, the platform→nlp payload contract, refresh cadence, staleness). The embedding/cosine/discovery *primitives* are reuse; wiring them into the scoring path across the service boundary is new.
 
 ## 8. Reuse map
 
 | Need | Reuse |
 |---|---|
-| Embeddings + cosine | `ecommerce_mcs.py` `cosine`, injected `EmbedFn` (Gemini `gemini-embedding-2`, unit-normed) |
-| AIO + competitor headings | already in `serp_analysis` (`aio_text`, `competitor_headings`) |
+| Embeddings + cosine (primitives) | `ecommerce_mcs.py` `cosine`, injected `EmbedFn` (Gemini `gemini-embedding-2`) — **wired into generate/reopt only today, NOT the scoring path; gated on `GEMINI_API_KEY`** (see §9) |
+| AIO + competitor headings | already in `serp_analysis` (`aio_text`, `competitor_headings`) — competitor *titles* are NOT (see §4a) |
 | Implied-query brief | Haiku intent fan-out, same shape as `keyword_research_topics` |
 | Claim/fact extraction | `ecommerce_facts.py`, MCS `parse_facts` |
-| Site discovery | `site_page_index.discover_site_urls` |
-| Genuinely new | the per-client **structured-fact site claim index** |
+| Site discovery | `site_page_index.discover_site_urls` — **platform-api only; scorer is nlp-api** (cross-service, see §7) |
+| Genuinely new | the per-client **structured-fact site claim index** + its platform→nlp payload contract |
 
 ## 9. Where it slots
 
-Ecommerce scorer first (`/score-ecommerce-page`, `/reoptimize-ecommerce-page`), then the Local SEO / service / blog scorers (shared `_compute_serp_signal_coverage` seam). Centering + per-subtopic coverage can fold into the deterministic `serp_signal_coverage` engine or sit beside it; Information Gain is a separate reported score. The reopt loop consumes the per-subtopic gaps + gain guidance as rewrite targets.
+Ecommerce scorer first (`/score-ecommerce-page`, `/reoptimize-ecommerce-page`), then the Local SEO / service / blog scorers.
+
+**All three measures run as a SEPARATE async pass beside the composite — NOT folded into `_compute_serp_signal_coverage`.** That engine is a synchronous, network-free `def` whose docstring is an explicit contract — *"Runs in Python — not scored by Claude — so results are precise, reproducible, and cost no extra tokens"* (`main.py:4826-4830`, called synchronously at `5350 / 8023 / 11405 / 11687 / 11924`). Centering / coverage / gain are embedding-based: network-bound, non-reproducible run-to-run, and cost+latency-bearing. Folding them in would break all three of that engine's guarantees, so they sit **beside** it as an async measure that emits its own scores, leaving the deterministic engine byte-for-byte untouched.
+
+**Dependency:** the whole measure is gated on **`GEMINI_API_KEY`** on the nlp service (the embedder is dormant without it — `main.py:190`; set in prod today). No key → the measure is skipped, not defaulted to a number. Budget the embedding calls per score (page + centroid components + per-subtopic + claims) — new per-score cost the deterministic engine never carried.
+
+The reopt loop consumes the per-subtopic gaps + gain guidance as rewrite targets.
 
 ## 10. Guardrails
 
 - **Fabrication:** gain credited only for site-grounded claims; ungrounded novelty scores zero and is flagged. Composite weight kept low/zero so no gain quota.
-- **Name-agnostic:** embeddings + site-grounding both work under `never_use_terms`; the module is the intended answer to the forbidden-name problem.
+- **Name-agnostic:** embeddings + site-grounding both work under `never_use_terms`; the module is the intended answer to the forbidden-name problem (predicate-based claim matching, §6, is the build-time must-verify).
 - **Centering gates gain:** novelty is only "gain" inside the topic vector — off-vector novelty (vendor-trust boilerplate) is not rewarded.
 - **Emotional arc stays in the LLM rubric,** never the cosine.
+- **Deterministic engine untouched:** the new measure sits beside `_compute_serp_signal_coverage`, never inside it (§9).
 
 ## 11. Decisions
 
 **Locked:**
 - Centroid = explicit query + AIO + top-10 headings; implied query demoted to coverage checklist only.
 - Fork 2 (per-subtopic semantic coverage) is in.
-- 11–20 headings pulled as a distinct "differentiation-within-reach" tier, gated by ≥2 page-spread + centering floor.
+- 11–20 headings partitioned as a distinct "differentiation-within-reach" tier from the **already-scraped** set (no extra fetch), gated by ≥2 page-spread + centering floor.
 - Information Gain = separate prominent score, coached into reopt, low/zero composite weight.
 - Site claim index granularity = **structured facts.**
 - Ground truth = the client's whole site.
+- Centering / coverage / gain run as a **separate async measure** beside the composite, gated on `GEMINI_API_KEY` (§9) — never folded into the deterministic engine.
 
 **Open:**
-- Structured-fact extractor scope (which fact types v1) + refresh cadence for the site index.
+- Structured-fact extractor scope (which fact types v1) + refresh cadence for the site index + the platform→nlp payload contract shape.
 - Exact centering-floor + rare-in-top-10 thresholds (calibrate from real runs, like every other floor in this codebase).
-- Whether centering/coverage fold into `serp_signal_coverage` or stand as a new engine.
 
 ## 12. Phasing
 
-- **P0 — report-only.** Centering score + per-subtopic coverage + the inverse gain gap (competitor claims the page lacks). No score fed to reopt yet. Cheapest, safest, immediately useful; validates the centroid + clustering before anything optimizes against them.
-- **P1 — site claim index (structured facts)** + the scored Information Gain dimension, coached into reopt.
-- **P2 — 11–20 differentiation tier** + the emotional-arc rubric dimension.
-- Adversarial-review the P0 design before building (the drift/saturation traps are exactly what that review catches).
+- **P0 — report-only.** Centering score + per-subtopic coverage + the inverse gain gap (competitor claims the page lacks). No score fed to reopt yet. Cheapest, safest, immediately useful; validates the centroid + clustering before anything optimizes against them. (The 11–20 tier here is a re-partition of the already-scraped set — see §3 — not new I/O.)
+- **P1 — site claim index (structured facts) + the platform→nlp payload wiring** + the scored Information Gain dimension, coached into reopt.
+- **P2 — the emotional-arc rubric dimension** (the 11–20 differentiation tier lands in P0/P1 as a partition, not a separate fetch phase).
+- Adversarial-review done (2026-09-15); re-review before build if the design moves materially.
 
 ## 13. Related findings surfaced during design (not this module, don't lose them)
 
 1. **`never_use_terms` not excluded from SERP-signal coverage** — the coverage engine penalizes the page for the forbidden target keyword and instructs the writer to add it, fighting voice enforcement every pass. Small standalone fix.
 2. **Empty entity extraction on an entity-rich SERP** — `entity_detail: []` on a 15-page "buy retatrutide" SERP; either the Google-NLP `GOOGLE_NLP_MIN_SALIENCE=0.40` floor (salience is a relative distribution; 0.40 keeps almost nothing) or an extraction failure. Needs a live `/analyze` to see the raw entity count + which provider fired. Compounds the "no entity gap" false comfort.
 3. **`<title>` not passed to the LLM scorer** — the `organic_ranking` engine reported it couldn't see the title ("Title tag content not provided in the page extract, so cannot confirm keyword presence"), so the qualitative engines under-scrutinize the single heaviest element while the deterministic `serp_signal_coverage` engine measures it. Extraction-parity fix.
+
+## 14. Acceptance criteria
+
+Concrete and checkable — no "improves quality":
+
+- **Centering tracks real drift.** On a labeled mini-set, the Nova "buy retatrutide" page (vendor-trust drift) scores **below** a strong on-vector competitor PDP for the same keyword. The module isn't "working" until it separates these correctly.
+- **Gain never rewards fabrication.** A claim absent from the client's site index is never credited; an injected ungrounded claim scores zero and is flagged (regression test).
+- **Coverage names the real gaps.** For the Nova run, the inverse-gain output surfaces the mechanism cluster (receptor / metabolic / triple-agonist) the page under-covers.
+- **No regression to the deterministic engine.** `_compute_serp_signal_coverage` outputs are byte-identical before/after (the new measure is beside it, not in it).
+- **Graceful degradation.** No `GEMINI_API_KEY`, an empty site index, or an absent AIO each degrade to a skipped-or-suppressed measure — never a misleading number or a failed score.
+- **Name-agnostic matching verified.** The coded-name/competitor-name claim pair (§6) reads as the same claim in the rarity test.
