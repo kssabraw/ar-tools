@@ -138,7 +138,10 @@ class OpenAIWriterLLM:
                 # server-side reasoning_effort default, so a forced tool call
                 # must set it to "none" explicitly. Harmless for prose quality
                 # here — every tool call is a structured extraction, not a
-                # reasoning task.
+                # reasoning task. To restore reasoning on the tool-call steps
+                # later, migrate these calls to the /v1/responses endpoint
+                # (supports function tools WITH reasoning). See decisions.md
+                # "Fanout Luna writer — reasoning_effort=none on tool calls".
                 "reasoning_effort": "none",
             },
             purpose=purpose,
