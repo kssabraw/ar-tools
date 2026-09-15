@@ -559,3 +559,34 @@ manual eyedropper (PRD §11 acceptance #1, within a stated tolerance) **before P
 D4.** If declared-hex-from-scraped-CSS doesn't recover real brand colors and the pixel-sampled
 palette is unacceptably wrong, reopen this decision (the fallbacks then in play: parse linked
 stylesheets / resolve `var()` ourselves, or reconsider a headless render after all).
+---
+
+## Fanout Luna writer — `reasoning_effort="none"` on tool calls (reasoning OFF for now)
+
+**Status: DECIDED (owner, 2026-09-15). Built in the same change (PR #1130).**
+
+gpt-5.6-luna began (2026-09-15) rejecting function tools combined with a
+non-`"none"` `reasoning_effort` on `/v1/chat/completions` (`400 — Function tools
+with reasoning_effort are not supported … set reasoning_effort to 'none'`). This
+dead-lettered every Fanout content run on the OpenAI/Luna provider that hits a
+forced tool-call step (observed live: Nova Life Peptides' retatrutide +
+tirzepatide 16:00 UTC runs). An earlier Luna article the same day succeeded, so
+this reads as a provider-side tightening, not a code change.
+
+**Decision (owner):** keep Luna running **without** reasoning on the tool-call
+steps for now — ship the one-line chat-completions fix
+(`OpenAIWriterLLM.call_tool` sends `reasoning_effort="none"`). Do NOT do the
+larger endpoint migration yet.
+
+**Scope of what loses reasoning:** ONLY the four short structured tool-call
+steps — `writer_intro`, `writer_faqs`, `writer_cta`, `writer_takeaways`. The
+long-form prose (`complete_text`: body sections, conclusion, enrichment lede)
+is untouched and keeps the model's default reasoning. The downstream Claude
+voice/quality judges still grade the output. Quality impact judged marginal.
+
+**To turn reasoning back on later (if needed):** migrate the Fanout writer's
+tool calls from `/v1/chat/completions` to OpenAI's `/v1/responses` endpoint,
+which supports function tools WITH a non-`none` reasoning_effort. That is a
+larger change (different request/response surface + parsing in
+`fanout/llm/openai_writer_client.py`) and was deliberately deferred. Only the
+tool-call path needs it; `complete_text` is unaffected either way.

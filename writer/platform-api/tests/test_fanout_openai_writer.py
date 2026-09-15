@@ -52,6 +52,9 @@ def test_complete_text_handles_empty_content():
 def test_call_tool_parses_json_arguments():
     def fake_create(**kwargs):
         assert kwargs["tool_choice"]["function"]["name"] == "emit"
+        # gpt-5.6-luna rejects function tools with a non-"none" reasoning_effort
+        # on chat-completions, so a forced tool call must send it explicitly.
+        assert kwargs["reasoning_effort"] == "none"
         call = SimpleNamespace(function=SimpleNamespace(name="emit", arguments='{"title": "X", "n": 3}'))
         return _resp(tool_calls=[call])
 

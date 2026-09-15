@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, FileText, Flame, Search, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Flame, Search, Share2, Sparkles, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import { toCsv, downloadCsv } from '../lib/csv'
@@ -38,10 +38,14 @@ interface TrendKeyword {
   trend_score: number | null
   relevance_score?: number | null
   audience_fit?: string | null
+  social_lean?: string | null
+  suggested_format?: string | null
+  social_score?: number | null
 }
 interface RunResponse {
   run: TrendRunSummary & { category_code: number | null; location_code: number | null }
   keywords: TrendKeyword[]
+  social_velocity_floor?: number
 }
 interface TrendsCategory { category_code: number; category_name: string; parent_code: number | null }
 
@@ -107,6 +111,21 @@ function composeTrendWriterNotes(k: TrendKeyword, run: RunResponse['run']): stri
   return lines.join('\n')
 }
 
+// Phase B (#1129): the angle threaded into the social fan-out — frames the post
+// around a search that's surging NOW, with the classifier's suggested short-form
+// format. The fan-out reuses source_type='topic', so this rides as the angle.
+function composeSocialAngle(k: TrendKeyword): string {
+  const velocity = k.is_breakout
+    ? 'a breakout trending search (interest is surging right now)'
+    : k.rising_value != null
+      ? `a fast-rising search, up +${Math.round(k.rising_value)}% in interest`
+      : 'a rising search'
+  const fmt = k.suggested_format ? ` Make it a ${k.suggested_format}.` : ''
+  return `Ride the trend: "${k.query}" is ${velocity}. Create a timely, native social post that hooks viewers on what's new / why it's taking off.${fmt} Punchy and shareable — this is trend-jacking, not an explainer.`
+}
+
+interface SocialAccountLite { account_id: string; platform: string; handle?: string | null }
+
 export function GoogleTrends() {
   const { id } = useParams<{ id: string }>()
   const queryClient = useQueryClient()
@@ -119,6 +138,7 @@ export function GoogleTrends() {
   const [runId, setRunId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [qualifiedOnly, setQualifiedOnly] = useState(true)
+  const [resultView, setResultView] = useState<'seo' | 'social'>('seo')
   const [routeMsg, setRouteMsg] = useState<string | null>(null)
   const [seasonal, setSeasonal] = useState<SeasonalResult | null>(null)
 
@@ -128,6 +148,16 @@ export function GoogleTrends() {
   const [writeNotes, setWriteNotes] = useState('')
   const [writeError, setWriteError] = useState<string | null>(null)
   const [createdRunId, setCreatedRunId] = useState<string | null>(null)
+
+  // "Draft social post" (#1129 Phase B) — fan a trending query out into reviewable
+  // social drafts via the existing social module (source_type='topic').
+  const [socialRow, setSocialRow] = useState<TrendKeyword | null>(null)
+  const [socialTopic, setSocialTopic] = useState('')
+  const [socialAngle, setSocialAngle] = useState('')
+  const [socialPlatforms, setSocialPlatforms] = useState<string[]>([])
+  const [socialError, setSocialError] = useState<string | null>(null)
+  const [socialJobId, setSocialJobId] = useState<string | null>(null)
+  const [socialDone, setSocialDone] = useState(false)
 
   const { data: client } = useQuery<Client>({
     queryKey: ['client', id],
@@ -250,18 +280,80 @@ export function GoogleTrends() {
     },
   })
 
+  // Phase B — the client's connected social accounts (only when the modal opens)
+  // → the platforms they can actually draft for.
+  const { data: socialAccounts, isLoading: socialAccountsLoading } = useQuery<SocialAccountLite[]>({
+    queryKey: ['social-accounts', id],
+    queryFn: () => api.get<SocialAccountLite[]>(`/clients/${id}/social/accounts`),
+    enabled: Boolean(id && socialRow),
+  })
+  const socialPlatformOptions = useMemo(
+    () => Array.from(new Set((socialAccounts ?? []).map((a) => a.platform.toLowerCase()))),
+    [socialAccounts],
+  )
+
+  function openSocial(k: TrendKeyword) {
+    setSocialRow(k)
+    setSocialTopic(k.query)
+    setSocialAngle(composeSocialAngle(k))
+    setSocialPlatforms([])
+    setSocialError(null)
+    setSocialJobId(null)
+    setSocialDone(false)
+  }
+  function socialErrorText(detail: string): string {
+    if (detail.includes('social_not_enabled')) return 'The Social module isn’t enabled for this workspace yet.'
+    if (detail === 'client_frozen') return 'This client is frozen — content creation is paused.'
+    return 'Could not create the social drafts. Please try again.'
+  }
+  const startFanout = useMutation({
+    mutationFn: () => api.post<{ angle_set_id: string; job_id: string }>(`/clients/${id}/social/fan-out`, {
+      source_type: 'topic', text: socialTopic.trim(), angle: socialAngle.trim(),
+      angle_title: socialRow?.query, platforms: socialPlatforms, format: 'feed',
+      include_image: false, include_hashtags: true,
+    }),
+    onSuccess: (r) => { setSocialError(null); setSocialJobId(r.job_id) },
+    onError: (e: unknown) => setSocialError(socialErrorText(e instanceof Error ? e.message : '')),
+  })
+  // Poll the fan-out job; the drafts land on the Social page for review + publish.
+  useQuery({
+    queryKey: ['social-fanout-job', id, socialJobId],
+    queryFn: async () => {
+      const j = await api.get<{ status: string; error?: string | null }>(`/clients/${id}/social/fan-out/${socialJobId}`)
+      if (j.status === 'complete') { setSocialJobId(null); setSocialDone(true) }
+      else if (j.status === 'failed') { setSocialJobId(null); setSocialError(socialErrorText(j.error || '')) }
+      return j
+    },
+    enabled: Boolean(socialJobId),
+    refetchInterval: 3000,
+  })
+  const socialBusy = startFanout.isPending || Boolean(socialJobId)
+
+  const socialFloor = runData?.social_velocity_floor ?? 100
+  // The "Trending / social" lane (#1129): social-shaped, no-demand queries surging
+  // past the velocity floor (breakout always clears it), sorted by social_score
+  // (trend_score is ~0 for a no-volume row, so it can't be used here).
+  const socialRows = useMemo(() => {
+    return (runData?.keywords ?? [])
+      .filter((k) => !k.qualified && k.social_lean === 'social'
+        && (k.is_breakout || (k.rising_value ?? 0) >= socialFloor))
+      .sort((a, b) => (b.social_score ?? 0) - (a.social_score ?? 0))
+  }, [runData, socialFloor])
+
   const rows = useMemo(() => {
+    if (resultView === 'social') return socialRows
     const ks = runData?.keywords ?? []
     return qualifiedOnly ? ks.filter((k) => k.qualified) : ks
-  }, [runData, qualifiedOnly])
+  }, [runData, qualifiedOnly, resultView, socialRows])
 
   function exportCsv() {
     if (!runData) return
     const csv = toCsv(
-      ['query', 'velocity', 'volume', 'cpc_usd', 'keyword_difficulty', 'intent', 'question', 'qualified', 'trend_score'],
+      ['query', 'velocity', 'volume', 'cpc_usd', 'keyword_difficulty', 'intent', 'question', 'qualified', 'trend_score', 'social_lean', 'suggested_format', 'social_score'],
       (runData.keywords).map((k) => [
         k.query, velocityLabel(k), k.volume ?? '', k.cpc_usd ?? '', k.keyword_difficulty ?? '',
         k.search_intent ?? '', k.is_question ? 'yes' : '', k.qualified ? 'yes' : 'no', k.trend_score ?? '',
+        k.social_lean ?? '', k.suggested_format ?? '', k.social_score ?? '',
       ]),
     )
     downloadCsv(`google-trends-${runData.run.seeds.join('-').slice(0, 40)}.csv`, csv)
@@ -417,13 +509,24 @@ export function GoogleTrends() {
           {/* Results */}
           {runId && scanMode !== 'seasonal' && (
             <div style={{ marginTop: 20 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                 <h2 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>Rising queries</h2>
                 {runData && <span style={{ fontSize: 13, color: '#64748b' }}>{runData.run.qualified_count} with demand / {runData.run.rising_count} rising</span>}
-                <label style={{ fontSize: 13, color: '#475569', marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <input type="checkbox" checked={qualifiedOnly} onChange={(e) => setQualifiedOnly(e.target.checked)} /> Qualified only
-                </label>
-                {isCategoryRun && (
+                {/* Content (SEO) vs Trending/social (#1129) — no-demand rising queries are often emerging terms for social, not SEO. */}
+                <div style={{ marginLeft: 'auto', display: 'inline-flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden' }}>
+                  {([['seo', 'Content (SEO)'], ['social', `Trending / social${socialRows.length ? ` (${socialRows.length})` : ''}`]] as [typeof resultView, string][]).map(([v, label]) => (
+                    <button key={v} onClick={() => setResultView(v)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', border: 'none', background: resultView === v ? (v === 'social' ? '#7c3aed' : '#0ea5e9') : '#fff', color: resultView === v ? '#fff' : '#475569', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                      {v === 'social' && <Sparkles size={13} />}{label}
+                    </button>
+                  ))}
+                </div>
+                {resultView === 'seo' && (
+                  <label style={{ fontSize: 13, color: '#475569', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <input type="checkbox" checked={qualifiedOnly} onChange={(e) => setQualifiedOnly(e.target.checked)} /> Qualified only
+                  </label>
+                )}
+                {resultView === 'seo' && isCategoryRun && (
                   <button onClick={() => routeToTopics.mutate(qualifiedQueries)} disabled={!qualifiedQueries.length || routeToTopics.isPending}
                     title="Start a Topic Research run seeded with these qualified rising queries"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, border: 'none', background: (!qualifiedQueries.length || routeToTopics.isPending) ? '#94a3b8' : '#6d28d9', color: '#fff', fontSize: 13, fontWeight: 600, cursor: (!qualifiedQueries.length || routeToTopics.isPending) ? 'default' : 'pointer' }}>
@@ -435,12 +538,19 @@ export function GoogleTrends() {
                   <Download size={14} /> CSV
                 </button>
               </div>
+              {resultView === 'social' && (
+                <div style={{ marginBottom: 8, fontSize: 12.5, color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Sparkles size={13} /> Rising searches with no measured search demand yet — often emerging terms, better for social / short-form content than SEO.
+                </div>
+              )}
               {routeMsg && <div style={{ marginBottom: 8, fontSize: 13, color: '#6d28d9' }}>{routeMsg}</div>}
               {loadingRun && !runData ? (
                 <div style={{ color: '#94a3b8', fontSize: 14, padding: 16 }}>Loading…</div>
               ) : rows.length === 0 ? (
                 <div style={{ padding: 16, borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b', fontSize: 14 }}>
-                  No {qualifiedOnly ? 'qualified ' : ''}rising queries for these seeds. Trends surfaced {runData?.run.rising_count ?? 0} rising terms; try a broader seed, a different category, or untick “Qualified only” to inspect the raw list.
+                  {resultView === 'social'
+                    ? <>No social-shaped trending searches in this scan. These are rising queries with no demand yet that read as entertainment/short-form (e.g. “… vids”, “… transformation”, “oddly satisfying …”); this scan’s rising terms were either buyer/informational or below the velocity floor.</>
+                    : <>No {qualifiedOnly ? 'qualified ' : ''}rising queries for these seeds. Trends surfaced {runData?.run.rising_count ?? 0} rising terms; try a broader seed, a different category, or untick “Qualified only” to inspect the raw list.</>}
                 </div>
               ) : (
                 <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 10 }}>
@@ -449,11 +559,20 @@ export function GoogleTrends() {
                       <tr style={{ background: '#f8fafc', textAlign: 'left', color: '#475569' }}>
                         <th style={{ padding: '8px 10px' }}>Query</th>
                         <th style={{ padding: '8px 10px' }}>Velocity</th>
-                        <th style={{ padding: '8px 10px' }}>Volume</th>
-                        <th style={{ padding: '8px 10px' }}>CPC</th>
-                        <th style={{ padding: '8px 10px' }}>KD</th>
-                        <th style={{ padding: '8px 10px' }}>Intent</th>
-                        <th style={{ padding: '8px 10px' }}>Trend score</th>
+                        {resultView === 'social' ? (
+                          <>
+                            <th style={{ padding: '8px 10px' }}>Suggested format</th>
+                            <th style={{ padding: '8px 10px' }}>Social score</th>
+                          </>
+                        ) : (
+                          <>
+                            <th style={{ padding: '8px 10px' }}>Volume</th>
+                            <th style={{ padding: '8px 10px' }}>CPC</th>
+                            <th style={{ padding: '8px 10px' }}>KD</th>
+                            <th style={{ padding: '8px 10px' }}>Intent</th>
+                            <th style={{ padding: '8px 10px' }}>Trend score</th>
+                          </>
+                        )}
                         <th style={{ padding: '8px 10px' }}></th>
                       </tr>
                     </thead>
@@ -461,21 +580,40 @@ export function GoogleTrends() {
                       {rows.map((k) => (
                         <tr key={k.query} style={{ borderTop: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '8px 10px', fontWeight: 600 }}>
-                            {k.query}{!k.qualified && <span style={{ marginLeft: 6, fontSize: 11, color: '#94a3b8' }}>(no demand)</span>}
+                            {k.query}{resultView === 'seo' && !k.qualified && <span style={{ marginLeft: 6, fontSize: 11, color: '#94a3b8' }}>(no demand)</span>}
                           </td>
                           <td style={{ padding: '8px 10px', color: k.is_breakout ? '#dc2626' : '#0f172a', fontWeight: k.is_breakout ? 700 : 400 }}>
                             {k.is_breakout && <Flame size={12} style={{ verticalAlign: -1, marginRight: 3 }} />}{velocityLabel(k)}
                           </td>
-                          <td style={{ padding: '8px 10px' }}>{k.volume?.toLocaleString() ?? '—'}</td>
-                          <td style={{ padding: '8px 10px' }}>{k.cpc_usd != null ? `$${k.cpc_usd.toFixed(2)}` : '—'}</td>
-                          <td style={{ padding: '8px 10px' }}>{k.keyword_difficulty ?? '—'}</td>
-                          <td style={{ padding: '8px 10px' }}>{k.search_intent ?? '—'}</td>
-                          <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.trend_score ?? '—'}</td>
+                          {resultView === 'social' ? (
+                            <>
+                              <td style={{ padding: '8px 10px' }}>
+                                {k.suggested_format
+                                  ? <span style={{ padding: '2px 8px', borderRadius: 999, background: '#f3e8ff', color: '#7c3aed', fontSize: 12, fontWeight: 600 }}>{k.suggested_format}</span>
+                                  : <span style={{ color: '#94a3b8' }}>—</span>}
+                              </td>
+                              <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.social_score ?? '—'}</td>
+                            </>
+                          ) : (
+                            <>
+                              <td style={{ padding: '8px 10px' }}>{k.volume?.toLocaleString() ?? '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>{k.cpc_usd != null ? `$${k.cpc_usd.toFixed(2)}` : '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>{k.keyword_difficulty ?? '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>{k.search_intent ?? '—'}</td>
+                              <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.trend_score ?? '—'}</td>
+                            </>
+                          )}
                           <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                            {k.qualified && (
+                            {resultView === 'seo' && k.qualified && (
                               <button onClick={() => openWrite(k)} title="Create a Blog Writer draft from this rising query"
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7, border: '1px solid #ddd6fe', background: '#f5f3ff', color: '#6d28d9', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                                 <FileText size={12} /> Write
+                              </button>
+                            )}
+                            {resultView === 'social' && (
+                              <button onClick={() => openSocial(k)} title="Draft social posts from this trending search"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7, border: '1px solid #e9d5ff', background: '#faf5ff', color: '#7c3aed', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                                <Share2 size={12} /> Draft social post
                               </button>
                             )}
                           </td>
@@ -551,6 +689,83 @@ export function GoogleTrends() {
                       {createDraft.isPending ? 'Creating…' : 'Create draft'}
                     </button>
                     <button disabled={createDraft.isPending} onClick={() => setWriteRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Cancel</button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {socialRow && (
+        <div onClick={() => !socialBusy && setSocialRow(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, padding: 16 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ background: '#fff', borderRadius: 12, maxWidth: 560, width: '100%', maxHeight: '85vh', overflow: 'auto', boxShadow: '0 20px 50px rgba(0,0,0,0.25)' }}>
+            <div style={{ padding: '16px 20px', borderBottom: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Share2 size={16} color="#7c3aed" />
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#0f172a' }}>Draft a social post</div>
+            </div>
+            <div style={{ padding: 20 }}>
+              {socialDone ? (
+                <div>
+                  <div style={{ fontSize: 14, color: '#0f172a', marginBottom: 6 }}>✅ Drafts created.</div>
+                  <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+                    Platform-native drafts for <strong>{socialRow.query}</strong> are ready to review, edit, and publish on the Social page.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button onClick={() => navigate(`/clients/${id}/social`)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#7c3aed', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Review drafts</button>
+                    <button onClick={() => setSocialRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Close</button>
+                  </div>
+                </div>
+              ) : socialAccountsLoading ? (
+                <div style={{ fontSize: 13, color: '#94a3b8' }}>Loading your connected accounts…</div>
+              ) : socialPlatformOptions.length === 0 ? (
+                <div>
+                  <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+                    No connected social accounts for this client yet. Connect them on the Social page, then come back to draft from this trend.
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button onClick={() => navigate(`/clients/${id}/social`)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#7c3aed', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Open Social page</button>
+                    <button onClick={() => setSocialRow(null)}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Close</button>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12.5, color: '#64748b', marginTop: 0 }}>
+                    Fans this trending search out into platform-native drafts (via the Social module) — review and publish them on the Social page. Nothing is posted automatically.
+                  </p>
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '12px 0 4px' }}>Topic</label>
+                  <textarea value={socialTopic} onChange={(e) => setSocialTopic(e.target.value)} rows={2} maxLength={500}
+                    style={{ width: '100%', fontSize: 12.5, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '14px 0 4px' }}>Angle {socialRow.suggested_format && <span style={{ textTransform: 'none', color: '#7c3aed' }}>· {socialRow.suggested_format}</span>}</label>
+                  <textarea value={socialAngle} onChange={(e) => setSocialAngle(e.target.value)} rows={5} maxLength={2000}
+                    style={{ width: '100%', fontSize: 12.5, padding: '8px 10px', border: '1px solid #cbd5e1', borderRadius: 8, resize: 'vertical', fontFamily: 'inherit', boxSizing: 'border-box', lineHeight: 1.5 }} />
+                  <label style={{ display: 'block', fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.4, color: '#94a3b8', margin: '14px 0 6px' }}>Platforms</label>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                    {socialPlatformOptions.map((p) => {
+                      const on = socialPlatforms.includes(p)
+                      return (
+                        <button key={p} onClick={() => setSocialPlatforms((cur) => on ? cur.filter((x) => x !== p) : [...cur, p])}
+                          style={{ textTransform: 'capitalize', fontSize: 12.5, fontWeight: 600, padding: '6px 12px', borderRadius: 999, cursor: 'pointer', border: on ? '1px solid #7c3aed' : '1px solid #cbd5e1', background: on ? '#7c3aed' : '#fff', color: on ? '#fff' : '#475569' }}>
+                          {p}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  {socialError && <div style={{ fontSize: 12.5, color: '#b91c1c', marginTop: 10 }}>{socialError}</div>}
+                  <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                    <button disabled={!socialTopic.trim() || !socialAngle.trim() || socialPlatforms.length === 0 || socialBusy}
+                      onClick={() => startFanout.mutate()}
+                      style={{ fontSize: 13, fontWeight: 600, color: '#fff', background: '#7c3aed', border: 'none', borderRadius: 8, padding: '8px 14px', cursor: 'pointer', opacity: (!socialTopic.trim() || !socialAngle.trim() || socialPlatforms.length === 0 || socialBusy) ? 0.6 : 1 }}>
+                      {socialBusy ? 'Creating drafts…' : `Create ${socialPlatforms.length || ''} draft${socialPlatforms.length === 1 ? '' : 's'}`.trim()}
+                    </button>
+                    <button disabled={socialBusy} onClick={() => setSocialRow(null)}
                       style={{ fontSize: 13, fontWeight: 600, color: '#475569', background: '#f1f5f9', border: '1px solid #e2e8f0', borderRadius: 8, padding: '8px 14px', cursor: 'pointer' }}>Cancel</button>
                   </div>
                 </>

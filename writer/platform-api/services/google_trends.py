@@ -52,7 +52,7 @@ import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import dataforseo_labs, keyword_research
+from services import dataforseo_labs, google_trends_social, keyword_research
 
 logger = logging.getLogger(__name__)
 
@@ -613,6 +613,8 @@ async def run_google_trends_scan(
         language_code=language_code, trends_type=trends_type,
         log_ctx={"client_id": client_id},
     )
+    # Tag the no-demand rows for the "Trending / social" lane (#1129) — best-effort.
+    google_trends_social.classify_social_fit(rows)
     qualified = sum(1 for r in rows if r["qualified"])
 
     run = _persist_run(
@@ -787,6 +789,8 @@ async def run_google_trends_category_scan(
             logger.warning("google_trends.audience_failed",
                            extra={"client_id": client_id, "error": str(exc)})
 
+    # Tag the no-demand rows for the "Trending / social" lane (#1129) — best-effort.
+    google_trends_social.classify_social_fit(rows)
     qualified = sum(1 for r in rows if r.get("qualified"))
     run = _persist_run(
         client_id, seeds, rows, mode="category",
@@ -837,6 +841,7 @@ def _persist_run(
                 "cpc_usd", "competition_index", "keyword_difficulty", "search_intent",
                 "is_question", "qualified", "trend_score", "relevance_score",
                 "audience_fit", "source_client_name",
+                "social_lean", "suggested_format", "social_score",
             )}} for r in rows]
         ).execute()
     return run_id
