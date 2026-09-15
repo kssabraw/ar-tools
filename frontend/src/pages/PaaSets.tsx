@@ -3,11 +3,36 @@ import { Link, useParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, HelpCircle, Link2, Check, X, Trash2, ExternalLink, AlertTriangle,
+  FileText, Download, RefreshCw, ShieldCheck, FileSpreadsheet,
 } from 'lucide-react'
 import { api } from '../lib/api'
+import { supabase } from '../lib/supabase'
 import type {
   Client, PaaSet, PaaCandidate, PaaPullResponse, PaaPreflight, PaaItem,
+  PaaManifest, PaaManifestAsset,
 } from '../lib/types'
+
+const API_BASE = import.meta.env.VITE_PLATFORM_API_URL as string
+
+// The export endpoint returns raw CSV / JSON (not the api client's parsed JSON),
+// so fetch it directly with the auth header and save it as a file.
+async function downloadManifest(manifestId: string, fmt: 'csv' | 'json') {
+  const { data } = await supabase.auth.getSession()
+  const token = data.session?.access_token
+  const res = await fetch(`${API_BASE}/paa-manifests/${manifestId}/export?format=${fmt}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error('Export failed')
+  const blob = fmt === 'csv'
+    ? await res.blob()
+    : new Blob([JSON.stringify(await res.json(), null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `paa-prep-sheet.${fmt}`
+  a.click()
+  URL.revokeObjectURL(url)
+}
 
 // The three PAA writing rules + the cannibalization discipline, tagged with the
 // methodology's own confidence markers (PRD §9 — surface, never present as
@@ -303,6 +328,8 @@ export function PaaSets() {
                     onClick={() => verify(s.id)}>Verify posts</button>
                 </div>
 
+                <PrepSheet setId={s.id} />
+
                 {preflight && preflight.gates.some((g) => g.blocking) && (
                   <div style={{ marginTop: 12, padding: 12, border: '1px solid #fed7aa', background: '#fff7ed', borderRadius: 8 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 700, fontSize: 13, color: '#9a3412' }}>
@@ -348,6 +375,208 @@ function CheckBadges({ checks }: { checks: NonNullable<PaaItem['checks']> }) {
       {em && pill(em.ok, `exact-match${em.match === 'contains' ? '*' : ''}`)}
       {sl && pill(sl.ok, sl.ok == null ? 'no link target' : 'links high')}
     </span>
+  )
+}
+
+// ── Phase 2 — the prep-sheet manifest (track / cost / QA / hand-off) ──────────
+
+const CATEGORY_ORDER: PaaManifestAsset['category'][] = [
+  'paa_post', 'gbp_post', 'syndication', 'image', 'authority', 'media',
+]
+const CATEGORY_LABELS: Record<string, string> = {
+  paa_post: 'PAA posts', gbp_post: 'GBP posts', syndication: 'Syndication copies',
+  image: 'Hosted images',
+  authority: 'Authority layer — tracked, NEVER executed by the suite',
+  media: 'Audio / video / influencer — manual, never generated',
+}
+const AUTHORITY_STATUSES = ['planned', 'handed_off', 'done']
+
+function verdictStyle(v: string | null | undefined): React.CSSProperties {
+  const red = v === 'fail' || v === 'needs_human'
+  const amber = v === 'revisions' || v === 'advisory'
+  const green = v === 'pass'
+  return {
+    fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 5,
+    background: red ? '#fee2e2' : amber ? '#fef9c3' : green ? '#dcfce7' : '#f1f5f9',
+    color: red ? '#b91c1c' : amber ? '#854d0e' : green ? '#166534' : '#64748b',
+  }
+}
+
+function PrepSheet({ setId }: { setId: string }) {
+  const qc = useQueryClient()
+  const { data: m, refetch, isFetching } = useQuery<PaaManifest>({
+    queryKey: ['paa-manifest', setId],
+    queryFn: () => api.get(`/paa-sets/${setId}/manifest`),
+    enabled: Boolean(setId),
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true); setErr(''); setNote('')
+    try { await fn() } catch (e) { setErr(e instanceof Error ? e.message : 'Failed') }
+    finally { setBusy(false) }
+  }
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['paa-manifest', setId] })
+
+  const build = () => run(async () => {
+    await api.post(`/paa-sets/${setId}/manifest/build`, {})
+    await invalidate()
+  })
+
+  const runQa = (manifestId: string) => run(async () => {
+    await api.post(`/paa-manifests/${manifestId}/qa`, {})
+    setNote('QA started — reviewing the live content URLs. Refresh in ~1 minute.')
+    // Best-effort auto-refresh a couple of times; the Refresh button covers the rest.
+    setTimeout(invalidate, 20000)
+    setTimeout(invalidate, 50000)
+  })
+
+  const exportSheet = (manifestId: string) => run(async () => {
+    const r = await api.post<{ sheet_url: string | null }>(
+      `/paa-manifests/${manifestId}/export/sheet`, {})
+    setNote(r.sheet_url ? `Exported to Google Sheet: ${r.sheet_url}` : 'Exported to Drive.')
+    await invalidate()
+  })
+
+  const editStatus = (assetId: string, status: string) => run(async () => {
+    await api.patch(`/paa-manifest-assets/${assetId}`, { status })
+    await invalidate()
+  })
+
+  if (!m) return null
+
+  const box: React.CSSProperties = {
+    marginTop: 14, borderTop: '1px solid #f1f5f9', paddingTop: 14,
+  }
+  const header = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      <FileText size={16} color="#7c3aed" />
+      <span style={{ fontWeight: 700, fontSize: 14 }}>Prep Sheet</span>
+      <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+        the hand-off manifest — track / cost / QA the campaign's assets, export for the link operator
+      </span>
+    </div>
+  )
+
+  if (!m.exists) {
+    return (
+      <div style={box}>
+        {header}
+        <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>
+          Auto-collect every asset URL this campaign has produced (PAA posts, GBP posts, syndication),
+          seed the standard authority bundle as tracked rows, cost it, and export a prep sheet.
+        </div>
+        <button style={{ ...btn, background: '#7c3aed', opacity: busy ? 0.6 : 1 }} disabled={busy}
+          onClick={build}>{busy ? 'Building…' : 'Build prep sheet'}</button>
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 6 }}>{err}</div>}
+      </div>
+    )
+  }
+
+  const manifest = m.manifest!
+  const assets = m.assets ?? []
+  const cost = m.cost_summary
+  const qa = m.qa_summary
+  const grouped = CATEGORY_ORDER
+    .map((cat) => ({ cat, rows: assets.filter((a) => a.category === cat) }))
+    .filter((g) => g.rows.length > 0)
+
+  return (
+    <div style={box}>
+      {header}
+
+      {/* action bar */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', marginBottom: 10 }}>
+        <span style={{ ...verdictStyle(null), background: '#ede9fe', color: '#6d28d9' }}>{manifest.status}</span>
+        <button style={{ ...btnGhost, padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          disabled={busy || isFetching} onClick={build} title="Refresh auto-collected assets">
+          <RefreshCw size={13} /> Rebuild
+        </button>
+        <button style={{ ...btnGhost, padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          disabled={busy} onClick={() => refetch()}>Refresh</button>
+        <button style={{ ...btn, padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          disabled={busy} onClick={() => runQa(manifest.id)} title="QA the content the authority layer will amplify">
+          <ShieldCheck size={13} /> Run QA
+        </button>
+        <span style={{ flex: 1 }} />
+        <button style={{ ...btnGhost, padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          disabled={busy} onClick={() => run(() => downloadManifest(manifest.id, 'csv'))}>
+          <Download size={13} /> CSV
+        </button>
+        <button style={{ ...btnGhost, padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          disabled={busy} onClick={() => run(() => downloadManifest(manifest.id, 'json'))}>
+          <Download size={13} /> JSON
+        </button>
+        <button style={{ ...btnGhost, padding: '6px 10px', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+          disabled={busy} onClick={() => exportSheet(manifest.id)} title="Export to a Google Sheet in the client's Drive">
+          <FileSpreadsheet size={13} /> Sheet
+        </button>
+      </div>
+
+      {/* cost + QA summary */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, fontSize: 12.5, color: '#475569', marginBottom: 10 }}>
+        <span>
+          <strong>Authority cost (est.):</strong>{' '}
+          {cost?.estimated_total != null ? `$${cost.estimated_total.toFixed(2)}` : 'not estimated'}
+          {cost?.not_estimated?.length ? ` · ${cost.not_estimated.length} not estimated (incl. off-menu RD 100)` : ''}
+        </span>
+        <span>
+          <strong>Content QA:</strong>{' '}
+          {qa ? <>{qa.reviewed}/{qa.content_assets} reviewed · {qa.pending} pending{qa.worst ? <> · worst <span style={verdictStyle(qa.worst)}>{qa.worst}</span></> : ''}</> : '—'}
+        </span>
+      </div>
+
+      {manifest.sheet_url && (
+        <div style={{ fontSize: 12, marginBottom: 8 }}>
+          Last export: <a href={manifest.sheet_url} target="_blank" rel="noreferrer" style={{ color: '#7c3aed' }}>Google Sheet</a>
+        </div>
+      )}
+      {note && <div style={{ fontSize: 12, color: '#166534', marginBottom: 8 }}>{note}</div>}
+      {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginBottom: 8 }}>{err}</div>}
+
+      {/* asset table grouped by category */}
+      {grouped.map(({ cat, rows }) => (
+        <div key={cat} style={{ marginBottom: 10 }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, color: cat === 'authority' || cat === 'media' ? '#9a3412' : '#475569', marginBottom: 4 }}>
+            {CATEGORY_LABELS[cat] || cat}
+          </div>
+          {rows.map((a) => {
+            const authorityLike = a.category === 'authority' || a.category === 'media'
+            return (
+              <div key={a.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 0', borderBottom: '1px solid #f8fafc' }}>
+                <span style={{ flex: 1, fontSize: 13 }}>
+                  {a.label}
+                  {a.confidence_tag && <span style={tagStyle(a.confidence_tag)}>{a.confidence_tag}</span>}
+                </span>
+                {a.url && (
+                  <a href={a.url} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: '#0ea5e9', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                    open <ExternalLink size={11} />
+                  </a>
+                )}
+                {a.qa_verdict && <span style={verdictStyle(a.qa_verdict)}>{a.qa_verdict}</span>}
+                {authorityLike ? (
+                  <select value={a.status} disabled={busy}
+                    onChange={(e) => editStatus(a.id, e.target.value)}
+                    style={{ fontSize: 11.5, padding: '2px 4px', borderRadius: 6, border: '1px solid #e2e8f0' }}>
+                    {AUTHORITY_STATUSES.map((st) => <option key={st} value={st}>{st}</option>)}
+                  </select>
+                ) : (
+                  <span style={{ fontSize: 11.5, color: '#94a3b8' }}>{a.status}</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ))}
+
+      <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+        Authority-layer items are off-platform vendor work — tracked here, <strong>never executed by the suite</strong>.
+        Confidence tags are the methodology's own working model, not Google guidance.
+      </div>
+    </div>
   )
 }
 

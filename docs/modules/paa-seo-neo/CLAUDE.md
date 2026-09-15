@@ -3,12 +3,19 @@
 > **This is a module-scoped brief, not the suite authority.** The root
 > `/CLAUDE.md` remains the suite's authoritative context and conventions — read
 > it first. This file orients work on the **PAA → SEO Neo** initiative: adapting
-> an external local-SEO content methodology into suite tooling. The initiative is
-> **at the planning stage — the PRD is written and merged, the v1 scope + all four
-> §8 design forks are owner-locked, but there is still no build and no code.** The
-> only remaining gate is the owner's greenlight of the PRD's §10 build order.
-> Current state + the locked decisions live in the module `HANDOFF.md` next to this
-> file.
+> an external local-SEO content methodology into suite tooling. **v1 (the CONTENT
+> HALF) is BUILT, merged, and LIVE in production**; **Phase 2 (the prep-sheet
+> manifest — track / cost / QA / hand-off) is BUILT + MERGED** (PR
+> [#1120](https://github.com/kssabraw/ar-tools/pull/1120), squash `813b323`; migration
+> applied live) — see the module `HANDOFF.md`. PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), 2026-09-15:
+> the `paa_sets` + `paa_items` tables (migration applied live), a PAA Content card
+> in the workspace "Content Creation" section → `/clients/:id/paa-sets`, the three
+> writing rules as reused writer constraints, the cannibalization guard, the
+> "create PAA posts" action, and the manual scan/verify workflow doc. Tables +
+> routes verified live in production (Supabase + PLATFORM `/openapi.json`). What
+> shipped, the seams it reused, and the deferred phases live in the module
+> `HANDOFF.md` next to this file. **The authority layer (SEO Neo / link blasts)
+> remains OUT of scope and is never executed by the suite** (guardrails below).
 
 ## Read these first, in order
 
@@ -91,9 +98,11 @@ anchors** (each row was checked against the current tree, 2026-09-15).
 
 - Don't re-add the source SOPs (07b/13b, 01–15) or the `AI-CONTEXT_why-*` reasoning
   docs to the repo — they were deliberately erased; only the master reference stays.
-- Don't build anything until the owner **greenlights the PRD's §10 build order.**
-  The PRD, the v1 scope, and the four §8 design forks are settled — but a merged
-  plan is not a build green light. No code, migration, or agent wiring before that.
+- Don't re-litigate locked scope or rebuild what shipped. v1 (the content half) is
+  built + live (PR #1117); Phase 2 (the prep-sheet manifest — track/cost/QA/hand-off)
+  is built + merged (PR #1120, PRD §11). Future work is **Phase 3** (the campaign
+  object + the automated single-variable gate). Each phase needs its own owner
+  greenlight before building — a merged/built phase is not a greenlight for the next.
 - Don't wire this into any agent loader — the master reference lives in
   `docs/reference/` precisely so `sop_library` never ingests it.
 - Don't design the suite to run or "automate" the link-layer blasts.

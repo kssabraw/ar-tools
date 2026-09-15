@@ -1120,6 +1120,10 @@ async def _process_job(job: dict) -> None:
         await run_deliverables_provision_job(job)
     elif job_type == "qa_review":
         await run_qa_review_job(job)
+    elif job_type == "paa_manifest_qa":
+        from services.paa_manifest_service import run_manifest_qa_job
+
+        await run_manifest_qa_job(job)
     elif job_type == "github_infer_patterns":
         await run_github_infer_job(job)
     elif job_type == "illustrate_run":

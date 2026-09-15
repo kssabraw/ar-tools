@@ -16,11 +16,20 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+import csv
+import io
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
 from middleware.auth import require_auth
-from models.paa import PaaCreatePostsRequest, PaaPullRequest, PaaSetCreateRequest
-from services import paa_sets_service
+from models.paa import (
+    PaaCreatePostsRequest,
+    PaaManifestAssetCreate,
+    PaaManifestAssetUpdate,
+    PaaPullRequest,
+    PaaSetCreateRequest,
+)
+from services import paa_manifest_service, paa_sets_service
 from services.freeze import assert_not_frozen
 from services.orchestrator import orchestrate_run
 
@@ -117,3 +126,89 @@ async def verify(set_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     """Run the deterministic writer-constraint checks (exact-match + service-page
     link) on each chosen item whose blog run has finished; persist the verdict."""
     return paa_sets_service.verify_posts(str(set_id))
+
+
+# ── Phase 2 — the prep-sheet manifest (track / cost / QA / hand-off) ──────────
+# The manifest auto-collects the URLs of assets the suite already produced,
+# tracks the human/authority work as rows, costs it (reused Recipe Engine), QAs
+# the content (reused QA Agent), and exports it. Guardrail (PRD §9): the suite
+# tracks / costs / QAs / hands off — it NEVER executes the authority layer.
+
+
+@router.get("/paa-sets/{set_id}/manifest")
+async def get_manifest(set_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The prep-sheet manifest for a set (``{exists: false}`` if not built yet)."""
+    return paa_manifest_service.get_manifest(set_id=str(set_id))
+
+
+@router.post("/paa-sets/{set_id}/manifest/build")
+async def build_manifest(set_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Build or refresh the manifest: auto-collect the suite-produced asset URLs,
+    seed the authority bundle + media checklist (first build only), recompute the
+    cost + QA roll-ups. Preserves operator edits on a rebuild."""
+    return paa_manifest_service.build_manifest(str(set_id), user_id=auth["user_id"])
+
+
+@router.get("/paa-manifests/{manifest_id}")
+async def get_manifest_by_id(manifest_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    return paa_manifest_service.get_manifest(manifest_id=str(manifest_id))
+
+
+@router.post("/paa-manifests/{manifest_id}/qa", status_code=202)
+async def manifest_qa(manifest_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Enqueue the QA pass: review each content asset's live URL via the QA Agent
+    (gated on qa_enabled; deterministic v1 checks as the free fallback)."""
+    job_id = paa_manifest_service.enqueue_qa(str(manifest_id))
+    return {"job_id": job_id}
+
+
+@router.post("/paa-manifests/{manifest_id}/assets", status_code=201)
+async def add_manifest_asset(
+    manifest_id: UUID, body: PaaManifestAssetCreate, auth: dict = Depends(require_auth)
+) -> dict:
+    """Add a manual asset row (a hand-captured content / authority / media item)."""
+    return paa_manifest_service.add_asset(str(manifest_id), body.model_dump())
+
+
+@router.patch("/paa-manifest-assets/{asset_id}")
+async def update_manifest_asset(
+    asset_id: UUID, body: PaaManifestAssetUpdate, auth: dict = Depends(require_auth)
+) -> dict:
+    """Operator edit to a manifest asset (status / url / note / cost)."""
+    return paa_manifest_service.update_asset(
+        str(asset_id), body.model_dump(exclude_none=True)
+    )
+
+
+@router.delete("/paa-manifest-assets/{asset_id}")
+async def delete_manifest_asset(asset_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    return paa_manifest_service.delete_asset(str(asset_id))
+
+
+@router.get("/paa-manifests/{manifest_id}/export")
+async def export_manifest(
+    manifest_id: UUID, format: str = "json", auth: dict = Depends(require_auth)
+):
+    """Export the prep sheet as JSON (default) or CSV — the deterministic
+    download half of the hand-off (the client-identity header + every asset row
+    with its confidence tag)."""
+    export = paa_manifest_service.build_export(str(manifest_id))
+    if format == "csv":
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for row in export["rows"]:
+            writer.writerow(row)
+        filename = "paa-prep-sheet.csv"
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    return export["payload"]
+
+
+@router.post("/paa-manifests/{manifest_id}/export/sheet")
+async def export_manifest_sheet(manifest_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Export the prep sheet to a Google Sheet in the client's Drive folder (the
+    hand-off artifact; reuses the Apps Script webhook)."""
+    return await paa_manifest_service.export_to_sheet(str(manifest_id))

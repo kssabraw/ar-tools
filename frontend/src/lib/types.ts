@@ -2602,3 +2602,72 @@ export interface PaaPreflight {
   slug_collisions: { slug: string }[]
   existing_site_matches: { question: string; url: string }[]
 }
+
+// ── Phase 2 — the prep-sheet manifest ──
+export interface PaaManifestAsset {
+  id: string
+  manifest_id: string
+  category: 'paa_post' | 'gbp_post' | 'syndication' | 'image' | 'authority' | 'media'
+  source: 'auto' | 'seed' | 'manual'
+  kind: string | null
+  label: string
+  url: string | null
+  note: string | null
+  status: string
+  confidence_tag: string | null
+  cost_task_type: string | null
+  cost_quantity: number | null
+  qa_verdict: string | null
+  qa_review: Record<string, unknown> | null
+  qa_reviewed_at: string | null
+  paa_item_id: string | null
+  position: number
+}
+export interface PaaCostLine {
+  label: string
+  task_type: string
+  quantity: number
+  unit_cost: number
+  line_cost: number
+}
+export interface PaaCostSummary {
+  estimated_total: number | null
+  lines: PaaCostLine[]
+  not_estimated: { label: string; kind: string | null; confidence_tag: string | null }[]
+  currency: string
+}
+export interface PaaQaSummary {
+  content_assets: number
+  reviewed: number
+  pending: number
+  not_applicable: number
+  verdicts: Record<string, number>
+  worst: string | null
+}
+export interface PaaManifest {
+  exists: boolean
+  set_id?: string
+  manifest?: {
+    id: string
+    set_id: string
+    client_id: string
+    status: 'draft' | 'ready' | 'handed_off'
+    sheet_id: string | null
+    sheet_url: string | null
+    last_export_at: string | null
+  }
+  assets?: PaaManifestAsset[]
+  client_identity?: {
+    business_name: string
+    address: string
+    phone: string
+    place_id: string
+    cid: string
+    gbp_url: string
+    website: string
+  }
+  service_keyword?: string
+  location?: string
+  cost_summary?: PaaCostSummary
+  qa_summary?: PaaQaSummary
+}
