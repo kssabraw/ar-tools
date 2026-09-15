@@ -64,6 +64,13 @@ _STYLE_ATTR_RE = re.compile(r'\sstyle="([^"]*)"', re.I)
 _STYLE_BLOCK_RE = re.compile(r"<style[^>]*>(.*?)</style>", re.S | re.I)
 _FONT_HREF_RE = re.compile(r"fonts\.googleapis\.com/css2\?([^\"']+)")
 _FAMILY_RE = re.compile(r"family=([^&:]+)")
+# A `font-family` value that is not a real typeface name — a CSS custom-property
+# reference (`var(--…)`, incl. Elementor's `var( --e-global-typography-… )` with
+# spaces) or a Wix `wfont_<hash>` / bare hex-hash font ID. Any 16+ char hex run
+# is an opaque asset hash, never a family name (real Wix aliases like
+# `futura-lt-w01-light` have no such run and survive). Observed leaking on live
+# sites in the Phase-0 D4 spike — dropped in the capture layer now.
+_FONT_JUNK_RE = re.compile(r"^var\(|^wfont[_-]|[0-9a-f]{16,}", re.I)
 
 # A near-transparent colour is page background bleed / an overlay, never a brand
 # swatch — dropped before the census.
@@ -567,13 +574,25 @@ def derive_type_scale(
 
 
 def _first_family(stack: str) -> Optional[str]:
-    """The first (preferred) family in a ``font-family`` stack, unquoted."""
+    """The first (preferred) family in a ``font-family`` stack, unquoted.
+
+    Drops values that are not a real typeface name: CSS generic fallbacks,
+    ``var(--…)`` custom-property references (Elementor writes every family as a
+    ``var(--e-global-typography-…-font-family)``), and Wix ``wfont_<hash>`` /
+    bare-hash font IDs. Both leak categories were observed on real client sites in
+    the Phase-0 D4 spike (FreightOptics → ``var(--ui)``/``var(--host)``;
+    Sealbeach CoLabs → ``wfont_3f9260_763c…``), where they otherwise ranked
+    *above* the real families. Genuine Wix family aliases (``futura-lt-w01-light``,
+    ``proxima-n-w01-reg``) are kept — only the opaque hash IDs are dropped.
+    """
     first = stack.split(",")[0].strip().strip("'\"").strip()
     if not first:
         return None
     low = first.lower()
     # Generic fallbacks are not a brand typeface.
     if low in {"inherit", "initial", "unset", "sans-serif", "serif", "monospace", "cursive", "fantasy", "system-ui"}:
+        return None
+    if _FONT_JUNK_RE.search(low):
         return None
     return first
 
@@ -661,6 +680,34 @@ _ICON_LINK_RE = re.compile(
     r'<link\b[^>]*rel=["\']([^"\']*icon[^"\']*)["\'][^>]*>', re.I
 )
 _LOGO_HINT_RE = re.compile(r"logo|brand|wordmark", re.I)
+# Third-party asset hosts a "logo"-hinted image can live on that are NEVER the
+# client's brand mark: cookie-consent / privacy banners, analytics/tag managers,
+# review widgets, avatars. Observed on a live spike site (UMH → a
+# cdn-cookieyes.com "poweredbtcky.svg" out-ranked the real UMH header logo). A
+# candidate on one of these hosts is heavily down-ranked (not dropped — a host
+# match is a strong hint, not proof), so it can never be the top suggestion but
+# is still visible. Wix/WordPress asset CDNs (wixstatic, wp-content, parastorage)
+# are deliberately NOT here — that is where a client's OWN logo lives.
+_THIRD_PARTY_ASSET_HOST_RE = re.compile(
+    r"(cookieyes|cookiebot|cookie-?script|onetrust|osano|termly|iubenda|usercentrics|"
+    r"trustpilot|trustindex|elfsight|powr\.io|googletagmanager|google-analytics|"
+    r"googleadservices|doubleclick|gravatar\.com)",
+    re.I,
+)
+# URL/path hints that a "logo"-hinted image is someone else's mark or a chrome
+# badge, not the brand: a customer/partner/client logo wall, a social-share card,
+# an "as seen in" / award / payment / powered-by badge. Down-ranked below the
+# real brand logo (FreightOptics → `freightoptics-customer-logo-*` + a
+# `social_sharing_badge` og:image both out-ranked the real site logo in the spike).
+_NON_BRAND_LOGO_HINT_RE = re.compile(
+    r"customer[-_]?logo|partner[-_]?logo|client[-_]?logo|/clients?[-_/]|"
+    r"social[-_]?shar|badge|award|payment|powered[-_]?b|as[-_]?seen|trust[-_]?bad|guarantee",
+    re.I,
+)
+# Sinks a third-party-host candidate below every plausible real one; a non-brand
+# hint just demotes within the real set (e.g. a customer logo below the site logo).
+_THIRD_PARTY_LOGO_PENALTY = 1000
+_NON_BRAND_LOGO_PENALTY = 60
 
 
 def _resolve_url(candidate: str, base_url: str) -> str:
@@ -698,6 +745,16 @@ def logo_candidates_from_html(html: str, base_url: str = "") -> list[LogoCandida
         resolved = _resolve_url(url, base_url)
         if not resolved:
             return
+        # Down-rank chrome that isn't the client's brand mark (finding 2 of the
+        # Phase-0 spike). A third-party host (consent banner / analytics) sinks
+        # below every real candidate; a non-brand hint (customer/partner logo,
+        # social-share badge) demotes it within the real set.
+        if _THIRD_PARTY_ASSET_HOST_RE.search(resolved):
+            score -= _THIRD_PARTY_LOGO_PENALTY
+            note = (note + " · third-party host, down-ranked").strip(" ·")
+        elif _NON_BRAND_LOGO_HINT_RE.search(resolved):
+            score -= _NON_BRAND_LOGO_PENALTY
+            note = (note + " · non-brand hint, down-ranked").strip(" ·")
         prev = scored.get(resolved)
         if prev is None or score > prev.score:
             scored[resolved] = LogoCandidate(url=resolved, source=source, score=score, note=note)
@@ -727,6 +784,94 @@ def logo_candidates_from_html(html: str, base_url: str = "") -> list[LogoCandida
             add(href, "favicon", 20, m.group(1).strip())
 
     return sorted(scored.values(), key=lambda c: c.score, reverse=True)
+
+
+# --------------------------------------------------------------------------
+# Key-page discovery (pure — nav links off the homepage, PRD §4.1)
+# --------------------------------------------------------------------------
+_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.I | re.S)
+_HREF_ATTR_RE = re.compile(r'href\s*=\s*["\']([^"\']+)["\']', re.I)
+_TAG_STRIP_RE = re.compile(r"<[^>]+>")
+_ASSET_EXT_RE = re.compile(r"\.(?:pdf|jpe?g|png|webp|gif|svg|zip|docx?|xlsx?|mp4|mp3)(?:$|\?)", re.I)
+# The two key-page kinds captured beyond the homepage: a commercial page
+# (product/service — brand voice + imagery in action) and an identity page
+# (about/contact — the brand's own framing). Ordered by URL/anchor signal.
+_SERVICE_PAGE_RE = re.compile(
+    r"service|product|solution|what-?we-?do|shop|store|menu|treatment|pricing|feature|offer",
+    re.I,
+)
+_ABOUT_PAGE_RE = re.compile(
+    r"about|our-?story|our-?team|company|who-?we-?are|contact|meet-?", re.I
+)
+
+
+def _same_host(url: str, base_url: str) -> bool:
+    def host(u: str) -> str:
+        m = re.match(r"https?://([^/]+)", u.lower())
+        return (m.group(1) if m else "").lstrip("www.")
+
+    b = host(base_url)
+    return not b or host(url) == b
+
+
+def discover_key_pages(html: str, base_url: str, *, limit: int = 2) -> list[str]:
+    """Up to ``limit`` auto-discovered key pages off the homepage's nav (PRD §4.1).
+
+    Deterministic: scan the homepage's ``<a href>`` links (nav links appear early
+    in the DOM), resolve same-host absolute URLs, and pick **one commercial page**
+    (product/service) + **one identity page** (about/contact) — the +2 pages the
+    capture layer grabs for logo candidates / imagery variety / a consistency
+    check (never the palette census, §4.1). Earliest-in-document wins within a
+    kind (nav order). The homepage, fragments, ``mailto:``/``tel:``, asset files,
+    and off-host links are excluded. Returns [] when nothing qualifies — the guide
+    still generates from the homepage alone (§5.4).
+    """
+    text = html or ""
+    origin = ""
+    m = re.match(r"(https?://[^/]+)", (base_url or "").lower())
+    if m:
+        origin = m.group(1)
+
+    best: dict[str, tuple[int, str]] = {}  # kind -> (doc_position, url)
+    for order, am in enumerate(_ANCHOR_RE.finditer(text)):
+        hm = _HREF_ATTR_RE.search(am.group(1))
+        if not hm:
+            continue
+        href = hm.group(1).strip()
+        if not href or href.startswith(("#", "mailto:", "tel:", "javascript:")):
+            continue
+        resolved = _resolve_url(href, base_url)
+        low = resolved.lower()
+        if not low.startswith(("http://", "https://")):
+            continue
+        if _ASSET_EXT_RE.search(low) or not _same_host(low, base_url):
+            continue
+        # Exclude the homepage itself (origin, origin/, or a bare path of "/").
+        path = low[len(origin):] if origin and low.startswith(origin) else low
+        if path in ("", "/") or low.rstrip("/") == origin.rstrip("/"):
+            continue
+        anchor_text = _TAG_STRIP_RE.sub(" ", am.group(2))
+        haystack = f"{path} {anchor_text}"
+        kind = None
+        if _SERVICE_PAGE_RE.search(haystack):
+            kind = "service"
+        elif _ABOUT_PAGE_RE.search(haystack):
+            kind = "about"
+        if kind is None:
+            continue
+        clean = resolved.split("#")[0]
+        if kind not in best:  # first (earliest) match per kind wins
+            best[kind] = (order, clean)
+
+    ordered = [best[k][1] for k in ("service", "about") if k in best]
+    # Dedup while preserving order (a link can match both kinds' pick to the same URL).
+    seen: set[str] = set()
+    out: list[str] = []
+    for u in ordered:
+        if u not in seen:
+            seen.add(u)
+            out.append(u)
+    return out[:limit]
 
 
 # --------------------------------------------------------------------------

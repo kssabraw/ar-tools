@@ -29,35 +29,11 @@ logger = logging.getLogger(__name__)
 # census is kept under "colors"; these are just the human-readable heads).
 _PREVIEW = 14
 
-
-def pixel_counts_from_png(png: bytes, *, max_colors: int = 40, max_dim: int = 500):
-    """Pillow median-cut quantization → a ``[(rgb, pixel_count)]`` dominance table.
-
-    Downscaled first (dominance *ratios* are scale-invariant, and it keeps the
-    quantize cheap on a tall full-page screenshot). Pillow is imported lazily so
-    this module loads in environments without it (the pure census never needs it).
-    Returns ``[]`` on any Pillow failure so the caller degrades to CSS-only.
-    """
-    try:
-        from PIL import Image
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("brand_guide_spike.no_pillow", extra={"error": str(exc)})
-        return []
-    import io
-
-    try:
-        im = Image.open(io.BytesIO(png)).convert("RGB")
-        im.thumbnail((max_dim, max_dim * 6))  # cap the longest side; keep aspect
-        quant = im.quantize(colors=max_colors, method=Image.Quantize.MEDIANCUT)
-        palette = quant.getpalette() or []
-        out: list[tuple[tuple[int, int, int], int]] = []
-        for count, idx in quant.getcolors(maxcolors=max_colors * 4) or []:
-            base = idx * 3
-            out.append(((palette[base], palette[base + 1], palette[base + 2]), count))
-        return out
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("brand_guide_spike.quantize_failed", extra={"error": str(exc)})
-        return []
+# The Pillow pixel-dominance helper moved to `services.brand_guide` (the canonical
+# Phase-1 capture home) so the spike and the shipped capture path share ONE
+# quantization implementation — the "repurpose the spike's capture core" the
+# Phase-1 task calls for. Re-exported here so the spike CLI/job are unchanged.
+from services.brand_guide import pixel_counts_from_png  # noqa: E402,F401
 
 
 async def capture_site_report(url: str) -> dict:

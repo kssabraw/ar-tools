@@ -86,6 +86,7 @@ SINGLE_JOB_REGISTRY: dict[str, dict[str, Any]] = {
     "brand_scan":             {"label": "AI visibility scan",      "path": "clients/{cid}/ai-visibility",    "notify": True},
     "brand_voice_scan":       {"label": "Brand voice scan",        "path": "clients/{cid}/brand-voice",      "notify": True},
     "icp_scan":               {"label": "ICP scan",                "path": "clients/{cid}/icp",              "notify": True},
+    "brand_guide_generate":   {"label": "Brand guide",             "path": "clients/{cid}/brand-guide",      "notify": True},
     "rank_keyword_report":    {"label": "Rank analysis report",    "path": "clients/{cid}/rankings",         "notify": True},
     "backlink_lookup":        {"label": "Backlink lookup",         "path": "clients/{cid}/backlinks",        "notify": True},
     "article_reanalyze":      {"label": "Article reanalysis",      "path": "clients/{cid}/articles",         "notify": True},
