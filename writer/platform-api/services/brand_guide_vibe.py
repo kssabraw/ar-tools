@@ -208,10 +208,11 @@ def sanitize_vibe_read(raw: Any) -> Optional[dict]:
 def homepage_screenshot_path(captured: Any) -> Optional[str]:
     """The stored homepage screenshot path from a `captured` record, or None.
 
-    The homepage is the SOLE input to the vibe read (PRD §4.3 / §12 Q4). Falls
-    back to the first page carrying a screenshot only if no page is explicitly
-    the homepage (defensive; the Phase-1 capture always labels one 'homepage').
-    Pure."""
+    The homepage is the SOLE input to the vibe read (PRD §4.3 / §12 Q4), so ONLY
+    a page whose role is 'homepage' AND which carries a screenshot_path qualifies
+    — a product/about page's screenshot never fills in (its photography would
+    pollute the read, exactly as it's kept out of the palette census). Returns
+    None when the homepage capture degraded to CSS-only (no screenshot). Pure."""
     if not isinstance(captured, dict):
         return None
     pages = captured.get("pages") or []
