@@ -76,6 +76,29 @@ _FORMAT_MARKERS: tuple[tuple[tuple[str, ...], str], ...] = (
 _BREAKOUT_VELOCITY = 5000.0  # matches google_trends._BREAKOUT_PCT (kept local — no import cycle)
 _LEAN_WEIGHT = {"social": 1.0, "ambiguous": 0.6, "seo": 0.0}
 
+# Health-safety / medical-QUESTION intent (owner ruling 2026-09-15 — flag these,
+# don't drop them). Deliberately the *safety/symptom/dosage question* vocabulary,
+# NOT "mentions a drug": a query that names a drug but is social ("ozempic weight
+# loss coworker discussions") or commercial ("costco ozempic") must NOT flag, while
+# a genuine medical question ("ozempic vaginal side effects", "ozempic 4 mg") must.
+# Client-agnostic — for a non-health brand these markers simply rarely fire, and
+# the flag is advisory (a badge, never a behaviour change). Matched as whole words/
+# phrases against the normalized query.
+_MEDICAL_MARKERS = (
+    "side effect", "side effects", "adverse", "reaction", "reactions",
+    "allergic", "allergy", "rash", "nausea", "vomiting", "diarrhea",
+    "symptom", "symptoms",
+    "dosage", "dose", "dosing", "mg", "mcg", "overdose", "how much to take",
+    "injection", "how to inject", "where to inject",
+    "interaction", "interactions", "contraindication", "contraindications",
+    "withdrawal", "taper", "tapering",
+    "is it safe", "safe", "safety", "dangerous", "risks", "side-effect", "black box",
+    "pregnant", "pregnancy", "breastfeeding", "breastfeed",
+    "blood pressure", "blood sugar", "hypoglycemia", "pancreatitis",
+    "kidney", "liver", "thyroid", "gallbladder",
+    "vaginal", "vagina", "erectile", "erection",
+)
+
 
 def _phrase_regex(terms) -> re.Pattern:
     """Word-boundary alternation over ``terms`` (phrases allowed), longest first."""
@@ -85,6 +108,7 @@ def _phrase_regex(terms) -> re.Pattern:
 
 _SOCIAL_RE = _phrase_regex(_SOCIAL_MARKERS)
 _SEO_RE = _phrase_regex(_SEO_MARKERS)
+_MEDICAL_RE = _phrase_regex(_MEDICAL_MARKERS)
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +130,17 @@ def lexical_lean(query: Optional[str]) -> str:
     if seo and not social:
         return "seo"
     return "ambiguous"
+
+
+def is_sensitive_medical(query: Optional[str]) -> bool:
+    """Whether a query reads as a medical / health-safety QUESTION (side effects,
+    dosage, symptoms, safety) — a real content opportunity, but one that needs
+    careful, authoritative treatment rather than a casual social post. Pure.
+
+    Flags the intent, not the topic: a query that merely names a drug but is social
+    or commercial is NOT flagged (no safety/symptom/dosage marker), while a genuine
+    medical question is. Advisory only — never changes lane routing."""
+    return bool(_MEDICAL_RE.search(keyword_research.normalize_keyword(query)))
 
 
 def suggested_format(query: Optional[str]) -> Optional[str]:
@@ -271,7 +306,15 @@ def classify_social_fit(rows: list[dict]) -> list[dict]:
     Tags each UNQUALIFIED row with social_lean / suggested_format / social_score:
     the deterministic lexical pass first, then ONE batched Haiku call resolves the
     'ambiguous' ones (Axis 1), and social_score is recomputed from the final lean.
-    Best-effort + gated: disabled → rows untouched; no LLM → lexical only."""
+    Also flags EVERY row `sensitive_medical` (a health-safety question — kept, not
+    dropped, just badged; FLAG ONLY, no lane change). Best-effort + gated:
+    classify disabled → social tags untouched; no LLM → lexical only."""
+    # Medical-safety flag on every row (qualified + unqualified) so the badge is
+    # consistent across both lanes. Deterministic + free; independent of the
+    # social classification. Owner ruling 2026-09-15 — flag, don't re-route.
+    if settings.google_trends_social_flag_sensitive:
+        for r in rows:
+            r["sensitive_medical"] = is_sensitive_medical(r.get("query"))
     if not settings.google_trends_social_classify_enabled:
         return rows
     candidates = [r for r in rows if not r.get("qualified")]
