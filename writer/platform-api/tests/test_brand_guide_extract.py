@@ -173,6 +173,21 @@ class TestColorCensusTwoTier:
         assert swatches == []
         assert source == "none"
 
+    def test_two_clusters_snapping_to_one_hex_are_folded(self):
+        # Two distinct pixel clusters (30 apart, >cluster tolerance) each within
+        # snap tolerance (15) of ONE declared colour must not appear twice.
+        m = (100, 100, 100)
+        pixels = [((100, 100, 85), 500), ((100, 100, 115), 400)]
+        swatches, source = bg.build_color_census(
+            pixel_counts=pixels, css_declarations_list=[("color", bg.rgb_to_hex(m))]
+        )
+        assert source == "pixel"
+        assert [s.hex for s in swatches] == ["#646464"]  # folded to a single swatch
+        folded = swatches[0]
+        assert folded.source == "both"
+        assert folded.member_count == 2  # both clusters counted
+        assert folded.share == pytest.approx(1.0)  # shares summed
+
 
 class TestTypeScale:
     def test_scale_is_descending_and_rem_normalised(self):
