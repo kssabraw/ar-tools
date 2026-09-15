@@ -211,6 +211,10 @@ class ClientDetail(BaseModel):
     # Slack channel PACE posts this client's PM notifications to (channel id like
     # C0... or #name). None → the single master PACE channel.
     slack_channel_id: Optional[str] = None
+    # Mandatory {real term: coded term} map applied to FINAL generated content
+    # only (keywords/research keep the real term) — a regulated-compound
+    # compliance rule. Empty = disabled.
+    term_substitutions: dict[str, str] = {}
     # Everhour project this client's time is logged against (opaque id like
     # "ev:123"/"as:123", not numeric). None → not yet onboarded to Everhour.
     everhour_project_id: Optional[str] = None
@@ -381,6 +385,9 @@ class ClientUpdateRequest(BaseModel):
     # Slack channel PACE posts this client's PM notifications to; pass an empty
     # string to clear it back to the master PACE channel.
     slack_channel_id: Optional[str] = None
+    # Mandatory {real term: coded term} content substitution map; pass {} to
+    # clear it (disable). Applied to generated OUTPUT only, never to keywords.
+    term_substitutions: Optional[dict[str, str]] = None
     # Everhour project this client's time is logged against; pass an empty string
     # to clear the mapping.
     everhour_project_id: Optional[str] = None

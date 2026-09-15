@@ -307,6 +307,20 @@ async def run_syndication_item_job(job: dict) -> None:
                 "rewritten_markdown": new_md,
             })
 
+        # Mandatory per-client term substitution (compliance): code the rewritten
+        # title/body before the public Doc/Sheet is created. Covers both a fresh
+        # rewrite and a cached one from before this feature; the backlink
+        # `source_url` (the client's own already-compliant page) is untouched.
+        # No-op without a map.
+        from services import term_substitution as _ts
+
+        _subs = _ts.parse_substitutions((client or {}).get("term_substitutions"))
+        if _subs:
+            _ct, _cmd = _ts.substitute_text(new_title, _subs), _ts.substitute_text(new_md, _subs)
+            if _ct != new_title or _cmd != new_md:
+                new_title, new_md = _ct, _cmd
+                _patch({"rewritten_title": new_title, "rewritten_markdown": new_md})
+
         # `dedupe_by_name`: the id below is recorded only AFTER the create call
         # returns, so an interruption in that window (a deploy drain requeues this
         # job) leaves a real public Doc/Sheet on Drive that the retry's

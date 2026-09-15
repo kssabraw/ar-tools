@@ -1412,6 +1412,74 @@ def _resolve_brand_voice_card(session_id: str) -> dict | None:
         return None
 
 
+def _resolve_term_substitutions(session_id: str) -> dict:
+    """The client's mandatory term-substitution map for a client-linked session
+    ({real term: coded term}), or ``{}`` when there is no client / no map.
+
+    Keywords, briefs and clustering keep the real term; this map is applied only
+    to the WRITTEN article. Best-effort: any failure degrades to no substitution
+    (a Fan-out article must never fail over this lookup).
+    """
+    try:
+        from db.supabase_client import get_supabase
+        from fanout.storage import silo as store
+        from services import term_substitution
+
+        session = store.get_session(session_id)
+        client_id = (session or {}).get("client_id")
+        if not client_id:
+            return {}
+        row = (get_supabase().table("clients").select("term_substitutions")
+               .eq("id", client_id).single().execute().data)
+        return term_substitution.parse_substitutions((row or {}).get("term_substitutions"))
+    except Exception as exc:  # noqa: BLE001 — best-effort; degrade to no substitution
+        logger.warning(
+            "fanout.term_substitutions_resolve_failed",
+            extra={"event": "fanout.term_substitutions_resolve_failed",
+                   "session_id": session_id, "reason": repr(exc)},
+        )
+        return {}
+
+
+def _recode_article_output(article, subs: dict) -> None:
+    """Re-apply the client's term substitution to the FINAL article after
+    internal-link injection (which can re-introduce a raw term via a sibling
+    keyword's anchor/slug) and re-serialize markdown/html from the coded items.
+
+    In-place + idempotent. Real internal links (e.g. a product page whose slug is
+    already compliant) contain no raw term and are left untouched; a sibling blog
+    link built from a raw keyword is coded to match that sibling's own coded
+    output. Best-effort — never raises."""
+    if not subs:
+        return
+    try:
+        from fanout.writer.serialize import to_html, to_markdown
+        from services import term_substitution as _ts
+
+        def _s(text):
+            return _ts.substitute_text(text, subs)
+
+        article.article = [
+            it.model_copy(update={
+                "heading": _s(it.heading) if it.heading else it.heading,
+                "body": _s(it.body) if it.body else it.body,
+            })
+            for it in article.article
+        ]
+        article.article_markdown = to_markdown(article.article)
+        article.article_html = to_html(article.article)
+        article.title = _s(article.title) or article.title
+        article.seo_title = _s(article.seo_title) or article.seo_title
+        article.intro = _s(article.intro) or article.intro
+        article.cta = _s(article.cta) or article.cta
+        article.key_takeaways = [_s(t) or t for t in article.key_takeaways]
+    except Exception as exc:  # noqa: BLE001 — compliance recode is best-effort
+        logger.warning(
+            "fanout.term_substitution_recode_failed",
+            extra={"event": "fanout.term_substitution_recode_failed", "reason": repr(exc)},
+        )
+
+
 def generate_article_core(
     session_id: str, cluster_id: str, keyword: str, location_code: int,
     force_refresh: bool = False, *, scheduled_article_run_id: str | None = None,
@@ -1478,17 +1546,22 @@ def generate_article_core(
         # writer's prompts and drives a voice review + corrective rewrite. None
         # for info-site generation (unchanged, client-agnostic).
         brand_voice_card = _resolve_brand_voice_card(session_id)
+        # Mandatory per-client term substitution (compliance): keywords/brief keep
+        # the real term, the WRITTEN article gets the coded term. {} for most clients.
+        term_subs = _resolve_term_substitutions(session_id)
         article = generate_article(
             brief, sie, warnings=warnings, deps=build_writer_deps(content_writer_provider),
             word_budget=s.writer_word_budget, coverage_enabled=s.writer_claim_coverage_enabled,
             timeout_s=s.writer_timeout_s, adherence_threshold=s.writer_adherence_threshold,
-            brand_voice_card=brand_voice_card,
+            brand_voice_card=brand_voice_card, substitutions=term_subs,
         )
         # M15 — deterministic internal-link injection (enrichment; never fails the article).
         _inject_internal_links(session_id, cluster_id, article)
         # Surface the clustered keywords no heading covered, so the UI can prompt the owner
         # to write them as separate articles. Suppressed on auto-split children (recursion guard).
         _attach_unused_keywords(cluster_id, brief_row["output_json"], article)
+        # Re-code after injection: a sibling link can re-introduce the raw term.
+        _recode_article_output(article, term_subs)
     except WriterAbort as exc:
         reason = f"{exc.code}: {exc.message}"
         logger.error(

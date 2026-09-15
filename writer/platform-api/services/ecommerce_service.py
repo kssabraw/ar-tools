@@ -306,6 +306,17 @@ def _job_checkpoint_writer(job_id: Optional[str], payload: Optional[dict]):
 
 # ── persistence ──────────────────────────────────────────────────────────────
 
+def _apply_term_substitutions(client: dict, result: dict) -> dict:
+    """Apply the client's mandatory term substitution to a generated/reoptimized
+    ecommerce page result (compliance): code the real term out of the WRITTEN page
+    and reconcile the voice verdict. Keywords/analysis keep the real term. In-place
+    + idempotent + best-effort; a no-op when the client has no map."""
+    from services import term_substitution as ts
+
+    subs = ts.parse_substitutions((client or {}).get("term_substitutions"))
+    return ts.substitute_page_result(result, subs)
+
+
 def _persist_page(
     client_id: str, keyword: str, page_type: str, source_url: Optional[str],
     product_input: Optional[str], mode: str, result: dict, user_id: str,
@@ -469,6 +480,7 @@ async def generate_page(
         payload["run_analysis"] = False
     result = await _stream_nlp("/generate-ecommerce-page", payload, on_progress=on_progress)
     result = await _apply_structure_gate(result, payload, reference_analysis)
+    result = _apply_term_substitutions(client, result)
     page = _persist_page(client_id, keyword.strip(), page_type, source_url, product_input, "generate", result, user_id, notes=notes)
     # Fill the cache on a miss, off the facts already persisted on the page.
     if not payload["researched_facts"]:
@@ -550,6 +562,7 @@ async def reoptimize_from(
         "notes": (notes or "").strip() or None,
         "score_threshold": score_threshold,
     }, on_progress=on_progress)
+    result = _apply_term_substitutions(client, result)
     page = _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)
     if not cached_facts:
         ecommerce_facts_cache.store_facts(

@@ -365,6 +365,23 @@ def _job_progress_writer(job_id: Optional[str]):
 
 # ── persistence ─────────────────────────────────────────────────────────────
 
+def _apply_term_substitutions(client: dict, result: dict) -> dict:
+    """Apply the client's mandatory term substitution to a generated/reoptimized
+    page result (compliance): the coded term replaces the real one in the WRITTEN
+    page (content HTML, title, JSON-LD), and the voice verdict is reconciled so it
+    no longer reports a forbidden word the shipped page no longer contains.
+
+    Keywords/briefs/analysis keep the real term — only this output is switched.
+    In-place + idempotent + best-effort; a no-op when the client has no map. The
+    nlp voice check ran on the raw term, so the reconcile is what keeps the stored
+    verdict (and the Director's degraded-content seam) honest.
+    """
+    from services import term_substitution as ts
+
+    subs = ts.parse_substitutions((client or {}).get("term_substitutions"))
+    return ts.substitute_page_result(result, subs)
+
+
 def _persist_page(client_id: str, keyword: str, location: str, run_analysis: bool, mode: str, result: dict, user_id: str, notes: Optional[str] = None, job_id: Optional[str] = None) -> dict:
     row = {
         "client_id": client_id,
@@ -912,6 +929,9 @@ async def generate_page(
         result = await _apply_structure_gate(result, payload, reference_analysis)
     coverage = _guarantee_internal_links(result, internal_links)
     result = attach_length_verdict(result, spec)
+    # Mandatory per-client term substitution (compliance): code the real term out
+    # of the WRITTEN page (keywords/analysis kept it). No-op without a map.
+    result = _apply_term_substitutions(client, result)
     # Record whether competitor analysis actually informed this page (it used
     # to be hard-coded True, so a degraded page was indistinguishable on read).
     page = _persist_page(client_id, keyword, location, analysis_ok, "generate", result, user_id, notes=notes, job_id=job_id)
@@ -1604,6 +1624,8 @@ async def reoptimize_page(
             # (Catches HTTPException from the proxy AND any decode/unexpected error.)
             logger.warning("local_seo.reoptimize_rescore_failed", extra={"client_id": client_id})
 
+    # Mandatory per-client term substitution (compliance) before persist.
+    result = _apply_term_substitutions(client, result)
     page = _persist_page(client_id, keyword, location, bool(serp_analysis), "reoptimize", result, user_id, job_id=job_id)
     if result.get("length_verdict") is not None:
         page["length_verdict"] = result["length_verdict"]
@@ -1800,6 +1822,19 @@ async def social_posts(
         "detected_icp": client.get("detected_icp"),
         "differentiators": client.get("differentiators") or [],
     })
+    # Mandatory per-client term substitution (compliance): GBP social posts are
+    # published, so code the real term out of every post's text. No-op without a map.
+    if isinstance(result, dict):
+        from services import term_substitution as _ts
+
+        _subs = _ts.parse_substitutions((client or {}).get("term_substitutions"))
+        if _subs:
+            import json as _json
+
+            try:
+                result = _json.loads(_ts.substitute_text(_json.dumps(result), _subs))
+            except Exception:  # noqa: BLE001 — leave posts untouched on any issue
+                pass
     if page_id and isinstance(result, dict):
         try:
             get_supabase().table("local_seo_pages").update(
