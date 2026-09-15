@@ -14,11 +14,14 @@ read (`brand_guide_vibe`, one Sonnet-vision call over the stored homepage
 screenshot); Phase 2 (`brand_guide_synthesis`) adds the grounded Proposed layer —
 two best-effort forced-tool calls over the census + vibe + the client's owned
 voice/ICP/differentiator assets, the deterministic coherence check + WCAG
-pairings, and the regulated guardrail. There is still no PDF render (Phase 3)
-here — so the `brand_guide_generate` job finalizes `done` after storing the
-census + best-effort `vibe_read` + `synthesized`, EXCEPT a regulated client
-(`content_compliance_mode != 'off'`) whose synthesis produced content finalizes
-`awaiting_signoff` (the §5.3b sign-off gate; the render/approval flow is Phase 3/4).
+pairings, and the regulated guardrail. Phase 3 (`brand_guide_render`) renders the
+assembled record to a portable PDF (both an `internal` + a `client` profile) into
+the `reports` bucket + delivers it to the client's Drive folder. For a NON-regulated
+client the `brand_guide_generate` job renders inline right after synthesis (status
+→ rendering → done, `renders`/`pdf_url` set); a regulated client
+(`content_compliance_mode != 'off'`) whose synthesis produced content stops at
+`awaiting_signoff` (the §5.3b sign-off gate) and is rendered LATER by the separate
+`brand_guide_render` job on a human approval (the approve endpoint/UI is Phase 4).
 
 Everything is gated on `settings.brand_guide_enabled` and best-effort: a dead
 page, a ScrapeOwl bot-block (401), a missing screenshot, or a client with no site
@@ -282,6 +285,24 @@ async def _finalize_guide(
     }
     if captured.get("no_source_url"):
         result["no_source_url"] = True
+
+    # Render (Phase 3). A NON-regulated guide (status resolved to `done`) renders
+    # inline right after synthesis (PRD §6 / §4.7): status → rendering → done with
+    # per-profile PDFs + Drive delivery. A regulated guide stopped at
+    # `awaiting_signoff` renders LATER via the separate `brand_guide_render` job on
+    # a human approval — it is deliberately NOT rendered here. Best-effort: a render
+    # failure records `status='error'` on the row (the census/vibe/synthesized data
+    # already written survives) and is reflected in the result, never raised.
+    if status == "done" and settings.brand_guide_enabled and settings.brand_guide_render_enabled:
+        from services import brand_guide_render
+
+        render_result = await brand_guide_render.render_and_store_guide(guide_id, deliver=True)
+        result["render_status"] = render_result.get("status")
+        result["status"] = render_result.get("status", status)
+        if render_result.get("pdf_url"):
+            result["pdf_url"] = render_result["pdf_url"]
+        if render_result.get("status") == "error":
+            result["render_error"] = render_result.get("error")
     return result
 
 
