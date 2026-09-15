@@ -654,6 +654,19 @@ async def run_google_trends_category_scan(
 
     seeds = derive_category_seeds(topic_research, settings.google_trends_category_seed_cap)
     if not seeds:
+        # research_topics can be fully gated off (keyword_research_topical=False) or
+        # return nothing; fall back to a DIRECT site-topic discovery (gated only on
+        # keyword_research_site_topics) so a category scan still anchors on the
+        # client's own site when it has one — decoupling Phase 2 from the topical flag.
+        try:
+            site_topics, _ = await keyword_research_topics.discover_site_topics(ctx, location_code)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("google_trends.site_topics_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+            site_topics = []
+        seeds = derive_category_seeds(
+            {"site": {"topics": site_topics}}, settings.google_trends_category_seed_cap)
+    if not seeds:
         raise ValueError("no_anchor")
     anchors = topic_research.get("anchors") or list(seeds)
 
@@ -678,6 +691,10 @@ async def run_google_trends_category_scan(
     if rows and settings.keyword_research_audience_filter:
         try:
             from services import keyword_research_audience
+            # Sync call on the async path — deliberately matching keyword_research's
+            # own call site (the job worker runs one job per lane; offloading to a
+            # thread would diverge from that pattern and put the shared Supabase
+            # client on a worker thread for no meaningful gain).
             rows, _ = keyword_research_audience.filter_by_audience(rows, ctx, seeds)
         except Exception as exc:  # noqa: BLE001 — best-effort; keep the relevance-gated set
             logger.warning("google_trends.audience_failed",
@@ -703,8 +720,11 @@ def _persist_run(
     client_id: Optional[str], seeds: list[str], rows: list[dict], *,
     mode: str = "keyword",
     category_code=None, category_name=None, location_code=None, language_code=None,
-    trends_type="web", cost_usd=None, qualified=0,
+    trends_type="web", cost_usd=None, qualified=0, rising_count: Optional[int] = None,
 ) -> str:
+    """Persist a run + its child rows. ``rising_count`` defaults to ``len(rows)``;
+    pass it explicitly when ``rows`` is a capped subset of a larger set (the
+    portfolio sweep stores a bounded slice but reports the true totals)."""
     supabase = get_supabase()
     run = (
         supabase.table("google_trends_runs").insert({
@@ -716,7 +736,7 @@ def _persist_run(
             "location_code": location_code,
             "language_code": language_code,
             "trends_type": trends_type,
-            "rising_count": len(rows),
+            "rising_count": rising_count if rising_count is not None else len(rows),
             "qualified_count": qualified,
             "status": "complete",
             "cost_usd": cost_usd,
@@ -857,6 +877,9 @@ async def run_google_trends_scan_job(job: dict) -> None:
 # union of clients' tracked keywords (no client scope, no relevance/audience gate),
 # digested to the SerMaStr strategy channel. Reuses the core with no anchor.
 # ---------------------------------------------------------------------------
+_PORTFOLIO_STORE_CAP = 500  # max qualified rows persisted per portfolio run
+
+
 def _portfolio_seed_groups() -> list[dict]:
     """Per-client tracked-keyword seed groups for the sweep: [{client_id,
     client_name, seeds}]. Grouped by client so each rising query is attributable
@@ -889,8 +912,13 @@ def _portfolio_seed_groups() -> list[dict]:
         bucket.append(kw.strip())
     if not by_client:
         return []
-    # Resolve client names (best-effort) and cap the number of clients.
-    client_ids = list(by_client.keys())[: max(1, settings.google_trends_portfolio_max_clients)]
+    # Cap the number of clients DETERMINISTICALLY — most tracked keywords first
+    # (biggest SEO footprint), client_id as a stable tiebreak — so a capped sweep
+    # is reproducible and prioritises the most-invested clients rather than
+    # whatever order the DB returned.
+    client_ids = sorted(
+        by_client, key=lambda c: (-len(by_client[c]), c)
+    )[: max(1, settings.google_trends_portfolio_max_clients)]
     names: dict[str, str] = {}
     try:
         rows = (
@@ -949,11 +977,16 @@ async def run_portfolio_trends_sweep() -> dict:
     qualified_rows = [r for r in ranked if r.get("qualified")]
     digest_rows = qualified_rows[: max(1, settings.google_trends_portfolio_digest_size)]
 
+    # Store the top qualified rows (bounded) — an agency sweep can dedupe to
+    # thousands of rising queries across clients, and the no-demand ones aren't
+    # actionable at the portfolio level. Report the TRUE totals via rising_count.
+    stored_rows = qualified_rows[:_PORTFOLIO_STORE_CAP]
     run_id = _persist_run(
-        None, [], ranked, mode="portfolio",
+        None, [], stored_rows, mode="portfolio",
         location_code=None, language_code="en",
         trends_type=settings.google_trends_default_type,
         cost_usd=round(total_cost, 4), qualified=len(qualified_rows),
+        rising_count=len(ranked),
     )
     # Emit the digest UNLESS we were budget-blocked before gathering anything — a
     # "nothing rising" post when the sweep never actually ran would be misleading.
