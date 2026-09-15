@@ -28,7 +28,7 @@ The Pomelli export was 7 pages: cover, a one-paragraph overview + tagline, logo 
 - Imagery is a vibe, not a rule.
 - Nothing is grounded in evidence — generic AI descriptors ("Bio-Futuristic Sharpness") untied to the real site, products, or customers.
 
-The suite already owns the two halves Pomelli is weakest at (real brand *voice* with enforceable terms; real *audience* via ICP + differentiators). The opportunity is fusing **measured visual identity (from the live site)** + **existing voice/ICP assets** + **a synthesized messaging + imagery layer** into one deep document.
+The suite already owns the two halves Pomelli is weakest at (real brand *voice* with enforceable terms; real *audience* via ICP + differentiators). The opportunity is fusing **measured visual identity (from the live site)** + **a read of the brand's aesthetic/feel (vision over the real render)** + **existing voice/ICP assets** + **a synthesized messaging + imagery layer** into one deep document.
 
 ---
 
@@ -56,11 +56,12 @@ The generated guide has these sections. Each is marked by its dominant **source*
 | 2 | **Audience (ICP)** ⭐ | Primary + secondary segments, demographics, triggers, fears, motivations, hooks, trust signals (`detected_icp`) | "What they need to hear" framing, objection handling |
 | 3 | **Voice & Messaging** ⭐ | Personality (3 traits), tone, current sample phrases (`brand_voice`), must-use / never-use vocabulary (Voice Card) | Tone-by-context matrix, **worked examples** (headline, CTA, product blurb, email opener), we-say/we-don't table, key messages, boilerplate (short + long) |
 | 4 | **Logo** | Extracted logo candidates (🆕) or `logo_url`/GBP | Clear space, min size (deterministic rules), do/don't usage guidance |
-| 5 | **Color** 🆕 | Real palette: named swatches + Hex/RGB/CMYK/HSL, area-weighted dominance | Organized roles (primary/secondary/neutral), 60/30/10 usage ratios, accessible pairings (WCAG contrast), do/don't, **gaps flagged** (e.g. "11 near-duplicate grays → consolidate to 3") |
-| 6 | **Typography** 🆕 | Real typefaces + measured type sizes/weights | Named type scale (H1→caption with size/weight/line-height), pairing rules, fallback stacks |
-| 7 | **Imagery & Iconography** ⭐ | Observed imagery (from the render/screenshot, described) | Subject/lighting/treatment direction, do/don't, stock-vs-custom guidance, iconography style |
-| 8 | **Applications** (optional, v1.1) | — | Mockups: website hero, social post, business card, letterhead, label (reuse Website-Builder theme render) |
-| 9 | **Brand-in-action** | — | Quick cheat sheet, "who owns brand questions", change log/version |
+| 5 | **Aesthetic & Art Direction** ⭐🆕 | The *felt* vibe read off the real screenshots (§4.3): aesthetic descriptors + evidence, mood-axis placements (minimal↔maximal, warm↔clinical, premium↔budget, …), color/type/shape/density/imagery character | Named aesthetic direction + rationale, **coherence check** (does the executed detail match the intended feel? gaps flagged), "keep doing / dial up / dial back" |
+| 6 | **Color** 🆕 | Real palette: named swatches + Hex/RGB/CMYK/HSL, area-weighted dominance | Organized roles (primary/secondary/neutral), 60/30/10 usage ratios, accessible pairings (WCAG contrast), do/don't, **gaps flagged** (e.g. "11 near-duplicate grays → consolidate to 3") |
+| 7 | **Typography** 🆕 | Real typefaces + measured type sizes/weights | Named type scale (H1→caption with size/weight/line-height), pairing rules, fallback stacks |
+| 8 | **Imagery & Iconography** ⭐ | Observed imagery (from the render/screenshot, described) + its treatment from the vibe read | Subject/lighting/treatment direction, do/don't, stock-vs-custom guidance, iconography style |
+| 9 | **Applications** (optional, v1.1) | — | Mockups: website hero, social post, business card, letterhead, label (reuse Website-Builder theme render) |
+| 10 | **Brand-in-action** | — | Quick cheat sheet, "who owns brand questions", change log/version |
 
 ⭐ = the sections that decisively out-depth Pomelli and lean on data the suite already owns.
 
@@ -68,7 +69,7 @@ The generated guide has these sections. Each is marked by its dominant **source*
 
 ## 4. Pipeline
 
-Seven stages. Stages 1–2 are the new capability; the rest is assembly + reuse.
+Eight stages. Stages 1–3 (capture, deterministic extract, aesthetic/vibe read) are the new capability; the rest is assembly + reuse.
 
 ### 4.1 Capture (headless render) 🆕
 
@@ -90,23 +91,37 @@ Turn the raw computed-style dump into a **visual census** (pure Python, unit-tes
 
 > **Prototype validation (2026-09-15):** this exact extractor, run against a representative fixture, recovered a full palette (including the four colors a human brand book named by hand), both fonts, a 7-step type scale, weights, radii, and 4 logo candidates. The census machinery is adapted from the Website Builder's `website_theme_precompile.py` color/font census (`census_styles`/`TokenCensus`), which today runs only on *uploaded* Claude Design files — this points the same idea at rendered live output. **Live-site runs are blocked in the Claude Code sandbox by egress policy** (same limitation as DataForSEO/nlp); they run on the deployed worker (Browserless) or in an allow-listed environment.
 
-### 4.3 Pull existing assets (no new calls)
+### 4.3 Aesthetic & Vibe read (vision over the screenshots) 🆕
+
+The deterministic census (§4.2) captures the *ingredients* of the visual identity — exact colors, fonts, sizes, radii — but not the **aesthetic**: the gestalt a human feels in two seconds (minimal↔maximal, warm↔clinical, playful↔serious, budget↔premium, organic↔geometric, retro↔futuristic). That feeling lives in the *relationships* between tokens (whitespace, contrast character, saturation, shape language, imagery treatment, polish), not the tokens themselves — two brands can share the same hex + typeface and feel opposite. So a separate **vision pass reads the captured screenshots** and produces the *felt* layer:
+
+- **Aesthetic descriptors** — a short controlled-ish vocabulary of adjectives ("clinical, high-contrast, minimalist, futuristic"), **each with an evidence phrase** tying it to what's on the page ("near-black canvas, single electric-violet accent, generous whitespace, hard corners"). This is the grounded version of Pomelli's "Clinical Midnight / Bio-Futuristic Sharpness" — read off the real render, not invented.
+- **Mood axes** — the brand placed on a fixed set of 0–100 scales (minimal↔maximal, warm↔cool, playful↔serious, understated↔bold, budget↔premium, organic↔geometric, classic↔futuristic) so the vibe is comparable and repeatable, not just prose.
+- **Character reads** — color mood (muted vs vibrant, mono vs multi), type personality (geometric vs humanist, technical vs editorial), shape language (sharp vs rounded), spatial density (airy vs packed), imagery style (photographic vs illustrated vs none; lighting; subjects).
+
+Mechanics: one bounded Claude **vision** call over the viewport + full-page screenshots (`GENERATION` set aside — see model note §12 Q4), forced-tool output into a fixed schema, best-effort (a failed/degraded read omits the vibe layer and the guide still renders from the census). This is **not new infrastructure** — the QA agent already renders a page screenshot and judges it with Claude vision (`qa_service` visual-render check + the DataForSEO `page_screenshot` path); this reuses that established pattern.
+
+**Coherence check (the audit payoff).** Because §4.2 (measured tokens) and §4.3 (felt vibe) are produced independently, synthesis (§4.5) can *cross-check* them and flag **incoherence** — where the intended feel and the executed detail diverge. Example: the vibe read says "premium, minimalist" but the census shows 11 near-duplicate grays and cramped spacing → a flagged gap ("the aesthetic reads premium, but the execution is inconsistent — consolidate to 3 neutrals, open up spacing"). This is exactly the "here's where your brand is leaking" insight that makes the deliverable a sales asset, and it's only possible because vibe and tokens are read separately then compared.
+
+Kept honest about its limits (surfaced in the guide's methodology note): a vibe read is an *interpretation*, motion/interaction feel isn't captured from static shots, and it's an LLM judgment that can be wrong — so it's presented as an observed reading the operator can edit, never as measurement.
+
+### 4.4 Pull existing assets (no new calls)
 
 Read the already-populated client-level canonical assets: `clients.brand_voice` (personality/tone/writing_style/vocabulary/messaging_themes/sample_phrases + the writer_execution_guide), `clients.detected_icp` (segments), `clients.differentiators`, the distilled **Voice & Audience Card** (tone_adjectives, person, must_use/never_use/discouraged terms, signature_phrases, cta_language, audience_pain_points/triggers/motivations/objections), `clients.logo_url` / `gbp.logo`, plus `clients.brand_guide_text` / `icp_text` (the human-authored seeds).
 
-### 4.4 Synthesize (grounded LLM)
+### 4.5 Synthesize (grounded LLM)
 
-One or a few forced-tool calls produce the **Proposed** layer + naming: swatch names, palette roles + ratios + contrast pairings, named type scale, imagery/iconography direction, tagline, positioning statement, worked voice examples (headline/CTA/blurb/email), we-say/we-don't table, key messages, boilerplate, and the **gap analysis** per section. Grounded strictly on the extracted census + the pulled assets + the site copy captured in stage 1. **Guardrail (§5.3) is enforced in the prompt AND with a deterministic post-check.**
+One or a few forced-tool calls produce the **Proposed** layer + naming: swatch names, palette roles + ratios + contrast pairings, named type scale, imagery/iconography direction, tagline, positioning statement, worked voice examples (headline/CTA/blurb/email), we-say/we-don't table, key messages, boilerplate, the **coherence check** (vibe vs tokens, §4.3), and the **gap analysis** per section. Grounded strictly on the extracted census (§4.2) + the aesthetic/vibe read (§4.3) + the pulled assets (§4.4) + the site copy captured in stage 1. **Guardrail (§5.3) is enforced in the prompt AND with a deterministic post-check.**
 
-### 4.5 Assemble + store
+### 4.6 Assemble + store
 
-Write a **versioned `brand_guides` row** carrying the captured assets, the deterministic census, the synthesized layer, provenance, and the render storage paths (§9). Regenerating creates a new version; an operator-edited guide is never silently overwritten (mirrors the page-spec/voice-card "edited stays" pattern).
+Write a **versioned `brand_guides` row** carrying the captured assets, the deterministic census, the aesthetic/vibe read, the synthesized layer, provenance, and the render storage paths (§9). Regenerating creates a new version; an operator-edited guide is never silently overwritten (mirrors the page-spec/voice-card "edited stays" pattern).
 
-### 4.6 Render (PDF)
+### 4.7 Render (PDF)
 
 Build a self-contained `<!doctype html>` doc with an inline print `<style>` (new `_CSS`, A4/`@page`, cover, swatch grids, type specimens, do/don't blocks, SVG legends) → `client_report.render_pdf(html)` (WeasyPrint) → `_store_pdf` (private `reports` bucket) → `_signed_url`. Screenshots/logo inlined as base64 data URIs so the PDF is portable. Delivered to the client's Drive folder via the existing `client_report_schedule.deliver_report` path (email when SMTP lands).
 
-### 4.7 Enforcement refresh loop (D1 — "Both")
+### 4.8 Enforcement refresh loop (D1 — "Both")
 
 After a guide is generated, **offer** to refresh the client's `brand_voice` + Voice Card from the guide's refined voice/messaging (opt-in; **never auto-overwrites** user-authored `source:"user"` text — same supersede-guard the scans already honour). This is how the guide feeds content generation without creating a **second, competing** voice system. The guide is a superset deliverable; the Voice Card stays the single enforcement authority.
 
@@ -115,7 +130,7 @@ After a guide is generated, **offer** to refresh the client's `brand_voice` + Vo
 ## 5. Design principles & guardrails
 
 ### 5.1 Reuse, don't reinvent
-~70% of the module is assembly + render over data the suite already stores. The only genuinely new capability is live-site visual extraction (§4.1–4.2). Do not build a second voice/ICP model; read the canonical ones.
+~70% of the module is assembly + render over data the suite already stores. The genuinely new capabilities are live-site visual extraction (§4.1–4.2) and the vision-based aesthetic/vibe read (§4.3) — and even the vibe read reuses the QA agent's existing screenshot+vision pattern. Do not build a second voice/ICP model; read the canonical ones.
 
 ### 5.2 Deterministic where it can be
 All measurement (color census, clustering, type scale, contrast math, clear-space/min-size rules) is pure Python and unit-tested. The LLM only *names* and *proposes* — it never counts, measures, or reports a hex value it wasn't handed. (Mirrors the suite's "the LLM never counts words" page-spec discipline.)
@@ -144,7 +159,8 @@ brand_guides
   source_url        text                 -- the URL captured
   captured          jsonb                -- per-page: dom digest, screenshot paths, capture notes
   visual_census     jsonb                -- deterministic extract (colors/fonts/scale/logos/…)
-  synthesized       jsonb                -- proposed layer (names/ratios/examples/gaps/tagline/…)
+  vibe_read         jsonb                -- aesthetic/vibe read (descriptors+evidence, mood axes, character reads)
+  synthesized       jsonb                -- proposed layer (names/ratios/examples/gaps/coherence/tagline/…)
   edited            bool default false   -- operator edited → never auto-overwrite
   storage_path      text                 -- pdf in reports bucket
   pdf_url           text                 -- signed
@@ -167,11 +183,12 @@ Migration: `writer/supabase/migrations/<ts>_brand_guides.sql` (apply live).
 | ICP + differentiators | `clients.detected_icp` (segments: demographics/psychographics/messaging) + `clients.differentiators` (claim/mechanism/type) | `services/icp_service.py`; nlp `/analyze-business` |
 | Distilled enforceable voice | Voice & Audience Card (must_use/never_use/discouraged, cta_language, audience_*) | `writer/nlp-api/voice_card.py` |
 | Color/font census machinery | `census_styles` / `TokenCensus` (frequency tables over style values) — adapt for computed styles | `services/website_theme_precompile.py` |
+| Vision-over-screenshot (aesthetic/vibe read) | Established pattern: render a page screenshot + judge with Claude vision (+ the DataForSEO `page_screenshot` path) | QA agent (`services/qa_service.py` visual-render check) |
 | Logo | `clients.logo_url` (manual, `client-logos` bucket) + `gbp.logo` fallback | `routers/files.py` `upload_logo`; `services/gbp_service.py` |
 | PDF render + store + deliver | `render_pdf`, `_store_pdf`, `_signed_url`, `build_report_html`/`_CSS` pattern, `generate_client_report`/`enqueue_client_report`/`run_client_report_job` scaffold, `client_report_schedule.deliver_report` | `services/client_report.py`, `services/client_report_schedule.py` |
 | Async job + completion ping | `async_jobs` + `job_worker` dispatch + `SINGLE_JOB_REGISTRY` | `services/job_worker.py`, `services/activity.py` |
 
-**Two real gaps this module fills:** (a) no live-URL visual extraction exists anywhere today (colors/fonts come from uploaded designs; logo is manual/GBP); (b) no imagery-direction concept beyond per-design image-slot labels.
+**Real gaps this module fills:** (a) no live-URL visual extraction exists anywhere today (colors/fonts come from uploaded designs; logo is manual/GBP); (b) no aesthetic/"vibe" read of a brand's visuals exists — the QA vision check judges page *correctness*, not brand *feel*; (c) no imagery-direction concept beyond per-design image-slot labels.
 
 ---
 
@@ -195,7 +212,8 @@ Migration: `writer/supabase/migrations/<ts>_brand_guides.sql` (apply live).
 
 - **Phase 0 — extraction core (pure).** `services/brand_guide_extract.py`: the census/clustering/type-scale/logo-ranking helpers + fixtures + unit tests. No network. *(Prototype already proves the shape.)*
 - **Phase 1 — capture.** Playwright capture over CDP/local; `brand_guides` table + `brand_guide_generate` job (capture→extract→store census, no synth/render yet). Verified on the worker.
-- **Phase 2 — synthesis (grounded).** The LLM Proposed-layer + the §5.3 guardrail (prompt + deterministic post-check) + unit tests on the pure post-check.
+- **Phase 1.5 — aesthetic/vibe read.** The vision pass over the captured screenshots (§4.3) → `vibe_read`; reuses the QA screenshot+vision pattern. Best-effort; the guide still generates without it.
+- **Phase 2 — synthesis (grounded).** The LLM Proposed-layer + the coherence check (vibe vs tokens) + the §5.3 guardrail (prompt + deterministic post-check) + unit tests on the pure post-check.
 - **Phase 3 — render.** New PDF template/`_CSS` + WeasyPrint + store + Drive delivery.
 - **Phase 4 — frontend + enforcement loop.** Workspace card/page + the opt-in Voice-Card/brand_voice refresh.
 - **Phase 5 (v1.1) — applications/mockups.** Reuse the Website-Builder theme render for in-context mockups.
@@ -209,10 +227,11 @@ Each phase is independently shippable and dark until the frontend lands. Gated o
 1. Given a client with a live site, a generated guide's **Documented** color section lists the site's actually-dominant colors (area-weighted, near-duplicates clustered) with correct Hex/RGB/HSL — verified against a manual eyedropper on ≥3 real client sites.
 2. The **Typography** section reproduces the site's real typefaces + a plausible type scale (largest→smallest) with no invented font.
 3. The **Audience** and **Voice** sections are populated from the client's stored ICP/voice with **≥1 worked example each** (headline, CTA, blurb) — never an empty adjective list.
-4. For a regulated client, **zero** invented product claims/efficacy/regulatory statements appear (deterministic post-check passes; spot-checked by a human on the peptide client).
-5. The guide renders to a portable PDF in the `reports` bucket + lands in the client's Drive folder.
-6. A client with **no** site still produces a guide (visual sections marked unavailable/prescriptive) rather than erroring.
-7. The enforcement refresh **never** overwrites user-authored `source:"user"` voice/ICP text.
+4. The **Aesthetic & Art Direction** section names the brand's vibe with descriptors + mood-axis placements, each tied to a screenshot-evidence phrase, and surfaces ≥1 coherence gap where one exists (feel vs execution) — spot-checked against a human's read of the same site on ≥3 clients.
+5. For a regulated client, **zero** invented product claims/efficacy/regulatory statements appear (deterministic post-check passes; spot-checked by a human on the peptide client). The vibe read describes *visual feel* only — it never asserts a product fact.
+6. The guide renders to a portable PDF in the `reports` bucket + lands in the client's Drive folder.
+7. A client with **no** site still produces a guide (visual sections marked unavailable/prescriptive; the vibe read is omitted, not faked) rather than erroring.
+8. The enforcement refresh **never** overwrites user-authored `source:"user"` voice/ICP text.
 
 ---
 
@@ -221,7 +240,7 @@ Each phase is independently shippable and dark until the frontend lands. Gated o
 1. **Logo auto-extraction:** should the guide auto-adopt the best logo candidate off the site (and store it to `client-logos`), or only *suggest* candidates and keep `logo_url` manual? (Recommend: suggest + one-click adopt; never silently overwrite an uploaded logo.)
 2. **Capture scope:** homepage only, or homepage + N key pages? Which pages (nav-discovered product/about, or operator-picked)? (Recommend: homepage + up to 2 auto-discovered, operator-overridable.)
 3. **Proposed palette authority:** may the Proposed layer *replace/rationalize* extracted colors (e.g. collapse 11 grays → 3, nudge for contrast), or only *organize* the real ones? (Recommend: organize + recommend, never silently restate a color the site doesn't use — flag substitutions explicitly.)
-4. **Model selection** per synthesis step (naming vs messaging vs examples) — Haiku for naming, Sonnet for messaging/examples? (Recommend yes; confirm.)
+4. **Model selection** per step — Haiku for naming, Sonnet for messaging/examples, and a **vision-capable Claude** for the aesthetic/vibe read (§4.3). Which model for the vibe read, and is one screenshot pass enough or should it see the full-page + a couple key pages? (Recommend: Sonnet vision, viewport + full-page homepage in one call; confirm.)
 5. **Enforcement-refresh UX & freeze:** auto-suggest a diff vs one-click apply; and should the refresh respect client freeze? (Recommend: one-click apply of a shown diff; not freeze-gated since it edits internal assets, not site output.)
 6. **v1 depth of Applications/mockups** — in v1 or deferred to v1.1? (Recommend defer.)
 
