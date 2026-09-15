@@ -1442,16 +1442,22 @@ class Settings(BaseSettings):
     google_trends_enabled: bool = False
     google_trends_daily_call_budget: int = 100         # paid explore+overview calls/day
     google_trends_default_type: str = "web"            # web | news | youtube | images | froogle
-    google_trends_max_seeds: int = 5                   # explore per-task keyword cap
+    google_trends_max_seeds: int = 5                   # explore per-task keyword hard cap (explore_live)
     google_trends_drop_no_demand: bool = False         # keep unqualified rows (flagged) for inspection
     # Phase 2 (informational): a SEEDLESS category scan anchors on the client's own
     # site topics + ICP (keyword_research_topics) and gates the rising queries with
     # the SAME relevance + audience filters keyword research uses, then the survivors
-    # route into Topic Research. seed_cap bounds the derived explore seeds (cost).
+    # route into Topic Research. seed_cap bounds the derived explore seeds — NOTE each
+    # seed is one billed explore call (rising queries are single-term), so a full
+    # category scan spends ~seed_cap explore calls + one overview batch.
     google_trends_category_seed_cap: int = 10
     # Phase 3 (portfolio): a weekly agency-wide "what's rising this week" sweep over
     # the union of clients' tracked keywords (no client scope, no relevance gate),
     # digested to the SerMaStr strategy channel. Weekday: Monday=0 … Sunday=6 (UTC).
+    # Cost per sweep ≈ Σ(seeds_per_client explore calls + 1 overview) across the
+    # selected clients — each seed is its own explore (rising queries are single-term),
+    # so keep max_clients × seeds_per_client within the daily_call_budget or the sweep
+    # meters out gracefully (it digests whatever it gathered before the cap).
     google_trends_portfolio_weekday: int = 0
     google_trends_portfolio_max_clients: int = 20
     google_trends_portfolio_seeds_per_client: int = 5

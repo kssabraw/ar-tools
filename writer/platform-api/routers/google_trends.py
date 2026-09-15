@@ -157,12 +157,12 @@ async def estimate(
     client_id: UUID, seeds: str = "", auth: dict = Depends(require_auth)
 ) -> dict:
     """Free preflight: how many paid calls a scan of these seeds would spend, and
-    the budget left. One explore call per ≤5 seeds + one overview batch."""
+    the budget left. One explore call PER SEED (rising queries are single-term, so
+    each seed is its own explore) + one overview batch."""
     parsed = google_trends.keyword_research.parse_seeds(seeds)
-    chunks = max(1, (len(parsed) + settings.google_trends_max_seeds - 1) // settings.google_trends_max_seeds)
     return {
         "seeds": parsed,
-        "estimated_calls": chunks + (1 if parsed else 0),
+        "estimated_calls": len(parsed) + (1 if parsed else 0),
         "budget_remaining": google_trends.budget_remaining(),
     }
 
