@@ -1,6 +1,6 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-15 · **Brand Guide Generator — Phase 1.5 (aesthetic / "vibe" read) — BUILT, DRAFT PR** (latest)
+## ⏩ Update — 2026-09-15 · **Brand Guide Generator — Phase 1.5 (aesthetic / "vibe" read) — BUILT + MERGED (PR [#1144](https://github.com/kssabraw/ar-tools/pull/1144))** (latest)
 
 Phase 1.5 of the Brand Guide Generator (PRD `docs/modules/brand-guide-generator-prd-v1_0.md` §4.3 / §3 §5 / §10 Phase 1.5 / §12 Q4). Adds the *felt* aesthetic layer on top of the merged Phase 1 capture (#1141). The ADR (no headless browser) stands. **NO synthesis, NO render, NO coherence check yet** — those are Phase 2/3. Still gated on `brand_guide_enabled` (default False in code; **TRUE on PLATFORM**); nothing auto-enqueues, so nothing spends until a guide is explicitly requested.
 
