@@ -229,6 +229,7 @@ def test_parse_interest_over_time_extracts_points():
     body = _graph_body([
         {"date_from": "2025-01-01", "values": [50]},
         {"date_from": "2025-02-01", "value": 80},
+        {"date_from": "2025-04-01", "values": [90], "missing_data": True},  # gap → dropped
         {"date_from": "junk"},   # no month → dropped
         {"date_from": "2025-03-01"},  # no value → dropped
         "notadict",
