@@ -34,6 +34,9 @@ export interface ClientListItem {
   archived: boolean
   created_at: string
   logo_url: string | null
+  // 'client' | 'prospect' | 'owned_property'. Prospects are lightweight
+  // prospecting records segregated from real clients on the dashboard.
+  kind?: 'client' | 'prospect' | 'owned_property'
 }
 
 export interface GbpReview {
@@ -1836,7 +1839,7 @@ export interface AsanaWorkloadReport {
 export interface ClientReport {
   id: string
   client_id: string
-  report_type: 'monthly' | 'weekly' | 'ai_visibility'
+  report_type: 'monthly' | 'weekly' | 'ai_visibility' | 'maps' | 'prospect_snapshot'
   period_start: string | null
   period_end: string | null
   status: 'pending' | 'running' | 'complete' | 'failed'

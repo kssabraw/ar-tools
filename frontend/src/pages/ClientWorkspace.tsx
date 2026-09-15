@@ -1,5 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { api } from '../lib/api'
 import type { Client } from '../lib/types'
 import {
@@ -14,6 +15,8 @@ import { WeeklyPulse } from '../components/WeeklyPulse'
 import { StrategistReview } from '../components/StrategistReview'
 import { InterventionOutcomes } from '../components/InterventionOutcomes'
 import { EverhourTimeCard } from '../components/EverhourTimeCard'
+import { ErrorDetails } from '../components/ErrorDetails'
+import { ProspectSnapshotCard } from '../components/ProspectSnapshotCard'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -73,6 +76,12 @@ export function ClientWorkspace() {
     enabled: Boolean(id),
   })
   const syndicationPublishedCount = syndicationData?.counts?.published ?? 0
+
+  // A prospect is a lightweight prospecting record — show only the four one-off
+  // report tools + convert, not the full client workspace.
+  if (client?.kind === 'prospect') {
+    return <ProspectWorkspace client={client} id={id!} />
+  }
 
   return (
     <div style={{ padding: 32, maxWidth: 1100 }}>
@@ -491,6 +500,147 @@ export function ClientWorkspace() {
 
     </div>
   )
+}
+
+function ProspectWorkspace({ client, id }: { client: Client; id: string }) {
+  const queryClient = useQueryClient()
+  const [convertError, setConvertError] = useState<string | null>(null)
+
+  const convert = useMutation({
+    mutationFn: () => api.post<Client>(`/clients/${id}/convert`, {}),
+    onSuccess: () => {
+      // Now a full client — refresh the workspace + dashboard lists.
+      queryClient.invalidateQueries({ queryKey: ['client', id] })
+      queryClient.invalidateQueries({ queryKey: ['clients'] })
+      queryClient.invalidateQueries({ queryKey: ['prospects'] })
+    },
+    onError: (e: unknown) => setConvertError((e as Error).message),
+  })
+
+  function onConvert() {
+    if (
+      window.confirm(
+        `Convert “${client.name}” to a full client? This kicks off the full setup — ` +
+        `website analysis and auto-generated brand voice & ICP — and moves it to your client list.`,
+      )
+    ) {
+      setConvertError(null)
+      convert.mutate()
+    }
+  }
+
+  return (
+    <div style={{ padding: 32, maxWidth: 1100 }}>
+      <Link to="/" style={backLinkStyle}>
+        <ArrowLeft size={14} /> Back to Dashboard
+      </Link>
+
+      {/* Prospect header */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 12, background: '#eef2ff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#6366f1' }}>
+          <Radar size={24} />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <h1 style={{ fontSize: 22, fontWeight: 700, color: '#0f172a', margin: 0 }}>{client.name}</h1>
+            <span style={prospectBadge}>Prospect</span>
+          </div>
+          {client.website_url && (
+            <a href={client.website_url} target="_blank" rel="noreferrer"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 13, color: '#6366f1', textDecoration: 'none' }}>
+              <Globe size={12} /> {client.website_url}
+            </a>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+          <Link to={`/prospects/${id}/edit`} style={editBtnStyle}>Edit</Link>
+          <button onClick={onConvert} disabled={convert.isPending} style={convertBtnStyle}>
+            {convert.isPending ? 'Converting…' : 'Convert to client'}
+          </button>
+        </div>
+      </div>
+
+      {/* Explainer banner */}
+      <div style={{ border: '1px solid #c7d2fe', background: '#f8faff', borderRadius: 12, padding: '14px 18px', marginBottom: 24, fontSize: 13, color: '#475569', lineHeight: 1.6 }}>
+        This is a <strong>prospect</strong> — a lightweight record for prospecting. Run the reports
+        below on demand; nothing is scheduled and no content is generated. When they sign,
+        <strong> Convert to client</strong> to unlock the full workspace and kick off setup.
+      </div>
+      {convertError && <div style={{ marginBottom: 16 }}><ErrorDetails message={convertError} /></div>}
+
+      <Section
+        title="Prospecting Reports"
+        subtitle="Run these on demand for this prospect — each opens its own tool, where you set the keywords / competitors it needs."
+      >
+        <ActionCard
+          icon={<Radar size={22} />}
+          label="Organic (Domain Intelligence)"
+          description="Estimated organic traffic, authority, and every keyword this domain ranks for — with volume, position & value. Plus keyword & backlink gaps vs. competitors. The SEMrush-style research view; runs on the website alone."
+          to={`/clients/${id}/domain-intel`}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Map size={22} />}
+          label="Maps Ranker"
+          description="Local-pack & Maps rankings across a geo-grid around this business. Link a Google Business Profile and add a few keywords in the tool, then scan."
+          to={`/clients/${id}/maps`}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Eye size={22} />}
+          label="AI Visibility"
+          description="Whether this brand shows up in AI-assistant answers — ChatGPT, Claude, Gemini, Perplexity & Google AI Overviews. Add a few keywords in the tool, then run a scan."
+          to={`/clients/${id}/ai-visibility`}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Swords size={22} />}
+          label="Competitive Intel"
+          description="Who this business is up against — local-pack pins, GBP reviews, authority & organic overlap. Add competitors (or discover them via Domain Intelligence) to populate it."
+          to={`/clients/${id}/competitors`}
+          cta="Open"
+        />
+      </Section>
+
+      {/* One combined deliverable assembled from whatever's been run above. */}
+      <ProspectSnapshotCard clientId={id} />
+
+      <Section
+        title="More research"
+        subtitle="Also useful while sizing up a prospect."
+      >
+        <ActionCard
+          icon={<Search size={22} />}
+          label="Keyword Research"
+          description="Enter a seed keyword to discover the related keyword universe — volume, CPC, competition, difficulty & intent — auto-grouped into topic clusters."
+          to={`/clients/${id}/keyword-research`}
+          cta="Research"
+        />
+        <ActionCard
+          icon={<Link2 size={22} />}
+          label="Backlink Explorer"
+          description="This domain's backlink profile — domain rating, referring domains, anchor mix — pulled on demand. Look up any competitor's domain too."
+          to={`/clients/${id}/backlinks`}
+          cta="Open"
+        />
+      </Section>
+    </div>
+  )
+}
+
+const prospectBadge: React.CSSProperties = {
+  fontSize: 11, fontWeight: 700, color: '#4338ca', background: '#e0e7ff',
+  borderRadius: 999, padding: '3px 10px', textTransform: 'uppercase', letterSpacing: '0.04em',
+}
+const editBtnStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center',
+  background: '#fff', color: '#475569', border: '1px solid #e2e8f0', borderRadius: 8,
+  padding: '8px 14px', fontSize: 13, fontWeight: 600, textDecoration: 'none',
+}
+const convertBtnStyle: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center',
+  background: '#6366f1', color: '#fff', border: 'none', borderRadius: 8,
+  padding: '8px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer',
 }
 
 function brandVoiceHasContent(client?: Client): boolean {

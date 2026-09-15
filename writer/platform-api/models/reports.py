@@ -27,7 +27,7 @@ class ClientReport(BaseModel):
 
 
 class GenerateReportRequest(BaseModel):
-    report_type: str = "monthly"          # monthly | weekly | ai_visibility
+    report_type: str = "monthly"          # monthly | weekly | ai_visibility | prospect_snapshot
     period: Optional[str] = None          # 30d | 60d | 90d | 120d | 1y | all (since campaign start)
     period_start: Optional[str] = None    # explicit ISO dates win over `period`
     period_end: Optional[str] = None
