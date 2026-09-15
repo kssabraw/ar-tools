@@ -348,8 +348,15 @@ def _s(val: Any, cap: int = _STR_CAP) -> str:
 
 
 def _slist(val: Any, cap_items: int, cap_len: int = _STR_CAP) -> list[str]:
+    # Only iterate a real sequence: a model (esp. a report_llm fallback provider)
+    # can return a scalar string where the schema declares an array, and iterating
+    # a str would split it into characters. A lone string is wrapped as one item.
+    if isinstance(val, str):
+        val = [val]
+    elif not isinstance(val, (list, tuple)):
+        val = []
     out: list[str] = []
-    for item in val or []:
+    for item in val:
         s = _s(item, cap_len)
         if s:
             out.append(s)
@@ -653,12 +660,16 @@ async def run_synthesis_for_guide(
     if synthesized is None:
         return None, "synthesis produced no usable output", "done"
 
-    if not (naming_raw is not None and messaging_raw is not None):
-        note = "synthesis partial (" + (
-            "naming only" if messaging_raw is None else "messaging only"
-        ) + ")"
-    else:
+    if naming_raw is not None and messaging_raw is not None:
         note = "synthesis complete"
+    elif naming_raw is None and messaging_raw is None:
+        # Both LLM halves failed; only the deterministic coherence/contrast layer
+        # survived (or synthesized would be None and we'd have returned above).
+        note = "synthesis deterministic-only (both LLM calls failed)"
+    elif messaging_raw is None:
+        note = "synthesis partial (naming only)"
+    else:
+        note = "synthesis partial (messaging only)"
 
     # Regulated + we actually synthesized content → hold for human sign-off (§5.3b).
     if regulated:

@@ -92,7 +92,7 @@ _HEALTH_OUTCOME = (
     r"longevity|aging|ageing|anti[\s-]?aging|blood\s?sugar|glucose|insulin|"
     r"cholesterol|appetite|hunger|growth\s?hormone|wound|wounds|cartilage|tendon|"
     r"ligament|gut|digestion|mood|wellness|vitality|performance|endurance|stamina|"
-    r"symptoms?|disease|condition|libinal|inflammatory|immune\s?system"
+    r"symptoms?|disease|condition|inflammatory|immune\s?system"
 )
 _HEALTH_OUTCOME_RE = re.compile(r"\b(?:" + _HEALTH_OUTCOME + r")\b", re.IGNORECASE)
 

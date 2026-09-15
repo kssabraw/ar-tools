@@ -111,6 +111,17 @@ class TestSanitizeNaming:
         out = S.sanitize_naming({"swatches": [{"hex": "#1a2b6d", "name": "N", "role": "primary"}]}, {})
         assert out["swatches"] == []
 
+    def test_scalar_string_where_array_expected_is_not_split(self):
+        # A fallback provider can return a scalar string for an array field; it
+        # must be wrapped as one item, never split into characters.
+        out = S.sanitize_naming(
+            {"swatches": [], "tagline_options": "Peptides Perfected",
+             "imagery_direction": {"dos": "use clean labs"}},
+            {"colors": [], "type_scale": []},
+        )
+        assert out["tagline_options"] == ["Peptides Perfected"]
+        assert out["imagery_direction"]["dos"] == ["use clean labs"]
+
 
 class TestSanitizeMessaging:
     def test_caps_and_shapes(self):
@@ -249,6 +260,7 @@ class TestRunSynthesis:
         synth, note, status = await S.run_synthesis_for_guide({"content_compliance_mode": "off"}, census=census)
         assert synth is not None and synth["coherence"]["flags"]
         assert status == "done"
+        assert note == "synthesis deterministic-only (both LLM calls failed)"  # not "naming only"
 
     async def test_both_fail_empty_census_returns_none(self, enabled, monkeypatch):
         _mock_calls(monkeypatch, None, None)

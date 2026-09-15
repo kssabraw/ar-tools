@@ -234,11 +234,17 @@ async def _finalize_guide(
     captured["vibe_note"] = vibe_note
 
     # Grounded synthesis (Phase 2) — best-effort. Returns the status the guide
-    # finalizes in (`done` | `awaiting_signoff` for a regulated client).
+    # finalizes in (`done` | `awaiting_signoff` for a regulated client). Wrapped so
+    # an unexpected synthesis error (a malformed asset, a helper raising) degrades
+    # to a done guide with the census + vibe intact, never an errored guide (§5.4).
     client = _get_client_row(client_id)
-    synthesized, synth_note, status = await brand_guide_synthesis.run_synthesis_for_guide(
-        client, census=census_dict, vibe_read=vibe_read, captured=captured
-    )
+    try:
+        synthesized, synth_note, status = await brand_guide_synthesis.run_synthesis_for_guide(
+            client, census=census_dict, vibe_read=vibe_read, captured=captured
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("brand_guide.synthesis_failed", extra={"guide_id": guide_id, "error": str(exc)[:300]})
+        synthesized, synth_note, status = None, f"synthesis error: {type(exc).__name__}", "done"
     captured["synthesis_note"] = synth_note
 
     fields: dict = {

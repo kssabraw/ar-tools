@@ -399,6 +399,36 @@ class TestSynthesisWiring:
         assert row["captured"]["no_source_url"] is True
         assert result["no_source_url"] is True
 
+    async def test_synthesis_exception_still_finalizes_done(self, guide_row, monkeypatch):
+        # §5.4: an unexpected synthesis error must NOT error the guide — the census
+        # + vibe still persist and the guide finalizes `done`.
+        monkeypatch.setattr(G.settings, "brand_guide_enabled", True)
+
+        async def _cap(url, role):
+            return {"url": url, "role": role, "notes": [], "html_len": 10,
+                    "has_screenshot": True, "_html": "<html></html>",
+                    "_pixels": [((26, 43, 109), 800)], "_png": b"PNG"}
+
+        async def _vibe(captured, *, homepage_png=None):
+            return None, "vibe read skipped — disabled"
+
+        async def _boom(*a, **k):
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(G, "_capture_page", _cap)
+        monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
+        monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
+        monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
+        monkeypatch.setattr("services.brand_guide_synthesis.run_synthesis_for_guide", _boom)
+
+        result = await G.generate_brand_guide("g-1", "c-1", "https://acme.example")
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"                    # not "error"
+        assert "synthesized" not in row
+        assert row["visual_census"]["colors"]             # census still persisted
+        assert row["captured"]["synthesis_note"].startswith("synthesis error")
+        assert result["synthesized"] is False
+
 
 class TestPixelCounts:
     def test_quantizes_a_two_colour_png(self):
