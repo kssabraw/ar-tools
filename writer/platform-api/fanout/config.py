@@ -345,8 +345,10 @@ class Settings(BaseSettings):
     textrazor_api_key: str = ""
     textrazor_base_url: str = "https://api.textrazor.com"
     # Anthropic tiers for SIE LLM calls (M3 classify / M11 pass-2 entities).
+    # Owner ruling 2026-09-15: brief-research reasoning standardized on Haiku +
+    # Sonnet 5 (was Haiku + Sonnet 4.6 + Opus 4.8). Env-overridable.
     sie_classifier_model: str = "claude-haiku-4-5"
-    sie_entity_model: str = "claude-sonnet-4-6"
+    sie_entity_model: str = "claude-sonnet-5"
     # Tunable SIE thresholds (PRD #3 defaults).
     sie_serp_depth: int = 20
     sie_coverage_threshold: int = 3            # M8: 3-of-top-10
@@ -422,11 +424,12 @@ class Settings(BaseSettings):
     brief_aio_doc_task_type: str = "RETRIEVAL_DOCUMENT"    # answer side
     brief_gen_model: str = "claude-haiku-4-5"              # MCS candidate generation
     brief_intent_model: str = "claude-haiku-4-5"           # intent + A1 classification
-    brief_title_model: str = "claude-sonnet-4-6"           # title/scope (quality cascades)
-    # Answer-contract (query understanding → must/must-not-cover guardrail for MCS). Opus
-    # on purpose: it sets the brief's whole direction + must correct a false premise; one
-    # small call, well under the per-brief ceiling. Env-overridable.
-    brief_answer_contract_model: str = "claude-opus-4-8"
+    brief_title_model: str = "claude-sonnet-5"             # title/scope (quality cascades)
+    # Answer-contract (query understanding → must/must-not-cover guardrail for MCS). It sets
+    # the brief's whole direction + must correct a false premise; one small call, well under
+    # the per-brief ceiling. Moved Opus 4.8 → Sonnet 5 (owner ruling 2026-09-15: brief
+    # reasoning standardized on Haiku + Sonnet 5). Env-overridable.
+    brief_answer_contract_model: str = "claude-sonnet-5"
     # DataForSEO AI-Optimization "LLM Responses" requires a per-provider model_name
     # (omitting it -> task error 40501 "Invalid Field: 'model_name'"). Env-overridable;
     # confirmed-valid values from the provider models endpoints (tune to a cheaper
