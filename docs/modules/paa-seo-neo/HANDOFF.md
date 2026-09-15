@@ -4,12 +4,13 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — Phase 2 (prep-sheet manifest) BUILT · draft PR · migration applied live
+## Status (2026-09-15) — Phase 2 (prep-sheet manifest) BUILT · MERGED (PR #1120) · migration applied live
 
 > **Phase 2 — the prep-sheet manifest + link-layer track/cost/QA (the "seam")** is
-> built to the PRD §11 build order on branch `claude/paa-seo-neo-phase2-manifest`
-> (draft PR). The owner settled the four Phase-2 design forks and greenlit the build
-> (2026-09-15). What shipped:
+> built to the PRD §11 build order and **merged to `main`** (PR
+> [#1120](https://github.com/kssabraw/ar-tools/pull/1120), squash `813b323`; CI
+> green — platform-api tests + lint/typecheck + Netlify preview). The owner settled
+> the four Phase-2 design forks and greenlit the build (2026-09-15). What shipped:
 > - **Data model** (migration `20260915160000_paa_manifests.sql`, **applied live +
 >   verified**): `paa_manifests` (one per `paa_set`, unique `set_id`; roll-up
 >   `cost_summary`/`qa_summary` + Sheet-export refs) + `paa_manifest_assets` (assets
@@ -120,12 +121,12 @@
 
 (Item 5 — the `keyword_research_serp` per-run PAA cap/cost — stays a build-time confirm.)
 
-## Next action — Phase 2 SHIPPED (draft PR); the next build is Phase 3 (needs its own owner greenlight)
+## Next action — Phase 2 SHIPPED (MERGED, PR #1120); the next build is Phase 3 (needs its own owner greenlight)
 
-Phase 2 (the prep-sheet manifest) is built to PRD §11 on
-`claude/paa-seo-neo-phase2-manifest` (draft PR; migration applied live). **A merged
-phase is not a greenlight for the next** — Phase 3 is its own scoped build the owner
-greenlights separately (PRD §6). Do NOT start Phase 3 unprompted.
+Phase 2 (the prep-sheet manifest) is built to PRD §11 and **merged to `main`**
+(PR #1120, squash `813b323`; migration applied live). **A merged phase is not a
+greenlight for the next** — Phase 3 is its own scoped build the owner greenlights
+separately (PRD §6). Do NOT start Phase 3 unprompted.
 
 **Phase 3 — the Service PAA Campaign object + the automated single-variable gate.**
 The full orchestration: target service → PAA set → blog runs → GBP posts →
@@ -140,11 +141,15 @@ generator (checklist rows only); the master reference is never wired into
 `sop_library`; anything user-facing carries the `[PROVEN]`/`[THEORY]`/`[BELIEF]`
 confidence tags.
 
-**When Phase 2 IS greenlit, the v1 seams to build on:** `services/paa_sets_service.py`
-already links each PAA item to its `run_id` + `gbp_post_id` + `post_url` (the raw
-material a manifest collects); `recipe_engine.py` already costs the RD-family / GBP
-Blast / DAS work; the QA Agent + `docs/sops/` playbooks exist. Read PRD §5 (the seam
-preview) + §6 (phasing) first.
+**When Phase 3 IS greenlit, the seams to build on:** the Phase-2 manifest
+(`services/paa_manifest.py` + `services/paa_manifest_service.py`, tables
+`paa_manifests`/`paa_manifest_assets`) is the campaign's asset ledger; the
+single-variable gate reuses the **Maps geo-grid** single-keyword scan
+(`local_dominator.resolve_scan_keywords`) + **response-episode tracking**
+(`response_episodes`) for the verify/refresh loop — v1 documents this as a *manual*
+workflow (`single-variable-scan-verify-workflow.md`), Phase 3 makes it an automated
+state machine. Read PRD §6 (phasing) + the master reference §5.2/§5.3 (the fixed
+order + the gate) first. The campaign object is the net-new piece.
 
 ## Gotchas (specific to this initiative)
 
@@ -156,18 +161,23 @@ preview) + §6 (phasing) first.
   any source SOP is ever imported, reconcile the naming + cross-refs in one pass.
 - **CI note (unrelated to this initiative):** `test_pace_interventions.py::test_decide_scan_action_lifecycle`
   is a known date-dependent test that has intermittently gone red on `main` (it was
-  cited as red on PR #1110's docs-only pytest). It **passed** in PR #1117's CI and
-  locally on 2026-09-15 (full platform-api suite green, 6016 passed), so it did not
-  affect the v1 build — but treat it as a latent date-bomb, not a stable green.
+  cited as red on PR #1110's docs-only pytest). It **passed** in PR #1117's and
+  PR #1120's CI and locally on 2026-09-15 (full platform-api suite green), so it did
+  not affect either build — but treat it as a latent date-bomb, not a stable green.
 
-## Definition of done (for THIS handoff step)
+## Definition of done
+
+**v1 (the content half) + Phase 2 (the manifest) — DONE:**
 
 - [x] Full corpus read + analyzed (minus SOP 07c).
 - [x] De-branded master reference committed (`docs/reference/…`, PR #1110).
 - [x] Module scaffolding (`CLAUDE.md` + `HANDOFF.md`) created.
-- [x] Owner settles the four open decisions above.
-- [x] Plan / PRD written for the chosen v1 scope (`docs/modules/paa-seo-neo-prd-v1_0.md`).
-- [x] Owner greenlit the v1 build order (§10), 2026-09-15.
-- [x] **v1 built** — the content half, per §10 (migration applied live; content
-      surface + writer constraints + cannibalization guard + create-posts action +
-      scan/verify doc + tests; on `claude/paa-seo-neo-v1-build-vakcd3`).
+- [x] Owner settled the four v1 decisions + greenlit the v1 build order (§10).
+- [x] Plan / PRD written (`docs/modules/paa-seo-neo-prd-v1_0.md`; Phase-2 build order §11).
+- [x] **v1 built + merged + live** — the content half (PR #1117, squash `9baaaa1`).
+- [x] Owner settled the four Phase-2 forks + greenlit the Phase-2 build order (§11).
+- [x] **Phase 2 built + merged** — the prep-sheet manifest (PR #1120, squash `813b323`;
+      migration applied live; pure core + I/O + QA job + router + frontend + tests).
+
+**Phase 3 (the campaign object + automated gate) — NOT STARTED** (needs its own
+owner greenlight; see "Next action").

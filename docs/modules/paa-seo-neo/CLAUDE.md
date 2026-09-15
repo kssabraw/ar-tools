@@ -5,9 +5,9 @@
 > it first. This file orients work on the **PAA → SEO Neo** initiative: adapting
 > an external local-SEO content methodology into suite tooling. **v1 (the CONTENT
 > HALF) is BUILT, merged, and LIVE in production**; **Phase 2 (the prep-sheet
-> manifest — track / cost / QA / hand-off) is BUILT** on
-> `claude/paa-seo-neo-phase2-manifest` (draft PR; migration applied live) — see the
-> module `HANDOFF.md`. PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), 2026-09-15:
+> manifest — track / cost / QA / hand-off) is BUILT + MERGED** (PR
+> [#1120](https://github.com/kssabraw/ar-tools/pull/1120), squash `813b323`; migration
+> applied live) — see the module `HANDOFF.md`. PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), 2026-09-15:
 > the `paa_sets` + `paa_items` tables (migration applied live), a PAA Content card
 > in the workspace "Content Creation" section → `/clients/:id/paa-sets`, the three
 > writing rules as reused writer constraints, the cannibalization guard, the
@@ -100,9 +100,9 @@ anchors** (each row was checked against the current tree, 2026-09-15).
   docs to the repo — they were deliberately erased; only the master reference stays.
 - Don't re-litigate locked scope or rebuild what shipped. v1 (the content half) is
   built + live (PR #1117); Phase 2 (the prep-sheet manifest — track/cost/QA/hand-off)
-  is built (draft PR, PRD §11). Future work is **Phase 3** (the campaign object +
-  the automated single-variable gate). Each phase needs its own owner greenlight
-  before building — a merged/built phase is not a greenlight for the next.
+  is built + merged (PR #1120, PRD §11). Future work is **Phase 3** (the campaign
+  object + the automated single-variable gate). Each phase needs its own owner
+  greenlight before building — a merged/built phase is not a greenlight for the next.
 - Don't wire this into any agent loader — the master reference lives in
   `docs/reference/` precisely so `sop_library` never ingests it.
 - Don't design the suite to run or "automate" the link-layer blasts.
