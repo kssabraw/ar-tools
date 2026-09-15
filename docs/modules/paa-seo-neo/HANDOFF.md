@@ -4,12 +4,15 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — Phase 3 (Service PAA Campaign + automated gate) BUILT · draft PR open
+## Status (2026-09-15) — Phase 3 (Service PAA Campaign + automated gate) BUILT · MERGED (PR #1125) · ships DARK
 
 > **Phase 3 — the Service PAA Campaign object + the automated single-variable
 > gate** is built to the PRD §12 build order (owner greenlit 2026-09-15; the four
-> §12.2 forks locked below) on branch `claude/paa-seo-neo-phase-3-vjbh78`. What
-> shipped:
+> §12.2 forks locked below) and **merged to `main`** (PR
+> [#1125](https://github.com/kssabraw/ar-tools/pull/1125); CI green — platform-api
+> pytest + ruff/mypy + Netlify preview). It **ships DARK** behind
+> `paa_campaign_enabled` (default off), so merging changed nothing until the owner
+> flips the flag. What shipped:
 > - **Locked forks (owner):** (1) autonomy = **hybrid propose-confirm** (the two
 >   paid/content steps — the geo-grid scan + a drill round — are human-confirmed;
 >   everything else auto-advances); (2) campaign **1:1 with one paa_set**, drilling
@@ -171,23 +174,17 @@
 
 (Item 5 — the `keyword_research_serp` per-run PAA cap/cost — stays a build-time confirm.)
 
-## Next action — Phase 3 BUILT (draft PR open); land it, then activate when the owner is ready
+## Next action — Phase 3 MERGED (PR #1125); activate when the owner is ready
 
 Phase 3 (the Service PAA Campaign + the automated single-variable gate) is built to
-PRD §12 (owner greenlit + forks locked 2026-09-15) on branch
-`claude/paa-seo-neo-phase-3-vjbh78` — a **draft PR**. Land the PR (CI green), then
-the owner activates with `PAA_CAMPAIGN_ENABLED=true` on PLATFORM (the migration is
-already applied live). It ships **dark** (default off), so merging changes nothing until the flag
-flips. **The module's phased scope is now complete** — any further work (full
-per-campaign autopilot; auto-creating the next-service campaign) is a new, separately
-greenlit enhancement, not a continuation.
-
-**Phase 3 — the Service PAA Campaign object + the automated single-variable gate.**
-The full orchestration: target service → PAA set → blog runs → GBP posts →
-syndication → manifest → an **automated** scan→moved/drill/HALT gate (v1 documents
-this as a *manual* workflow — see `single-variable-scan-verify-workflow.md`) →
-tracked link-layer bundle → re-scan on cadence. Introduces the campaign state
-machine; reuses response-episodes for the verify loop.
+PRD §12 (owner greenlit + forks locked 2026-09-15) and **merged to `main`** (PR
+[#1125](https://github.com/kssabraw/ar-tools/pull/1125); CI green). It ships **dark**
+(default off), so nothing runs until the owner sets `PAA_CAMPAIGN_ENABLED=true` on
+PLATFORM (the migration is already applied live). **The module's phased scope (§6) is
+now complete** — the content half (v1), the prep-sheet manifest (Phase 2), and the
+campaign object + automated gate (Phase 3) are all built and merged. Any further work
+(full per-campaign autopilot; auto-creating the next-service campaign) is a new,
+separately greenlit enhancement, not a continuation.
 
 **Permanent guardrails (never, any phase — PRD §9):** the suite never executes link
 blasts (SEO Neo / GMBB Blast / RD 100 / Omega / PBNs); no audio/video/influencer
@@ -195,15 +192,14 @@ generator (checklist rows only); the master reference is never wired into
 `sop_library`; anything user-facing carries the `[PROVEN]`/`[THEORY]`/`[BELIEF]`
 confidence tags.
 
-**When Phase 3 IS greenlit, the seams to build on:** the Phase-2 manifest
+**Seams Phase 3 built on (for reference):** the Phase-2 manifest
 (`services/paa_manifest.py` + `services/paa_manifest_service.py`, tables
 `paa_manifests`/`paa_manifest_assets`) is the campaign's asset ledger; the
 single-variable gate reuses the **Maps geo-grid** single-keyword scan
-(`local_dominator.resolve_scan_keywords`) + **response-episode tracking**
-(`response_episodes`) for the verify/refresh loop — v1 documents this as a *manual*
-workflow (`single-variable-scan-verify-workflow.md`), Phase 3 makes it an automated
-state machine. Read PRD §6 (phasing) + the master reference §5.2/§5.3 (the fixed
-order + the gate) first. The campaign object is the net-new piece.
+(`local_dominator.enqueue_maps_scan` / `resolve_scan_keywords`) reading
+`maps_scan_results`. The campaign carries its OWN settle/rinse clock (borrowing
+`response_episodes`' cadence constants) rather than force-fitting that alert-keyed
+table — see the honest divergence note in the status block above and PRD §12.5.
 
 ## Gotchas (specific to this initiative)
 
