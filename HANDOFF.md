@@ -1,6 +1,27 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-15 · **Google Trends Discovery — VERIFIED LIVE + ENABLED in production; one bug found + fixed (single-keyword explore, PR [#1121](https://github.com/kssabraw/ar-tools/pull/1121) merged)** (latest)
+## ⏩ Update — 2026-09-15 · **Brand Guide Generator — Phase 0 BUILT + MERGED (PR [#1138](https://github.com/kssabraw/ar-tools/pull/1138), squash `01342037`); the D4 palette-method gate RAN LIVE and PASSED** (latest)
+
+First code for the Brand Guide Generator module (authority: `docs/modules/brand-guide-generator-prd-v1_0.md` + the ADR "Brand Guide Generator — no headless browser for visual extraction" in `decisions.md`). Phase 0 = the pure extraction core + the decisive **D4 spike** that gates Phase 1. Both built, merged, and the spike **ran on the live worker and passed** — so Phase 1 is unblocked on D4.
+
+**Built + merged (CI green — platform-api tests + lint/typecheck + Netlify):**
+- **`services/brand_guide_extract.py`** (pure, stdlib-only — no network/Pillow/numpy, doesn't import `config`, so it imports + unit-tests bare): CSS-declaration harvest from scraped HTML (inline `style=` + `<style>`; external/`var()`/Tailwind deliberately not surfaced — the gap the pixel signal covers); **colour census + near-dup clustering** (Euclidean RGB, weight-aware, heaviest-member rep) + the **two-tier hex merge** (pixel-dominance is PRIMARY for *which colours dominate*; a dominant pixel colour matching a declared CSS colour snaps its reported hex to the exact declared value `source='both'`, else pixel-sampled `source='pixel'`; **CSS-only fallback** `source='css'` when no screenshot); type-scale (rem→px, near-equal snapped), font ranking (Google-Fonts-href cross-ref), weights/radii/spacing, ranked logo candidates. **Salvage** of ~25 lines from `website_theme_precompile.py`, not a drop-in. 34 unit tests (`tests/test_brand_guide_extract.py`).
+- **`services/brand_guide_spike.py`** (impure capture core — ScrapeOwl `render_js` + DataForSEO `page_screenshot` + Pillow pixel-dominance + the pure census → per-site report + gate summary) shared by the CLI (`scripts/spike_brand_guide_palette.py`, a thin printer) AND the worker job.
+- **`brand_guide_spike` async job** (`job_worker.run_brand_guide_spike_job`, migration `20260916160000` — CHECK rebuilt from the LIVE constraint + the new type, APPLIED LIVE): reads `payload.urls`, runs the spike, settles the row with `{reports, summary}` in `result`. **Gated on `brand_guide_enabled`** (an enqueue while dark no-ops with a clear note, no paid spend); `max_attempts=1` at enqueue (paid calls → no double-charge); not freeze-gated (observation).
+- **`config.brand_guide_enabled`** (default False) — the module ship flag.
+
+**D4 gate RUN LIVE + PASSED (owner-requested full run).** Sandbox can't reach ScrapeOwl/DataForSEO (org egress denial), so after merge → auto-deploy → set `BRAND_GUIDE_ENABLED=true` on PLATFORM (redeploy `58727978`) → enqueued job `da3180c2-4a9d-4f22-94ab-ae0f34a30bef` against 4 real client stacks → read `async_jobs.result`. Result: `css_recovered_any=true`, 4/4 captured.
+- **FreightOptics** (WP/Elementor): 6/6 swatches snapped to CSS — brand navy `#01162f`, white. CSS half fires perfectly.
+- **UMH Lake Sherman** (WP): 9/14 snapped — brand navy `#212d58`, off-white `#fafafa`, red accent. Strong.
+- **Co-Labs** (Wix): 3/23 snapped, rest pixel-sampled — Wix serves colour via external/hashed CSS; palette still coherent (earthy neutrals). The external-CSS signature the ADR anticipated → pixel-sampled is the real output.
+- **Wellington Internal Medicine**: ScrapeOwl **401 (bot-blocked, premium retry too)** → 0 CSS, but the screenshot path recovered a sound palette incl. brand green `#01694d`. **Graceful degradation validated.**
+- **Gate call: PASS — ADR NOT reopened.** The failure condition (CSS recovers nothing AND pixel-sampled unacceptable) hit zero sites. Pixel-primary + CSS-refinement works as designed. Final literal eyedropper confirmation is the human's, but the brand colours are structurally unambiguous.
+
+**Three Phase-1 refinements the spike surfaced (NOT gate-blocking, NOT bugs, log-only):** (1) the font extractor leaks indirections — `var(--…)` (Elementor) and Wix `wfont_<hash>` IDs come through as "families" beside the real ones (Inter/Lato/futura); Phase 1 should drop `var(...)`-valued + hash-pattern font-family values. (2) logo candidates include chrome noise (cookieyes banner SVGs, customer/partner logos) — real logo still ranks top; down-rank known third-party asset hosts. (3) some sites hard-block ScrapeOwl (401) even with premium — the screenshot/pixel path is the essential fallback and held.
+
+**Current state / next chat:** `BRAND_GUIDE_ENABLED` is **`true` on PLATFORM** right now (harmless — only gates the spike job + not-yet-built Phase 1 code). Decide whether to set it back to `false` until Phase 1 ships. Phase 1 (capture pipeline + `brand_guides` table + `brand_guide_generate`/`brand_guide_render` jobs, no browser) is unblocked; fold the 3 refinements into the Phase-1 capture layer. The `brand_guide_spike` job type is a one-time diagnostic — it can be retired (or kept as a re-runnable palette probe) once Phase 1's real capture lands. `docs/modules/brand-guide-generator-prd-v1_0.md` §10 has the phase plan; §11 the acceptance criteria.
+
+## ⏩ Update — 2026-09-15 · **Google Trends Discovery — VERIFIED LIVE + ENABLED in production; one bug found + fixed (single-keyword explore, PR [#1121](https://github.com/kssabraw/ar-tools/pull/1121) merged)**
 
 The module is **ON** (`GOOGLE_TRENDS_ENABLED=true` on PLATFORM; the code default stays `False`, so a fresh env still ships dark). Live-shape fix #1118 was already deployed (commit `90a3674`).
 
