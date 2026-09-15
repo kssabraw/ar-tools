@@ -41,6 +41,7 @@ interface TrendKeyword {
   social_lean?: string | null
   suggested_format?: string | null
   social_score?: number | null
+  sensitive_medical?: boolean | null
 }
 interface RunResponse {
   run: TrendRunSummary & { category_code: number | null; location_code: number | null }
@@ -349,11 +350,11 @@ export function GoogleTrends() {
   function exportCsv() {
     if (!runData) return
     const csv = toCsv(
-      ['query', 'velocity', 'volume', 'cpc_usd', 'keyword_difficulty', 'intent', 'question', 'qualified', 'trend_score', 'social_lean', 'suggested_format', 'social_score'],
+      ['query', 'velocity', 'volume', 'cpc_usd', 'keyword_difficulty', 'intent', 'question', 'qualified', 'trend_score', 'social_lean', 'suggested_format', 'social_score', 'sensitive_medical'],
       (runData.keywords).map((k) => [
         k.query, velocityLabel(k), k.volume ?? '', k.cpc_usd ?? '', k.keyword_difficulty ?? '',
         k.search_intent ?? '', k.is_question ? 'yes' : '', k.qualified ? 'yes' : 'no', k.trend_score ?? '',
-        k.social_lean ?? '', k.suggested_format ?? '', k.social_score ?? '',
+        k.social_lean ?? '', k.suggested_format ?? '', k.social_score ?? '', k.sensitive_medical ? 'yes' : '',
       ]),
     )
     downloadCsv(`google-trends-${runData.run.seeds.join('-').slice(0, 40)}.csv`, csv)
@@ -581,6 +582,10 @@ export function GoogleTrends() {
                         <tr key={k.query} style={{ borderTop: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '8px 10px', fontWeight: 600 }}>
                             {k.query}{resultView === 'seo' && !k.qualified && <span style={{ marginLeft: 6, fontSize: 11, color: '#94a3b8' }}>(no demand)</span>}
+                            {k.sensitive_medical && (
+                              <span title="Medical/health-safety question — a real content opportunity, but handle carefully and authoritatively (not a casual social post)."
+                                style={{ marginLeft: 6, padding: '1px 7px', borderRadius: 999, background: '#fef2f2', color: '#b91c1c', border: '1px solid #fecaca', fontSize: 10.5, fontWeight: 700, verticalAlign: 1 }}>⚠ medical</span>
+                            )}
                           </td>
                           <td style={{ padding: '8px 10px', color: k.is_breakout ? '#dc2626' : '#0f172a', fontWeight: k.is_breakout ? 700 : 400 }}>
                             {k.is_breakout && <Flame size={12} style={{ verticalAlign: -1, marginRight: 3 }} />}{velocityLabel(k)}

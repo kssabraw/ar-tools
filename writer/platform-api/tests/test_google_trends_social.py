@@ -107,6 +107,50 @@ def test_apply_lexical_tags_only_unqualified():
     assert "social_lean" not in rows[1]
 
 
+# --- is_sensitive_medical (flag medical-question intent, don't re-route) -------
+def test_is_sensitive_medical_flags_health_questions():
+    # The exact SEO-lane rows from the live ozempic smoke-test that the owner wants kept + flagged.
+    for q in ["ozempic vaginal side effects", "ozempic vaginal issues",
+              "what is ozempic vagina", "ozempic 4 mg", "semaglutide dosage",
+              "wegovy withdrawal symptoms", "is retatrutide safe", "ozempic pregnancy"]:
+        assert gs.is_sensitive_medical(q) is True, q
+
+
+def test_is_sensitive_medical_ignores_social_and_commercial():
+    # Names a drug but is social / commercial / comparison — must NOT flag (intent, not topic).
+    for q in ["ozempic weight loss coworker discussions", "costco ozempic wegovy",
+              "retatrutide vs ozempic", "collagen peptides transformation",
+              "cute landscaping vids", "ozempic before and after"]:
+        assert gs.is_sensitive_medical(q) is False, q
+    assert gs.is_sensitive_medical("") is False
+    assert gs.is_sensitive_medical(None) is False
+
+
+def test_classify_flags_all_rows_regardless_of_qualified(monkeypatch):
+    monkeypatch.setattr(gs.settings, "google_trends_social_flag_sensitive", True)
+    monkeypatch.setattr(gs.settings, "google_trends_social_classify_enabled", True)
+    monkeypatch.setattr(gs.settings, "google_trends_social_llm", False)
+    rows = [
+        {"query": "ozempic 4 mg", "qualified": True, "rising_value": 200, "is_breakout": False},   # qualified + medical
+        {"query": "what is ozempic side effects", "qualified": False, "rising_value": 300, "is_breakout": False},
+        {"query": "cute ozempic memes", "qualified": False, "rising_value": 400, "is_breakout": False},  # social, not medical
+    ]
+    gs.classify_social_fit(rows)
+    assert rows[0]["sensitive_medical"] is True   # flagged even though qualified (no social tags)
+    assert "social_lean" not in rows[0]           # qualified row still gets no social classification
+    assert rows[1]["sensitive_medical"] is True and rows[1]["social_lean"] == "seo"  # medical stays SEO lane, flagged
+    assert rows[2]["sensitive_medical"] is False and rows[2]["social_lean"] == "social"  # social, unflagged
+
+
+def test_flag_sensitive_disabled_is_noop(monkeypatch):
+    monkeypatch.setattr(gs.settings, "google_trends_social_flag_sensitive", False)
+    monkeypatch.setattr(gs.settings, "google_trends_social_classify_enabled", True)
+    monkeypatch.setattr(gs.settings, "google_trends_social_llm", False)
+    rows = [{"query": "ozempic side effects", "qualified": False, "rising_value": 300, "is_breakout": False}]
+    gs.classify_social_fit(rows)
+    assert "sensitive_medical" not in rows[0]  # flag off → not set
+
+
 # --- classify_social_fit gate (LLM stubbed) -----------------------------------
 def test_classify_social_fit_disabled_is_noop(monkeypatch):
     monkeypatch.setattr(gs.settings, "google_trends_social_classify_enabled", False)

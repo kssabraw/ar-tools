@@ -1496,6 +1496,11 @@ class Settings(BaseSettings):
     google_trends_social_model: str = "claude-haiku-4-5-20251001"
     google_trends_social_max_tokens: int = 1024
     google_trends_social_velocity_floor: float = 100.0  # min rising % (breakout exempt)
+    # Flag (don't drop) medical-QUESTION rising queries — side effects / dosage /
+    # symptoms / safety. Kept in the SEO lane (no re-routing), just badged
+    # `sensitive_medical` so a reviewer treats them carefully. Deterministic,
+    # advisory (never a behaviour change). Owner ruling 2026-09-15.
+    google_trends_social_flag_sensitive: bool = True
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner

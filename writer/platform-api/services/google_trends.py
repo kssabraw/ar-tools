@@ -841,7 +841,7 @@ def _persist_run(
                 "cpc_usd", "competition_index", "keyword_difficulty", "search_intent",
                 "is_question", "qualified", "trend_score", "relevance_score",
                 "audience_fit", "source_client_name",
-                "social_lean", "suggested_format", "social_score",
+                "social_lean", "suggested_format", "social_score", "sensitive_medical",
             )}} for r in rows]
         ).execute()
     return run_id
