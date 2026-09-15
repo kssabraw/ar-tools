@@ -45,6 +45,14 @@ All from the SERP we already fetch (DataForSEO usually returns 20+ URLs). Pullin
 
 **Related finding (adjacent, separately fixable):** `_compute_serp_signal_coverage` has no `never_use_terms` awareness, so it scores the page against `retatrutide` (34 kw + 66 bold shortfall) and its recommendations literally say "add retatrutide" — which voice enforcement then strips, every pass. Excluding `never_use_terms` from the coverage targets is a small, separate change worth doing regardless of this module.
 
+## 4a. Title centering — the heaviest single signal
+
+The `<title>` carries disproportionate weight for both Google and the embedder, and for a "buy" query it is the most important element on the page. The plan treats it explicitly:
+
+- **Weight the title zone in the centering score.** A generic or off-vector title under-centers the whole page regardless of body coverage. (Live example: Nova's `Buy GLP-3RT Research Peptide | Nova Life Peptides` — leads with "Buy" correctly, but carries the coded name instead of the entity every competitor titles with, and none of Nova's own verification edge.)
+- **Capture competitor titles as a first-class signal.** Today we surface competitor *headings* (H2/H3) but not competitor *titles* — so the writer gets per-keyword title-zone counts, never "here's how the top-10 title their pages." Capture the top-10 `<title>` strings (already in the DataForSEO SERP results — no extra scrape) and surface them as a pattern target alongside headings, and fold their tokens into the centroid.
+- **The `never_use_terms` cap bites hardest here.** The title is the one place the entity matters most and the one place it's forbidden. There's no full fix; the coded-name title will under-perform for the branded query. The available lever is to win the title on the **commercial + differentiation axis** (buy · sizes · purity · COA/verified) rather than the entity name — the information-gain edge (§6) applied to the title.
+
 ## 5. Measure 2 — Per-subtopic coverage
 
 Cluster the competitor headings (top-10 + qualifying 11–20) into subtopics; embed each subtopic; for each, take the page's **best-matching section's cosine**. A subtopic the page is semantically far from is the gap — regardless of exact wording. This is the semantic version of the (never-built) subtopic-coverage engine and the correct home for the **implied-query brief**: one cheap Haiku call (same shape as `keyword_research_topics`'s intent fan-out) emits `{implied_query, job_to_be_done, desired_outcome, must-answer sub-questions}`, and those sub-questions become *additional* coverage checklist items — additive only, never centroid inputs.
@@ -130,3 +138,4 @@ Ecommerce scorer first (`/score-ecommerce-page`, `/reoptimize-ecommerce-page`), 
 
 1. **`never_use_terms` not excluded from SERP-signal coverage** — the coverage engine penalizes the page for the forbidden target keyword and instructs the writer to add it, fighting voice enforcement every pass. Small standalone fix.
 2. **Empty entity extraction on an entity-rich SERP** — `entity_detail: []` on a 15-page "buy retatrutide" SERP; either the Google-NLP `GOOGLE_NLP_MIN_SALIENCE=0.40` floor (salience is a relative distribution; 0.40 keeps almost nothing) or an extraction failure. Needs a live `/analyze` to see the raw entity count + which provider fired. Compounds the "no entity gap" false comfort.
+3. **`<title>` not passed to the LLM scorer** — the `organic_ranking` engine reported it couldn't see the title ("Title tag content not provided in the page extract, so cannot confirm keyword presence"), so the qualitative engines under-scrutinize the single heaviest element while the deterministic `serp_signal_coverage` engine measures it. Extraction-parity fix.
