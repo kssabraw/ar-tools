@@ -4,7 +4,7 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — PLAN MERGED · DECISIONS LOCKED · AWAITING BUILD GREENLIGHT
+## Status (2026-09-15) — PLAN MERGED · DECISIONS LOCKED · BUILD GREENLIT (v1 = content half)
 
 - **The whole external corpus has been read and analyzed** (except SOP 07c, Video —
   not provided). A complete "how it all works together" synthesis exists.
@@ -16,9 +16,10 @@
   audio/video checklist-only, confidence tags carried. Merged in **PR #1110**.
 - **The four §8 design forks are settled** (owner, 2026-09-15) and reflected in the
   PRD (§4.1/§4.2/§8) — merged in **PR [#1112](https://github.com/kssabraw/ar-tools/pull/1112)**. See "§8 design forks — LOCKED" below.
-- There is still **no schema, no code, no config, no migration** — the PRD is a plan,
-  not a build. Nothing is wired into any agent (`sop_library` still never reads the
-  reference). The one remaining gate is the owner's **greenlight of the §10 build order**.
+- There is still **no schema, no code, no config, no migration** — nothing built yet.
+  Nothing is wired into any agent (`sop_library` still never reads the reference).
+- **The owner GREENLIT the v1 build (2026-09-15).** The next session builds v1 (the
+  content half) to the PRD's **§10 build order** — schema first. See "Next action".
 
 ## What exists vs. what's missing
 
@@ -62,11 +63,30 @@
 
 (Item 5 — the `keyword_research_serp` per-run PAA cap/cost — stays a build-time confirm.)
 
-## Next action
+## Next action — BUILD v1 (in a fresh build session)
 
-- **Owner greenlights the v1 build order** (PRD §10). All four §8 design forks are now
-  locked, so the build can start on approval. Do **not** start implementation code, a
-  migration, or agent wiring until that greenlight — this session is still plan-only.
+Greenlit. Build the **content half** to PRD §10, on a fresh feature branch off the
+latest `main`, following suite conventions. Order:
+
+1. `paa_sets` + `paa_items` migration (`writer/supabase/migrations/`; fields per PRD
+   §4.1 — incl. `geo_mode` default `geo`, nullable `service_page_url`, item `slug` +
+   nullable `run_id`/`post_url`).
+2. The PAA-set card in the workspace **Content Creation** section (`ClientWorkspace.tsx`),
+   own route (e.g. `/clients/:id/paa-sets`): pull PAA (reuse `keyword_research_serp`)
+   → select ~4 → save.
+3. The three writer constraints (reuse `writer_notes` + a deterministic title/H2 check
+   + the `local_seo_matrix.ensure_internal_links` pattern for the service-page link).
+4. Cannibalization guard (reuse `site_page_index` token match + `local_seo_matrix`
+   `scale_gates` / `MATRIX_SIGNOFF_THRESHOLD`).
+5. The "create the PAA posts" action → N blog runs + matching GBP posts + syndication,
+   all seeded from the exact PAA string.
+6. Document the manual single-variable scan/verify workflow (Maps geo-grid +
+   response-episodes) — no new state machine in v1.
+7. Tests: pure helpers + the writer-constraint enforcement, mocked per `tests/`.
+
+**Do NOT drift into later phases** — no prep-sheet manifest, no link-layer
+tracking/costing/QA, no campaign object/automated gate, no audio/video generator, no
+`sop_library` wiring. Guardrails in the PRD §9 are permanent.
 
 ## Gotchas (specific to this initiative)
 
@@ -89,4 +109,5 @@
 - [x] Module scaffolding (`CLAUDE.md` + `HANDOFF.md`) created.
 - [x] Owner settles the four open decisions above.
 - [x] Plan / PRD written for the chosen v1 scope (`docs/modules/paa-seo-neo-prd-v1_0.md`).
-- [ ] Owner reviews + greenlights the v1 build order (§10). No code until then.
+- [x] Owner greenlit the v1 build order (§10), 2026-09-15.
+- [ ] **v1 built** — the content half, per §10 (next session; schema first).
