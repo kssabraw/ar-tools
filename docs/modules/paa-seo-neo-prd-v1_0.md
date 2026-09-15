@@ -316,6 +316,74 @@ rows.
 
 *(Phases 2–3 get their own build orders when the owner greenlights them.)*
 
+## 11. Phase 2 build order — the prep-sheet manifest + link-layer track/cost/QA (GREENLIT 2026-09-15)
+
+> v1 (the content half) is built + live (PR #1117). This is the **Phase 2** build
+> order — the seam previewed in §5, scoped concretely. Design forks locked by the
+> owner (2026-09-15) below; guardrails (§9) unchanged and load-bearing — the suite
+> tracks / costs / QAs / hands off a manifest and **executes nothing** at the
+> authority layer.
+
+### 11.1 Phase 2 design forks — LOCKED (owner, 2026-09-15)
+
+1. **Manifest grain → one manifest per `paa_set`** (per service-in-geo). Matches the
+   topical-congruence discipline (one service per campaign, never mix) and evolves
+   into Phase 3's per-service Campaign object. The client-identity header
+   (NAP/CID/place ID/GBP URL) is read fresh from `clients.gbp` at build/export time,
+   never stored, so it can't go stale.
+2. **Data model → own tables `paa_manifests` + `paa_manifest_assets`** (assets
+   first-class so a QA verdict + a cost attach per row; mirrors `paa_sets`/`paa_items`).
+3. **Authority bundle → seed the standard bundle as tracked-only rows.** The manifest
+   arrives pre-listing the 7 seam-bolt authority items (reference §5.1 — RD 100
+   anchors, GMBB Blast, wiki/cloud stacks, PRs, Neo buckets) as `source='seed'`,
+   `status='planned'`, mapped to a Recipe-Engine cost `task_type` where one exists,
+   each carrying its `[PROVEN]`/`[THEORY]`/`[BELIEF]` tag. Operator edits/removes.
+   **No execute affordance, ever.**
+4. **QA → the QA Agent on live content URLs, async.** A `paa_manifest_qa` job runs
+   `qa_service.review_url` per content asset that has a **live URL** (the thing
+   authority amplifies — reference §2), gated on `qa_enabled`, rolled up onto the
+   manifest. v1's free deterministic per-item checks (`verify_posts`) remain the
+   always-available fallback. One new `async_jobs` type.
+5. **Export → CSV + JSON download AND an optional Google Sheet** into the client's
+   Drive folder (reuses `google_docs.create_google_sheet`; matches the reference's
+   "the prep sheet IS a sheet").
+
+Settled by recommendation (suite-consistent, reversible): surfaced as a **"Prep
+Sheet" section on the PAA-set detail view** (anchored to the set it hands off, not a
+new top-level card); **no new feature flag** (track/cost/QA/export, no execution —
+manifest QA just rides `qa_enabled`); authority/media rows are **status-only**
+(planned → handed_off → done, all human-set).
+
+### 11.2 Build checklist (for the build PR)
+
+1. **Data model + migration** — `paa_manifests` (one per set: status, `cost_summary`
+   / `qa_summary` roll-ups, last Sheet-export refs) + `paa_manifest_assets` (one per
+   asset: `category` content/authority/media, `source` auto/seed/manual, `kind`,
+   `label`, `url`, `note`, `status`, `confidence_tag`, `cost_task_type`,
+   `cost_quantity`, `qa_verdict`/`qa_review`, `paa_item_id`). New `async_jobs` type
+   `paa_manifest_qa` (drift-proof CHECK widen). RLS service-role, matching the suite.
+2. **Auto-collect (pure assembly over a DB read)** — from v1 linkage: a PAA post's
+   live URL (`runs.published_url` via `paa_items.run_id`), a GBP post's `search_url`
+   (via `gbp_post_id`), syndication copies (`syndication_items.doc_url`/`sheet_url`),
+   hosted images (best-effort). Not-yet-published posts collect as `status='pending'`.
+3. **Seed authority + manual-media rows** — the §11.1.3 bundle (once, never clobbered
+   on rebuild) + audio/video/influencer manual rows.
+4. **Cost** — `recipe_engine.cost_of` over the costable rows; honest "not estimated"
+   for off-menu (RD 100). Roll up onto `paa_manifests.cost_summary`.
+5. **QA** — the `paa_manifest_qa` job → `qa_service.review_url` per live content-asset
+   URL → per-asset verdict + a manifest-level rollup. Gated on `qa_enabled`.
+6. **Export / hand-off** — CSV + JSON download (deterministic, always) + optional
+   Google Sheet into the client's Drive folder, each carrying the client-identity
+   header + all rows with their confidence tags.
+7. **Surface** — a Prep Sheet section on the PAA-set detail view (build/refresh, the
+   asset table grouped by category, cost + QA rollups, Run QA, exports, editable
+   status on authority/media rows).
+8. **Tests** — pure helpers (auto-collect assembly, cost/QA rollups, export rendering,
+   the seeded bundle) + the QA/build/export wiring, mocked per the repo's conventions.
+
+*(Phase 3 — the Service PAA Campaign object + the automated single-variable gate —
+gets its own build order when greenlit.)*
+
 ---
 
 *Plan only — no implementation until the owner approves. Defer to
