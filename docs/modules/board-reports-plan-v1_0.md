@@ -117,16 +117,26 @@ redundant Slack content duplicating the PACE board report — unset
 and the PACE daily digest are complementary (daily/exception) and can stay.
 
 ## Detail depth — the who/what/where/why/how (owner ask 2026-09-14)
-A scorecard alone is "a list of tasks and problems." Each report now also carries
+A scorecard alone is "a list of tasks and problems." Each report also carries
 **cases** — per-client / per-problem write-ups (`common.render_report` +
 `render_html` render a `cases: {title, items:[{name, rag, detail:[{label,text}]}]}`
-section), drawn from the diagnostics the suite already produces (nothing invented):
-- **Client Health** — every **non-green** client gets a case: *Status* (the metrics
-  line), *Why* (frozen reason, behind/overdue goals with current-vs-target,
-  deindex-risk keywords, biggest organic drop, and the Action Plan's per-problem
-  **diagnosis**/classification), *What's being done* (the Action Plan
-  **recommendation** + open response-episode notes), *Who & where* (named
-  competitors + market). Green clients stay one line in the "All clients" table.
+section), drawn from the diagnostics the suite already produces (nothing invented).
+The cases are written at **board altitude** — the specifics a board needs to make a
+call, not the IC runbook (owner ruling 2026-09-15, after the first live set read as
+a runbook dump):
+- **Client Health** — every **non-green** client gets a case with up to four tight
+  lines: *Root cause* (the lead classified drop **diagnosis** as one sentence —
+  `_diagnosis_headline` unwraps the `[§A — Sitewide decline]` tag and drops the
+  algo tail — plus the deindex-risk page count/keywords and the biggest organic
+  drop), *Goals* (behind/overdue goals as `current→target by due`), *Plan* (ONE
+  board directive — `_plan_line`/`_headline` take the lead Action-Plan
+  **recommendation** and strip the `(SOP …)` numbered runbook; a vague indexing
+  headline is promoted to a concrete "confirm indexing" action — plus the count of
+  responses in flight), and *Competitors* (named + market). The redundant *Status*
+  line is dropped (it's already the "All clients" table row), diagnosis/plan text is
+  **sentence-bounded** (never truncated mid-word — the old `[:280]` clip was the
+  cause), and a non-green client with no structured detail is omitted from cases
+  entirely (it stays in the table). Green clients stay one line in the table.
 - **PACE** — cases name the specific **stuck** and **overdue** tasks (task · client ·
   owner · days-in-status/due-date · action), the **over-capacity** people
   (utilization + committed-vs-capacity), and the **behind-pace** clients (done-vs-
