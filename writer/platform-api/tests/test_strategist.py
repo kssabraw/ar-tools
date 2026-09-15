@@ -501,7 +501,8 @@ def test_opportunity_sweep_targets_quiet_clients_not_recently_run(monkeypatch):
     def fake_table(name):
         m = MagicMock()
         if name == "clients":
-            m.select.return_value.eq.return_value.execute.return_value.data = [
+            # .select("id").eq("archived", False).neq("kind", "prospect").execute()
+            m.select.return_value.eq.return_value.neq.return_value.execute.return_value.data = [
                 {"id": "a"}, {"id": "b"}, {"id": "c"},
             ]
         else:  # strategy_reviews within the interval

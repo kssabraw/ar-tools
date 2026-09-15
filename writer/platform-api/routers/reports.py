@@ -41,7 +41,7 @@ async def generate_report(
     client_id: UUID, body: GenerateReportRequest, auth: dict = Depends(require_auth)
 ) -> ClientReport:
     """Enqueue a report build; returns the pending row (poll the detail endpoint)."""
-    if body.report_type not in ("monthly", "weekly", "ai_visibility"):
+    if body.report_type not in ("monthly", "weekly", "ai_visibility", "prospect_snapshot"):
         raise HTTPException(status_code=422, detail="invalid_report_type")
     if body.period is not None and body.period not in client_report.PERIOD_CHOICES:
         raise HTTPException(status_code=422, detail="invalid_period")

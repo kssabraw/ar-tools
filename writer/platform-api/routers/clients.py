@@ -135,6 +135,40 @@ def _enqueue_auto_brand_voice_icp(client: dict, user_id: str) -> None:
     logger.info("client_auto_assets_enqueued", extra={"client_id": client["id"]})
 
 
+def _provision_full_client(client: dict, user_id: str) -> None:
+    """Run the heavy background provisioning a full client gets: website scrape,
+    repo-pattern discovery, GSC registry seeding, auto brand-voice/ICP scans,
+    own-domain backlink tracking, rank-location derivation, and the deliverables
+    sheet. Every step is best-effort. Skipped for prospects at creation — a
+    prospect runs this only when it's converted to a full client.
+
+    Page-structure scrapes are NOT here: those come from the client form's own
+    reference-URL fields and are enqueued inline at create time.
+    """
+    client_id = client["id"]
+    website_url = client.get("website_url")
+    if website_url:
+        _enqueue_website_scrape(client_id, website_url)
+    if client.get("github_repo"):
+        github_infer.enqueue_github_infer(client_id)
+    _ensure_gsc_property_registered(client_id, client.get("gsc_property"), user_id)
+    _enqueue_auto_brand_voice_icp(client, user_id)
+    try:
+        from services import backlink_explorer
+
+        backlink_explorer.ensure_client_domain_tracked(client_id, website_url)
+    except Exception as exc:
+        logger.warning("client_backlink_autotrack_failed", extra={"client_id": client_id, "error": str(exc)})
+    if client.get("gbp"):
+        rank_location.enqueue_location_derive(client_id)
+    try:
+        from services import deliverables_sheet
+
+        deliverables_sheet.enqueue_provision(client_id)
+    except Exception as exc:
+        logger.warning("client_deliverables_provision_failed", extra={"client_id": client_id, "error": str(exc)})
+
+
 def _enqueue_page_structure_scrape(client_id: str, page_type: str, url: str) -> None:
     supabase = get_supabase()
     supabase.table("async_jobs").insert(
@@ -314,18 +348,20 @@ def _resolve_file_fields(
 @router.get("/clients", response_model=list[ClientListItem])
 async def list_clients(
     archived: bool = Query(False),
+    kind: str = Query("client"),
     auth: dict = Depends(require_auth),
 ) -> list[ClientListItem]:
+    # 'client' (the default — real clients) or 'prospect' (lightweight
+    # prospecting records). Agency-owned website properties have their own fleet
+    # view and are never listed here.
+    if kind not in ("client", "prospect"):
+        raise HTTPException(status_code=422, detail="invalid_kind")
     supabase = get_supabase()
     result = (
         supabase.table("clients")
-        .select("id, name, website_url, website_analysis_status, archived, created_at, logo_url")
+        .select("id, name, website_url, website_analysis_status, archived, created_at, logo_url, kind")
         .eq("archived", archived)
-        # Agency-owned website properties (kind='owned_property') are not clients —
-        # they back a standalone site and belong in the Website Builder's fleet
-        # view, not the client list. Filter them out here (the one shared client
-        # list); 'client' is the column default so every real client is kept.
-        .neq("kind", "owned_property")
+        .eq("kind", kind)
         .order("name")
         .execute()
     )
@@ -482,46 +518,70 @@ async def create_client(
     detected_icp = icp_service.merge_raw_text(None, icp_text)
     if detected_icp is not None:
         row["detected_icp"] = detected_icp
+    row["kind"] = body.kind
     result = supabase.table("clients").insert(row).execute()
     client = result.data[0]
 
-    if body.website_url:
-        _enqueue_website_scrape(client["id"], body.website_url)
-    # Discover the existing-site URL/slug conventions when a repo is configured
-    # (SOP "site always wins" — populates github_inferred_patterns).
-    if body.github_repo:
-        github_infer.enqueue_github_infer(client["id"])
-    # Seed the GSC registry so the Search Console property feeds the live rank
-    # tracker (still needs the external verify step in Rankings → Settings).
-    _ensure_gsc_property_registered(client["id"], body.gsc_property, auth["user_id"])
+    is_prospect = body.kind == "prospect"
+
+    # Reference-page structures come from the client form only (a prospect form
+    # sends none, so these loops are empty for a prospect); enqueue them for the
+    # real reference URLs/specs whichever kind this is.
     for page_type, url in ps_to_enqueue:
         _enqueue_page_structure_scrape(client["id"], page_type, url)
     for page_type, text, filename in ps_guides_to_enqueue:
         _enqueue_page_structure_parse(client["id"], page_type, text, filename)
-    # Auto-generate the brand voice + ICP so they exist without a manual scan.
-    _enqueue_auto_brand_voice_icp(client, auth["user_id"])
-    # Auto-track the client's own domain for backlink monitoring (best-effort;
-    # the daily scheduler pass also backfills, so a failure here self-heals).
-    try:
-        from services import backlink_explorer
 
-        backlink_explorer.ensure_client_domain_tracked(client["id"], client.get("website_url"))
-    except Exception as exc:
-        logger.warning("client_backlink_autotrack_failed", extra={"client_id": client["id"], "error": str(exc)})
-    # Auto-derive the rank-tracking location from the GBP (best-effort, async).
-    if body.gbp is not None:
-        rank_location.enqueue_location_derive(client["id"])
-    # Auto-provision the client's deliverables sheet (Drive copy of the master
-    # template — PRD §5.5). Self-gated + best-effort; no-ops until the module
-    # flag + template/folder ids are configured.
-    try:
-        from services import deliverables_sheet
+    if is_prospect:
+        # A prospect stays lightweight: no website scrape, no auto brand-voice /
+        # ICP scans, no own-domain backlink tracking, no deliverables sheet — the
+        # whole point is to run one-off reports without building a full profile.
+        # Only derive the rank-tracking location from a linked GBP (cheap, and it
+        # gives Maps + Domain Intelligence a sensible default location).
+        if body.gbp is not None:
+            rank_location.enqueue_location_derive(client["id"])
+        logger.info(
+            "prospect_created",
+            extra={"client_id": client["id"], "user_id": auth["user_id"]},
+        )
+    else:
+        _provision_full_client(client, auth["user_id"])
+        logger.info("client_created", extra={"client_id": client["id"], "user_id": auth["user_id"]})
 
-        deliverables_sheet.enqueue_provision(client["id"])
-    except Exception as exc:
-        logger.warning("client_deliverables_provision_failed", extra={"client_id": client["id"], "error": str(exc)})
-    logger.info("client_created", extra={"client_id": client["id"], "user_id": auth["user_id"]})
+    return _to_client_detail(client)
 
+
+@router.post("/clients/{client_id}/convert", response_model=ClientDetail)
+async def convert_prospect(
+    client_id: UUID,
+    auth: dict = Depends(require_staff),
+) -> ClientDetail:
+    """Promote a prospect to a full client: flip ``kind`` and run the heavy
+    provisioning a full client gets at creation (website scrape, auto
+    brand-voice/ICP, own-domain backlink tracking, GSC registry seeding,
+    deliverables sheet). Idempotent-ish — a row that's already a client is a
+    409 so the caller knows nothing ran."""
+    supabase = get_supabase()
+    existing = (
+        supabase.table("clients").select("*").eq("id", str(client_id)).single().execute()
+    )
+    if not existing.data:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    if existing.data.get("kind") != "prospect":
+        raise HTTPException(status_code=409, detail="not_a_prospect")
+
+    updated = (
+        supabase.table("clients")
+        .update({"kind": "client", "updated_at": "now()"})
+        .eq("id", str(client_id))
+        .execute()
+    )
+    client = updated.data[0]
+    _provision_full_client(client, auth["user_id"])
+    logger.info(
+        "prospect_converted",
+        extra={"client_id": str(client_id), "user_id": auth["user_id"]},
+    )
     return _to_client_detail(client)
 
 

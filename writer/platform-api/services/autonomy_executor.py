@@ -508,7 +508,8 @@ def enqueue_due_autonomy_runs(today_weekday: Optional[int] = None) -> int:
     supabase = get_supabase()
     try:
         clients = (
-            supabase.table("clients").select("id").gt("autonomy_tier", 0).execute()
+            supabase.table("clients").select("id").gt("autonomy_tier", 0)
+            .neq("kind", "prospect").execute()
         ).data or []
     except Exception as exc:  # noqa: BLE001
         logger.warning("autonomy_due_clients_failed", extra={"error": str(exc)})

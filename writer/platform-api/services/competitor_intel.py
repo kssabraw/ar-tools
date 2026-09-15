@@ -765,6 +765,14 @@ def enqueue_due_competitor_intel() -> int:
         ).data or []:
             if s["client_id"] not in seeded:
                 due.add(s["client_id"])
+        # Prospects run no recurring intel — a prospect that ran a one-off maps
+        # report has a completed maps_scan, which would otherwise bootstrap it.
+        prospects = {
+            r["id"] for r in (
+                supabase.table("clients").select("id").eq("kind", "prospect").execute()
+            ).data or []
+        }
+        due -= prospects
     except Exception as exc:
         logger.error("competitor_intel.due_check_failed", extra={"error": str(exc)})
         return 0
