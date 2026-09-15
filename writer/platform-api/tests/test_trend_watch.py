@@ -110,3 +110,69 @@ def test_demand_outlook_direction_and_swings():
 def test_windows_overlap():
     assert tw.windows_overlap(date(2026, 7, 1), date(2026, 7, 3), date(2026, 7, 3), date(2026, 7, 5))
     assert not tw.windows_overlap(date(2026, 7, 1), date(2026, 7, 3), date(2026, 7, 4), date(2026, 7, 6))
+
+
+# ---------------------------------------------------------------------------
+# Trends seasonality merge (Google Trends profile PREFERRED over Ads history)
+# ---------------------------------------------------------------------------
+def _trends_row(keyword, index, *, location_code=1027, peak=None, low=None):
+    """A stored google_trends_seasonality row (jsonb month_index has string keys)."""
+    return {
+        "keyword": keyword,
+        "location_code": location_code,
+        "month_index": {str(m): v for m, v in index.items()},
+        "peak_months": peak or [],
+        "low_months": low or [],
+    }
+
+
+def test_trends_profile_coerces_string_keys_and_guards_thin():
+    row = _trends_row("kw", {m: (2.0 if m == 6 else 1.0) for m in range(1, 13)},
+                      peak=[6], low=[1])
+    prof = tw._trends_profile(row)
+    assert prof is not None
+    assert prof["index"][6] == 2.0 and isinstance(next(iter(prof["index"])), int)
+    assert prof["peak_months"] == [6] and prof["low_months"] == [1]
+    # <6 months → None (matches seasonality_profile's guard)
+    assert tw._trends_profile(_trends_row("kw", {1: 1.0, 2: 1.2})) is None
+    assert tw._trends_profile({"month_index": None}) is None
+    assert tw._trends_profile({}) is None
+
+
+def test_merge_prefers_trends_over_ads_history():
+    # keyword_market carries the Ads-volume history (the WEIGHT + a fallback shape).
+    market = [
+        {"keyword": "collagen peptides", "search_volume": 5000,
+         "monthly_searches": _history({m: 100 for m in range(1, 13)})},  # flat Ads shape
+        {"keyword": "marine collagen", "search_volume": 800,
+         "monthly_searches": _history({1: 50, 2: 50, 3: 100, 4: 150, 5: 200, 6: 200,
+                                       7: 150, 8: 100, 9: 50, 10: 50, 11: 50, 12: 50})},
+    ]
+    # A Trends profile exists only for the first keyword (case/space-insensitive join).
+    trends = [_trends_row("Collagen  Peptides",
+                          {m: (3.0 if m == 12 else 1.0) for m in range(1, 13)}, peak=[12])]
+    tuples = tw.merge_seasonality_profiles(market, trends)
+    by_kw = {kw: (vol, prof) for kw, vol, prof in tuples}
+    # weight always from Ads volume; shape from Trends when present
+    assert by_kw["collagen peptides"][0] == 5000
+    assert by_kw["collagen peptides"][1]["index"][12] == 3.0   # Trends shape, not flat
+    # the keyword with no Trends row falls back to the Ads-derived seasonality
+    assert by_kw["marine collagen"][1] is not None
+    assert by_kw["marine collagen"][1]["index"][5] > 1.3       # Ads shape survives
+
+
+def test_merge_iterates_market_rows_only():
+    # A Trends-only keyword (no Ads volume row) is not emitted — demand_outlook
+    # needs an Ads volume to weight it, so a Trends-only keyword has no weight.
+    trends = [_trends_row("orphan term", {m: 1.0 for m in range(1, 13)})]
+    assert tw.merge_seasonality_profiles([], trends) == []
+
+
+def test_merge_thin_trends_profile_falls_back_to_ads():
+    # A stored-but-thin Trends profile (<6 months) is ignored; the Ads shape wins.
+    market = [{"keyword": "kw", "search_volume": 400,
+               "monthly_searches": _history({1: 50, 2: 50, 3: 100, 4: 150, 5: 200, 6: 200,
+                                             7: 150, 8: 100, 9: 50, 10: 50, 11: 50, 12: 50})}]
+    trends = [_trends_row("kw", {1: 1.0, 2: 1.5})]  # thin → dropped by _trends_profile
+    _, _, prof = tw.merge_seasonality_profiles(market, trends)[0]
+    assert prof is not None and prof["index"][5] > 1.3  # Ads-derived shape

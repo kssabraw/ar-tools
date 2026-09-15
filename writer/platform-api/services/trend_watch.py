@@ -28,6 +28,7 @@ shared scheduler (inline, like the offpage sweep — no job type).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -140,6 +141,80 @@ def seasonality_profile(monthly_searches: Optional[list[dict]]) -> Optional[dict
         "peak_months": [m for m, v in ranked[:2] if v >= 1.15],
         "low_months": [m for m, v in sorted(index.items(), key=lambda kv: kv[1])[:2] if v <= 0.85],
     }
+
+
+def _norm_kw(keyword: Optional[str]) -> str:
+    """Lower-cased, whitespace-collapsed keyword for joining across tables. Pure."""
+    return re.sub(r"\s+", " ", (keyword or "").strip().lower())
+
+
+def _trends_profile(row: dict) -> Optional[dict]:
+    """Coerce a stored google_trends_seasonality row into a seasonality profile in
+    the shape demand_outlook consumes ({index: {1..12: float}, peak_months,
+    low_months}). Pure. jsonb month keys come back as strings, so they're coerced
+    to ints; None when fewer than 6 months are present (matches
+    seasonality_profile's guard)."""
+    raw = row.get("month_index")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    index: dict[int, float] = {}
+    for k, v in raw.items():
+        try:
+            m = int(k)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= m <= 12 and isinstance(v, (int, float)):
+            index[m] = float(v)
+    if len(index) < 6:
+        return None
+
+    def _months(key: str) -> list[int]:
+        out = []
+        for m in row.get(key) or []:
+            try:
+                mi = int(m)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= mi <= 12:
+                out.append(mi)
+        return out
+
+    return {"index": index, "peak_months": _months("peak_months"),
+            "low_months": _months("low_months")}
+
+
+def merge_seasonality_profiles(
+    market_rows: list[dict], trends_rows: list[dict],
+) -> list[tuple[str, Optional[int], Optional[dict]]]:
+    """Build demand_outlook's (keyword, avg_volume, seasonality_profile) tuples,
+    PREFERRING a stored Google Trends seasonality profile over the Ads-volume
+    history for each keyword. Pure.
+
+    market_rows: keyword_market rows [{keyword, search_volume, monthly_searches}].
+    trends_rows: google_trends_seasonality rows [{keyword, month_index,
+      peak_months, low_months}].
+
+    Trends relative-interest is a truer seasonality SHAPE, but carries no absolute
+    volume — so the shape comes from Trends when present, the WEIGHT always from the
+    Ads search_volume. A keyword with no Trends row falls back to the Ads-derived
+    seasonality_profile. Iterates market_rows because demand_outlook needs an Ads
+    volume to weight a keyword at all (a Trends-only keyword has no weight)."""
+    trends_by_kw: dict[str, dict] = {}
+    for r in trends_rows or []:
+        kw = _norm_kw(r.get("keyword"))
+        if not kw:
+            continue
+        prof = _trends_profile(r)
+        if prof:
+            trends_by_kw[kw] = prof
+    tuples: list[tuple[str, Optional[int], Optional[dict]]] = []
+    for r in market_rows or []:
+        kw = r.get("keyword")
+        if not kw:
+            continue
+        prof = trends_by_kw.get(_norm_kw(kw)) or seasonality_profile(r.get("monthly_searches"))
+        tuples.append((kw, r.get("search_volume"), prof))
+    return tuples
 
 
 def demand_outlook(
@@ -332,16 +407,27 @@ def build_demand_outlook(client_id: str, today: Optional[date] = None) -> Option
     ]
     if not kws:
         return None
+    loc = location_code_for(client[0])
     rows = (
         supabase.table("keyword_market")
         .select("keyword, search_volume, monthly_searches")
-        .in_("keyword", kws).eq("location_code", location_code_for(client[0]))
+        .in_("keyword", kws).eq("location_code", loc)
         .execute()
     ).data or []
-    profiles = [
-        (r["keyword"], r.get("search_volume"), seasonality_profile(r.get("monthly_searches")))
-        for r in rows
-    ]
+    # Prefer a stored Google Trends seasonality profile (a truer shape) over the
+    # Ads-volume history, keyed to the same location. Best-effort — a read failure
+    # degrades to the Ads-only profiles.
+    trends_rows: list[dict] = []
+    try:
+        trends_rows = (
+            supabase.table("google_trends_seasonality")
+            .select("keyword, month_index, peak_months, low_months")
+            .eq("client_id", client_id).eq("location_code", loc)
+            .execute()
+        ).data or []
+    except Exception:
+        trends_rows = []
+    profiles = merge_seasonality_profiles(rows, trends_rows)
     outlook = demand_outlook(profiles, today)
     if outlook:
         outlook["keywords_without_history"] = len(kws) - outlook["keywords_with_history"]
