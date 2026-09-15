@@ -28,11 +28,13 @@ _PRICES: dict[str, tuple[float, float]] = {
     "haiku": (1.00, 5.00),
     "sonnet": (3.00, 15.00),
     "opus": (5.00, 25.00),
-    # OpenAI content-writer prose models (gpt-5.6-luna). ESTIMATE — confirm
-    # against OpenAI's live pricing; this cost accounting is advisory
-    # (module_outputs.cost_usd). Substring-matched like the Claude tiers so a
-    # dated/variant id ("gpt-5.6-luna") still resolves.
-    "luna": (1.25, 10.00),
+    # OpenAI content-writer prose ("Luna"). Confirmed against OpenAI's published
+    # API pricing as of 2026-09-14 ($0.20/1M in, $1.20/1M out; cached input
+    # $0.02 not modelled). Substring-matched like the Claude tiers, and "luna"
+    # is checked before the generic "gpt-5" fallback so a "gpt-5.6-luna" id
+    # resolves to the Luna rate. The "gpt-5" row stays a coarse estimate for any
+    # other GPT-5 variant.
+    "luna": (0.20, 1.20),
     "gpt-5": (1.25, 10.00),
 }
 
