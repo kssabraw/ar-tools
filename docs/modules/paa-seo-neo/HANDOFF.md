@@ -4,10 +4,14 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — v1 (content half) BUILT · in PR on `claude/paa-seo-neo-v1-build-vakcd3`
+## Status (2026-09-15) — v1 (content half) BUILT · MERGED (PR #1117) · LIVE in production
 
-> v1 is built to PRD §10 and pushed. The migration (`paa_sets` + `paa_items`) is
-> **applied live** to the Supabase project. What shipped: the two tables; a **PAA
+> v1 is built to PRD §10, **merged to `main`** (PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), squash `9baaaa1`),
+> and **verified live in production**: the `paa_sets` (11 cols) + `paa_items` (15
+> cols) tables exist RLS-on in the Supabase project, and all six PAA routes are
+> served by the live PLATFORM instance (checked against `/openapi.json` on the
+> active deploy). The migration (`paa_sets` + `paa_items`) is **applied live**.
+> What shipped: the two tables; a **PAA
 > Content** card in the workspace "Content Creation" section → `/clients/:id/paa-sets`
 > (pull PAA via `keyword_research_serp` → select ~4 → save); the three writer
 > constraints (`services/paa_seo.compose_writer_notes` on the reused `writer_notes`
