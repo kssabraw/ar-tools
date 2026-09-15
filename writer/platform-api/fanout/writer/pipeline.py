@@ -414,6 +414,7 @@ def generate_article(
     word_budget: int | None = None, coverage_enabled: bool = True,
     timeout_s: float = 90.0, adherence_threshold: float = budget_mod.ADHERENCE_THRESHOLD,
     brand_voice_card: dict | None = None,
+    substitutions: dict | None = None,
 ) -> WriterOutput:
     """Run the writer flow and return the §6 WriterOutput.
 
@@ -587,6 +588,35 @@ def generate_article(
         for viol in v.paragraph_violations(it.body, max_sent):
             para_violations.append({"section_order": it.order, **viol})
 
+    # ----- mandatory per-client term substitution (compliance) ----
+    # Some clients research a term (keywords + brief see the real name) but must
+    # never PUBLISH it — e.g. "retatrutide" -> "glp3-rt". Apply the coded swap to
+    # the finished article + title BEFORE voice enforcement, so the never-use
+    # voice finding self-resolves and the serialized markdown/html inherit it.
+    # No-op when the client carries no substitution map. Lazy suite import
+    # (fanout already reaches into suite services at the job layer).
+    seo_title = brief.seo_title or ""
+    if substitutions:
+        from services import term_substitution as _ts
+
+        _subs = _ts.parse_substitutions(substitutions)
+        if _subs:
+            def _s(text: str | None) -> str | None:
+                return _ts.substitute_text(text, _subs)
+
+            title = _s(title) or title
+            seo_title = _s(seo_title) or seo_title
+            intro = _s(intro) or intro
+            cta = _s(cta) or cta
+            takeaways = [_s(t) or t for t in takeaways]
+            article = [
+                it.model_copy(update={
+                    "heading": _s(it.heading) if it.heading else it.heading,
+                    "body": _s(it.body) if it.body else it.body,
+                })
+                for it in article
+            ]
+
     # ----- brand-voice enforcement (client-linked only) ----
     # Score the finished body against the client's guide and rewrite the
     # worst-drifting sections toward the voice bar BEFORE serialization, so the
@@ -635,7 +665,7 @@ def generate_article(
     )
     return WriterOutput(
         keyword=brief.keyword, intent_type=brief.intent_type, title=title,
-        seo_title=brief.seo_title or "",
+        seo_title=seo_title,
         article=article, article_markdown=article_markdown, article_html=article_html,
         key_takeaways=takeaways, intro=intro, cta=cta,
         citation_usage={"total_citations_available": 0, "citations_used": 0,

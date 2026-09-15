@@ -661,8 +661,16 @@ async def run_publish_job(job: dict) -> None:
         cta_url = post.get("cta_url")
         if cta_url and settings.gbp_post_default_utm:
             cta_url = api.append_utm(cta_url, _client_slug(client))
+        # Mandatory per-client term substitution (compliance): the single seam
+        # every published post (AI-drafted OR manually typed) passes through, so
+        # the coded term is guaranteed on what actually posts to Google. No-op
+        # without a map.
+        from services import term_substitution as _ts
+
+        _subs = _ts.parse_substitutions((client or {}).get("term_substitutions"))
+        _summary = _ts.substitute_text(post["summary"], _subs) if _subs else post["summary"]
         body = api.build_local_post_body(
-            summary=post["summary"], topic_type=post["topic_type"],
+            summary=_summary, topic_type=post["topic_type"],
             cta_type=post.get("cta_type"), cta_url=cta_url,
             event=post.get("event"), offer=post.get("offer"), media=post.get("media"),
         )
@@ -1060,6 +1068,14 @@ async def run_generate_job(job: dict) -> None:
         )
         if not summary:
             raise HTTPException(status_code=502, detail="empty_draft")
+        # Mandatory per-client term substitution (compliance): code the AI draft
+        # so the stored/displayed post already reads the coded term (publish
+        # re-applies it as the mandatory gate). No-op without a map.
+        from services import term_substitution as _ts
+
+        _dsubs = _ts.parse_substitutions((client or {}).get("term_substitutions"))
+        if _dsubs:
+            summary = _ts.substitute_text(summary, _dsubs)
 
         # Regenerate: rewrite the existing post's text in place instead of adding
         # a new row (keeps its image, schedule slot, CTA, and gen_context).

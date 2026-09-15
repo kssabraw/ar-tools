@@ -633,6 +633,12 @@ async def update_client(
     # Explicit-set semantics: an empty string clears the channel back to master.
     if "slack_channel_id" in body.model_fields_set:
         updates["slack_channel_id"] = ((body.slack_channel_id or "").strip() or None)
+    # Mandatory content term-substitution map (applied to generated output only).
+    # Explicit-set semantics: {} disables it. Normalized on write.
+    if "term_substitutions" in body.model_fields_set:
+        from services import term_substitution
+
+        updates["term_substitutions"] = term_substitution.parse_substitutions(body.term_substitutions)
     # Explicit-set semantics: an empty string clears the Everhour project mapping.
     if "everhour_project_id" in body.model_fields_set:
         updates["everhour_project_id"] = ((body.everhour_project_id or "").strip() or None)
