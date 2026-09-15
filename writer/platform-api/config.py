@@ -755,6 +755,18 @@ class Settings(BaseSettings):
     # of gbp_profile_enabled; flip on PLATFORM to activate (like freeze_check).
     gbp_profile_monitor_enabled: bool = False
     # ------------------------------------------------------------------
+    # Brand Guide Generator module (docs/modules/brand-guide-generator-prd-v1_0.md).
+    # Turns a client's website URL + their existing ICP/differentiators/brand-voice
+    # assets into a client-facing Brand Audit + Brand Guide (PDF + structured record).
+    # ~70% is assembly over existing suite data; the one new capability is live-URL
+    # visual extraction (no headless browser — ScrapeOwl CSS + DataForSEO screenshot
+    # + Pillow pixel-dominance, per ADR 2026-09-15). Master gate: default OFF so the
+    # (future) routes + jobs no-op until the module lands and the D4 palette spike
+    # (PRD §10) has proven the extraction path on the worker. Phase 0 (the pure
+    # extraction core + the spike) references nothing at runtime, so this flag is
+    # inert until Phase 1 wires capture/jobs behind it.
+    brand_guide_enabled: bool = False
+    # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may
     # not be accepted as a listing Manager (unlike GSC). With a Google Workspace
