@@ -263,6 +263,114 @@ def parse_categories(body: dict) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Phase 4 (local seasonal) pure helpers — the interest_over_time slice of the
+# explore response (a DIFFERENT item type from the queries list) → a calendar
+# seasonality profile in the exact shape trend_watch.demand_outlook consumes.
+#
+# ⚠️ The interest_over_time shape is DOCUMENTED, not live-verified (the same
+# egress block as the rising-queries shape) — the graph item is `type=
+# "google_trends_graph"` with data[] points each carrying a timestamp + values[].
+# scripts/verify_google_trends.py --keyword ... --interest prints the live shape;
+# reconcile this parser + its tests together if it differs.
+# ---------------------------------------------------------------------------
+def _point_month(entry: dict) -> Optional[int]:
+    """The calendar month (1-12) of an interest_over_time point. Defensive.
+
+    Handles an explicit ``date_from``/``date`` ISO string, a unix ``timestamp``
+    (seconds), or a nested ``{year, month}``. None when unparseable."""
+    for key in ("date_from", "date", "datetime"):
+        val = entry.get(key)
+        if isinstance(val, str) and len(val) >= 7 and val[4] == "-":
+            try:
+                return int(val[5:7])
+            except ValueError:
+                pass
+    ts = entry.get("timestamp")
+    if isinstance(ts, (int, float)) and ts > 0:
+        try:
+            from datetime import datetime, timezone
+            return datetime.fromtimestamp(float(ts), tz=timezone.utc).month
+        except (ValueError, OSError, OverflowError):
+            pass
+    month = entry.get("month")
+    if isinstance(month, int) and 1 <= month <= 12:
+        return month
+    return None
+
+
+def _point_value(entry: dict) -> Optional[float]:
+    """The interest value of a point. Defensive across shapes: a scalar ``value``,
+    or a ``values``/``data`` list (single-keyword explore → first element)."""
+    val = entry.get("value")
+    if isinstance(val, (int, float)):
+        return float(val)
+    for key in ("values", "data"):
+        seq = entry.get(key)
+        if isinstance(seq, list) and seq:
+            first = seq[0]
+            if isinstance(first, (int, float)):
+                return float(first)
+            if isinstance(first, dict) and isinstance(first.get("value"), (int, float)):
+                return float(first["value"])
+    return None
+
+
+def parse_interest_over_time(body: dict) -> list[dict]:
+    """Extract the interest_over_time series from a DataForSEO explore response.
+    Pure. Defensive. Returns [{month, value}] points (month 1-12, value float)."""
+    tasks = body.get("tasks") if isinstance(body, dict) else None
+    if not isinstance(tasks, list):
+        return []
+    out: list[dict] = []
+    for task in tasks:
+        if not isinstance(task, dict):
+            continue
+        for result in task.get("result") or []:
+            if not isinstance(result, dict):
+                continue
+            for item in result.get("items") or []:
+                if not isinstance(item, dict) or item.get("type") != "google_trends_graph":
+                    continue
+                data = item.get("data")
+                points = data if isinstance(data, list) else (
+                    (data or {}).get("data") if isinstance(data, dict) else None)
+                for entry in points or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    month = _point_month(entry)
+                    value = _point_value(entry)
+                    if month is not None and value is not None:
+                        out.append({"month": month, "value": value})
+    return out
+
+
+def seasonality_profile_from_series(series: list[dict]) -> Optional[dict]:
+    """A calendar seasonality profile from an interest_over_time series, in the
+    EXACT shape trend_watch.demand_outlook consumes: {"index": {1..12: float},
+    "peak_months": [...], "low_months": [...]} where 1.0 = the year's mean. Pure.
+
+    Averages each point's value into its calendar month, then normalizes each
+    month to the mean of the months that HAVE data. None when <6 months covered
+    or the mean is zero (mirrors trend_watch.seasonality_profile's guards)."""
+    by_month: dict[int, list[float]] = {}
+    for p in series or []:
+        m = p.get("month")
+        v = p.get("value")
+        if isinstance(m, int) and 1 <= m <= 12 and isinstance(v, (int, float)):
+            by_month.setdefault(m, []).append(float(v))
+    if len(by_month) < 6:
+        return None
+    month_avg = {m: (sum(vs) / len(vs)) for m, vs in by_month.items()}
+    overall = sum(month_avg.values()) / len(month_avg)
+    if overall <= 0:
+        return None
+    index = {m: round(month_avg[m] / overall, 3) for m in month_avg}
+    peak = sorted(index, key=lambda m: index[m], reverse=True)[:3]
+    low = sorted(index, key=lambda m: index[m])[:3]
+    return {"index": index, "peak_months": sorted(peak), "low_months": sorted(low)}
+
+
+# ---------------------------------------------------------------------------
 # DataForSEO calls (I/O).
 # ---------------------------------------------------------------------------
 async def explore_live(
@@ -367,33 +475,25 @@ def _client_location(client_id: str) -> Optional[int]:
     return None
 
 
-async def run_google_trends_scan(
-    client_id: str,
+async def _explore_and_qualify(
     seeds: list[str],
     *,
-    category_code: Optional[int] = None,
-    category_name: Optional[str] = None,
-    location_code: Optional[int] = None,
-    language_code: Optional[str] = None,
-    trends_type: str = "web",
-) -> dict:
-    """Phase 1 scan: expand seeds → rising related queries → qualify → score →
-    persist a run. Returns a summary dict. Raises BudgetExceeded when metered out.
+    category_code: Optional[int],
+    location_code: Optional[int],
+    language_code: str,
+    trends_type: str,
+    log_ctx: Optional[dict] = None,
+) -> tuple[list[dict], float]:
+    """Shared core: explore seeds → rising related queries → qualify with the
+    volume/CPC gate → build stored rows. Returns (rows, total_cost). Reserves the
+    paid-call budget (fail-closed) for the explore chunks + the overview batch.
 
-    Keyword-anchored (seeds required), so it needs no relevance-anchor step — the
-    seed IS the anchor. category_code is an optional Trends filter."""
-    seeds = keyword_research.parse_seeds(seeds)
-    if not seeds:
-        raise ValueError("no_seeds")
-
-    if location_code is None:
-        location_code = _client_location(client_id)
-    language_code = language_code or "en"
-    trends_type = trends_type or "web"
-
-    # One explore call per ≤5-seed chunk (each billed).
+    Used by every scan mode (keyword / category / portfolio). A chunk of >1 seed
+    can't attribute a rising query to a specific seed (explore aggregates across
+    the ≤5 keywords), so per-query ``seed`` is only set for single-seed chunks."""
+    log_ctx = log_ctx or {}
     chunks = dataforseo_labs.chunk(seeds, _EXPLORE_MAX_KEYWORDS)
-    reserve_budget(len(chunks))
+    reserve_budget(len(chunks))  # one explore call per ≤5-seed chunk (each billed)
 
     rising: list[dict] = []
     total_cost = 0.0
@@ -404,13 +504,10 @@ async def run_google_trends_scan(
                 language_code=language_code, trends_type=trends_type,
             )
         except Exception as exc:  # noqa: BLE001 — one dead chunk shouldn't kill the scan
-            logger.warning("google_trends.explore_chunk_failed",
-                           extra={"client_id": client_id, "error": str(exc)})
+            logger.warning("google_trends.explore_chunk_failed", extra={**log_ctx, "error": str(exc)})
             continue
         total_cost += cost
         for r in parse_rising_queries(body):
-            # Attribute to the first seed in the chunk (explore aggregates across
-            # the ≤5 keywords; per-query origin isn't returned).
             r["seed"] = group[0] if len(group) == 1 else None
             rising.append(r)
 
@@ -438,43 +535,208 @@ async def run_google_trends_scan(
         except BudgetExceeded:
             raise
         except Exception as exc:  # noqa: BLE001 — unqualified rows still persist, flagged
-            logger.warning("google_trends.qualify_failed",
-                           extra={"client_id": client_id, "error": str(exc)})
+            logger.warning("google_trends.qualify_failed", extra={**log_ctx, "error": str(exc)})
 
-    rows = build_trend_rows(deduped, overview)
+    return build_trend_rows(deduped, overview), round(total_cost, 4)
+
+
+async def run_google_trends_scan(
+    client_id: str,
+    seeds: list[str],
+    *,
+    category_code: Optional[int] = None,
+    category_name: Optional[str] = None,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    trends_type: str = "web",
+) -> dict:
+    """Phase 1 scan: expand seeds → rising related queries → qualify → score →
+    persist a run. Returns a summary dict. Raises BudgetExceeded when metered out.
+
+    Keyword-anchored (seeds required), so it needs no relevance-anchor step — the
+    seed IS the anchor. category_code is an optional Trends filter."""
+    seeds = keyword_research.parse_seeds(seeds)
+    if not seeds:
+        raise ValueError("no_seeds")
+
+    if location_code is None:
+        location_code = _client_location(client_id)
+    language_code = language_code or "en"
+    trends_type = trends_type or "web"
+
+    rows, total_cost = await _explore_and_qualify(
+        seeds, category_code=category_code, location_code=location_code,
+        language_code=language_code, trends_type=trends_type,
+        log_ctx={"client_id": client_id},
+    )
     qualified = sum(1 for r in rows if r["qualified"])
 
     run = _persist_run(
-        client_id, seeds, rows,
+        client_id, seeds, rows, mode="keyword",
         category_code=category_code, category_name=category_name,
         location_code=location_code, language_code=language_code,
-        trends_type=trends_type, cost_usd=round(total_cost, 4),
-        qualified=qualified,
+        trends_type=trends_type, cost_usd=total_cost, qualified=qualified,
     )
     return {
         "run_id": run,
         "rising_count": len(rows),
         "qualified_count": qualified,
-        "cost_usd": round(total_cost, 4),
+        "cost_usd": total_cost,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — informational sites: a SEEDLESS category scan anchored on the
+# client's own site topics + ICP, gated by the same relevance + audience filters
+# keyword research uses, whose survivors route into Topic Research.
+# ---------------------------------------------------------------------------
+def derive_category_seeds(topic_research: dict, cap: int) -> list[str]:
+    """The explore seeds for a seedless category scan: the client's own site
+    topics, then intent-fanout expansion seeds, then the ICP-grounded intents
+    (deduped, capped, in that priority). Pure.
+
+    Trends explore needs keywords; a category scan has none, so we anchor on what
+    the client is actually about. Site-topic slugs make the cleanest explore seeds,
+    so they lead; the ICP-grounded ``intents`` are the fallback that lets a client
+    with an ICP but no discoverable website still anchor a scan (honouring the
+    'site topics/ICP' anchor decision). Empty only when the client has neither."""
+    if not isinstance(topic_research, dict):
+        return []
+    site = topic_research.get("site")
+    topics = (site or {}).get("topics") or []
+    expansion = topic_research.get("expansion_seeds") or []
+    intents = topic_research.get("intents") or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for phrase in list(topics) + list(expansion) + list(intents):
+        if not isinstance(phrase, str) or not phrase.strip():
+            continue
+        norm = keyword_research.normalize_keyword(phrase)
+        if norm and norm not in seen:
+            seen.add(norm)
+            out.append(phrase.strip())
+        if len(out) >= max(1, cap):
+            break
+    return out
+
+
+async def run_google_trends_category_scan(
+    client_id: str,
+    *,
+    category_code: Optional[int] = None,
+    category_name: Optional[str] = None,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+    trends_type: str = "web",
+) -> dict:
+    """Phase 2 scan (informational): derive anchor seeds from the client's site
+    topics/ICP → explore (category-filtered) → qualify → the SAME relevance +
+    audience gates keyword research uses → persist a run (mode='category'). The
+    survivors are routed to Topic Research via the router (a deliberate human
+    step, so the expensive strategist run is an explicit click, not auto-spend).
+
+    Best-effort throughout: a missing site/LLM/embedding key degrades a gate to a
+    no-op rather than aborting. Raises ValueError('no_anchor') only when the client
+    has no site/ICP signal at all (nothing to anchor a seedless scan on)."""
+    from services import keyword_research_topics
+
+    if location_code is None:
+        location_code = _client_location(client_id)
+    language_code = language_code or "en"
+    trends_type = trends_type or "web"
+
+    ctx = keyword_research._client_context(client_id)
+    try:
+        topic_research = await keyword_research_topics.research_topics(ctx, [], location_code)
+    except Exception as exc:  # noqa: BLE001 — degrade to no anchors rather than abort
+        logger.warning("google_trends.topics_failed", extra={"client_id": client_id, "error": str(exc)})
+        topic_research = {}
+
+    seeds = derive_category_seeds(topic_research, settings.google_trends_category_seed_cap)
+    if not seeds:
+        # research_topics can be fully gated off (keyword_research_topical=False) or
+        # return nothing; fall back to a DIRECT site-topic discovery (gated only on
+        # keyword_research_site_topics) so a category scan still anchors on the
+        # client's own site when it has one — decoupling Phase 2 from the topical flag.
+        try:
+            site_topics, _ = await keyword_research_topics.discover_site_topics(ctx, location_code)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning("google_trends.site_topics_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+            site_topics = []
+        seeds = derive_category_seeds(
+            {"site": {"topics": site_topics}}, settings.google_trends_category_seed_cap)
+    if not seeds:
+        raise ValueError("no_anchor")
+    anchors = topic_research.get("anchors") or list(seeds)
+
+    rows, total_cost = await _explore_and_qualify(
+        seeds, category_code=category_code, location_code=location_code,
+        language_code=language_code, trends_type=trends_type,
+        log_ctx={"client_id": client_id, "mode": "category"},
+    )
+
+    # Relevance + audience gates — reuse keyword research's, so a category's
+    # national noise doesn't flood the client's list. Each needs a `keyword` field.
+    for r in rows:
+        r["keyword"] = r["query"]
+    if rows and settings.keyword_research_semantic_relevance:
+        try:
+            from services import keyword_research_relevance
+            rows, _ = await keyword_research_relevance.score_relevance(
+                rows, anchors, seeds, settings.keyword_research_relevance_floor)
+        except Exception as exc:  # noqa: BLE001 — best-effort; keep the token-gated set
+            logger.warning("google_trends.relevance_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+    if rows and settings.keyword_research_audience_filter:
+        try:
+            from services import keyword_research_audience
+            # Sync call on the async path — deliberately matching keyword_research's
+            # own call site (the job worker runs one job per lane; offloading to a
+            # thread would diverge from that pattern and put the shared Supabase
+            # client on a worker thread for no meaningful gain).
+            rows, _ = keyword_research_audience.filter_by_audience(rows, ctx, seeds)
+        except Exception as exc:  # noqa: BLE001 — best-effort; keep the relevance-gated set
+            logger.warning("google_trends.audience_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+
+    qualified = sum(1 for r in rows if r.get("qualified"))
+    run = _persist_run(
+        client_id, seeds, rows, mode="category",
+        category_code=category_code, category_name=category_name,
+        location_code=location_code, language_code=language_code,
+        trends_type=trends_type, cost_usd=total_cost, qualified=qualified,
+    )
+    return {
+        "run_id": run,
+        "rising_count": len(rows),
+        "qualified_count": qualified,
+        "seeds": seeds,
+        "cost_usd": total_cost,
     }
 
 
 def _persist_run(
-    client_id: str, seeds: list[str], rows: list[dict], *,
-    category_code, category_name, location_code, language_code, trends_type,
-    cost_usd, qualified,
+    client_id: Optional[str], seeds: list[str], rows: list[dict], *,
+    mode: str = "keyword",
+    category_code=None, category_name=None, location_code=None, language_code=None,
+    trends_type="web", cost_usd=None, qualified=0, rising_count: Optional[int] = None,
 ) -> str:
+    """Persist a run + its child rows. ``rising_count`` defaults to ``len(rows)``;
+    pass it explicitly when ``rows`` is a capped subset of a larger set (the
+    portfolio sweep stores a bounded slice but reports the true totals)."""
     supabase = get_supabase()
     run = (
         supabase.table("google_trends_runs").insert({
             "client_id": client_id,
+            "mode": mode,
             "seeds": seeds,
             "category_code": category_code,
             "category_name": category_name,
             "location_code": location_code,
             "language_code": language_code,
             "trends_type": trends_type,
-            "rising_count": len(rows),
+            "rising_count": rising_count if rising_count is not None else len(rows),
             "qualified_count": qualified,
             "status": "complete",
             "cost_usd": cost_usd,
@@ -486,7 +748,8 @@ def _persist_run(
             [{"run_id": run_id, **{k: r.get(k) for k in (
                 "query", "seed", "bucket", "rising_value", "is_breakout", "volume",
                 "cpc_usd", "competition_index", "keyword_difficulty", "search_intent",
-                "is_question", "qualified", "trend_score",
+                "is_question", "qualified", "trend_score", "relevance_score",
+                "audience_fit", "source_client_name",
             )}} for r in rows]
         ).execute()
     return run_id
@@ -499,6 +762,7 @@ def enqueue_google_trends_scan(
     client_id: str,
     seeds: list[str],
     *,
+    mode: str = "keyword",
     category_code: Optional[int] = None,
     category_name: Optional[str] = None,
     location_code: Optional[int] = None,
@@ -506,13 +770,14 @@ def enqueue_google_trends_scan(
     trends_type: str = "web",
     user_id: Optional[str] = None,
 ) -> str:
-    """Enqueue a google_trends_scan async job. Returns the job id."""
+    """Enqueue a google_trends_scan async job. Returns the job id. ``mode`` is
+    'keyword' (Phase 1, seeds required) or 'category' (Phase 2, seeds derived)."""
     row = (
         get_supabase().table("async_jobs").insert({
             "job_type": "google_trends_scan",
             "entity_id": client_id,
             "payload": {
-                "client_id": client_id, "seeds": seeds,
+                "client_id": client_id, "seeds": seeds, "mode": mode,
                 "category_code": category_code, "category_name": category_name,
                 "location_code": location_code, "language_code": language_code,
                 "trends_type": trends_type, "user_id": user_id,
@@ -522,20 +787,73 @@ def enqueue_google_trends_scan(
     return row["id"]
 
 
+def enqueue_portfolio_sweep(*, user_id: Optional[str] = None) -> str:
+    """Enqueue a portfolio (agency-wide) Google Trends sweep. Returns the job id.
+    client-less (entity_id null); the digest goes to the strategy channel."""
+    row = (
+        get_supabase().table("async_jobs").insert({
+            "job_type": "google_trends_scan",
+            "payload": {"mode": "portfolio", "user_id": user_id},
+        }).execute()
+    ).data[0]
+    return row["id"]
+
+
+def enqueue_due_portfolio_trends_sweep() -> int:
+    """Weekly (shared scheduler): enqueue ONE portfolio sweep. Self-gated on
+    google_trends_enabled; deduped against an in-flight portfolio job so a
+    same-day re-tick can't double-run. Returns 1 if enqueued, else 0."""
+    if not settings.google_trends_enabled:
+        return 0
+    try:
+        pending = (
+            get_supabase().table("async_jobs").select("id, payload")
+            .eq("job_type", "google_trends_scan").in_("status", ["pending", "running"])
+            .limit(50).execute()
+        ).data or []
+    except Exception:  # noqa: BLE001 — on a read failure, err toward enqueuing
+        pending = []
+    if any((p.get("payload") or {}).get("mode") == "portfolio" for p in pending):
+        return 0
+    enqueue_portfolio_sweep()
+    logger.info("gsc_scheduler.trends_sweep_enqueued")
+    return 1
+
+
 async def run_google_trends_scan_job(job: dict) -> None:
-    """async_jobs handler for google_trends_scan."""
+    """async_jobs handler for google_trends_scan (keyword / category / portfolio)."""
     payload = job.get("payload") or {}
+    mode = payload.get("mode") or "keyword"
     supabase = get_supabase()
     try:
-        result = await run_google_trends_scan(
-            payload.get("client_id") or job.get("entity_id"),
-            payload.get("seeds") or [],
-            category_code=payload.get("category_code"),
-            category_name=payload.get("category_name"),
-            location_code=payload.get("location_code"),
-            language_code=payload.get("language_code"),
-            trends_type=payload.get("trends_type") or "web",
-        )
+        if mode == "portfolio":
+            result = await run_portfolio_trends_sweep()
+        elif mode == "local_seasonal":
+            result = await run_local_seasonal_scan(
+                payload.get("client_id") or job.get("entity_id"),
+                payload.get("seeds") or payload.get("keywords") or [],
+                location_code=payload.get("location_code"),
+                language_code=payload.get("language_code"),
+            )
+        elif mode == "category":
+            result = await run_google_trends_category_scan(
+                payload.get("client_id") or job.get("entity_id"),
+                category_code=payload.get("category_code"),
+                category_name=payload.get("category_name"),
+                location_code=payload.get("location_code"),
+                language_code=payload.get("language_code"),
+                trends_type=payload.get("trends_type") or "web",
+            )
+        else:
+            result = await run_google_trends_scan(
+                payload.get("client_id") or job.get("entity_id"),
+                payload.get("seeds") or [],
+                category_code=payload.get("category_code"),
+                category_name=payload.get("category_name"),
+                location_code=payload.get("location_code"),
+                language_code=payload.get("language_code"),
+                trends_type=payload.get("trends_type") or "web",
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job["id"]).execute()
@@ -555,27 +873,332 @@ async def run_google_trends_scan_job(job: dict) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 3 — portfolio-wide "what's rising this week": an agency sweep over the
+# union of clients' tracked keywords (no client scope, no relevance/audience gate),
+# digested to the SerMaStr strategy channel. Reuses the core with no anchor.
+# ---------------------------------------------------------------------------
+_PORTFOLIO_STORE_CAP = 500  # max qualified rows persisted per portfolio run
+
+
+def _portfolio_seed_groups() -> list[dict]:
+    """Per-client tracked-keyword seed groups for the sweep: [{client_id,
+    client_name, seeds}]. Grouped by client so each rising query is attributable
+    (explore aggregates within a chunk). Capped by config (clients × seeds)."""
+    supabase = get_supabase()
+    try:
+        kw_rows = (
+            supabase.table("tracked_keywords").select("client_id, keyword")
+            .eq("active", True).execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("google_trends.portfolio_seeds_failed", extra={"error": str(exc)})
+        return []
+    per_client_cap = max(1, settings.google_trends_portfolio_seeds_per_client)
+    by_client: dict[str, list[str]] = {}
+    seen: dict[str, set[str]] = {}
+    for r in kw_rows:
+        cid = r.get("client_id")
+        kw = r.get("keyword")
+        if not cid or not isinstance(kw, str) or not kw.strip():
+            continue
+        norm = keyword_research.normalize_keyword(kw)
+        s = seen.setdefault(cid, set())
+        if norm in s:
+            continue
+        bucket = by_client.setdefault(cid, [])
+        if len(bucket) >= per_client_cap:
+            continue
+        s.add(norm)
+        bucket.append(kw.strip())
+    if not by_client:
+        return []
+    # Cap the number of clients DETERMINISTICALLY — most tracked keywords first
+    # (biggest SEO footprint), client_id as a stable tiebreak — so a capped sweep
+    # is reproducible and prioritises the most-invested clients rather than
+    # whatever order the DB returned.
+    client_ids = sorted(
+        by_client, key=lambda c: (-len(by_client[c]), c)
+    )[: max(1, settings.google_trends_portfolio_max_clients)]
+    names: dict[str, str] = {}
+    try:
+        rows = (
+            supabase.table("clients").select("id, name").in_("id", client_ids).execute()
+        ).data or []
+        names = {r["id"]: r.get("name") for r in rows}
+    except Exception:  # noqa: BLE001 — names are cosmetic
+        pass
+    return [{"client_id": cid, "client_name": names.get(cid), "seeds": by_client[cid]}
+            for cid in client_ids]
+
+
+async def run_portfolio_trends_sweep() -> dict:
+    """Phase 3 sweep: explore each client's tracked keywords → qualify → aggregate
+    the top rising+qualified queries across the agency → persist a portfolio run
+    (client_id null, mode='portfolio') → emit a weekly trends_digest to the
+    strategy channel. Best-effort per client; raises BudgetExceeded when metered
+    out (whatever was gathered before the cap is still digested)."""
+    groups = _portfolio_seed_groups()
+    if not groups:
+        return {"rising_count": 0, "qualified_count": 0, "clients": 0, "note": "no_seeds"}
+
+    all_rows: list[dict] = []
+    total_cost = 0.0
+    metered_out = False
+    for g in groups:
+        try:
+            rows, cost = await _explore_and_qualify(
+                g["seeds"], category_code=None, location_code=None,
+                language_code="en", trends_type=settings.google_trends_default_type,
+                log_ctx={"mode": "portfolio", "client_id": g["client_id"]},
+            )
+        except BudgetExceeded:
+            metered_out = True
+            break
+        except Exception as exc:  # noqa: BLE001 — one client shouldn't kill the sweep
+            logger.warning("google_trends.portfolio_client_failed",
+                           extra={"client_id": g["client_id"], "error": str(exc)})
+            continue
+        total_cost += cost
+        for r in rows:
+            r["source_client_name"] = g.get("client_name")
+        all_rows.extend(rows)
+
+    # Aggregate: dedupe across clients by normalized query (strongest trend_score
+    # wins), keep the qualified ones, rank, cap to the digest size.
+    best: dict[str, dict] = {}
+    for r in all_rows:
+        norm = keyword_research.normalize_keyword(r["query"])
+        if not norm:
+            continue
+        cur = best.get(norm)
+        if cur is None or (r.get("trend_score") or 0) > (cur.get("trend_score") or 0):
+            best[norm] = r
+    ranked = sorted(best.values(), key=lambda x: (x.get("trend_score") or 0.0, x.get("volume") or 0), reverse=True)
+    qualified_rows = [r for r in ranked if r.get("qualified")]
+    digest_rows = qualified_rows[: max(1, settings.google_trends_portfolio_digest_size)]
+
+    # Store the top qualified rows (bounded) — an agency sweep can dedupe to
+    # thousands of rising queries across clients, and the no-demand ones aren't
+    # actionable at the portfolio level. Report the TRUE totals via rising_count.
+    stored_rows = qualified_rows[:_PORTFOLIO_STORE_CAP]
+    run_id = _persist_run(
+        None, [], stored_rows, mode="portfolio",
+        location_code=None, language_code="en",
+        trends_type=settings.google_trends_default_type,
+        cost_usd=round(total_cost, 4), qualified=len(qualified_rows),
+        rising_count=len(ranked),
+    )
+    # Emit the digest UNLESS we were budget-blocked before gathering anything — a
+    # "nothing rising" post when the sweep never actually ran would be misleading.
+    if digest_rows or not metered_out:
+        _emit_portfolio_digest(run_id, digest_rows, len(qualified_rows))
+    return {
+        "run_id": run_id,
+        "rising_count": len(ranked),
+        "qualified_count": len(qualified_rows),
+        "clients": len(groups),
+        "cost_usd": round(total_cost, 4),
+        "metered_out": metered_out,
+    }
+
+
+def build_digest_summary(rows: list[dict], total_qualified: int) -> str:
+    """The weekly trends_digest body: top rising+qualified queries, each with its
+    velocity, demand, and the client it surfaced for. Pure, deterministic."""
+    if not rows:
+        return "No qualified rising searches across the portfolio this week."
+    lines = [f"*{len(rows)}* of {total_qualified} qualified rising searches across the portfolio this week:"]
+    for r in rows:
+        vel = "Breakout" if r.get("is_breakout") else (
+            f"+{round(r['rising_value'])}%" if r.get("rising_value") else "rising")
+        vol = f"{int(r['volume']):,}/mo" if r.get("volume") else "—"
+        who = f" · {r['source_client_name']}" if r.get("source_client_name") else ""
+        lines.append(f"• *{r['query']}* — {vel} · {vol}{who}")
+    return "\n".join(lines)
+
+
+def _emit_portfolio_digest(run_id: str, rows: list[dict], total_qualified: int) -> None:
+    """Emit the weekly portfolio digest to the SerMaStr strategy channel.
+
+    kind='trends_digest' is in NEITHER the PACE nor DIRECTOR routing set, so it
+    falls through to settings.slack_default_channel (the strategy channel) — the
+    same routing strategy reviews use. client_id=None (agency-level). Best-effort."""
+    from datetime import date as _date
+    try:
+        from services import notifications
+        iso = _date.today().isocalendar()
+        notifications.emit(
+            None, "trends_digest",
+            "Google Trends — what's rising this week",
+            summary=build_digest_summary(rows, total_qualified),
+            payload={"run_id": run_id, "items": [
+                {"query": r["query"], "trend_score": r.get("trend_score"),
+                 "volume": r.get("volume"), "is_breakout": r.get("is_breakout"),
+                 "client": r.get("source_client_name")} for r in rows]},
+            dedupe_key=f"trends_digest:{iso[0]}-W{iso[1]:02d}",
+        )
+    except Exception as exc:  # noqa: BLE001 — the run persists even if delivery fails
+        logger.warning("google_trends.digest_emit_failed", extra={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 — local seasonal (metro-geo only): build a calendar seasonality
+# profile from Trends interest_over_time and feed trend_watch.demand_outlook.
+# A DIFFERENT slice of the explore response from Phases 1-3 (the graph, not the
+# rising queries) — a distinct, smaller build. Result rides the job row (no new
+# table), like backlink_lookup. Metro-only: sub-metro Ads volume returns null
+# (the LeadOff ZIP probe proved it), so the qualify volume needs metro grain.
+# ---------------------------------------------------------------------------
+_SEASONAL_MAX_KEYWORDS = 10
+
+
+def _seasonal_date_from(months: int) -> str:
+    """ISO date ``months`` before today (the interest_over_time history window)."""
+    from datetime import date as _date
+    today = _date.today()
+    total = today.year * 12 + (today.month - 1) - max(1, months)
+    y, m = divmod(total, 12)
+    return f"{y:04d}-{m + 1:02d}-01"
+
+
+async def run_local_seasonal_scan(
+    client_id: str,
+    keywords: list[str],
+    *,
+    location_code: Optional[int] = None,
+    language_code: Optional[str] = None,
+) -> dict:
+    """Phase 4: per keyword, pull the Trends interest_over_time series (metro geo)
+    → a calendar seasonality profile → feed trend_watch.demand_outlook. Returns
+    {outlook, profiles, location_code, cost_usd}. The result rides the job row.
+
+    Metro-gated: raises ValueError('location_required') without a location_code
+    (sub-metro Ads volume is null, so the qualify volume needs metro grain)."""
+    keywords = keyword_research.parse_seeds(keywords)
+    if not keywords:
+        raise ValueError("no_keywords")
+    if location_code is None:
+        location_code = _client_location(client_id)
+    if location_code is None:
+        raise ValueError("location_required")
+    language_code = language_code or "en"
+    keywords = keywords[:_SEASONAL_MAX_KEYWORDS]
+    date_from = _seasonal_date_from(settings.google_trends_seasonal_months)
+
+    # One explore per keyword (a single keyword per call so the graph is that
+    # keyword's — a multi-keyword explore returns one graph per keyword with no
+    # attribution in parse_interest_over_time), plus one overview batch.
+    reserve_budget(len(keywords) + 1)
+
+    profiles: list[dict] = []
+    total_cost = 0.0
+    for kw in keywords:
+        try:
+            body, cost = await explore_live(
+                [kw], location_code=location_code, language_code=language_code,
+                trends_type="web", date_from=date_from,
+            )
+        except Exception as exc:  # noqa: BLE001 — one dead keyword shouldn't kill the scan
+            logger.warning("google_trends.seasonal_explore_failed",
+                           extra={"client_id": client_id, "keyword": kw, "error": str(exc)})
+            continue
+        total_cost += cost
+        profile = seasonality_profile_from_series(parse_interest_over_time(body))
+        profiles.append({"keyword": kw, "profile": profile})
+
+    # Qualify for avg volume (metro grain) so demand_outlook can weight keywords.
+    overview: dict[str, dict] = {}
+    try:
+        overview, ov_cost = await dataforseo_labs.fetch_keyword_overview(
+            keywords, location_code=dataforseo_labs.labs_location_code(location_code),
+            language_code=language_code,
+        )
+        total_cost += ov_cost
+    except Exception as exc:  # noqa: BLE001 — profiles still usable without volume weighting
+        logger.warning("google_trends.seasonal_qualify_failed",
+                       extra={"client_id": client_id, "error": str(exc)})
+
+    from datetime import date as _date
+    from services import trend_watch
+    tuples = [
+        (p["keyword"],
+         (overview.get(p["keyword"]) or {}).get("volume"),
+         p["profile"])
+        for p in profiles
+    ]
+    outlook = trend_watch.demand_outlook(tuples, _date.today())
+
+    return {
+        "location_code": location_code,
+        "profiles": [
+            {"keyword": p["keyword"],
+             "index": (p["profile"] or {}).get("index"),
+             "peak_months": (p["profile"] or {}).get("peak_months"),
+             "volume": (overview.get(p["keyword"]) or {}).get("volume")}
+            for p in profiles
+        ],
+        "outlook": outlook,
+        "cost_usd": round(total_cost, 4),
+    }
+
+
+def enqueue_local_seasonal_scan(
+    client_id: str, keywords: list[str], *,
+    location_code: Optional[int] = None, language_code: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> str:
+    """Enqueue a Phase 4 local-seasonal scan (mode='local_seasonal'). Job id."""
+    row = (
+        get_supabase().table("async_jobs").insert({
+            "job_type": "google_trends_scan",
+            "entity_id": client_id,
+            "payload": {
+                "client_id": client_id, "keywords": keywords, "mode": "local_seasonal",
+                "location_code": location_code, "language_code": language_code,
+                "user_id": user_id,
+            },
+        }).execute()
+    ).data[0]
+    return row["id"]
+
+
+# ---------------------------------------------------------------------------
 # Reads (for the router).
 # ---------------------------------------------------------------------------
+_RUN_SUMMARY_COLS = (
+    "id, mode, seeds, category_code, category_name, location_code, "
+    "language_code, trends_type, rising_count, qualified_count, "
+    "cost_usd, status, created_at"
+)
+
+
 def list_runs(client_id: str, limit: int = 25) -> list[dict]:
-    """Scan-run summary rows for a client (no child keywords), newest first."""
+    """Scan-run summary rows for a client (no child keywords), newest first.
+    Covers both keyword (Phase 1) and category (Phase 2) runs — both client-scoped."""
     return (
         get_supabase().table("google_trends_runs")
-        .select("id, seeds, category_code, category_name, location_code, "
-                "language_code, trends_type, rising_count, qualified_count, "
-                "cost_usd, status, created_at")
+        .select(_RUN_SUMMARY_COLS)
         .eq("client_id", client_id).order("created_at", desc=True).limit(limit).execute()
     ).data or []
 
 
-def get_run(client_id: str, run_id: str) -> Optional[dict]:
+def list_portfolio_runs(limit: int = 25) -> list[dict]:
+    """Portfolio (agency-wide) sweep summary rows, newest first. client_id is null."""
+    return (
+        get_supabase().table("google_trends_runs")
+        .select(_RUN_SUMMARY_COLS)
+        .is_("client_id", "null").eq("mode", "portfolio")
+        .order("created_at", desc=True).limit(limit).execute()
+    ).data or []
+
+
+def get_run(client_id: Optional[str], run_id: str) -> Optional[dict]:
     """A single run + its rising-query rows (trend_score desc). None if not the
-    client's run."""
+    client's run. client_id=None fetches a portfolio run (client_id null)."""
     supabase = get_supabase()
-    runs = (
-        supabase.table("google_trends_runs").select("*")
-        .eq("id", run_id).eq("client_id", client_id).limit(1).execute()
-    ).data
+    q = supabase.table("google_trends_runs").select("*").eq("id", run_id)
+    q = q.is_("client_id", "null") if client_id is None else q.eq("client_id", client_id)
+    runs = q.limit(1).execute().data
     if not runs:
         return None
     keywords = (
