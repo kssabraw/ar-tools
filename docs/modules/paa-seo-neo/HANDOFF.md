@@ -4,7 +4,57 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — Phase 2 (prep-sheet manifest) BUILT · MERGED (PR #1120) · migration applied live
+## Status (2026-09-15) — Phase 3 (Service PAA Campaign + automated gate) BUILT · draft PR open
+
+> **Phase 3 — the Service PAA Campaign object + the automated single-variable
+> gate** is built to the PRD §12 build order (owner greenlit 2026-09-15; the four
+> §12.2 forks locked below) on branch `claude/paa-seo-neo-phase-3-vjbh78`. What
+> shipped:
+> - **Locked forks (owner):** (1) autonomy = **hybrid propose-confirm** (the two
+>   paid/content steps — the geo-grid scan + a drill round — are human-confirmed;
+>   everything else auto-advances); (2) campaign **1:1 with one paa_set**, drilling
+>   adds `drill_level` items to the SAME set (Phase-2 manifest reused unchanged);
+>   (3) the service keyword is **auto-added to the Maps tracker** on campaign start;
+>   (4) ships behind **`paa_campaign_enabled` (default off — dark)**. Smaller
+>   defaults: maintenance re-scan **piggybacks scheduled scans** ($0); drill via
+>   **PAA re-pull** (no LLM); **HALT = critical notification + best-effort
+>   strategist escalation**.
+> - **Data model** (migration `20260915170000_paa_campaigns.sql`, **applied live +
+>   verified**): `paa_campaigns`
+>   (1:1 `set_id` unique — state machine, drill_level, settle/next-action clocks,
+>   baseline/current rank, last_scan_id, halted_reason, history log) +
+>   `paa_items.drill_level`. **No new async-job type** (the sweep is inline; the
+>   scan reuses `maps_scan`). RLS service-role.
+> - **Pure core** `services/paa_campaign.py` (unit-tested `tests/test_paa_campaign.py`):
+>   the gate evaluator (`evaluate_gate` → moved/drill/halt/no_data), cadence math,
+>   the transition log, the next-action descriptor (confirm flags = the hybrid
+>   posture), drill seeding, confidence-tagged copy.
+> - **I/O** `services/paa_campaign_service.py` (`tests/test_paa_campaign_service.py`):
+>   create (auto-add the Maps keyword + capture baseline), start (reuse v1
+>   `create_posts`), the inline sweep `run_paa_campaign_sync()` (settle→scan_ready,
+>   gate read over `maps_scan_results`, moved→maintenance + manifest refresh, HALT
+>   notify + strategist escalation, rinse piggyback), confirm-scan (reuse
+>   `enqueue_maps_scan`), propose/confirm-drill (reuse `pull_paa`).
+> - **Scheduler** `_safe("paa_campaigns", run_paa_campaign_sync)` in the daily
+>   block (self-gated). **API** `routers/paa.py` + `models/paa.py` (campaign CRUD,
+>   start, confirm-scan, drill-preview/drill, reset — all 503 when the flag is off,
+>   content steps freeze-gated). **Frontend** a **Campaign** panel on the PAA-set
+>   detail (`pages/PaaSets.tsx`): state chip + next-action + the two confirm
+>   buttons + the drill preview + a HALT banner + the timeline; renders nothing
+>   when the flag is off. Config `paa_campaign_*`.
+> - **Guardrails held (§9):** no authority execution (moved→handoff only builds the
+>   Phase-2 manifest); no audio/video generator; the master reference is not wired
+>   into `sop_library`; confidence tags in the UI; HALT is a STOP.
+> - **Honest divergence (PRD §12.5):** `response_episodes` is alert-keyed/decline-
+>   oriented, so the campaign carries its OWN settle/rinse clock (borrowing its
+>   cadence constants) rather than force-fitting it; maintenance declines still
+>   route through the existing episode machinery.
+>
+> **Activation (owner, when ready):** the migration is already applied live — just
+> set `PAA_CAMPAIGN_ENABLED=true` on PLATFORM. **Not built (deferred):** full
+> per-campaign autopilot (a future flag); auto-creating the next service's campaign.
+
+## Prior status (2026-09-15) — Phase 2 (prep-sheet manifest) BUILT · MERGED (PR #1120) · migration applied live
 
 > **Phase 2 — the prep-sheet manifest + link-layer track/cost/QA (the "seam")** is
 > built to the PRD §11 build order and **merged to `main`** (PR
@@ -121,12 +171,16 @@
 
 (Item 5 — the `keyword_research_serp` per-run PAA cap/cost — stays a build-time confirm.)
 
-## Next action — Phase 2 SHIPPED (MERGED, PR #1120); the next build is Phase 3 (needs its own owner greenlight)
+## Next action — Phase 3 BUILT (draft PR open); land it, then activate when the owner is ready
 
-Phase 2 (the prep-sheet manifest) is built to PRD §11 and **merged to `main`**
-(PR #1120, squash `813b323`; migration applied live). **A merged phase is not a
-greenlight for the next** — Phase 3 is its own scoped build the owner greenlights
-separately (PRD §6). Do NOT start Phase 3 unprompted.
+Phase 3 (the Service PAA Campaign + the automated single-variable gate) is built to
+PRD §12 (owner greenlit + forks locked 2026-09-15) on branch
+`claude/paa-seo-neo-phase-3-vjbh78` — a **draft PR**. Land the PR (CI green), then
+the owner activates with `PAA_CAMPAIGN_ENABLED=true` on PLATFORM (the migration is
+already applied live). It ships **dark** (default off), so merging changes nothing until the flag
+flips. **The module's phased scope is now complete** — any further work (full
+per-campaign autopilot; auto-creating the next-service campaign) is a new, separately
+greenlit enhancement, not a continuation.
 
 **Phase 3 — the Service PAA Campaign object + the automated single-variable gate.**
 The full orchestration: target service → PAA set → blog runs → GBP posts →

@@ -2671,3 +2671,41 @@ export interface PaaManifest {
   cost_summary?: PaaCostSummary
   qa_summary?: PaaQaSummary
 }
+
+// ── Phase 3 — the Service PAA Campaign + the automated single-variable gate ──
+export interface PaaCampaignRow {
+  id: string
+  set_id: string
+  client_id: string
+  service_keyword: string
+  location: string | null
+  state:
+    | 'draft' | 'content' | 'settling' | 'scan_ready' | 'scanning'
+    | 'evaluating' | 'moved' | 'drill_ready' | 'halted' | 'maintenance'
+  drill_level: number
+  settle_until: string | null
+  next_action_at: string | null
+  baseline_rank: number | null
+  current_rank: number | null
+  halted_reason: string | null
+  history: { at: string; from: string; to: string; note: string | null }[]
+  created_at: string
+}
+export interface PaaCampaignNextAction {
+  action: string
+  label: string
+  confirm: boolean
+  when: string | null
+}
+export interface PaaCampaignView {
+  exists: boolean
+  enabled?: boolean
+  set_id?: string
+  campaign?: PaaCampaignRow
+  next_action?: PaaCampaignNextAction
+}
+export interface PaaDrillPreview {
+  seeds: string[]
+  candidates: PaaCandidate[]
+  drill_level: number
+}

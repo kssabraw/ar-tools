@@ -422,7 +422,11 @@ async def create_posts(set_id: str, user_id: str, acknowledge: bool = False) -> 
     client = _client(set_row["client_id"])
     client_id = set_row["client_id"]
     service_page_url = set_row.get("service_page_url")
-    chosen = [i for i in set_row["items"] if i.get("chosen")]
+    # Only items that don't already have a post — so a re-invoke (e.g. a Phase-3
+    # drill round adds items to an existing set, then calls this again) creates
+    # posts for the NEW items only and never duplicates a GBP draft for one that
+    # was already created. First run: no item has a run_id, so all are created.
+    chosen = [i for i in set_row["items"] if i.get("chosen") and not i.get("run_id")]
 
     run_ids: list[str] = []
     gbp_created = 0

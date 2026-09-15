@@ -360,6 +360,23 @@ class Settings(BaseSettings):
     # Response-episode tracking: the SOPs' verify loop (2-week rechecks, 6-week
     # escalation) over open rank/maps drop responses.
     episode_tracking_enabled: bool = True
+    # PAA → SEO Neo Phase 3: the Service PAA Campaign state machine + the automated
+    # single-variable gate (content → settle → scan → moved/drill/HALT → rinse).
+    # Ships DARK (default False) — it adds scheduled automation + a paid geo-grid
+    # scan step on top of v1's content half, so it gets a kill switch. When off,
+    # the scheduler sweep no-ops and the campaign routes 503. Autonomy posture is
+    # hybrid propose-confirm: the two paid/content steps are human-confirmed (PRD
+    # §12.2). Guardrail (PRD §9): the campaign orchestrates + tracks + hands off the
+    # manifest — it NEVER executes the SEO Neo authority layer.
+    paa_campaign_enabled: bool = False
+    # The load-bearing settle wait before a single-variable scan (reference §5.2).
+    paa_campaign_settle_days: int = 7
+    # The rinse/maintenance cadence after a moved campaign (reference §5.2 —
+    # "6 weeks – 3 months"; 6 weeks is the conservative default).
+    paa_campaign_rinse_days: int = 42
+    # Drill deeper ≤ this many levels (reference §5.3); at the cap with no movement
+    # the gate branches to HALT (stop; re-check on-page/entity).
+    paa_campaign_drill_cap: int = 4
     # Chronic-emergency escalation (services/goal_escalation.py): a campaign goal
     # that stays critically behind (behind/overdue) for weeks stops being heard —
     # the weekly strategist review degrades to a "0 proposals / N findings"
