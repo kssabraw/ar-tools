@@ -128,16 +128,26 @@ than adding a data source.
   `rank_tracking_location_code`, and persists them on
   `keyword_research_runs.serp_intel`. v1 promotes those PAA questions from a
   by-product into a **named, service-anchored, selectable set**.
-- **Shape (proposed):** a persisted `paa_set` per (client, service, location) —
-  the service keyword ("metal roof repair," not "roofing" — reference §4), the geo,
-  and an ordered list of chosen PAA strings each with: the exact-match question,
-  its DataForSEO volume/CPC (reused market enrichment), a `chosen`/`candidate`
-  flag, and a `slug` (for the cannibalization guard, §4.3). **[No migration in
-  this doc]** — the data model is proposed here and locked in the build step.
-- **UI:** a "PAA Set" surface hung off the client workspace (or as a tab within
-  Keyword Research, TBD in build) — pick service → pull PAA (reuses the metered
-  SERP call) → select ~4 → save the set. Deliberately thin: it is an organizer over
-  an existing paid call, not a new pipeline.
+- **Shape (LOCKED — own tables, §8.2):** two net-new tables (one migration at
+  build):
+  - **`paa_sets`** — per (client, service keyword, location): the service keyword
+    ("metal roof repair," not "roofing" — reference §4), the geo, a
+    **`geo_mode`** flag (**default `geo` — geo-modified — with `naked` as a
+    per-set toggle**, §8.4), and an optional **`service_page_url`** (the "link
+    high" target, §4.2 / §8.3).
+  - **`paa_items`** — one row per PAA string in a set: the exact-match question,
+    its DataForSEO volume/CPC (reused market enrichment), a `chosen`/`candidate`
+    flag, a `slug` (for the cannibalization guard, §4.3), and a nullable
+    `run_id`/`post_url` filled once a post is created.
+- **UI (LOCKED — §8.1):** a **new card in the client workspace "Content Creation"
+  section** (`frontend/src/pages/ClientWorkspace.tsx`, the `<Section
+  title="Content Creation">` block — alongside Blog Writer, Local SEO, GBP Posts,
+  Content Syndication), at its own route (e.g. `/clients/:id/paa-sets`). It is a
+  **content-creation entry point**, not a Keyword Research tab: pick service →
+  pull PAA (reuses the metered `keyword_research_serp` SERP call under the hood) →
+  select ~4 → save the set → create the posts (§4.2, step 5 of §10). Deliberately
+  thin: an organizer over an existing paid call that kicks off existing writers,
+  not a new pipeline or a parallel research UI.
 
 ### 4.2 The three writing rules (net-new *constraints* over existing writers)
 
@@ -147,7 +157,7 @@ The rules are enforced where content is generated, reusing existing seams:
 |---|---|---|
 | One question → one post | Blog Writer run per PAA; the PAA is the run's seed keyword | Structural — one `run` per selected PAA |
 | Exact-match everywhere | `writer_notes` seam (verified: `run_dispatch.create_run_and_snapshot(writer_notes=…)` → `orchestrator` `user_notes`) carries "title/an H2 must be this exact PAA string"; the same string seeds the GBP post + syndication title | `writer_notes` (soft, LLM) + a deterministic title/H2 check (net-new, small) |
-| Link HIGH to the service page | `writer_notes` names the service-page URL as the primary internal link; a deterministic post-generation check guarantees the link is present, modeled on Local SEO's `local_seo_matrix.ensure_internal_links` / `check_internal_links` (verified) | Deterministic guarantee (reuse the `ensure_internal_links` pattern), not just a prompt |
+| Link HIGH to the service page | `writer_notes` names the service-page URL as the primary internal link; a deterministic post-generation check guarantees the link is present, modeled on Local SEO's `local_seo_matrix.ensure_internal_links` / `check_internal_links` (verified). **URL resolution (LOCKED, §8.3): explicit `paa_sets.service_page_url` → auto-matched live page via `site_page_index` → prompt the user** (never silently guess) | Deterministic guarantee (reuse the `ensure_internal_links` pattern), not just a prompt |
 
 > **Why deterministic checks, not just prompts:** the reference is explicit that
 > exact-match and the service-page link are the *entity-resolution mechanism*, not
@@ -241,21 +251,29 @@ Every row below was checked against the current tree (2026-09-15):
 | Prep-sheet manifest (the URL hand-off) | **Not modeled** | The clearest net-new object — Phase 2 |
 | Podcast / video / influencer production | **No suite equivalent** | Off-platform, human-proofed — checklist rows only, Phase 2 |
 
-## 8. Open items / decisions to lock before build
+## 8. Decisions locked before build (owner, 2026-09-15)
 
-- **PAA Set home:** a new lightweight surface vs. a tab inside Keyword Research
-  (which already owns the PAA pull). Leaning: a tab/output of Keyword Research to
-  avoid a parallel research UI. *(Owner call at build.)*
-- **Service-page URL source for the "link high" rule:** the client's own live
-  service page (via `site_page_index`), a Local SEO page, or a Website-Builder page —
-  need a resolution order (probably: explicit field → matched live page → prompt).
-- **Naked vs geo PAA** — the reference flags this as an unresolved contradiction
-  (§9). v1 default = geo-modified (matches the suite's local-SEO grain), but surface
-  both and let the user choose; do not hardcode.
-- **Data model specifics** (table names, whether `paa_set` is its own table or rides
-  Keyword Research runs) — proposed in §4.1, locked in the migration at build.
-- **The `keyword_research_serp` per-run PAA cap / cost** — one billed SERP call per
-  seed already; confirm the PAA-set flow doesn't multiply that.
+The four design forks below are **settled** — reflected in §4.1 / §4.2. Item 5
+stays a build-time confirmation (not a design fork).
+
+1. **PAA Set home → a new card in the workspace "Content Creation" section** (LOCKED).
+   Not a Keyword Research tab and not a standalone module — it lives beside the other
+   content generators (`ClientWorkspace.tsx`, `<Section title="Content Creation">`),
+   at its own route (e.g. `/clients/:id/paa-sets`), and reuses `keyword_research_serp`
+   for the PAA pull under the hood. It is a content-creation entry point (pull →
+   select → create posts), per §4.1.
+2. **Data model → own tables `paa_sets` + `paa_items`** (LOCKED). First-class and
+   sluggable (for the cannibalization guard), independent of any research run. One
+   migration at build. Fields per §4.1.
+3. **Service-page URL resolution → explicit `service_page_url` → auto-matched live
+   page via `site_page_index` → prompt the user** (LOCKED). Human intent wins,
+   auto-match is the fallback, never a silent guess. Per §4.2.
+4. **Naked vs geo PAA → geo-modified default, `naked` as a per-set toggle** (LOCKED;
+   `paa_sets.geo_mode`). Matches the suite's local-SEO grain; the contested point
+   (reference §9) is surfaced, not hardcoded away.
+5. **The `keyword_research_serp` per-run PAA cap / cost** *(build-time confirm, not a
+   design fork):* one billed SERP call per seed already; confirm the PAA-set flow
+   doesn't multiply that before wiring the pull.
 
 ## 9. Non-goals (v1 and permanent guardrails)
 

@@ -50,11 +50,21 @@
 3. **Audio/video syndication → manual / checklist-tracked.** Never suite-generated.
 4. **Plan delivery → the PRD doc** (`docs/modules/paa-seo-neo-prd-v1_0.md`).
 
+## PRD §8 design forks — LOCKED (owner, 2026-09-15)
+
+1. PAA Set home → **a new card in the workspace "Content Creation" section** (its own
+   route; reuses `keyword_research_serp` for the pull) — not a Keyword Research tab.
+2. Data model → **own tables `paa_sets` + `paa_items`** (one migration at build).
+3. "Link high" service-page URL → **explicit field → `site_page_index` match → prompt.**
+4. Naked vs geo PAA → **geo-modified default, `naked` per-set toggle** (`geo_mode`).
+
+(Item 5 — the `keyword_research_serp` per-run PAA cap/cost — stays a build-time confirm.)
+
 ## Next action
 
-- **Owner reviews `docs/modules/paa-seo-neo-prd-v1_0.md`** and greenlights (or
-  redirects) the v1 build order (§10). Do **not** start implementation code, a
-  migration, or agent wiring until that approval — this session is plan-only.
+- **Owner greenlights the v1 build order** (PRD §10). All four §8 design forks are now
+  locked, so the build can start on approval. Do **not** start implementation code, a
+  migration, or agent wiring until that greenlight — this session is still plan-only.
 
 ## Gotchas (specific to this initiative)
 
