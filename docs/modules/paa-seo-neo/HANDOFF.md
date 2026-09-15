@@ -4,17 +4,20 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — ANALYSIS COMPLETE · NO PLAN / NO CODE YET
+## Status (2026-09-15) — SCOPE SETTLED · PLAN WRITTEN · STILL NO CODE
 
 - **The whole external corpus has been read and analyzed** (except SOP 07c, Video —
   not provided). A complete "how it all works together" synthesis exists.
 - **The master reference is committed:** `docs/reference/paa-seo-neo-master-reference.md`
   — a single **de-branded** synthesis (all source/person/group names removed;
   confidence tags + gray-hat caveat preserved). In **PR [#1110](https://github.com/kssabraw/ar-tools/pull/1110)** (draft, **unmerged**).
-- **These two module docs (`CLAUDE.md` + `HANDOFF.md`) are the only scaffolding.**
-- There is **no PRD, no plan, no schema, no code, no config, no migration** yet.
-- Nothing is wired into any agent. The master reference is in `docs/reference/`
-  (reference-only; not read by `sop_library`).
+- **The four open decisions are settled** (owner, 2026-09-15) — see below.
+- **The plan is written:** `docs/modules/paa-seo-neo-prd-v1_0.md` — reuse-verified
+  against current code (§7), v1 = the content half, link layer track/cost/QA only,
+  audio/video checklist-only, confidence tags carried.
+- There is still **no schema, no code, no config, no migration** — the PRD is a plan,
+  not a build. Nothing is wired into any agent (`sop_library` still never reads the
+  reference).
 
 ## What exists vs. what's missing
 
@@ -36,28 +39,22 @@
 - The **prep-sheet template** — referenced everywhere as the hand-off artifact,
   never provided as a file.
 
-## Open decisions (owner input needed BEFORE the plan)
+## Open decisions — SETTLED (owner, 2026-09-15)
 
-1. **v1 scope.** Full **"Service PAA Campaign" object** (the net-new orchestration:
-   target service → PAA set → blog runs → GBP posts → syndication → prep-sheet
-   manifest → gate → link-layer task bundle → re-scan), **or** start smaller with
-   the content half (PAA-set as a first-class research output + enforce the
-   link-high / exact-match / one-question-one-post rules as writer constraints)?
-   *Recommendation: prove the content half first — it mirrors the methodology's own
-   "content before authority" discipline.*
-2. **Off-platform boundary (load-bearing).** Confirm the suite **tracks/costs/QAs
-   but never executes** link blasts (GMBB Blast, RD 100, SEO Neo, Omega, PBN).
-3. **Audio/video syndication.** Confirm it stays **manual / checklist-tracked**, not
-   suite-generated.
-4. **Plan delivery format.** A PRD in `docs/modules/` (repo doc) vs. laid out in
-   chat first for reaction.
+1. **v1 scope → the content half first.** PAA set as a first-class research output +
+   enforce the link-high / exact-match / one-question-one-post rules as writer
+   constraints. (Full "Service PAA Campaign" object is deferred to Phase 3.)
+2. **Off-platform boundary → track / cost / QA / manifest only.** The suite **never
+   executes** link blasts (GMBB Blast, RD 100, SEO Neo, Omega, PBN). Confirmed as a
+   permanent guardrail.
+3. **Audio/video syndication → manual / checklist-tracked.** Never suite-generated.
+4. **Plan delivery → the PRD doc** (`docs/modules/paa-seo-neo-prd-v1_0.md`).
 
 ## Next action
 
-- **Write the plan** for the owner-chosen v1 scope (see decision #1). Likely a
-  `docs/modules/paa-seo-neo-prd-v1_0.md` following the repo's PRD conventions, plus
-  a build-plan section. Do **not** start until scope + the off-platform boundary are
-  confirmed.
+- **Owner reviews `docs/modules/paa-seo-neo-prd-v1_0.md`** and greenlights (or
+  redirects) the v1 build order (§10). Do **not** start implementation code, a
+  migration, or agent wiring until that approval — this session is plan-only.
 
 ## Gotchas (specific to this initiative)
 
@@ -78,5 +75,6 @@
 - [x] Full corpus read + analyzed (minus SOP 07c).
 - [x] De-branded master reference committed (`docs/reference/…`, PR #1110).
 - [x] Module scaffolding (`CLAUDE.md` + `HANDOFF.md`) created.
-- [ ] Owner settles the four open decisions above.
-- [ ] Plan / PRD written for the chosen v1 scope.
+- [x] Owner settles the four open decisions above.
+- [x] Plan / PRD written for the chosen v1 scope (`docs/modules/paa-seo-neo-prd-v1_0.md`).
+- [ ] Owner reviews + greenlights the v1 build order (§10). No code until then.
