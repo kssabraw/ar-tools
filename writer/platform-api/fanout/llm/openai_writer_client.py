@@ -131,6 +131,15 @@ class OpenAIWriterLLM:
                     },
                 }],
                 "tool_choice": {"type": "function", "function": {"name": tool_name}},
+                # gpt-5.6-luna rejects function tools combined with a non-"none"
+                # reasoning_effort on /v1/chat/completions (400:
+                # "Function tools with reasoning_effort are not supported ...
+                # set reasoning_effort to 'none'."). The GPT-5 family applies a
+                # server-side reasoning_effort default, so a forced tool call
+                # must set it to "none" explicitly. Harmless for prose quality
+                # here — every tool call is a structured extraction, not a
+                # reasoning task.
+                "reasoning_effort": "none",
             },
             purpose=purpose,
         )
