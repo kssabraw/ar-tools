@@ -4,7 +4,7 @@ One place resolves which LLM provider writes a client's DRAFT prose across all
 four content writers (blog + service/location in pipeline-api; Local SEO +
 Ecommerce in nlp-api):
 
-    per-run/request override  ??  client default  ??  "anthropic"
+    per-run/request override  ??  client default  ??  "openai"
 
 Only a PROVIDER string is resolved here ("anthropic" | "openai"); the concrete
 OpenAI model id lives in each generating service's own config
@@ -22,7 +22,10 @@ from __future__ import annotations
 from typing import Optional
 
 CONTENT_WRITER_PROVIDERS = ("anthropic", "openai")
-DEFAULT_CONTENT_WRITER_PROVIDER = "anthropic"
+# The agency standardized on OpenAI (gpt-5.6-luna) for draft prose (owner request
+# 2026-09-15), so a piece of content with no override and no client-level default
+# falls back to OpenAI. Mirrors clients.content_writer_provider's DB default.
+DEFAULT_CONTENT_WRITER_PROVIDER = "openai"
 
 
 def normalize_provider(value: Optional[str]) -> Optional[str]:
@@ -38,8 +41,9 @@ def resolve_content_writer_provider(
 ) -> str:
     """Effective provider for a piece of content: the per-run/request override if
     valid, else the client's ``content_writer_provider`` default, else
-    "anthropic". Never raises; an unknown value at any level is ignored (falls
-    through), so a bad column can't route content to a nonexistent provider."""
+    ``DEFAULT_CONTENT_WRITER_PROVIDER`` ("openai"). Never raises; an unknown value
+    at any level is ignored (falls through), so a bad column can't route content to
+    a nonexistent provider."""
     chosen = normalize_provider(override)
     if chosen:
         return chosen

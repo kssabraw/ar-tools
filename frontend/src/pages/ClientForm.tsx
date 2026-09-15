@@ -97,7 +97,7 @@ const empty: FormData = {
   logo_url: '', gsc_property: '', business_location: '', target_cities: '', targeted_services: '', client_notes: '', gbp_place_id: null, gbp: null,
   ps_local_landing: '', ps_service: '', ps_location: '', ps_blog_post: '', ps_product: '', ps_solution: '',
   ps_mode: emptyPsRecord('url'), ps_guidelines: emptyPsRecord(''), ps_filename: emptyPsRecord(''),
-  retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', content_writer_provider: 'anthropic', strategist_weekday: '',
+  retainer_monthly: '', is_sab: false, illustrate_content: false, client_type: 'local', content_writer_provider: 'openai', strategist_weekday: '',
   slack_channel_id: '',
   everhour_project_id: '',
 }
@@ -308,7 +308,7 @@ export function ClientForm() {
         is_sab: existing.is_sab ?? false,
         illustrate_content: existing.illustrate_content ?? false,
         client_type: existing.client_type ?? 'local',
-        content_writer_provider: existing.content_writer_provider ?? 'anthropic',
+        content_writer_provider: existing.content_writer_provider ?? 'openai',
         strategist_weekday: existing.strategist_weekday != null ? String(existing.strategist_weekday) : '',
         slack_channel_id: existing.slack_channel_id ?? '',
         everhour_project_id: existing.everhour_project_id ?? '',
@@ -739,7 +739,7 @@ export function ClientForm() {
             <div>
               <ContentWriterSelect
                 value={form.content_writer_provider}
-                onChange={(v) => setForm(f => ({ ...f, content_writer_provider: v ?? 'anthropic' }))}
+                onChange={(v) => setForm(f => ({ ...f, content_writer_provider: v ?? 'openai' }))}
                 help="Default model for this client's content drafts (blog, service, Local SEO, Ecommerce). A run or page can override it. Quality checks always run on Claude."
               />
             </div>

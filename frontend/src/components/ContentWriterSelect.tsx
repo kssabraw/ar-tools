@@ -2,8 +2,8 @@ import type { CSSProperties } from 'react'
 
 // A compact "Content writing model" selector — chooses which LLM writes the DRAFT
 // prose for the content writers (blog, service/location, Local SEO, Ecommerce,
-// Fanout mass posts). "Sonnet" (Claude Sonnet) is the default; "Luna" routes the
-// draft to OpenAI (gpt-5.6-luna). The post-draft quality gates (voice scoring,
+// Fanout mass posts). "Luna" (OpenAI gpt-5.6-luna) is the default; "Sonnet" routes
+// the draft to Claude Sonnet. The post-draft quality gates (voice scoring,
 // ICP/banned-term/QA judges) always stay on Claude, so grading is unaffected.
 //
 // The user-facing labels are MODEL names (Sonnet / Luna); the stored value is the
