@@ -1114,7 +1114,8 @@ def clients_due_opportunity_sweep(active: set[str], interval_days: int) -> set[s
     quiet = {
         r["id"]
         for r in (
-            supabase.table("clients").select("id").eq("archived", False).execute()
+            supabase.table("clients").select("id")
+            .eq("archived", False).neq("kind", "prospect").execute()
         ).data or []
     } - active
     if not quiet:
@@ -1281,6 +1282,7 @@ def clients_due_monthly_plan_review() -> set[str]:
             supabase.table("clients")
             .select("id, retainer_monthly")
             .eq("archived", False)
+            .neq("kind", "prospect")
             .execute()
         ).data or []
     except Exception as exc:

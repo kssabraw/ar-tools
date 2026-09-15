@@ -16,6 +16,7 @@ import { Runs } from './pages/Runs'
 import { RunDetail } from './pages/RunDetail'
 import { Clients } from './pages/Clients'
 import { ClientForm } from './pages/ClientForm'
+import { ProspectForm } from './pages/ProspectForm'
 import { ClientWorkspace } from './pages/ClientWorkspace'
 import { ClientContent } from './pages/ClientContent'
 import { BrandVoice } from './pages/BrandVoice'
@@ -115,6 +116,8 @@ export default function App() {
                       <Route path="/runs/:id" element={<RunDetail />} />
                       <Route path="/clients" element={<Clients />} />
                       <Route path="/clients/new" element={<StaffRoute><ClientForm /></StaffRoute>} />
+                      <Route path="/prospects/new" element={<StaffRoute><ProspectForm /></StaffRoute>} />
+                      <Route path="/prospects/:id/edit" element={<StaffRoute><ProspectForm /></StaffRoute>} />
                       <Route path="/clients/:id" element={<ClientWorkspace />} />
                       <Route path="/clients/:id/brand-voice" element={<BrandVoice />} />
                       <Route path="/clients/:id/icp" element={<Icp />} />

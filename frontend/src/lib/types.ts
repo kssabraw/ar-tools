@@ -34,6 +34,9 @@ export interface ClientListItem {
   archived: boolean
   created_at: string
   logo_url: string | null
+  // 'client' | 'prospect' | 'owned_property'. Prospects are lightweight
+  // prospecting records segregated from real clients on the dashboard.
+  kind?: 'client' | 'prospect' | 'owned_property'
 }
 
 export interface GbpReview {

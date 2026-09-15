@@ -364,6 +364,7 @@ def enqueue_due_freeze_checks() -> int:
             supabase.table("clients")
             .select("id, website_url")
             .eq("archived", False)
+            .neq("kind", "prospect")  # prospects run no recurring checks
             .not_.is_("website_url", "null")
             .execute()
         ).data or []

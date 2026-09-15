@@ -624,7 +624,10 @@ def auto_track_client_domains() -> int:
     per client. Returns the count newly auto-tracked."""
     if not settings.backlink_auto_track_client_domain:
         return 0
-    clients = (get_supabase().table("clients").select("id, website_url").execute()).data or []
+    clients = (
+        get_supabase().table("clients").select("id, website_url")
+        .neq("kind", "prospect").execute()
+    ).data or []
     created = 0
     for c in clients:
         if not (c.get("website_url") or "").strip():

@@ -66,7 +66,8 @@ def build_portfolio_context() -> dict:
     """
     supabase = get_supabase()
     clients = (
-        supabase.table("clients").select("id, name, website_url").order("name").execute()
+        supabase.table("clients").select("id, name, website_url")
+        .neq("kind", "prospect").order("name").execute()
     ).data or []
 
     def _counts(table: str, filters) -> dict[str, int]:

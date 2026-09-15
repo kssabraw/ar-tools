@@ -431,7 +431,7 @@ def run(today: Optional[date] = None) -> dict:
     supabase = get_supabase()
     clients = (
         supabase.table("clients").select("id, name, business_location")
-        .eq("archived", False).order("name").execute()
+        .eq("archived", False).neq("kind", "prospect").order("name").execute()
     ).data or []
     rows = [_client_row(supabase, c, today) for c in clients]
     report = build_report(today, rows)

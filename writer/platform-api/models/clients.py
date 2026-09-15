@@ -16,6 +16,10 @@ class ClientListItem(BaseModel):
     archived: bool
     created_at: str
     logo_url: Optional[str] = None
+    # 'client' (the default) | 'prospect' (a lightweight prospecting record) |
+    # 'owned_property' (agency site, filtered out of the client list). Lets the
+    # dashboard segregate prospects from real clients.
+    kind: str = "client"
 
 
 class WebsiteAnalysis(BaseModel):
@@ -145,6 +149,8 @@ class ClientDetail(BaseModel):
     archived: bool
     created_at: str
     updated_at: str
+    # 'client' | 'prospect' | 'owned_property' (see ClientListItem.kind).
+    kind: str = "client"
     google_drive_folder_id: Optional[str] = None
     # Per-content-type Drive folders (content_type slug → folder ID). The
     # type-specific folder wins; google_drive_folder_id is the fallback.
@@ -275,6 +281,10 @@ class ClientDetail(BaseModel):
 
 class ClientCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
+    # 'client' (a full client) | 'prospect' (a lightweight prospecting record:
+    # skips the auto brand-voice/ICP/website/GSC/backlink machinery so staff can
+    # run one-off reports without building a full profile). Convertible later.
+    kind: Literal["client", "prospect"] = "client"
     # Empty = no website yet (a pre-client market pick from LeadOff). Every
     # website consumer already truthiness-guards, and setting a real URL later
     # via update re-enqueues the scrape.

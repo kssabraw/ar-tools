@@ -283,6 +283,7 @@ def enqueue_due_site_inventory() -> int:
             supabase.table("clients")
             .select("id, website_url")
             .eq("archived", False)
+            .neq("kind", "prospect")
             .execute()
         ).data or []
         fetched = {

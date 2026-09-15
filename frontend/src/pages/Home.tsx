@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { api } from '../lib/api'
 import { useAuth } from '../context/AuthContext'
 import type { ClientListItem, ClientRankingHealth, RankingHealthResponse, RankingTrend, VisibilityTrend, UnreadCountsResponse } from '../lib/types'
-import { Plus, Globe, Bell } from 'lucide-react'
+import { Plus, Globe, Bell, Radar } from 'lucide-react'
 
 function initials(name: string): string {
   return name.trim().split(/\s+/).slice(0, 2).map(w => w[0]?.toUpperCase() ?? '').join('')
@@ -95,6 +95,12 @@ export function Home() {
     queryFn: () => api.get<ClientListItem[]>('/clients'),
   })
 
+  // Prospects — lightweight prospecting records, kept out of the client grid.
+  const { data: prospects = [] } = useQuery<ClientListItem[]>({
+    queryKey: ['prospects'],
+    queryFn: () => api.get<ClientListItem[]>('/clients?kind=prospect'),
+  })
+
   // Per-client average-ranking trend (organic + maps, latest vs first) — one
   // call for all tiles.
   const { data: rankingResp } = useQuery<RankingHealthResponse>({
@@ -164,6 +170,43 @@ export function Home() {
       {!isLoading && clients.length === 0 && !isStaff && (
         <div style={{ color: '#64748b', fontSize: 14, marginTop: 8 }}>
           No clients yet. Ask an admin to add one.
+        </div>
+      )}
+
+      {/* Prospects — lightweight records for one-off prospecting reports. Shown
+          for staff (who can add them) or whenever any exist. */}
+      {(isStaff || prospects.length > 0) && (
+        <div style={{ marginTop: 40 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+            <Radar size={16} color="#6366f1" />
+            <h2 style={{ fontSize: 15, fontWeight: 700, color: '#0f172a', margin: 0 }}>Prospects</h2>
+          </div>
+          <p style={{ fontSize: 13, color: '#94a3b8', margin: '0 0 16px' }}>
+            Run one-off Organic, Maps, AI-Visibility & Competitive reports without building a full client profile.
+          </p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 16 }}>
+            {prospects.map(p => (
+              <Link key={p.id} to={`/clients/${p.id}`} style={tileStyle}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div style={{ ...avatarStyle, background: '#eef2ff' }}><Radar size={20} /></div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 600, fontSize: 15, color: '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {p.name}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 12, color: '#94a3b8', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {p.website_url ? (<><Globe size={11} /> {p.website_url}</>) : 'No website'}
+                    </div>
+                  </div>
+                </div>
+              </Link>
+            ))}
+            {isStaff && (
+              <Link to="/prospects/new" style={{ ...tileStyle, ...addTileStyle }}>
+                <Plus size={20} />
+                <span style={{ fontWeight: 600, fontSize: 14 }}>Add Prospect</span>
+              </Link>
+            )}
+          </div>
         </div>
       )}
     </div>
