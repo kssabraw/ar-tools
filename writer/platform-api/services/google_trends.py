@@ -664,6 +664,43 @@ def derive_category_seeds(topic_research: dict, cap: int) -> list[str]:
     return out
 
 
+_HEAD_TERM_MAX_TOKENS = 3
+
+
+def head_term_seeds(seeds: list[str], cap: int) -> list[str]:
+    """Reduce each derived category-scan seed to its head term (the first 1-3
+    significant tokens) so Google Trends explore can actually return rising
+    related queries for it. Pure.
+
+    Google Trends only carries rising/related queries for reasonably-popular HEAD
+    terms; the seeds a seedless category scan derives (site-topic slugs, intent-
+    fanout phrases, ICP intents) are often long-tail full phrases ("does semax
+    need to be refrigerated", "ajp endocrinology and metabolism impact factor")
+    that return ZERO rising queries even with the single-keyword-per-explore fix.
+    ``keyword_research.tokenize`` already drops interrogatives + stopwords, so the
+    first few remaining tokens are the core term. Deduped by normalized form,
+    capped, input order preserved. Best-effort: a seed with no significant tokens
+    left (all filler) falls through as-is rather than being dropped.
+
+    Applied to DERIVED category-scan seeds only — never to user-entered Phase-1
+    seeds, which are the relevance anchor and stay verbatim."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for seed in seeds or []:
+        if not isinstance(seed, str) or not seed.strip():
+            continue
+        tokens = keyword_research.tokenize(seed)
+        head = " ".join(tokens[:_HEAD_TERM_MAX_TOKENS]) if tokens else seed.strip()
+        norm = keyword_research.normalize_keyword(head)
+        if not norm or norm in seen:
+            continue
+        seen.add(norm)
+        out.append(head)
+        if len(out) >= max(1, cap):
+            break
+    return out
+
+
 async def run_google_trends_category_scan(
     client_id: str,
     *,
@@ -712,7 +749,13 @@ async def run_google_trends_category_scan(
             {"site": {"topics": site_topics}}, settings.google_trends_category_seed_cap)
     if not seeds:
         raise ValueError("no_anchor")
+    # Reduce the derived seeds to head terms before exploring — Trends only
+    # carries rising related queries for reasonably-popular head terms, and the
+    # derived seeds are often long-tail full phrases that return zero rising
+    # queries (the §10 follow-up). The rich relevance anchors keep the full
+    # topic_research anchor set; only the EXPLORE seeds are shortened.
     anchors = topic_research.get("anchors") or list(seeds)
+    seeds = head_term_seeds(seeds, settings.google_trends_category_seed_cap)
 
     rows, total_cost = await _explore_and_qualify(
         seeds, category_code=category_code, location_code=location_code,
@@ -878,6 +921,7 @@ async def run_google_trends_scan_job(job: dict) -> None:
                 payload.get("seeds") or payload.get("keywords") or [],
                 location_code=payload.get("location_code"),
                 language_code=payload.get("language_code"),
+                source_run_id=job.get("id"),
             )
         elif mode == "category":
             result = await run_google_trends_category_scan(
@@ -1105,12 +1149,49 @@ def _seasonal_date_from(months: int) -> str:
     return f"{y:04d}-{m + 1:02d}-01"
 
 
+def _store_seasonality(
+    client_id: str, location_code: int, profiles: list[dict],
+    source_run_id: Optional[str] = None,
+) -> None:
+    """Upsert each non-empty per-keyword Trends seasonality profile into
+    google_trends_seasonality (keyed by client × keyword × location) so
+    trend_watch.build_demand_outlook can read it on the Forecast card. Best-effort
+    — a store failure never fails the scan. A None/empty profile (thin history) is
+    skipped, so an existing stored profile is preserved rather than nulled."""
+    rows: list[dict] = []
+    for p in profiles:
+        prof = (p or {}).get("profile")
+        index = (prof or {}).get("index")
+        if not index:
+            continue
+        rows.append({
+            "client_id": client_id,
+            "keyword": p["keyword"],
+            "location_code": location_code,
+            "month_index": {str(m): v for m, v in index.items()},
+            "peak_months": prof.get("peak_months") or [],
+            "low_months": prof.get("low_months") or [],
+            "source_run_id": source_run_id,
+            "updated_at": "now()",
+        })
+    if not rows:
+        return
+    try:
+        get_supabase().table("google_trends_seasonality").upsert(
+            rows, on_conflict="client_id,keyword,location_code"
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+        logger.warning("google_trends.seasonality_store_failed",
+                       extra={"client_id": client_id, "error": str(exc)})
+
+
 async def run_local_seasonal_scan(
     client_id: str,
     keywords: list[str],
     *,
     location_code: Optional[int] = None,
     language_code: Optional[str] = None,
+    source_run_id: Optional[str] = None,
 ) -> dict:
     """Phase 4: per keyword, pull the Trends interest_over_time series (metro geo)
     → a calendar seasonality profile → feed trend_watch.demand_outlook. Returns
@@ -1149,6 +1230,10 @@ async def run_local_seasonal_scan(
         total_cost += cost
         profile = seasonality_profile_from_series(parse_interest_over_time(body))
         profiles.append({"keyword": kw, "profile": profile})
+
+    # Persist the per-keyword Trends seasonality so the Forecast card picks it up
+    # (build_demand_outlook prefers it over the Ads-volume history). Best-effort.
+    _store_seasonality(client_id, location_code, profiles, source_run_id)
 
     # Qualify for avg volume (metro grain) so demand_outlook can weight keywords.
     overview: dict[str, dict] = {}

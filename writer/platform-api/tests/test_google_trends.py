@@ -187,6 +187,50 @@ def test_derive_category_seeds_falls_back_to_icp_intents():
     assert g.derive_category_seeds(tr2, cap=5) == ["roof restoration", "storm damage repair"]
 
 
+# --- head_term_seeds (broader head terms for the category scan) ---------------
+def test_head_term_seeds_shortens_long_tail_phrases():
+    seeds = [
+        "does semax need to be refrigerated",          # question/filler dropped
+        "ajp endocrinology and metabolism impact factor",
+        "collagen peptides",                            # already a head term
+    ]
+    out = g.head_term_seeds(seeds, cap=10)
+    # tokenize drops interrogatives ("does") + stopwords ("to", "and"); the first
+    # up-to-3 significant tokens are kept as the head term.
+    assert out[0] == "semax need be"
+    assert out[1] == "ajp endocrinology metabolism"
+    assert out[2] == "collagen peptides"
+
+
+def test_head_term_seeds_drops_question_words():
+    # A pure-interrogative lead ("what is") never survives into the head term.
+    assert g.head_term_seeds(["what is retatrutide"], cap=5) == ["retatrutide"]
+    assert g.head_term_seeds(["how does semaglutide work"], cap=5) == ["semaglutide work"]
+
+
+def test_head_term_seeds_dedupes_after_shortening():
+    # Distinct long-tail phrases sharing the same first-3 head tokens collapse to
+    # one head term → deduped (fewer redundant explores).
+    out = g.head_term_seeds(
+        ["collagen peptides powder", "collagen peptides powder for skin", "marine collagen"],
+        cap=10,
+    )
+    assert out == ["collagen peptides powder", "marine collagen"]
+
+
+def test_head_term_seeds_caps():
+    seeds = [f"term{n} extra words here" for n in range(10)]
+    out = g.head_term_seeds(seeds, cap=3)
+    assert len(out) == 3
+    assert out == ["term0 extra words", "term1 extra words", "term2 extra words"]
+
+
+def test_head_term_seeds_falls_through_when_all_filler():
+    # A seed with no significant tokens left (all stopwords/interrogatives) falls
+    # through as-is rather than being dropped (best-effort).
+    assert g.head_term_seeds(["how to", "  ", 3, "retatrutide"], cap=5) == ["how to", "retatrutide"]
+
+
 # --- Phase 3: build_digest_summary (deterministic weekly body) ----------------
 def test_build_digest_summary_lines_and_attribution():
     rows = [
