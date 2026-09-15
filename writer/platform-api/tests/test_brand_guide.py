@@ -292,6 +292,48 @@ class TestEnqueueAndJob:
         assert fake_db.tables["async_jobs"][0]["status"] == "complete"
 
 
+# ---------------------------------------------------------------------------
+# Phase 1.5 vibe read — wiring into the row write (the read itself is tested in
+# test_brand_guide_vibe.py; here we lock that generate_brand_guide folds a
+# returned vibe_read into the final update + records the note either way).
+# ---------------------------------------------------------------------------
+class TestVibeWiring:
+    async def _run(self, guide_row, monkeypatch, vibe_result):
+        async def _cap(url, role):
+            return {"url": url, "role": role, "notes": [], "html_len": 10,
+                    "has_screenshot": True, "_html": "<html></html>",
+                    "_pixels": [((26, 43, 109), 800)], "_png": b"PNG"}
+
+        monkeypatch.setattr(G, "_capture_page", _cap)
+        monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
+        monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
+
+        async def _vibe(captured, *, homepage_png=None):
+            # the generate flow reuses the in-memory homepage bytes (no bucket round-trip)
+            assert homepage_png == b"PNG"
+            return vibe_result
+
+        monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
+        return await G.generate_brand_guide("g-1", "c-1", "https://acme.example")
+
+    async def test_vibe_read_folded_into_row(self, guide_row, monkeypatch):
+        vibe = {"aesthetic_descriptors": [{"descriptor": "clinical", "evidence": "black canvas"}]}
+        result = await self._run(guide_row, monkeypatch, (vibe, "vibe read captured"))
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"
+        assert row["vibe_read"] == vibe
+        assert row["captured"]["vibe_note"] == "vibe read captured"
+        assert result["vibe"] is True
+
+    async def test_skipped_vibe_omits_field_but_notes(self, guide_row, monkeypatch):
+        result = await self._run(guide_row, monkeypatch, (None, "vibe read skipped — disabled"))
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"
+        assert "vibe_read" not in row                     # never written as null
+        assert row["captured"]["vibe_note"] == "vibe read skipped — disabled"
+        assert result["vibe"] is False
+
+
 class TestPixelCounts:
     def test_quantizes_a_two_colour_png(self):
         Image = pytest.importorskip("PIL.Image")

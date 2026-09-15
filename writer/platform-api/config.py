@@ -771,6 +771,18 @@ class Settings(BaseSettings):
     # is always captured and is the sole palette/fonts/type source; these extras
     # add logo candidates + imagery variety only. Operator-overridable per run.
     brand_guide_max_pages: int = 2
+    # Phase 1.5 — the aesthetic/"vibe" read (PRD §4.3 / §12 Q4). ONE bounded Claude
+    # vision call over the HOMEPAGE screenshot the Phase-1 capture already stored
+    # (read back from the brand-guides bucket — no re-pay of DataForSEO; the +2
+    # pages are NOT sent). Sonnet (one tier above the QA visual-check's Haiku)
+    # because the read is interpretive and feeds the whole Aesthetic section +
+    # coherence check. `brand_guide_vibe_enabled` is the skip guard — turn the vibe
+    # read off while capture keeps running; the read also requires the module-wide
+    # `brand_guide_enabled` (the "nothing spends until on" gate). Best-effort: a
+    # failed/disabled/degraded read omits `vibe_read` and the guide still finalizes.
+    brand_guide_vibe_enabled: bool = True
+    brand_guide_vibe_model: str = "claude-sonnet-4-6"
+    brand_guide_vibe_max_tokens: int = 1500
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may

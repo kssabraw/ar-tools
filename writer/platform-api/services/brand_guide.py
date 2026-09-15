@@ -9,12 +9,13 @@ existing ScrapeOwl (`render_js`) + DataForSEO `page_screenshot` production paths
 run the deterministic census, and store `captured` + `visual_census` on a
 versioned `brand_guides` row.
 
-Phase 1 does capture → extract → store census ONLY. There is no synthesis (Phase
-2), no aesthetic/vibe read (Phase 1.5), and no PDF render (Phase 3) here — so the
-`brand_guide_generate` job finalizes `done` after storing the census, and the
-regulated `awaiting_signoff` gate (which gates *synthesis* output for
-`content_compliance_mode != 'off'` clients) does not engage yet (nothing
-synthesized to sign off).
+Phase 1 does capture → extract → store census; Phase 1.5 adds the aesthetic/vibe
+read (`brand_guide_vibe`, one Sonnet-vision call over the stored homepage
+screenshot). There is still no synthesis (Phase 2) and no PDF render (Phase 3)
+here — so the `brand_guide_generate` job finalizes `done` after storing the
+census + best-effort `vibe_read`, and the regulated `awaiting_signoff` gate (which
+gates *synthesis* output for `content_compliance_mode != 'off'` clients) does not
+engage yet (nothing synthesized to sign off).
 
 Everything is gated on `settings.brand_guide_enabled` and best-effort: a dead
 page, a ScrapeOwl bot-block (401), a missing screenshot, or a client with no site
@@ -239,6 +240,9 @@ async def generate_brand_guide(
     )
 
     # 4. Store screenshots + assemble the `captured` record.
+    #    Hold the homepage bytes before the loop pops them, so the vibe read (step
+    #    5) reuses the in-memory capture instead of a redundant bucket round-trip.
+    homepage_png = home.get("_png")
     captured_pages = []
     for rec in [home, *extra]:
         png = rec.pop("_png", None)
@@ -254,18 +258,34 @@ async def generate_brand_guide(
             "dom_digest": _dom_digest(html),
             "notes": rec.get("notes", []),
         })
+    captured = {"pages": captured_pages, "page_count": len(captured_pages)}
 
-    _set(guide_id, {
+    # 5. Aesthetic / vibe read (Phase 1.5) — ONE Sonnet-vision call over the stored
+    #    HOMEPAGE screenshot (read back from the bucket, no DataForSEO re-pay; the
+    #    +2 pages are not sent). Best-effort: a disabled/degraded/failed read omits
+    #    `vibe_read` and the guide still finalizes `done` (§4.3 / §5.4).
+    from services import brand_guide_vibe
+
+    vibe_read, vibe_note = await brand_guide_vibe.run_vibe_read_for_capture(
+        captured, homepage_png=homepage_png
+    )
+    captured["vibe_note"] = vibe_note
+
+    fields: dict = {
         "status": "done",
         "source_url": source_url,
-        "captured": {"pages": captured_pages, "page_count": len(captured_pages)},
+        "captured": captured,
         "visual_census": census.as_dict(),
         "generated_at": "now()",
-    })
+    }
+    if vibe_read is not None:
+        fields["vibe_read"] = vibe_read
+    _set(guide_id, fields)
     logger.info(
         "brand_guide.capture_complete",
         extra={"guide_id": guide_id, "client_id": client_id, "pages": len(captured_pages),
-               "palette_source": census.palette_source, "colors": len(census.colors)},
+               "palette_source": census.palette_source, "colors": len(census.colors),
+               "vibe": bool(vibe_read)},
     )
     return {
         "guide_id": guide_id,
@@ -274,6 +294,8 @@ async def generate_brand_guide(
         "colors": len(census.colors),
         "fonts": len(census.fonts),
         "logo_candidates": len(census.logo_candidates),
+        "vibe": bool(vibe_read),
+        "vibe_note": vibe_note,
     }
 
 
