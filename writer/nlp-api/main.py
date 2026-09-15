@@ -217,6 +217,11 @@ SCORE_MODEL = os.environ.get("SCORE_MODEL", "claude-sonnet-4-6")
 _MODEL_PRICING = {
     "claude-sonnet-4-6":          {"input": 3.00, "output": 15.00},
     "claude-haiku-4-5-20251001":  {"input": 1.00, "output": 5.00},  # current Haiku 4.5 list price
+    # OpenAI content-writer prose ("Luna"). Confirmed against OpenAI's published
+    # API pricing as of 2026-09-14 ($0.20/1M in, $1.20/1M out; cached input $0.02
+    # not modelled). Exact-match key (must equal CONTENT_WRITER_OPENAI_MODEL);
+    # without it an openai-written page fell back to the Sonnet rate ($3/$15).
+    "gpt-5.6-luna":               {"input": 0.20, "output": 1.20},
 }
 
 
