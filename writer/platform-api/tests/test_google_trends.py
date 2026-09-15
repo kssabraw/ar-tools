@@ -1,0 +1,156 @@
+"""Unit tests for the Google Trends Discovery module's pure logic (no I/O).
+
+The DataForSEO explore response shape is verified against docs but NOT a live
+call (the build sandbox is egress-blocked); these fixtures encode the documented
+shape. scripts/verify_google_trends.py confirms it live from Railway before the
+flag flips — if the live shape differs, update parse_rising_queries AND these
+fixtures together.
+"""
+
+from services import google_trends as g
+
+
+# --- parse_rising_value -------------------------------------------------------
+def test_parse_rising_value_breakout():
+    assert g.parse_rising_value("Breakout") == (g._BREAKOUT_PCT, True)
+    assert g.parse_rising_value("breakout") == (g._BREAKOUT_PCT, True)
+
+
+def test_parse_rising_value_percent_forms():
+    assert g.parse_rising_value("+250%") == (250.0, False)
+    assert g.parse_rising_value("1,200") == (1200.0, False)
+    assert g.parse_rising_value(80) == (80.0, False)
+    assert g.parse_rising_value(80.5) == (80.5, False)
+
+
+def test_parse_rising_value_junk_and_negative():
+    assert g.parse_rising_value("n/a") == (0.0, False)
+    assert g.parse_rising_value(None) == (0.0, False)
+    assert g.parse_rising_value(-40) == (0.0, False)  # clamped
+
+
+# --- velocity_factor (monotonic, bounded) -------------------------------------
+def test_velocity_factor_monotonic_and_anchored():
+    assert g.velocity_factor(0) == 1.0
+    assert g.velocity_factor(0) < g.velocity_factor(100) < g.velocity_factor(5000)
+    # bounded — a breakout doesn't swamp the demand signal it multiplies
+    assert g.velocity_factor(g._BREAKOUT_PCT) < 3.0
+
+
+# --- trend_score (reuses the existing opportunity model) ----------------------
+def test_trend_score_zero_when_no_commercial_demand():
+    # opportunity_score is value(volume*cpc) × ease × intent → 0 when cpc is 0,
+    # so a high-velocity but commercially-empty query scores 0 (by design).
+    assert g.trend_score(g._BREAKOUT_PCT, 100000, 0.0, 10, "commercial") == 0.0
+    assert g.trend_score(500, None, None, None, None) == 0.0
+
+
+def test_trend_score_rises_with_velocity_and_demand():
+    low = g.trend_score(100, 1000, 2.0, 20, "commercial")
+    high = g.trend_score(5000, 1000, 2.0, 20, "commercial")
+    assert high > low > 0
+    # more demand → higher score at equal velocity
+    assert g.trend_score(500, 5000, 2.0, 20, "commercial") > g.trend_score(500, 1000, 2.0, 20, "commercial")
+
+
+# --- parse_rising_queries (defensive) -----------------------------------------
+def _explore_body(rising, top=None):
+    data = {"rising": rising}
+    if top is not None:
+        data["top"] = top
+    return {"tasks": [{"result": [{"items": [
+        {"type": "google_trends_graph", "data": {}},
+        {"type": "google_trends_queries_list", "data": data},
+    ]}]}]}
+
+
+def test_parse_rising_queries_extracts_rising_only_by_default():
+    body = _explore_body(
+        rising=[{"query": "bpc 157 dosage", "value": "Breakout"},
+                {"query": "tb500 stack", "value": 300}],
+        top=[{"query": "peptides", "value": 100}],
+    )
+    out = g.parse_rising_queries(body)
+    queries = [r["query"] for r in out]
+    assert queries == ["bpc 157 dosage", "tb500 stack"]  # top excluded by default
+    assert out[0]["is_breakout"] is True
+    assert out[0]["rising_value"] == g._BREAKOUT_PCT
+    assert out[1]["rising_value"] == 300.0
+    assert all(r["bucket"] == "rising" for r in out)
+
+
+def test_parse_rising_queries_include_top():
+    body = _explore_body(rising=[{"query": "a", "value": 10}], top=[{"query": "b", "value": 5}])
+    out = g.parse_rising_queries(body, include_top=True)
+    assert {r["query"] for r in out} == {"a", "b"}
+    assert next(r for r in out if r["query"] == "b")["bucket"] == "top"
+
+
+def test_parse_rising_queries_dedupes_normalized():
+    body = _explore_body(rising=[{"query": "BPC 157", "value": 100},
+                                 {"query": "bpc  157", "value": 200}])
+    out = g.parse_rising_queries(body)
+    assert len(out) == 1  # normalized dedupe (case + whitespace)
+
+
+def test_parse_rising_queries_defensive_on_junk():
+    assert g.parse_rising_queries({}) == []
+    assert g.parse_rising_queries({"tasks": None}) == []
+    assert g.parse_rising_queries({"tasks": [{"result": [{"items": [
+        {"type": "google_trends_queries_list", "data": {"rising": [
+            {"value": 100},            # no query
+            {"query": "", "value": 1}, # empty query
+            "notadict",
+        ]}},
+    ]}]}]}) == []
+
+
+# --- build_trend_rows ---------------------------------------------------------
+def test_build_trend_rows_qualified_flag_and_sort():
+    rising = [
+        {"query": "cheap widget", "bucket": "rising", "rising_value": 5000, "is_breakout": True},
+        {"query": "premium widget kit", "bucket": "rising", "rising_value": 300, "is_breakout": False},
+        {"query": "no demand term", "bucket": "rising", "rising_value": 800, "is_breakout": False},
+    ]
+    overview = {
+        "cheap widget": {"volume": 200, "cpc_usd": 0.0, "keyword_difficulty": 10, "search_intent": "commercial"},
+        "premium widget kit": {"volume": 500, "cpc_usd": 3.0, "keyword_difficulty": 25, "search_intent": "transactional"},
+        # "no demand term" absent → unqualified
+    }
+    rows = g.build_trend_rows(rising, overview)
+    by_q = {r["query"]: r for r in rows}
+    assert by_q["premium widget kit"]["qualified"] is True
+    assert by_q["cheap widget"]["qualified"] is True        # has volume even though cpc 0
+    assert by_q["no demand term"]["qualified"] is False     # no overview row
+    # premium (real cpc) outranks cheap (cpc 0 → score 0) outranks no-demand
+    assert rows[0]["query"] == "premium widget kit"
+    # sorted by trend_score desc then volume
+    scores = [r["trend_score"] or 0.0 for r in rows]
+    assert scores == sorted(scores, reverse=True)
+
+
+def test_build_trend_rows_empty():
+    assert g.build_trend_rows([], {}) == []
+
+
+# --- parse_categories (nested) ------------------------------------------------
+def test_parse_categories_flattens_tree():
+    body = {"tasks": [{"result": [{"items": [
+        {"category_code": 0, "category_name": "All categories", "items": [
+            {"category_code": 3, "category_name": "Arts & Entertainment", "category_code_parent": 0},
+            {"category_code": 5, "category_name": "Computers", "category_code_parent": 0, "items": [
+                {"category_code": 30, "category_name": "Software", "category_code_parent": 5},
+            ]},
+        ]},
+    ]}]}]}
+    cats = g.parse_categories(body)
+    codes = {c["category_code"] for c in cats}
+    assert {0, 3, 5, 30} <= codes
+    software = next(c for c in cats if c["category_code"] == 30)
+    assert software["category_name"] == "Software"
+    assert software["parent_code"] == 5
+
+
+def test_parse_categories_defensive():
+    assert g.parse_categories({}) == []
+    assert g.parse_categories({"tasks": [{"result": None}]}) == []

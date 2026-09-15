@@ -1430,6 +1430,21 @@ class Settings(BaseSettings):
     keyword_topic_sop_char_budget: int = 16000         # SOP grounding block size
     keyword_topic_context_char_budget: int = 12000     # client-position JSON size
 
+    # Google Trends Discovery (services/google_trends.py): pull RISING related
+    # queries from Google Trends (via DataForSEO keywords_data/google_trends/explore),
+    # qualify each with the volume/CPC data the suite already buys, score by velocity
+    # × the existing opportunity model, and persist a run. Phase 1 = ecommerce,
+    # keyword-anchored. Ships DARK — flip google_trends_enabled only AFTER running
+    # scripts/verify_google_trends.py from Railway PLATFORM (the sandbox is egress-
+    # blocked from api.dataforseo.com, so the live response shape can't be confirmed
+    # at build time). Budget is its own daily paid-call meter (google_trends_usage),
+    # conservative until the real DataForSEO ceiling is known.
+    google_trends_enabled: bool = False
+    google_trends_daily_call_budget: int = 100         # paid explore+overview calls/day
+    google_trends_default_type: str = "web"            # web | news | youtube | images | froogle
+    google_trends_max_seeds: int = 5                   # explore per-task keyword cap
+    google_trends_drop_no_demand: bool = False         # keep unqualified rows (flagged) for inspection
+
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner
     # than the competitor median; distinct topics competitors cover the client lacks).

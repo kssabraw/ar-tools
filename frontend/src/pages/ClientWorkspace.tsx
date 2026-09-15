@@ -457,6 +457,13 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/domain-intel` : undefined}
           cta="Open"
         />
+        <ActionCard
+          icon={<TrendingUp size={22} />}
+          label="Google Trends Discovery"
+          description="Find rising searches related to a seed before competitors do — pulled from Google Trends and qualified with real volume & CPC, so you only chase trends with a market. Then send a winner straight to a draft."
+          to={id ? `/clients/${id}/google-trends` : undefined}
+          cta="Discover"
+        />
       </Section>
 
       {/* ── Website Builder ─────────────────────────────────────────── */}

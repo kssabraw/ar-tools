@@ -1,7 +1,9 @@
 # Google Trends Discovery — module plan v1.0
 
-**Status:** proposed (not built). Draft for owner review.
-**Author:** drafted 2026-09-14.
+**Status:** Shared core + Phase 1 (ecommerce) **BUILT 2026-09-15**, ships **dark** behind `google_trends_enabled` (code default False). Phases 2–4 remain. Corrected against the adversarial review (the `item_types`/sandbox-reachability/category-count fixes below are now decisions in the code, not open risks).
+**Author:** drafted 2026-09-14; built + corrected 2026-09-15.
+
+> **Build note (what shipped in the first PR).** Migration `20260915120000_google_trends.sql` (applied live: `google_trends_runs` / `google_trends_keywords` / `google_trends_usage` + the fail-closed `reserve_google_trends_calls` RPC + `async_jobs` CHECK += `google_trends_scan`). `services/google_trends.py` (wrapper + pure parsers/scoring + budget + scan job). `routers/google_trends.py` (`/clients/{id}/google-trends` scan/runs/estimate/jobs + `/google-trends/categories`). Config `google_trends_*`. `scripts/verify_google_trends.py` (the Railway smoke-test). Frontend `pages/GoogleTrends.tsx` + a "Google Trends Discovery" workspace card + route. Pure helpers unit-tested (`tests/test_google_trends.py`, 14). **Before flipping the flag on: run `scripts/verify_google_trends.py` from Railway PLATFORM** — the sandbox cannot reach `api.dataforseo.com`, so the live response shape is unconfirmed.
 **One-liner:** a demand-discovery front door that pulls *rising* queries from Google Trends (via DataForSEO), qualifies them with the volume/CPC data we already buy, and routes the survivors into the research → strategy → draft flow the suite already runs.
 
 > **Read this first.** This is an **input source**, not a new pipeline. Everything downstream of "here is a rising query" already exists (Keyword Research, Topic Research, the Strategist, "Write this post", the blog Writer, the seasonal-demand watcher). The whole build is *one shared core* + *four thin surfaces* that reuse those modules. If you find yourself building a second scorer, clusterer, or content generator, stop — you're rebuilding something that already ships.
@@ -54,10 +56,10 @@ So "all four" is **the shared core + progressively cheaper surfaces**, not four 
   - `category_code` — the "hundreds of categories" the tweet references (DataForSEO ships the Google Trends category taxonomy; we vendor it as a static map, see §5).
   - `location_name` / `location_code` — geo scope (defaults to the client's rank-tracking location, mirroring the Keyword Research location default).
   - `date_from` / `date_to` or `time_range` — recency window (default: trailing 90 days, so "rising" means rising-recently).
-  - `type` — `web` (default) | `news` | `youtube` | `froogle` (shopping) | `images`.
-  - `item_types` — request `google_trends_queries_list` for the rising/top related queries specifically.
+  - `type` — `web` (default) | `news` | `youtube` | `froogle` (shopping) | `images`. (The `froogle` literal for shopping is documented-convention but unconfirmed live — verify with the Railway smoke-test.)
+  - **Do NOT send `item_types`.** The documented `item_types` param is **rejected live** with task error `40501 Invalid Field: 'item_types'` (confirmed via GitHub `superdesigndev/treg#493` during the adversarial review). `google_trends_queries_list` is returned in the DEFAULT response, so the parser reads it from there. The wrapper never sends `item_types`.
 
-> **⚠️ Verify at build time, not from this doc.** DataForSEO's exact request/response JSON for the Trends family must be confirmed against a live call before the parser is written (the same discipline the Everhour plan used — endpoint shapes pulled from the vendor's own spec, never guessed). The sandbox can reach `api.dataforseo.com`; make one real `explore/live` call with a known category, save the response to `scratchpad/`, and write `parse_*` against *that*. Auth mirrors `dataforseo_labs._auth_header` (Basic auth from `DATAFORSEO_LOGIN`/`DATAFORSEO_PASSWORD`, already set on `PLATFORM`). `_post` copies `dataforseo_labs._post` (retry + jittered backoff verbatim).
+> **⚠️ Verify against a LIVE call — from Railway, not the sandbox.** The build sandbox is **egress-blocked** from `api.dataforseo.com` (a 403 CONNECT tunnel, confirmed during the review), so the live response shape could NOT be confirmed at build time. `scripts/verify_google_trends.py` makes one real `explore/live` + one `categories` call and prints the shape; **run it from the Railway PLATFORM service** (which holds the creds and has egress) before flipping `google_trends_enabled` on. If the live shape differs from `parse_rising_queries`'s fixtures, update the parser + `tests/test_google_trends.py` together. Auth mirrors `dataforseo_labs._auth_header`; `_post` copies `dataforseo_labs._post` (retry + jittered backoff verbatim).
 
 **Cost note:** Trends `explore/live` is billed per task. A single category sweep across many categories is where cost accumulates — hence the budget meter (§4) and the per-scan category cap.
 
@@ -91,7 +93,7 @@ Mirrors the `keyword_research` module's proven shape one-for-one:
 
 ## 5. Category taxonomy
 
-Google Trends categories are a fixed ~1,400-node tree (`category_code`). Vendor it as a static JSON (`writer/platform-api/data/google_trends_categories.json`) fetched once from DataForSEO's `categories` endpoint at build time, **not** re-fetched per scan (it doesn't change). Expose the top ~2 levels in the UI dropdown; the leaf codes ride through to the API. Sync-guard: a small test asserting the JSON parses to the expected shape (a hand-maintained vendored file is the drift risk — same discipline as the SOP/module-card vendoring).
+Google Trends categories are a fixed `category_code` tree (root "All categories" = 0). DataForSEO exposes a **free** categories endpoint (`POST /v3/keywords_data/google_trends/categories`, confirmed real + $0 in the review), so rather than vendor a static JSON we **fetch it live and cache it per process** (`google_trends.fetch_categories`, best-effort — an empty list on failure, and the scan form falls back to a free-text category code). The exact node count is unknown (the "~1,400" figure in an earlier draft was unattributed and has been dropped); the smoke-test prints the real tree. The leaf codes ride through to the API as `category_code`.
 
 ---
 
@@ -106,8 +108,10 @@ Nearly free once Phase 1 exists. Same category scan, routed to **Topic Research*
 ### Phase 3 — Portfolio-wide scanner
 An agency-level "what's rising this week" scan (category sweep, no client scope) → a deterministic weekly digest through the **notifications service** (`kind="trends_digest"`, `client_id=None`), surfaced by DORA / SerMaStr. Reuses the core with no client anchor and skips the client relevance/audience gate. Rides the shared `gsc_scheduler` weekly block (self-gated on `google_trends_enabled`), like every other scheduled scan. **No new infra.**
 
-### Phase 4 — Local seasonal (narrowest, last)
-Geo-scoped, keyword-anchored Trends (a client's own service terms) feeding the seasonal-demand signal we **already** have in `trend_watch.py` (which today derives seasonality from DataForSEO `monthly_searches` history only). Google Trends' finer-grained recent rising signal becomes a *second, corroborating* input to `demand_outlook` — an enrichment of an existing surface (the Forecast page's "Seasonal demand outlook" card), not a new screen. Deliberately last: most local demand is stable, so this is the least load-bearing of the four.
+### Phase 4 — Local seasonal (narrowest, last — re-scoped after the review)
+Geo-scoped Trends feeding the seasonal-demand signal we **already** have in `trend_watch.py`. **Two corrections from the adversarial review, both to respect before building this:**
+1. **It is NOT "the same engine" as Phases 1–3.** `trend_watch.demand_outlook` consumes a *calendar-month seasonality profile* (a monthly `index` dict from 12-month history), not the *rising queries* the §1 engine produces. To corroborate it you need Trends' **`interest_over_time`** series (a different slice of the explore response) run through a new seasonality-profile builder — a different downstream contract. So Phase 4 is a distinct, smaller build, not a thin reroute; treat it as Phase 5/"later," or cut it.
+2. **Local geo is where the data is thinnest.** The §3 qualify gate needs DataForSEO Ads volume, which the suite's own **LeadOff ZIP-demand probe** (`docs/modules/leadoff-gbp-placement-plan-v1_0.md`, dropped 2026-08-26) measured returns `null` at ZIP granularity, and Trends itself is sparse below metro. Scope Phase 4 to **metro-level geo only** (where volume resolves), or gate it on the same feasibility that probe failed. Most local demand is stable anyway — the least load-bearing of the four.
 
 ---
 
@@ -151,18 +155,20 @@ Geo-scoped, keyword-anchored Trends (a client's own service terms) feeding the s
 
 ## 10. Rough build order (checklist)
 
-- [ ] Live `explore/live` call → save response → confirm JSON shape (§2, §8.2)
-- [ ] `services/google_trends.py` wrapper + pure parsers + pure scoring (`tests/test_google_trends.py`)
-- [ ] Vendored category taxonomy JSON + sync-guard test (§5)
-- [ ] Migration: `google_trends_runs` + `google_trends_keywords` + `google_trends_usage` + `reserve_google_trends_calls` RPC + `async_jobs` CHECK += `google_trends_scan` (apply live)
-- [ ] `google_trends_scan` async job + `job_worker` dispatch + budget meter
-- [ ] `routers/google_trends.py` (scan / runs / categories / estimate)
-- [ ] Qualify gate wired to `keyword_market` + relevance + audience (§3)
-- [ ] **Phase 1** frontend panel on `pages/KeywordResearch.tsx` (ecommerce) — ships the loop
+- [x] `services/google_trends.py` wrapper + pure parsers + pure scoring (`tests/test_google_trends.py`, 14 passing)
+- [x] Migration: `google_trends_runs` + `google_trends_keywords` + `google_trends_usage` + `reserve_google_trends_calls` RPC + `async_jobs` CHECK += `google_trends_scan` (**applied live**)
+- [x] `google_trends_scan` async job + `job_worker` dispatch + fail-closed budget meter
+- [x] `routers/google_trends.py` (scan / runs / estimate / jobs + free `/google-trends/categories`)
+- [x] Qualify gate wired to `dataforseo_labs.fetch_keyword_overview` (volume/CPC — the non-negotiable gate; §3)
+- [x] **Phase 1** frontend `pages/GoogleTrends.tsx` + workspace card + route (ecommerce, keyword-anchored) — dedicated page rather than a KeywordResearch panel (lower regression risk on that large file; the "Write this post" reuse is the next follow-up)
+- [x] `google_trends_enabled` flag + `google_trends_*` config block (ships dark, code default False)
+- [x] `scripts/verify_google_trends.py` (the Railway live smoke-test, §2)
+- [ ] **BEFORE FLAG ON:** run `scripts/verify_google_trends.py` from Railway PLATFORM → confirm the `google_trends_queries_list` shape; reconcile parser/fixtures if it differs (§2, §8.2)
+- [ ] Follow-up: "Write this post" CTA from a qualified row (Phase 1.1)
+- [ ] Follow-up: relevance/audience gate for a future seedless category scan (Phase 2 needs an anchor source — a seed-anchored Phase 1 scan doesn't)
 - [ ] Phase 2 route to Topic Research
 - [ ] Phase 3 portfolio weekly digest on `gsc_scheduler` + notifications
-- [ ] Phase 4 `trend_watch` seasonal enrichment
-- [ ] `google_trends_enabled` flag + config block (ships dark, code default False)
+- [ ] Phase 4 `trend_watch` seasonal enrichment (re-scoped — see Phase 4 above: `interest_over_time`, metro-geo only)
 
 ---
 

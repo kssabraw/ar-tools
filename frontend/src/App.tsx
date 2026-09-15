@@ -37,6 +37,7 @@ import { Competitors } from './pages/Competitors'
 import { DomainIntel } from './pages/DomainIntel'
 import { CoverageAudit } from './pages/CoverageAudit'
 import { KeywordResearch } from './pages/KeywordResearch'
+import { GoogleTrends } from './pages/GoogleTrends'
 import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
 import { Guides } from './pages/Guides'
@@ -142,6 +143,7 @@ export default function App() {
                       <Route path="/clients/:id/domain-intel" element={<DomainIntel />} />
                       <Route path="/clients/:id/coverage-audit" element={<CoverageAudit />} />
                       <Route path="/clients/:id/keyword-research" element={<KeywordResearch />} />
+                      <Route path="/clients/:id/google-trends" element={<GoogleTrends />} />
                       <Route path="/clients/:id/forecast" element={<Forecast />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />

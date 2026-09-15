@@ -26,6 +26,7 @@ from routers.competitors import router as competitors_router
 from routers.coverage_audit import router as coverage_audit_router
 from routers.domain_intel import router as domain_intel_router
 from routers.keyword_research import router as keyword_research_router
+from routers.google_trends import router as google_trends_router
 from routers.content_schedule import router as content_schedule_router
 from routers.dashboard import router as dashboard_router
 from routers.deliverables import router as deliverables_router
@@ -369,6 +370,7 @@ app.include_router(everhour_router)
 app.include_router(feedback_router)
 app.include_router(wheelhouse_router)
 app.include_router(keyword_research_router)
+app.include_router(google_trends_router)
 app.include_router(files_router)
 app.include_router(forecast_router)
 app.include_router(freeze_router)
