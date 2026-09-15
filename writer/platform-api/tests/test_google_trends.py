@@ -269,3 +269,44 @@ def test_seasonality_profile_zero_mean_none():
 def test_seasonal_date_from_is_months_back():
     d = g._seasonal_date_from(24)
     assert len(d) == 10 and d.endswith("-01") and d[4] == "-"
+
+
+# --- _explore_and_qualify: ONE explore per seed -------------------------------
+# Google Trends rising/related queries are single-term: a multi-keyword explore is
+# a comparison view with no queries list and returns 0 rising (verified live
+# 2026-09-15). So every rising-query scan must explore one keyword per call.
+def test_queries_explore_is_single_keyword():
+    assert g._QUERIES_EXPLORE_KEYWORDS == 1
+
+
+async def test_explore_and_qualify_explores_one_seed_per_call(monkeypatch):
+    calls: list[list[str]] = []
+
+    async def fake_explore_live(keywords, **kwargs):
+        calls.append(list(keywords))
+        seed = keywords[0]  # each explore carries one seed; return its own rising query
+        return _explore_body([{"query": f"{seed} rising", "value": 120}]), 0.006
+
+    async def fake_overview(queries, **kwargs):
+        return {q: {"volume": 1000, "cpc_usd": 1.0, "competition_index": 10,
+                    "keyword_difficulty": 5.0, "search_intent": "commercial"}
+                for q in queries}, 0.01
+
+    monkeypatch.setattr(g, "explore_live", fake_explore_live)
+    monkeypatch.setattr(g, "reserve_budget", lambda n: None)
+    monkeypatch.setattr(g.dataforseo_labs, "fetch_keyword_overview", fake_overview)
+    monkeypatch.setattr(g.dataforseo_labs, "labs_location_code", lambda c: c)
+
+    rows, cost = await g._explore_and_qualify(
+        ["semaglutide", "collagen peptides", "retatrutide"],
+        category_code=None, location_code=None, language_code="en", trends_type="web",
+    )
+
+    # one explore call per seed, each carrying exactly one keyword
+    assert calls == [["semaglutide"], ["collagen peptides"], ["retatrutide"]]
+    # every rising query attributes to its exact seed
+    by_query = {r["query"]: r["seed"] for r in rows}
+    assert by_query["semaglutide rising"] == "semaglutide"
+    assert by_query["collagen peptides rising"] == "collagen peptides"
+    assert by_query["retatrutide rising"] == "retatrutide"
+    assert cost > 0

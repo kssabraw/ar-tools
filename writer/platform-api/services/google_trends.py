@@ -21,6 +21,13 @@ DataForSEO shape notes — verified LIVE from Railway PLATFORM 2026-09-15
     queries list, so every rising-query scan MUST send
     ``item_types: ["google_trends_queries_list"]``. The seasonal scan omits it and
     parses the default graph.
+  * ONE keyword per explore for rising queries. Google Trends "related/rising
+    queries" is a SINGLE-TERM concept: a multi-keyword explore is a comparison
+    view that carries NO ``google_trends_queries_list`` item, so it returns zero
+    rising queries (verified live 2026-09-15 — a 2-keyword explore returns 0
+    rising even when each seed alone returns many). Rising-query scans therefore
+    send exactly one keyword per call (``_QUERIES_EXPLORE_KEYWORDS``); the seasonal
+    graph scan already explores one keyword per call for per-keyword attribution.
   * response  tasks[0].result[0].items[] — the item with type="google_trends_queries_list"
     carries data.top[] / data.rising[] (each {query, value}; a rising value is a
     percent int or the string "Breakout"). The graph item's points are
@@ -54,6 +61,11 @@ _EXPLORE_PATH = "/v3/keywords_data/google_trends/explore/live"
 _CATEGORIES_PATH = "/v3/keywords_data/google_trends/categories"
 
 _EXPLORE_MAX_KEYWORDS = 5   # DataForSEO Google Trends explore per-task keyword cap
+# Rising-query scans send ONE keyword per explore: Google Trends related/rising
+# queries only exist for a single search term, so a multi-keyword explore (a
+# comparison view) carries no queries list and yields zero rising queries. See the
+# module docstring's "ONE keyword per explore" note (verified live 2026-09-15).
+_QUERIES_EXPLORE_KEYWORDS = 1
 _BREAKOUT_PCT = 5000.0      # "Breakout" (>5000%) folded to this sentinel percentage
 _TIMEOUT = 60.0
 _DFS_MAX_RETRIES = 3
@@ -518,12 +530,13 @@ async def _explore_and_qualify(
     volume/CPC gate → build stored rows. Returns (rows, total_cost). Reserves the
     paid-call budget (fail-closed) for the explore chunks + the overview batch.
 
-    Used by every scan mode (keyword / category / portfolio). A chunk of >1 seed
-    can't attribute a rising query to a specific seed (explore aggregates across
-    the ≤5 keywords), so per-query ``seed`` is only set for single-seed chunks."""
+    Used by every scan mode (keyword / category / portfolio). Explores ONE seed
+    per call — Google Trends rising queries only exist for a single term (a
+    multi-keyword explore is a comparison view with no queries list), so each seed
+    is a chunk of one and every rising query attributes to its exact seed."""
     log_ctx = log_ctx or {}
-    chunks = dataforseo_labs.chunk(seeds, _EXPLORE_MAX_KEYWORDS)
-    reserve_budget(len(chunks))  # one explore call per ≤5-seed chunk (each billed)
+    chunks = dataforseo_labs.chunk(seeds, _QUERIES_EXPLORE_KEYWORDS)
+    reserve_budget(len(chunks))  # one explore call per seed (each billed)
 
     rising: list[dict] = []
     total_cost = 0.0
@@ -539,7 +552,7 @@ async def _explore_and_qualify(
             continue
         total_cost += cost
         for r in parse_rising_queries(body):
-            r["seed"] = group[0] if len(group) == 1 else None
+            r["seed"] = group[0]  # one seed per chunk → exact attribution
             rising.append(r)
 
     # Dedupe rising queries across chunks by normalized query.

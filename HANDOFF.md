@@ -1,6 +1,20 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-15 · **Google Trends Discovery — Phases 1.1, 2, 3, 4 BUILT (continue), still DARK (PR [#1109](https://github.com/kssabraw/ar-tools/pull/1109))** (latest)
+## ⏩ Update — 2026-09-15 · **Google Trends Discovery — VERIFIED LIVE + ENABLED in production; one bug found + fixed (single-keyword explore)** (latest)
+
+The module is **ON** (`GOOGLE_TRENDS_ENABLED=true` on PLATFORM; the code default stays `False`, so a fresh env still ships dark). Live-shape fix #1118 was already deployed (commit `90a3674`).
+
+**Verification (done on the DEPLOYED code, not the standalone script — the sandbox has no egress to `api.dataforseo.com`, and there's no way to exec the script inside the Railway container from here).** Instead of `scripts/verify_google_trends.py`, the identical live code path was exercised end-to-end by inserting real `google_trends_scan` async-job rows (the worker handler is NOT flag-gated — only the routes are), which run on Railway's egress:
+- **Phase 1 ecommerce keyword scan** (Nova Life Peptides, seed `collagen peptides`) → **13 rising / 13 qualified**, $0.0246, sensible rows (collagen supplement +110% / 201k vol, etc.). A second (`semaglutide`) → **25 rising / 20 qualified**. Both runs left in Nova's workspace as evidence.
+- **Phase 4 seasonal** (dense term `collagen peptides`, US) → a **full 12-month `demand_outlook` profile** (peak months 4–6, troughs Sep/Oct). A niche term in a small metro correctly returns a `null` profile (Trends <6 months of data → `None` by design — not a bug).
+- Rising-queries + interest-over-time shapes therefore **confirmed against live DataForSEO** on the exact deployed commit — stronger than the presence-only standalone script.
+- Routes confirmed live-served (all 12 `/google-trends/*` paths in `/openapi.json`; the scan route 401s unauthenticated → route registered, flag gate is behind auth). The authenticated 200 needs a logged-in user (team can confirm in-UI).
+
+**Bug found + fixed while enabling — ONE keyword per rising-query explore (this PR).** Category (Phase 2) and portfolio (Phase 3) scans were returning **0 rising queries**. Root cause (proven live: a 2-keyword explore `["semaglutide","collagen peptides"]` → 0 rising, though each alone returns 25 / 13): Google Trends **related/rising queries are single-term** — a multi-keyword explore is a comparison view that carries no `google_trends_queries_list`. `_explore_and_qualify` was chunking 5 seeds/call. Fix: `_QUERIES_EXPLORE_KEYWORDS=1` (one explore per seed, exact per-seed attribution), the `estimate` endpoint now counts one explore/seed, config comments note the new per-seed cost. Phase 1 single-seed scans + Phase 4 (already one-keyword-per-call) were unaffected. Unit-tested (`tests/test_google_trends.py` — one-call-per-seed + attribution; 28 pass, ruff clean). **After this deploys, re-smoke-test category + portfolio** (the two zeroed surfaces) via a real scan.
+
+**Follow-up (noted, not built):** the Phase 2 category scan derives good on-topic anchor seeds from the client's site/ICP, but they can be too long-tail for Trends to carry rising related queries (Nova's derived seeds like "does semax need to be refrigerated" → 0 even single-keyword). A broader head-term seed derivation would make category scans productive. **Budget note:** with one explore/seed, a full portfolio sweep costs ≈ Σ(seeds_per_client + 1 overview) across selected clients; at current scale (11 clients × ≤5) that's ~66 calls, within the 100/day budget, but tune `google_trends_portfolio_seeds_per_client` / `_max_clients` if the roster grows (the sweep meters out gracefully). **Side effect:** the portfolio smoke-test emitted one "No qualified rising searches this week" `trends_digest` to the strategy Slack channel before the fix (can't unsend; the in-app copy + the 3 diagnostic 0-result runs were cleaned up).
+
+## ⏩ Update — 2026-09-15 · **Google Trends Discovery — Phases 1.1, 2, 3, 4 BUILT (continue), still DARK (PR [#1109](https://github.com/kssabraw/ar-tools/pull/1109))**
 
 Continues the module (#1107 shared core + Phase 1, now merged). All four remaining phases built, still gated on `google_trends_enabled` (code default `False`). Authority: `docs/modules/google-trends-discovery-plan-v1_0.md`.
 
