@@ -6,7 +6,7 @@ import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList, BookOpen, Share2, Send, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
-  LayoutGrid,
+  LayoutGrid, HelpCircle,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -303,6 +303,13 @@ export function ClientWorkspace() {
           description="Generate an SEO + AEO-optimized article through the five-module pipeline."
           to={id ? `/runs?client=${id}&new=1` : undefined}
           cta="Create"
+        />
+        <ActionCard
+          icon={<HelpCircle size={22} />}
+          label="PAA Content"
+          description="Answer the exact questions buyers ask about one service in one place — pull People-Also-Ask, pick ~4, and create one post per question that links high to the service page."
+          to={id ? `/clients/${id}/paa-sets` : undefined}
+          cta="Open"
         />
         <ActionCard
           icon={<CalendarClock size={22} />}
