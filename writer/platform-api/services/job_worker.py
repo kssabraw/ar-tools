@@ -530,6 +530,52 @@ async def drain_inflight_jobs() -> None:
         )
 
 
+async def run_brand_guide_spike_job(job: dict) -> None:
+    """Run the D4 palette-method spike on the worker (Brand Guide PRD §10 / §11 #1).
+
+    A one-time diagnostic that gates Phase 1: capture >=1 live site through the
+    real ScrapeOwl + DataForSEO + Pillow + census path (which the egress-blocked
+    sandbox can't reach) and write the per-site reports + gate summary into the
+    job's `result`, so the decision can be read straight from the DB. Gated on
+    `brand_guide_enabled` (the module ship flag) — an enqueue while it is off
+    no-ops with a clear note rather than spending on paid vendor calls.
+
+    payload: {"urls": ["https://a.com", ...]} (>=1). Best-effort throughout; a
+    site that fails to capture is still recorded as a data point.
+    """
+    from services import brand_guide_spike
+
+    job_id = job["id"]
+    payload = job.get("payload") or {}
+    urls = [u for u in (payload.get("urls") or []) if isinstance(u, str) and u.strip()]
+
+    if not settings.brand_guide_enabled:
+        get_supabase().table("async_jobs").update(
+            {"status": "complete",
+             "result": {"skipped": "brand_guide_disabled",
+                        "note": "Set BRAND_GUIDE_ENABLED=true on PLATFORM to run the D4 spike."},
+             "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        logger.info("brand_guide_spike.disabled", extra={"job_id": job_id})
+        return
+    if not urls:
+        get_supabase().table("async_jobs").update(
+            {"status": "failed", "error": "no_urls", "completed_at": "now()"}
+        ).eq("id", job_id).execute()
+        return
+
+    logger.info("brand_guide_spike.started", extra={"job_id": job_id, "urls": urls})
+    reports = await brand_guide_spike.run_spike(urls)
+    summary = brand_guide_spike.summarize(reports)
+    get_supabase().table("async_jobs").update(
+        {"status": "complete", "result": {"reports": reports, "summary": summary},
+         "completed_at": "now()"}
+    ).eq("id", job_id).execute()
+    logger.info("brand_guide_spike.complete",
+                extra={"job_id": job_id, "captured": summary.get("captured"),
+                       "css_recovered_any": summary.get("css_recovered_any")})
+
+
 async def _run_website_scrape(job: dict) -> None:
     """Execute a website_scrape job."""
     payload = job.get("payload") or {}
@@ -1135,6 +1181,8 @@ async def _process_job(job: dict) -> None:
     elif job_type == "voice_revalidate":
         from services import voice_revalidate
         await voice_revalidate.run_revalidate_job(job)
+    elif job_type == "brand_guide_spike":
+        await run_brand_guide_spike_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
         # Settle as failed, not complete: an unroutable job type is a real
