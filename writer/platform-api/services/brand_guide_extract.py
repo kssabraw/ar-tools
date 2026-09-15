@@ -808,7 +808,10 @@ _ABOUT_PAGE_RE = re.compile(
 def _same_host(url: str, base_url: str) -> bool:
     def host(u: str) -> str:
         m = re.match(r"https?://([^/]+)", u.lower())
-        return (m.group(1) if m else "").lstrip("www.")
+        h = m.group(1) if m else ""
+        # Strip a leading "www." PREFIX only — never `.lstrip("www.")`, which
+        # strips the character set {w, .} and would fold "wfoo.com" onto "foo.com".
+        return h[4:] if h.startswith("www.") else h
 
     b = host(base_url)
     return not b or host(url) == b
