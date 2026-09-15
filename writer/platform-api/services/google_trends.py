@@ -592,16 +592,23 @@ async def run_google_trends_scan(
 # ---------------------------------------------------------------------------
 def derive_category_seeds(topic_research: dict, cap: int) -> list[str]:
     """The explore seeds for a seedless category scan: the client's own site
-    topics + intent-fanout expansion seeds (deduped, capped). Pure.
+    topics, then intent-fanout expansion seeds, then the ICP-grounded intents
+    (deduped, capped, in that priority). Pure.
 
     Trends explore needs keywords; a category scan has none, so we anchor on what
-    the client is actually about. Empty when the client has no site/ICP signal."""
-    site = topic_research.get("site") if isinstance(topic_research, dict) else None
+    the client is actually about. Site-topic slugs make the cleanest explore seeds,
+    so they lead; the ICP-grounded ``intents`` are the fallback that lets a client
+    with an ICP but no discoverable website still anchor a scan (honouring the
+    'site topics/ICP' anchor decision). Empty only when the client has neither."""
+    if not isinstance(topic_research, dict):
+        return []
+    site = topic_research.get("site")
     topics = (site or {}).get("topics") or []
-    expansion = topic_research.get("expansion_seeds") or [] if isinstance(topic_research, dict) else []
+    expansion = topic_research.get("expansion_seeds") or []
+    intents = topic_research.get("intents") or []
     out: list[str] = []
     seen: set[str] = set()
-    for phrase in list(topics) + list(expansion):
+    for phrase in list(topics) + list(expansion) + list(intents):
         if not isinstance(phrase, str) or not phrase.strip():
             continue
         norm = keyword_research.normalize_keyword(phrase)
@@ -948,7 +955,10 @@ async def run_portfolio_trends_sweep() -> dict:
         trends_type=settings.google_trends_default_type,
         cost_usd=round(total_cost, 4), qualified=len(qualified_rows),
     )
-    _emit_portfolio_digest(run_id, digest_rows, len(qualified_rows))
+    # Emit the digest UNLESS we were budget-blocked before gathering anything — a
+    # "nothing rising" post when the sweep never actually ran would be misleading.
+    if digest_rows or not metered_out:
+        _emit_portfolio_digest(run_id, digest_rows, len(qualified_rows))
     return {
         "run_id": run_id,
         "rising_count": len(ranked),

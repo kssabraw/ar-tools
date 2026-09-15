@@ -49,7 +49,7 @@ interface SeasonalProfile { keyword: string; index: Record<string, number> | nul
 interface SeasonalResult {
   location_code: number | null
   profiles: SeasonalProfile[]
-  outlook: { direction?: string; change_pct_next_quarter?: number; keywords_with_history?: number; notable_swings?: { keyword: string; direction: string; change_pct: number }[] } | null
+  outlook: { direction?: string; change_pct_next_quarter?: number; keywords_with_history?: number; notable_swings?: { keyword: string; change_pct: number; volume?: number; peak_months?: string[] }[] } | null
   cost_usd: number | null
 }
 

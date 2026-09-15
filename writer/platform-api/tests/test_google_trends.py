@@ -172,6 +172,19 @@ def test_derive_category_seeds_empty_when_no_signal():
     assert g.derive_category_seeds({"site": {"topics": []}, "expansion_seeds": []}, cap=5) == []
     # junk entries are skipped
     assert g.derive_category_seeds({"site": {"topics": ["", "   ", 3]}}, cap=5) == []
+    assert g.derive_category_seeds(None, cap=5) == []  # non-dict guard
+
+
+def test_derive_category_seeds_falls_back_to_icp_intents():
+    # A client with an ICP but no discoverable website: no site topics, no
+    # expansion — the ICP-grounded intents still anchor the scan.
+    tr = {"site": {"topics": []}, "expansion_seeds": [],
+          "intents": ["reducing claims leakage", "catastrophe surge staffing"]}
+    assert g.derive_category_seeds(tr, cap=5) == ["reducing claims leakage", "catastrophe surge staffing"]
+    # But site topics lead when present (intents are the fallback, appended last).
+    tr2 = {"site": {"topics": ["roof restoration"]}, "expansion_seeds": [],
+           "intents": ["storm damage repair"]}
+    assert g.derive_category_seeds(tr2, cap=5) == ["roof restoration", "storm damage repair"]
 
 
 # --- Phase 3: build_digest_summary (deterministic weekly body) ----------------
