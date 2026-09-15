@@ -1183,6 +1183,19 @@ async def _process_job(job: dict) -> None:
         await voice_revalidate.run_revalidate_job(job)
     elif job_type == "brand_guide_spike":
         await run_brand_guide_spike_job(job)
+    elif job_type == "brand_guide_generate":
+        from services.brand_guide import run_brand_guide_generate_job
+
+        await run_brand_guide_generate_job(job)
+    elif job_type == "brand_guide_render":
+        # The render half (Phase 3) lands with the PDF template + the regulated
+        # sign-off gate (PRD §6 — enqueued on a human "approve & render"). The job
+        # TYPE exists in the CHECK now so that phase needs no migration; nothing
+        # enqueues it in Phase 1, so an early enqueue settles as an honest defect.
+        get_supabase().table("async_jobs").update(
+            {"status": "failed", "error": "brand_guide_render_not_implemented",
+             "completed_at": "now()"}
+        ).eq("id", job["id"]).execute()
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
         # Settle as failed, not complete: an unroutable job type is a real

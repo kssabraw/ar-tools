@@ -273,3 +273,124 @@ class TestExtractVisualCensus:
         assert set(d) >= {"colors", "fonts", "type_scale", "logo_candidates", "palette_source"}
         assert isinstance(d["colors"][0]["rgb"], list)  # tuples serialised to lists
         assert isinstance(d["colors"][0]["share"], float)
+
+
+# --------------------------------------------------------------------------
+# Phase-0 spike findings folded into the capture layer. Fixtures mirror the
+# actual leaks measured on live client sites in the D4 spike.
+# --------------------------------------------------------------------------
+class TestFontJunkDropped:
+    """Finding 1: Elementor `var(--…)` + Wix `wfont_<hash>` leak as families."""
+
+    def test_elementor_var_family_dropped(self):
+        # FreightOptics: var(--ui)/var(--host)/var( --e-global-typography-…-font-family )
+        decls = [
+            ("font-family", "Host Grotesk, sans-serif"),
+            ("font-family", "var(--ui)"),
+            ("font-family", "var(--host)"),
+            ("font-family", "var( --e-global-typography-text-font-family )"),
+            ("font-family", "Inter, system-ui"),
+        ]
+        names = [f.name for f in bg.rank_font_families(decls)]
+        assert "Host Grotesk" in names and "Inter" in names
+        assert not any(n.startswith("var(") for n in names)
+
+    def test_wix_wfont_hash_dropped_but_real_aliases_kept(self):
+        # Sealbeach CoLabs: wfont_3f9260_<32hex> IDs alongside real Wix aliases.
+        decls = [
+            ("font-family", "wfont_3f9260_763c7b8a6d994b3e81f4796950e90e13,sans-serif"),
+            ("font-family", "futura-lt-w01-light"),
+            ("font-family", "proxima-n-w01-reg"),
+            ("font-family", "helvetica-w01-roman"),
+        ]
+        names = [f.name for f in bg.rank_font_families(decls)]
+        assert "futura-lt-w01-light" in names        # real alias survives
+        assert "proxima-n-w01-reg" in names
+        assert not any(n.startswith("wfont_") for n in names)
+        assert not any(f.name for f in bg.rank_font_families(decls) if "763c7b8a" in f.name)
+
+    def test_bare_first_family_helper(self):
+        assert bg._first_family("var(--ui)") is None
+        assert bg._first_family("wfont_3f9260_4ead16c8356b4536a4538ccdfe940616") is None
+        assert bg._first_family("Host Grotesk, sans-serif") == "Host Grotesk"
+        assert bg._first_family("futura-lt-w01-light") == "futura-lt-w01-light"
+
+
+class TestLogoChromeDownRanked:
+    """Finding 2: consent-banner / customer-logo chrome out-ranking the brand."""
+
+    UMH = """
+      <meta property="og:image" content="https://umh.com/wp-content/uploads/UMH_logo-o.png">
+      <header>
+        <img src="https://cdn-cookieyes.com/assets/images/poweredbtcky.svg" class="logo">
+        <img src="https://umh.com/wp-content/uploads/UMH_header_logo.svg" alt="UMH logo">
+      </header>
+    """
+
+    def test_cookieyes_never_outranks_real_logo(self):
+        cands = bg.logo_candidates_from_html(self.UMH, base_url="https://umh.com")
+        # Real brand marks lead; the cookie-consent SVG sinks below them.
+        top_urls = [c.url for c in cands[:2]]
+        assert "https://umh.com/wp-content/uploads/UMH_logo-o.png" in top_urls
+        assert "https://umh.com/wp-content/uploads/UMH_header_logo.svg" in top_urls
+        cky = next(c for c in cands if "cookieyes" in c.url)
+        assert cky.score < 0 and "down-ranked" in cky.note
+        assert cky is cands[-1]  # last, never a suggestion
+
+    def test_customer_logo_demoted_below_site_logo(self):
+        html = """
+          <header>
+            <img src="/wp-content/uploads/freightoptics-site-logo-480.png" class="logo">
+            <img src="/wp-content/uploads/freightoptics-customer-logo-park-west.png" alt="customer logo">
+          </header>
+        """
+        cands = bg.logo_candidates_from_html(html, base_url="https://www.freightoptics.com")
+        site = next(c for c in cands if "site-logo" in c.url)
+        cust = next(c for c in cands if "customer-logo" in c.url)
+        assert site.score > cust.score
+        assert cands[0].url.endswith("freightoptics-site-logo-480.png")
+
+    def test_wixstatic_asset_host_not_penalised(self):
+        # A client's OWN logo on a Wix/WordPress CDN must NOT be treated as chrome.
+        html = '<header><img src="https://static.wixstatic.com/media/abc~mv2.png" class="logo"></header>'
+        cands = bg.logo_candidates_from_html(html, base_url="https://x.example")
+        assert cands and cands[0].score >= 70 and "down-ranked" not in cands[0].note
+
+
+class TestDiscoverKeyPages:
+    NAV = """
+      <nav>
+        <a href="/">Home</a>
+        <a href="/services/roof-repair">Services</a>
+        <a href="/products">Shop</a>
+        <a href="/about-us">About</a>
+        <a href="/contact">Contact</a>
+        <a href="https://facebook.com/x">Follow us</a>
+        <a href="/brochure.pdf">Download</a>
+        <a href="#top">Back to top</a>
+        <a href="mailto:a@b.com">Email</a>
+      </nav>
+    """
+
+    def test_picks_one_service_and_one_about(self):
+        pages = bg.discover_key_pages(self.NAV, base_url="https://acme.example")
+        assert pages == [
+            "https://acme.example/services/roof-repair",
+            "https://acme.example/about-us",
+        ]
+
+    def test_excludes_homepage_assets_fragments_offhost(self):
+        pages = bg.discover_key_pages(self.NAV, base_url="https://acme.example")
+        joined = " ".join(pages)
+        assert "facebook.com" not in joined  # off-host
+        assert ".pdf" not in joined          # asset
+        assert "#" not in joined             # fragment
+        assert "mailto" not in joined
+        assert all(u.rstrip("/") != "https://acme.example" for u in pages)
+
+    def test_limit_and_empty_degrade(self):
+        assert bg.discover_key_pages(self.NAV, base_url="https://acme.example", limit=1) == [
+            "https://acme.example/services/roof-repair"
+        ]
+        assert bg.discover_key_pages("<nav><a href='/'>Home</a></nav>", base_url="https://acme.example") == []
+        assert bg.discover_key_pages("", base_url="https://acme.example") == []

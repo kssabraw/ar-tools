@@ -766,6 +766,11 @@ class Settings(BaseSettings):
     # extraction core + the spike) references nothing at runtime, so this flag is
     # inert until Phase 1 wires capture/jobs behind it.
     brand_guide_enabled: bool = False
+    # Phase 1 capture scope: how many auto-discovered key pages to capture BEYOND
+    # the homepage (a product/service + an about/contact, PRD §4.1). The homepage
+    # is always captured and is the sole palette/fonts/type source; these extras
+    # add logo candidates + imagery variety only. Operator-overridable per run.
+    brand_guide_max_pages: int = 2
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may
