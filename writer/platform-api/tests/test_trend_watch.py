@@ -110,3 +110,63 @@ def test_demand_outlook_direction_and_swings():
 def test_windows_overlap():
     assert tw.windows_overlap(date(2026, 7, 1), date(2026, 7, 3), date(2026, 7, 3), date(2026, 7, 5))
     assert not tw.windows_overlap(date(2026, 7, 1), date(2026, 7, 3), date(2026, 7, 4), date(2026, 7, 6))
+
+
+# ---------------------------------------------------------------------------
+# Task 2: merge_seasonality_profiles — prefer the Trends profile, fall back to Ads
+# history, always take volume from keyword_market. The Forecast card's shape is
+# unchanged because the output tuples match the pre-Trends profiles list exactly.
+# ---------------------------------------------------------------------------
+def _trends_profile(index: dict[int, float]) -> dict:
+    return {"index": dict(index), "peak_months": [], "low_months": []}
+
+
+def test_merge_prefers_trends_profile_over_ads_history():
+    market_rows = [{"keyword": "Roof Repair", "search_volume": 1000,
+                    "monthly_searches": _history({m: 100 for m in range(1, 13)})}]
+    trends = {"roof repair": _trends_profile({m: (2.0 if m == 7 else 0.5) for m in range(1, 13)})}
+    out = tw.merge_seasonality_profiles(market_rows, trends)
+    assert len(out) == 1
+    kw, vol, profile = out[0]
+    assert kw == "Roof Repair"           # keyword preserved verbatim
+    assert vol == 1000                    # volume always from keyword_market
+    assert profile["index"][7] == 2.0     # the Trends profile won, not the flat Ads one
+    assert profile["peak_months"] == []
+
+
+def test_merge_falls_back_to_ads_history_when_no_trends():
+    market_rows = [{"keyword": "gutter cleaning", "search_volume": 500,
+                    "monthly_searches": _history({1: 50, 2: 50, 3: 100, 4: 150, 5: 200,
+                                                  6: 200, 7: 150, 8: 100, 9: 50, 10: 50,
+                                                  11: 50, 12: 50})}]
+    out = tw.merge_seasonality_profiles(market_rows, {})  # no Trends profile
+    kw, vol, profile = out[0]
+    assert vol == 500
+    # falls through to the Ads-history seasonality_profile (peaks in May/Jun)
+    assert profile is not None and (5 in profile["peak_months"] or 6 in profile["peak_months"])
+
+
+def test_merge_trends_rescues_thin_ads_history():
+    # The WIN: a keyword whose Ads history is too thin for seasonality_profile (None)
+    # but which HAS a Trends profile becomes usable in demand_outlook.
+    market_rows = [{"keyword": "collagen peptides", "search_volume": 800,
+                    "monthly_searches": _history({1: 10, 2: 12})}]  # <6 months → None alone
+    assert tw.seasonality_profile(market_rows[0]["monthly_searches"]) is None
+    trends = {"collagen peptides": _trends_profile({m: (3.0 if m in (6, 7) else 0.6) for m in range(1, 13)})}
+    out = tw.merge_seasonality_profiles(market_rows, trends)
+    _, vol, profile = out[0]
+    assert profile is not None and profile["index"][6] == 3.0
+    # and it now feeds demand_outlook (rising into summer)
+    outlook = tw.demand_outlook(out, date(2026, 5, 15))
+    assert outlook is not None and outlook["direction"] == "rising"
+
+
+def test_merge_matches_keyword_case_insensitively():
+    market_rows = [{"keyword": "Collagen  Peptides", "search_volume": 900, "monthly_searches": None}]
+    trends = {"collagen peptides": _trends_profile({m: 1.0 for m in range(1, 13)})}
+    out = tw.merge_seasonality_profiles(market_rows, trends)
+    assert out[0][2] is not None  # normalized-key match despite case + double space
+
+
+def test_merge_empty_rows():
+    assert tw.merge_seasonality_profiles([], {"x": _trends_profile({1: 1.0})}) == []

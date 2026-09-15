@@ -28,6 +28,7 @@ shared scheduler (inline, like the offpage sweep — no job type).
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
@@ -185,6 +186,41 @@ def demand_outlook(
     }
 
 
+def _norm_kw(keyword) -> str:
+    """Lower-cased, whitespace-collapsed keyword. Pure. Local (keeps this module
+    dependency-light), matching keyword_research.normalize_keyword's shape."""
+    return re.sub(r"\s+", " ", str(keyword or "").strip().lower())
+
+
+def merge_seasonality_profiles(
+    market_rows: list[dict],
+    trends_by_keyword: dict[str, dict],
+) -> list[tuple[str, Optional[int], Optional[dict]]]:
+    """Build the (keyword, avg_volume, seasonality_profile) tuples demand_outlook
+    consumes, PREFERRING a stored Google Trends interest_over_time profile over the
+    Ads-volume-history one when one exists for that keyword. Pure.
+
+    market_rows: keyword_market rows [{keyword, search_volume, monthly_searches}].
+    trends_by_keyword: {normalized keyword: {index, peak_months, low_months}} — the
+    Trends seasonality profile, its ``index`` keyed by INT month (as demand_outlook
+    expects).
+
+    Volume ALWAYS comes from keyword_market (Ads volume is a distinct signal), so the
+    demand weighting is unchanged; only WHICH seasonality shape feeds a keyword flips
+    to the truer Trends signal when one is stored, falling back to the Ads history
+    otherwise. Output shape is identical to the pre-Trends profiles list, so
+    demand_outlook (and the Forecast card) render unchanged. The win: a keyword whose
+    Ads history is too thin for seasonality_profile (None) but which HAS a Trends
+    profile becomes usable."""
+    profiles: list[tuple[str, Optional[int], Optional[dict]]] = []
+    for r in market_rows or []:
+        kw = r.get("keyword")
+        trends = trends_by_keyword.get(_norm_kw(kw))
+        profile = trends if trends else seasonality_profile(r.get("monthly_searches"))
+        profiles.append((kw, r.get("search_volume"), profile))
+    return profiles
+
+
 # ---------------------------------------------------------------------------
 # Sweep (daily, DB-reads only)
 # ---------------------------------------------------------------------------
@@ -315,8 +351,54 @@ def algo_note_for(created_at, events: list[dict]) -> Optional[str]:
     return None
 
 
+def _load_trends_seasonality(client_id: str) -> dict[str, dict]:
+    """Stored Google Trends seasonality profiles for a client, keyed by normalized
+    keyword (newest per keyword wins across locations). Best-effort → {} on any
+    failure or when the table isn't present. Impure.
+
+    The jsonb ``month_index`` comes back with STRING keys from Postgres; they're
+    coerced to INT months here so demand_outlook's int-keyed lookups
+    (``p["index"].get(cur_m)``) work."""
+    try:
+        rows = (
+            get_supabase().table("google_trends_seasonality")
+            .select("keyword, month_index, peak_months, low_months, updated_at")
+            .eq("client_id", client_id).order("updated_at", desc=True).execute()
+        ).data or []
+    except Exception:  # noqa: BLE001 — best-effort; degrade to Ads-history-only
+        return {}
+    out: dict[str, dict] = {}
+    for r in rows:
+        kw = _norm_kw(r.get("keyword"))
+        if not kw or kw in out:  # newest-first ⇒ first row per keyword wins
+            continue
+        raw = r.get("month_index")
+        if not isinstance(raw, dict) or not raw:
+            continue
+        index: dict[int, float] = {}
+        for k, v in raw.items():
+            try:
+                index[int(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+        if not index:
+            continue
+        out[kw] = {
+            "index": index,
+            "peak_months": r.get("peak_months") or [],
+            "low_months": r.get("low_months") or [],
+        }
+    return out
+
+
 def build_demand_outlook(client_id: str, today: Optional[date] = None) -> Optional[dict]:
-    """Seasonal demand read for a client's tracked keywords (cache-only)."""
+    """Seasonal demand read for a client's tracked keywords (cache-only).
+
+    Prefers a stored Google Trends interest_over_time seasonality profile per keyword
+    (a truer seasonality signal) over the DataForSEO Ads-volume history
+    (``keyword_market.monthly_searches``), falling back to the Ads history when no
+    Trends profile is stored. Volume weighting always comes from keyword_market, and
+    the output shape is unchanged, so the Forecast card renders identically."""
     from services.dataforseo_rank import location_code_for
 
     supabase = get_supabase()
@@ -338,10 +420,8 @@ def build_demand_outlook(client_id: str, today: Optional[date] = None) -> Option
         .in_("keyword", kws).eq("location_code", location_code_for(client[0]))
         .execute()
     ).data or []
-    profiles = [
-        (r["keyword"], r.get("search_volume"), seasonality_profile(r.get("monthly_searches")))
-        for r in rows
-    ]
+    trends_by_keyword = _load_trends_seasonality(client_id)
+    profiles = merge_seasonality_profiles(rows, trends_by_keyword)
     outlook = demand_outlook(profiles, today)
     if outlook:
         outlook["keywords_without_history"] = len(kws) - outlook["keywords_with_history"]

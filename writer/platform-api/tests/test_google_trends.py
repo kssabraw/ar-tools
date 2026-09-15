@@ -310,3 +310,105 @@ async def test_explore_and_qualify_explores_one_seed_per_call(monkeypatch):
     assert by_query["collagen peptides rising"] == "collagen peptides"
     assert by_query["retatrutide rising"] == "retatrutide"
     assert cost > 0
+
+
+# --- Task 1: head_term_seeds (broader head terms for the category scan) --------
+# Google Trends explore only carries rising related queries for reasonably-popular
+# HEAD terms, so a long-tail derived category seed must be shortened to its core.
+def test_head_term_seeds_shortens_longtail():
+    # The plan's own examples of derived seeds too long-tail for Trends.
+    out = g.head_term_seeds(
+        ["does semax need to be refrigerated",
+         "ajp endocrinology and metabolism impact factor"],
+        cap=10,
+    )
+    # each shortened to ≤3 significant tokens, with question/filler words dropped
+    assert all(len(s.split()) <= 3 for s in out)
+    semax = out[0]
+    assert "semax" in semax and "does" not in semax and "to" not in semax and "refrigerated" not in semax
+    # "and" (stopword) dropped; "ajp endocrinology metabolism" is the head
+    assert out[1] == "ajp endocrinology metabolism"
+
+
+def test_head_term_seeds_drops_question_words():
+    assert g.head_term_seeds(["what is collagen"], cap=5) == ["collagen"]
+    # "how"/"do"/"i" all dropped (interrogative / stopword / too short)
+    assert g.head_term_seeds(["how do i store peptides"], cap=5) == ["store peptides"]
+
+
+def test_head_term_seeds_dedupes_after_shortening():
+    # Distinct long-tail phrases can collapse to the same head term → deduped.
+    out = g.head_term_seeds(
+        ["collagen peptides benefits", "collagen peptides dosage", "collagen peptides"],
+        cap=10, max_tokens=2,
+    )
+    assert out == ["collagen peptides"]
+
+
+def test_head_term_seeds_caps():
+    seeds = ["alpha term", "beta term", "gamma term", "delta term", "epsilon term"]
+    assert g.head_term_seeds(seeds, cap=2) == ["alpha term", "beta term"]
+
+
+def test_head_term_seeds_phase1_style_short_seed_unchanged():
+    # An already-short head term (a Phase-1-style seed) passes through unchanged.
+    assert g.head_term_seeds(["collagen peptides"], cap=5) == ["collagen peptides"]
+    assert g.head_term_seeds(["semaglutide"], cap=5) == ["semaglutide"]
+
+
+def test_head_term_seeds_fallthrough_and_junk():
+    # A phrase that tokenizes to nothing (all filler) falls through UNCHANGED so a
+    # scan never loses an anchor it can't shorten.
+    assert g.head_term_seeds(["the of for"], cap=5) == ["the of for"]
+    # junk entries are skipped
+    assert g.head_term_seeds(["", "   ", None, 3], cap=5) == []
+
+
+async def test_category_scan_shortens_seeds_before_explore(monkeypatch):
+    """The category scan explores HEAD terms, not the full long-tail derived seeds
+    — while the relevance anchors keep the full phrases."""
+    from services import keyword_research, keyword_research_topics
+
+    captured: dict = {}
+
+    long_tail = ["does semax need to be refrigerated",
+                 "ajp endocrinology and metabolism impact factor"]
+
+    async def fake_research_topics(ctx, seeds, location_code):
+        return {"site": {"topics": long_tail}, "anchors": long_tail}
+
+    async def fake_explore_and_qualify(seeds, **kwargs):
+        captured["seeds"] = list(seeds)
+        return [], 0.0
+
+    monkeypatch.setattr(keyword_research, "_client_context", lambda cid: {})
+    monkeypatch.setattr(keyword_research_topics, "research_topics", fake_research_topics)
+    monkeypatch.setattr(g, "_explore_and_qualify", fake_explore_and_qualify)
+    monkeypatch.setattr(g, "_persist_run", lambda *a, **k: "run-1")
+    monkeypatch.setattr(g.settings, "keyword_research_semantic_relevance", False)
+    monkeypatch.setattr(g.settings, "keyword_research_audience_filter", False)
+
+    await g.run_google_trends_category_scan("client-1", location_code=1000)
+
+    # the seeds explored are the shortened head terms, not the long-tail phrases
+    assert captured["seeds"] == g.head_term_seeds(long_tail, g.settings.google_trends_category_seed_cap)
+    assert all(len(s.split()) <= 3 for s in captured["seeds"])
+    assert long_tail[0] not in captured["seeds"]
+
+
+async def test_keyword_scan_passes_seeds_verbatim(monkeypatch):
+    """Phase-1 (user-entered) seeds are NEVER shortened — a long-tail seed the user
+    typed reaches explore verbatim."""
+    captured: dict = {}
+
+    async def fake_explore_and_qualify(seeds, **kwargs):
+        captured["seeds"] = list(seeds)
+        return [], 0.0
+
+    monkeypatch.setattr(g, "_explore_and_qualify", fake_explore_and_qualify)
+    monkeypatch.setattr(g, "_persist_run", lambda *a, **k: "run-2")
+    monkeypatch.setattr(g, "_client_location", lambda cid: 1000)
+
+    await g.run_google_trends_scan("client-1", ["does semax need to be refrigerated"])
+
+    assert captured["seeds"] == ["does semax need to be refrigerated"]
