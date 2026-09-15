@@ -105,6 +105,9 @@ async def get_scan(
         run = google_trends.get_run(str(client_id), str(run_id))
         if run is None:
             raise HTTPException(status_code=404, detail="run_not_found")
+        # The "Trending / social" lane (#1129) filters to social-shaped no-demand
+        # rows surging past this floor; expose it so the frontend filters the same.
+        run["social_velocity_floor"] = settings.google_trends_social_velocity_floor
         return run
     except HTTPException:
         raise

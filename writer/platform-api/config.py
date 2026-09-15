@@ -1483,6 +1483,19 @@ class Settings(BaseSettings):
     # Trends interest_over_time series feeds trend_watch.demand_outlook. months = the
     # history window requested (≥2y so a full calendar cycle is covered).
     google_trends_seasonal_months: int = 24
+    # "Trending / social" lane (services/google_trends_social.py, issue #1129): a
+    # rising query with NO Ads volume (qualified=false) is often an emerging term
+    # too new to have measured volume yet — the trend-jacking signal for SOCIAL
+    # content, not SEO. The classifier tags those no-demand rows social-shaped vs
+    # SEO-shaped (a deterministic wordlist first, then one batched Haiku call for
+    # the ambiguous ones) so they surface in their own lane. Best-effort: LLM off /
+    # no key degrades to the wordlist. velocity_floor = the min rising % for the
+    # lane (is_breakout always clears it).
+    google_trends_social_classify_enabled: bool = True
+    google_trends_social_llm: bool = True              # the Haiku pass for ambiguous rows
+    google_trends_social_model: str = "claude-haiku-4-5-20251001"
+    google_trends_social_max_tokens: int = 1024
+    google_trends_social_velocity_floor: float = 100.0  # min rising % (breakout exempt)
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Download, FileText, Flame, Search, TrendingUp } from 'lucide-react'
+import { ArrowLeft, Download, FileText, Flame, Search, Sparkles, TrendingUp } from 'lucide-react'
 import { api } from '../lib/api'
 import { useResumableJob } from '../lib/useResumableJob'
 import { toCsv, downloadCsv } from '../lib/csv'
@@ -38,10 +38,14 @@ interface TrendKeyword {
   trend_score: number | null
   relevance_score?: number | null
   audience_fit?: string | null
+  social_lean?: string | null
+  suggested_format?: string | null
+  social_score?: number | null
 }
 interface RunResponse {
   run: TrendRunSummary & { category_code: number | null; location_code: number | null }
   keywords: TrendKeyword[]
+  social_velocity_floor?: number
 }
 interface TrendsCategory { category_code: number; category_name: string; parent_code: number | null }
 
@@ -119,6 +123,7 @@ export function GoogleTrends() {
   const [runId, setRunId] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [qualifiedOnly, setQualifiedOnly] = useState(true)
+  const [resultView, setResultView] = useState<'seo' | 'social'>('seo')
   const [routeMsg, setRouteMsg] = useState<string | null>(null)
   const [seasonal, setSeasonal] = useState<SeasonalResult | null>(null)
 
@@ -250,18 +255,31 @@ export function GoogleTrends() {
     },
   })
 
+  const socialFloor = runData?.social_velocity_floor ?? 100
+  // The "Trending / social" lane (#1129): social-shaped, no-demand queries surging
+  // past the velocity floor (breakout always clears it), sorted by social_score
+  // (trend_score is ~0 for a no-volume row, so it can't be used here).
+  const socialRows = useMemo(() => {
+    return (runData?.keywords ?? [])
+      .filter((k) => !k.qualified && k.social_lean === 'social'
+        && (k.is_breakout || (k.rising_value ?? 0) >= socialFloor))
+      .sort((a, b) => (b.social_score ?? 0) - (a.social_score ?? 0))
+  }, [runData, socialFloor])
+
   const rows = useMemo(() => {
+    if (resultView === 'social') return socialRows
     const ks = runData?.keywords ?? []
     return qualifiedOnly ? ks.filter((k) => k.qualified) : ks
-  }, [runData, qualifiedOnly])
+  }, [runData, qualifiedOnly, resultView, socialRows])
 
   function exportCsv() {
     if (!runData) return
     const csv = toCsv(
-      ['query', 'velocity', 'volume', 'cpc_usd', 'keyword_difficulty', 'intent', 'question', 'qualified', 'trend_score'],
+      ['query', 'velocity', 'volume', 'cpc_usd', 'keyword_difficulty', 'intent', 'question', 'qualified', 'trend_score', 'social_lean', 'suggested_format', 'social_score'],
       (runData.keywords).map((k) => [
         k.query, velocityLabel(k), k.volume ?? '', k.cpc_usd ?? '', k.keyword_difficulty ?? '',
         k.search_intent ?? '', k.is_question ? 'yes' : '', k.qualified ? 'yes' : 'no', k.trend_score ?? '',
+        k.social_lean ?? '', k.suggested_format ?? '', k.social_score ?? '',
       ]),
     )
     downloadCsv(`google-trends-${runData.run.seeds.join('-').slice(0, 40)}.csv`, csv)
@@ -417,13 +435,24 @@ export function GoogleTrends() {
           {/* Results */}
           {runId && scanMode !== 'seasonal' && (
             <div style={{ marginTop: 20 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8, flexWrap: 'wrap' }}>
                 <h2 style={{ fontSize: 16, fontWeight: 800, margin: 0 }}>Rising queries</h2>
                 {runData && <span style={{ fontSize: 13, color: '#64748b' }}>{runData.run.qualified_count} with demand / {runData.run.rising_count} rising</span>}
-                <label style={{ fontSize: 13, color: '#475569', marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <input type="checkbox" checked={qualifiedOnly} onChange={(e) => setQualifiedOnly(e.target.checked)} /> Qualified only
-                </label>
-                {isCategoryRun && (
+                {/* Content (SEO) vs Trending/social (#1129) — no-demand rising queries are often emerging terms for social, not SEO. */}
+                <div style={{ marginLeft: 'auto', display: 'inline-flex', border: '1px solid #cbd5e1', borderRadius: 8, overflow: 'hidden' }}>
+                  {([['seo', 'Content (SEO)'], ['social', `Trending / social${socialRows.length ? ` (${socialRows.length})` : ''}`]] as [typeof resultView, string][]).map(([v, label]) => (
+                    <button key={v} onClick={() => setResultView(v)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '6px 12px', border: 'none', background: resultView === v ? (v === 'social' ? '#7c3aed' : '#0ea5e9') : '#fff', color: resultView === v ? '#fff' : '#475569', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
+                      {v === 'social' && <Sparkles size={13} />}{label}
+                    </button>
+                  ))}
+                </div>
+                {resultView === 'seo' && (
+                  <label style={{ fontSize: 13, color: '#475569', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <input type="checkbox" checked={qualifiedOnly} onChange={(e) => setQualifiedOnly(e.target.checked)} /> Qualified only
+                  </label>
+                )}
+                {resultView === 'seo' && isCategoryRun && (
                   <button onClick={() => routeToTopics.mutate(qualifiedQueries)} disabled={!qualifiedQueries.length || routeToTopics.isPending}
                     title="Start a Topic Research run seeded with these qualified rising queries"
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 8, border: 'none', background: (!qualifiedQueries.length || routeToTopics.isPending) ? '#94a3b8' : '#6d28d9', color: '#fff', fontSize: 13, fontWeight: 600, cursor: (!qualifiedQueries.length || routeToTopics.isPending) ? 'default' : 'pointer' }}>
@@ -435,12 +464,19 @@ export function GoogleTrends() {
                   <Download size={14} /> CSV
                 </button>
               </div>
+              {resultView === 'social' && (
+                <div style={{ marginBottom: 8, fontSize: 12.5, color: '#7c3aed', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Sparkles size={13} /> Rising searches with no measured search demand yet — often emerging terms, better for social / short-form content than SEO.
+                </div>
+              )}
               {routeMsg && <div style={{ marginBottom: 8, fontSize: 13, color: '#6d28d9' }}>{routeMsg}</div>}
               {loadingRun && !runData ? (
                 <div style={{ color: '#94a3b8', fontSize: 14, padding: 16 }}>Loading…</div>
               ) : rows.length === 0 ? (
                 <div style={{ padding: 16, borderRadius: 10, background: '#f8fafc', border: '1px solid #e2e8f0', color: '#64748b', fontSize: 14 }}>
-                  No {qualifiedOnly ? 'qualified ' : ''}rising queries for these seeds. Trends surfaced {runData?.run.rising_count ?? 0} rising terms; try a broader seed, a different category, or untick “Qualified only” to inspect the raw list.
+                  {resultView === 'social'
+                    ? <>No social-shaped trending searches in this scan. These are rising queries with no demand yet that read as entertainment/short-form (e.g. “… vids”, “… transformation”, “oddly satisfying …”); this scan’s rising terms were either buyer/informational or below the velocity floor.</>
+                    : <>No {qualifiedOnly ? 'qualified ' : ''}rising queries for these seeds. Trends surfaced {runData?.run.rising_count ?? 0} rising terms; try a broader seed, a different category, or untick “Qualified only” to inspect the raw list.</>}
                 </div>
               ) : (
                 <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 10 }}>
@@ -449,11 +485,20 @@ export function GoogleTrends() {
                       <tr style={{ background: '#f8fafc', textAlign: 'left', color: '#475569' }}>
                         <th style={{ padding: '8px 10px' }}>Query</th>
                         <th style={{ padding: '8px 10px' }}>Velocity</th>
-                        <th style={{ padding: '8px 10px' }}>Volume</th>
-                        <th style={{ padding: '8px 10px' }}>CPC</th>
-                        <th style={{ padding: '8px 10px' }}>KD</th>
-                        <th style={{ padding: '8px 10px' }}>Intent</th>
-                        <th style={{ padding: '8px 10px' }}>Trend score</th>
+                        {resultView === 'social' ? (
+                          <>
+                            <th style={{ padding: '8px 10px' }}>Suggested format</th>
+                            <th style={{ padding: '8px 10px' }}>Social score</th>
+                          </>
+                        ) : (
+                          <>
+                            <th style={{ padding: '8px 10px' }}>Volume</th>
+                            <th style={{ padding: '8px 10px' }}>CPC</th>
+                            <th style={{ padding: '8px 10px' }}>KD</th>
+                            <th style={{ padding: '8px 10px' }}>Intent</th>
+                            <th style={{ padding: '8px 10px' }}>Trend score</th>
+                          </>
+                        )}
                         <th style={{ padding: '8px 10px' }}></th>
                       </tr>
                     </thead>
@@ -461,18 +506,31 @@ export function GoogleTrends() {
                       {rows.map((k) => (
                         <tr key={k.query} style={{ borderTop: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '8px 10px', fontWeight: 600 }}>
-                            {k.query}{!k.qualified && <span style={{ marginLeft: 6, fontSize: 11, color: '#94a3b8' }}>(no demand)</span>}
+                            {k.query}{resultView === 'seo' && !k.qualified && <span style={{ marginLeft: 6, fontSize: 11, color: '#94a3b8' }}>(no demand)</span>}
                           </td>
                           <td style={{ padding: '8px 10px', color: k.is_breakout ? '#dc2626' : '#0f172a', fontWeight: k.is_breakout ? 700 : 400 }}>
                             {k.is_breakout && <Flame size={12} style={{ verticalAlign: -1, marginRight: 3 }} />}{velocityLabel(k)}
                           </td>
-                          <td style={{ padding: '8px 10px' }}>{k.volume?.toLocaleString() ?? '—'}</td>
-                          <td style={{ padding: '8px 10px' }}>{k.cpc_usd != null ? `$${k.cpc_usd.toFixed(2)}` : '—'}</td>
-                          <td style={{ padding: '8px 10px' }}>{k.keyword_difficulty ?? '—'}</td>
-                          <td style={{ padding: '8px 10px' }}>{k.search_intent ?? '—'}</td>
-                          <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.trend_score ?? '—'}</td>
+                          {resultView === 'social' ? (
+                            <>
+                              <td style={{ padding: '8px 10px' }}>
+                                {k.suggested_format
+                                  ? <span style={{ padding: '2px 8px', borderRadius: 999, background: '#f3e8ff', color: '#7c3aed', fontSize: 12, fontWeight: 600 }}>{k.suggested_format}</span>
+                                  : <span style={{ color: '#94a3b8' }}>—</span>}
+                              </td>
+                              <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.social_score ?? '—'}</td>
+                            </>
+                          ) : (
+                            <>
+                              <td style={{ padding: '8px 10px' }}>{k.volume?.toLocaleString() ?? '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>{k.cpc_usd != null ? `$${k.cpc_usd.toFixed(2)}` : '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>{k.keyword_difficulty ?? '—'}</td>
+                              <td style={{ padding: '8px 10px' }}>{k.search_intent ?? '—'}</td>
+                              <td style={{ padding: '8px 10px', fontWeight: 700 }}>{k.trend_score ?? '—'}</td>
+                            </>
+                          )}
                           <td style={{ padding: '8px 10px', whiteSpace: 'nowrap' }}>
-                            {k.qualified && (
+                            {resultView === 'seo' && k.qualified && (
                               <button onClick={() => openWrite(k)} title="Create a Blog Writer draft from this rising query"
                                 style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 10px', borderRadius: 7, border: '1px solid #ddd6fe', background: '#f5f3ff', color: '#6d28d9', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
                                 <FileText size={12} /> Write
