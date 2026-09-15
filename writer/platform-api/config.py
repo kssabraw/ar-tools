@@ -1444,6 +1444,22 @@ class Settings(BaseSettings):
     google_trends_default_type: str = "web"            # web | news | youtube | images | froogle
     google_trends_max_seeds: int = 5                   # explore per-task keyword cap
     google_trends_drop_no_demand: bool = False         # keep unqualified rows (flagged) for inspection
+    # Phase 2 (informational): a SEEDLESS category scan anchors on the client's own
+    # site topics + ICP (keyword_research_topics) and gates the rising queries with
+    # the SAME relevance + audience filters keyword research uses, then the survivors
+    # route into Topic Research. seed_cap bounds the derived explore seeds (cost).
+    google_trends_category_seed_cap: int = 10
+    # Phase 3 (portfolio): a weekly agency-wide "what's rising this week" sweep over
+    # the union of clients' tracked keywords (no client scope, no relevance gate),
+    # digested to the SerMaStr strategy channel. Weekday: Monday=0 … Sunday=6 (UTC).
+    google_trends_portfolio_weekday: int = 0
+    google_trends_portfolio_max_clients: int = 20
+    google_trends_portfolio_seeds_per_client: int = 5
+    google_trends_portfolio_digest_size: int = 15
+    # Phase 4 (local seasonal, metro-geo only): a seasonality profile built from the
+    # Trends interest_over_time series feeds trend_watch.demand_outlook. months = the
+    # history window requested (≥2y so a full calendar cycle is covered).
+    google_trends_seasonal_months: int = 24
 
     # On-site content comparison (Tier B / B5): how many competitor pages to
     # scrape per keyword, and the thresholds to flag a content gap (words thinner

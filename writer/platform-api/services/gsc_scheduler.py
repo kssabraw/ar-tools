@@ -610,6 +610,7 @@ async def gsc_scheduler() -> None:
     from services.local_dominator import enqueue_due_maps_scans, poll_pending_maps_scans
     from services.citation_check import enqueue_due_citation_checks
     from services.competitor_intel import enqueue_due_competitor_intel
+    from services.google_trends import enqueue_due_portfolio_trends_sweep
     from services.site_inventory import enqueue_due_site_inventory
     from services.deliverables_sheet import enqueue_due_notes_scans as enqueue_due_deliverable_notes
     from services.website_deploy import (
@@ -648,12 +649,14 @@ async def gsc_scheduler() -> None:
     weekday = settings.dataforseo_rank_weekday
     reopt_weekday = settings.reopt_plan_weekday
     rank_analysis_weekday = settings.rank_analysis_weekly_weekday
+    trends_sweep_weekday = settings.google_trends_portfolio_weekday
     # Durable markers: survive deploys so the daily/weekly blocks don't re-fire
     # on every restart (see the ops-fix comment above).
     state = load_scheduler_state()
     last_run_date = parse_marker_date(state.get("daily"))
     last_df_date = parse_marker_date(state.get("df_weekly"))
     last_reopt_date = parse_marker_date(state.get("reopt_weekly"))
+    last_trends_sweep_date = parse_marker_date(state.get("trends_sweep_weekly"))
     last_ops_digest_date = parse_marker_date(state.get("ops_digest_weekly"))
     last_board_reports_date = parse_marker_date(state.get("board_reports_weekly"))
     last_pace_intervention_report_date = parse_marker_date(state.get("pace_intervention_report_weekly"))
@@ -881,6 +884,13 @@ async def gsc_scheduler() -> None:
                 if _safe("reopt_plans", enqueue_due_reopt_plans):
                     last_reopt_date = now.date()
                     save_marker("reopt_weekly", last_reopt_date.isoformat())
+            # Weekly portfolio Google Trends sweep ("what's rising this week") on
+            # its own weekday. Self-gated on google_trends_enabled (no-ops while
+            # dark); the digest goes to the SerMaStr strategy channel.
+            if now.weekday() == trends_sweep_weekday and should_run(now, last_trends_sweep_date, hour):
+                if _safe("trends_sweep", enqueue_due_portfolio_trends_sweep):
+                    last_trends_sweep_date = now.date()
+                    save_marker("trends_sweep_weekly", last_trends_sweep_date.isoformat())
             # Director of Operations — weekly operations-flow digest (build
             # spec §6.2, owner decision 2: its own weekday hook, not a line on
             # the daily PACE digest). Self-gated on director_enabled; the

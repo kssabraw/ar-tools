@@ -154,3 +154,104 @@ def test_parse_categories_flattens_tree():
 def test_parse_categories_defensive():
     assert g.parse_categories({}) == []
     assert g.parse_categories({"tasks": [{"result": None}]}) == []
+
+
+# --- Phase 2: derive_category_seeds (site topics + expansion, deduped/capped) --
+def test_derive_category_seeds_merges_dedupes_caps():
+    tr = {
+        "site": {"topics": ["Historic Preservation", "historic  preservation", "Adaptive Reuse"]},
+        "expansion_seeds": ["national trust", "Adaptive Reuse"],  # dup of a site topic
+    }
+    out = g.derive_category_seeds(tr, cap=3)
+    # normalized dedupe (case + whitespace), site topics before expansion, capped
+    assert out == ["Historic Preservation", "Adaptive Reuse", "national trust"]
+
+
+def test_derive_category_seeds_empty_when_no_signal():
+    assert g.derive_category_seeds({}, cap=5) == []
+    assert g.derive_category_seeds({"site": {"topics": []}, "expansion_seeds": []}, cap=5) == []
+    # junk entries are skipped
+    assert g.derive_category_seeds({"site": {"topics": ["", "   ", 3]}}, cap=5) == []
+
+
+# --- Phase 3: build_digest_summary (deterministic weekly body) ----------------
+def test_build_digest_summary_lines_and_attribution():
+    rows = [
+        {"query": "collagen gummies", "is_breakout": True, "volume": 12000, "source_client_name": "Acme"},
+        {"query": "marine collagen", "is_breakout": False, "rising_value": 250, "volume": 3000, "source_client_name": None},
+    ]
+    out = g.build_digest_summary(rows, total_qualified=5)
+    assert "*2*" in out and "5 qualified" in out
+    assert "collagen gummies" in out and "Breakout" in out and "Acme" in out
+    assert "marine collagen" in out and "+250%" in out and "3,000/mo" in out
+
+
+def test_build_digest_summary_empty():
+    assert "No qualified" in g.build_digest_summary([], 0)
+
+
+# --- Phase 4: interest_over_time point parsing --------------------------------
+def test_point_month_and_value_shapes():
+    from datetime import datetime, timezone
+    assert g._point_month({"date_from": "2025-03-15"}) == 3
+    assert g._point_month({"month": 7}) == 7
+    assert g._point_month({"timestamp": datetime(2025, 6, 1, tzinfo=timezone.utc).timestamp()}) == 6
+    assert g._point_month({}) is None
+    assert g._point_month({"date_from": "junk"}) is None
+    assert g._point_value({"value": 42}) == 42.0
+    assert g._point_value({"values": [55]}) == 55.0
+    assert g._point_value({"values": [{"value": 33}]}) == 33.0
+    assert g._point_value({"data": [{"value": 7}]}) == 7.0
+    assert g._point_value({}) is None
+
+
+def _graph_body(points):
+    return {"tasks": [{"result": [{"items": [
+        {"type": "google_trends_queries_list", "data": {"rising": []}},
+        {"type": "google_trends_graph", "data": points},
+    ]}]}]}
+
+
+def test_parse_interest_over_time_extracts_points():
+    body = _graph_body([
+        {"date_from": "2025-01-01", "values": [50]},
+        {"date_from": "2025-02-01", "value": 80},
+        {"date_from": "junk"},   # no month → dropped
+        {"date_from": "2025-03-01"},  # no value → dropped
+        "notadict",
+    ])
+    out = g.parse_interest_over_time(body)
+    assert out == [{"month": 1, "value": 50.0}, {"month": 2, "value": 80.0}]
+
+
+def test_parse_interest_over_time_defensive():
+    assert g.parse_interest_over_time({}) == []
+    assert g.parse_interest_over_time({"tasks": [{"result": [{"items": [
+        {"type": "google_trends_graph", "data": None}]}]}]}) == []
+
+
+# --- Phase 4: seasonality profile (feeds trend_watch.demand_outlook) ----------
+def test_seasonality_profile_needs_six_months():
+    series = [{"month": m, "value": 10} for m in range(1, 6)]  # only 5 months
+    assert g.seasonality_profile_from_series(series) is None
+
+
+def test_seasonality_profile_index_normalized_to_mean():
+    series = [{"month": m, "value": 200 if m == 12 else 100} for m in range(1, 13)]
+    prof = g.seasonality_profile_from_series(series)
+    assert prof is not None
+    idx = prof["index"]
+    assert set(idx) == set(range(1, 13))
+    mean = (11 * 100 + 200) / 12
+    assert abs(idx[12] - 200 / mean) < 0.01   # 1.0 == the year's mean
+    assert abs(idx[1] - 100 / mean) < 0.01
+    assert 12 in prof["peak_months"] and 12 not in prof["low_months"]
+
+
+def test_seasonality_profile_zero_mean_none():
+    assert g.seasonality_profile_from_series([{"month": m, "value": 0} for m in range(1, 13)]) is None
+
+
+def test_seasonal_date_from_is_months_back():
+    d = g._seasonal_date_from(24)
+    assert len(d) == 10 and d.endswith("-01") and d[4] == "-"
