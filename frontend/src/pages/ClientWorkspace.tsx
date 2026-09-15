@@ -16,6 +16,7 @@ import { StrategistReview } from '../components/StrategistReview'
 import { InterventionOutcomes } from '../components/InterventionOutcomes'
 import { EverhourTimeCard } from '../components/EverhourTimeCard'
 import { ErrorDetails } from '../components/ErrorDetails'
+import { ProspectSnapshotCard } from '../components/ProspectSnapshotCard'
 
 export function ClientWorkspace() {
   const { id } = useParams<{ id: string }>()
@@ -600,6 +601,9 @@ function ProspectWorkspace({ client, id }: { client: Client; id: string }) {
           cta="Open"
         />
       </Section>
+
+      {/* One combined deliverable assembled from whatever's been run above. */}
+      <ProspectSnapshotCard clientId={id} />
 
       <Section
         title="More research"

@@ -2155,6 +2155,252 @@ def _build_ai_visibility_report(client_id: str, period_start: date, period_end: 
     return result["html"], f"{name} — AI Visibility Report ({period_end.isoformat()})"
 
 
+# ── Prospect Snapshot ────────────────────────────────────────────────────────
+# A combined one-off prospecting report (organic / maps / AI-visibility /
+# competitive-intel) for a kind='prospect' client. Deterministic: it AGGREGATES
+# whatever each module has already captured on demand — NO new paid calls, NO
+# LLM — and, rather than silently omitting a section a prospect hasn't run yet,
+# prompts the reader with what to click to fill it.
+
+def _prospect_prompt(msg: str) -> str:
+    return f"<p class='lead'>{_esc(msg)}</p>"
+
+
+def _gather_geogrid_any(supabase, client_id: str) -> Optional[dict]:
+    """The latest COMPLETED maps scan for a client regardless of trigger — a
+    prospect's scans are `trigger='manual'`, which the reporting filter behind
+    `_gather_geogrid` excludes. Same dict shape `_section_geogrid` consumes,
+    minus the period-over-period fields (a prospect typically has one scan)."""
+    rows = (
+        supabase.table("maps_scans").select("id, created_at")
+        .eq("client_id", client_id).eq("status", "complete")
+        .order("created_at", desc=True).limit(1).execute()
+    ).data
+    if not rows:
+        return None
+    scan = rows[0]
+    results = (
+        supabase.table("maps_scan_results")
+        .select("keyword, average_rank, top3_pins, total_pins, rank_grid, map_image_url, report_weak_locations")
+        .eq("scan_id", scan["id"]).limit(6).execute()
+    ).data or []
+    if not results:
+        return None
+    weak: list[str] = []
+    for r in results:
+        for city in _weak_area_names(r.get("report_weak_locations")):
+            if city not in weak:
+                weak.append(city)
+
+    def _kw(r: dict) -> dict:
+        return {
+            "keyword": r.get("keyword"), "average_rank": r.get("average_rank"),
+            "top3_pins": r.get("top3_pins"), "total_pins": r.get("total_pins"),
+            "rank_grid": r.get("rank_grid"), "map_image": _png_data_uri(r.get("map_image_url")),
+            "presence_pct": _pin_presence(r.get("top3_pins"), r.get("total_pins")),
+            "presence_prev_pct": None, "presence_change_pts": None, "rank_change": None,
+        }
+
+    return {
+        "scan_at": scan.get("created_at"),
+        "presence_now": _scan_presence(supabase, scan["id"]),
+        "presence_prev": None, "presence_horizons": None,
+        "keywords": [_kw(r) for r in results], "weak_areas": weak[:8],
+    }
+
+
+def _section_prospect_organic(d: Optional[dict]) -> str:
+    if not (d and d.get("overview")):
+        return (
+            "<section><h2>Organic search</h2>"
+            + _prospect_prompt("No organic data captured yet — open Domain Intelligence and "
+                               "run an overview on the prospect's website to fill this in.")
+            + "</section>"
+        )
+    ov = d["overview"]
+    dr = ov.get("dr")
+    tv = ov.get("traffic_value_est")
+    kpis = (
+        "<div class='kpis'>"
+        + _kpi("Est. monthly traffic", _fmt_int(ov.get("organic_traffic_est")), "organic visits")
+        + _kpi("Keywords ranked", _fmt_int(ov.get("ranked_keyword_count")), "in Google")
+        + _kpi("Domain rating", (str(dr) if dr is not None else "—"),
+               f"{_fmt_int(ov.get('rd'))} referring domains")
+        + _kpi("Traffic value", ("$" + _fmt_int(tv)) if tv is not None else "—", "est. PPC equivalent")
+        + "</div>"
+    )
+    body = kpis
+    kws = d.get("ranked_keywords") or []
+    if kws:
+        rows = "".join(
+            f"<tr><td>{_esc(k.get('keyword'))}</td>"
+            f"<td class='num'>{_fmt_pos(k.get('position'))}</td>"
+            f"<td class='num'>{_fmt_int(k.get('volume'))}</td>"
+            f"<td class='num'>{('$' + _fmt_int(k.get('est_value'))) if k.get('est_value') is not None else '—'}</td></tr>"
+            for k in kws[:15]
+        )
+        body += (
+            "<p class='lead'>Top keywords this site already ranks for:</p>"
+            "<table><thead><tr><th>Keyword</th><th class='num'>Position</th>"
+            "<th class='num'>Volume</th><th class='num'>Est. value</th></tr></thead>"
+            f"<tbody>{rows}</tbody></table>"
+        )
+    gaps = d.get("keyword_gaps") or []
+    if gaps:
+        grows = "".join(
+            f"<tr><td>{_esc(g.get('keyword'))}</td><td>{_esc(g.get('competitor_domain'))}</td>"
+            f"<td class='num'>{_fmt_pos(g.get('competitor_position'))}</td>"
+            f"<td class='num'>{_fmt_int(g.get('volume'))}</td></tr>"
+            for g in gaps[:10]
+        )
+        body += (
+            "<p class='lead'>Keyword gaps — terms competitors rank for that this site doesn't:</p>"
+            "<table><thead><tr><th>Keyword</th><th>Competitor</th>"
+            "<th class='num'>Their pos.</th><th class='num'>Volume</th></tr></thead>"
+            f"<tbody>{grows}</tbody></table>"
+        )
+    return "<section><h2>Organic search</h2>" + body + "</section>"
+
+
+def _section_prospect_competitors(ci: Optional[dict]) -> str:
+    comps = (ci or {}).get("competitors") or []
+    if not comps:
+        return (
+            "<section><h2>Competitive landscape</h2>"
+            + _prospect_prompt("No competitors on file yet — add them under Competitive Intel "
+                               "(or discover them via Domain Intelligence), then run a sync.")
+            + "</section>"
+        )
+
+    def _v(x):
+        return "—" if x is None else x
+
+    rows = ""
+    for c in comps[:8]:
+        gbp = c.get("gbp") or {}
+        bl = c.get("backlinks") or {}
+        org = c.get("organic") or {}
+        lp = c.get("local_pack") or {}
+        rating = gbp.get("rating")
+        rc = gbp.get("review_count")
+        rating_cell = f"{_v(rating)}{(' (' + _fmt_int(rc) + ')') if rc is not None else ''}"
+        rows += (
+            f"<tr><td>{_esc(c.get('name') or c.get('domain') or '—')}</td>"
+            f"<td class='num'>{rating_cell}</td>"
+            f"<td class='num'>{_v(bl.get('domain_rating'))}</td>"
+            f"<td class='num'>{_fmt_int(bl.get('referring_domains')) if bl.get('referring_domains') is not None else '—'}</td>"
+            f"<td class='num'>{_fmt_int(org.get('top10_keyword_count')) if org.get('top10_keyword_count') is not None else '—'}</td>"
+            f"<td class='num'>{_fmt_pos(lp.get('avg_rank'))}</td></tr>"
+        )
+    return (
+        "<section><h2>Competitive landscape</h2>"
+        "<p class='note'>The businesses competing for this prospect's space, across every "
+        "signal we track — ordered most-threatening first.</p>"
+        "<table><thead><tr><th>Competitor</th><th class='num'>GBP rating</th><th class='num'>DR</th>"
+        "<th class='num'>Ref. domains</th><th class='num'>Top-10 kw</th><th class='num'>Maps avg</th>"
+        f"</tr></thead><tbody>{rows}</tbody></table></section>"
+    )
+
+
+def _build_prospect_report(client_id: str, period_start: date, period_end: date) -> tuple[str, str]:
+    """(html, title) for the 'prospect_snapshot' report type — a combined
+    prospecting deliverable aggregating the latest already-captured Organic
+    (Domain Intelligence), Maps geo-grid, AI-visibility and Competitive-Intel
+    data for a prospect. Deterministic; reads stored data only."""
+    from services import competitor_intel, domain_intel
+
+    supabase = get_supabase()
+    rows = (
+        supabase.table("clients")
+        .select("id, name, website_url, logo_url, business_location")
+        .eq("id", client_id).limit(1).execute()
+    ).data
+    client = rows[0] if rows else {}
+    name = client.get("name") or "Prospect"
+
+    # Organic — latest Domain Intelligence overview + top keywords + keyword gaps.
+    organic: Optional[dict] = None
+    try:
+        domain = domain_intel._client_domain(client_id)
+        if domain:
+            ov = domain_intel.get_latest_overview(client_id, domain)
+            if ov and ov.get("snapshot"):
+                organic = {
+                    "overview": ov["snapshot"],
+                    "ranked_keywords": ov.get("ranked_keywords") or [],
+                    "keyword_gaps": (domain_intel.get_keyword_gaps(client_id) or {}).get("gaps") or [],
+                }
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prospect_report_organic_failed", extra={"client_id": client_id, "error": str(exc)})
+
+    # Maps — latest completed scan (any trigger, since prospect scans are manual).
+    try:
+        geogrid = _gather_geogrid_any(supabase, client_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prospect_report_maps_failed", extra={"client_id": client_id, "error": str(exc)})
+        geogrid = None
+
+    # AI visibility — latest batch within a wide window (reuses the combined
+    # report's gatherer; degrades to None when the prospect has run no scan).
+    try:
+        ai = _gather_ai_visibility(supabase, client_id, period_start, period_end)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prospect_report_ai_failed", extra={"client_id": client_id, "error": str(exc)})
+        ai = None
+
+    # Competitive intel — profiles assembled from already-synced data.
+    try:
+        ci = competitor_intel.build_profiles(client_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("prospect_report_ci_failed", extra={"client_id": client_id, "error": str(exc)})
+        ci = None
+
+    maps_section = (
+        _section_geogrid({"geogrid": geogrid}) if geogrid else
+        "<section><h2>Local pack / Maps coverage</h2>"
+        + _prospect_prompt("No Maps geo-grid scan yet — open the Maps Ranker, link a Google "
+                           "Business Profile, add a few keywords and run a scan.")
+        + "</section>"
+    )
+    ai_section = (
+        _section_ai_visibility({"ai_visibility": ai}) if (ai and ai.get("engines")) else
+        "<section><h2>AI search visibility</h2>"
+        + _prospect_prompt("No AI-visibility scan yet — open AI Visibility, add a few keywords "
+                           "and run a scan.")
+        + "</section>"
+    )
+
+    site = client.get("website_url")
+    intro = (
+        "<section><p class='lead'>A point-in-time prospecting snapshot"
+        + (f" for <strong>{_esc(name)}</strong>" if name else "")
+        + (f" — {_esc(site)}" if site else "")
+        + " across organic search, local rankings, AI visibility and the competitive field. "
+        "Each section reflects the data run so far; blank sections tell you what to run next.</p></section>"
+    )
+    sections = intro + _section_prospect_organic(organic) + maps_section + ai_section + _section_prospect_competitors(ci)
+
+    logo = client.get("logo_url")
+    logo_html = f'<img class="logo" src="{_esc(logo)}"/>' if logo else ""
+    agency = settings.client_report_agency_name or "Amazing Rankings"
+    title = f"{name} — Prospect Snapshot ({period_end.isoformat()})"
+    html = (
+        '<!doctype html><html><head><meta charset="utf-8"/>'
+        f"<title>{_esc(title)}</title>"
+        f"<style>{_CSS}</style></head><body>"
+        '<header class="cover">'
+        f"{logo_html}"
+        f"<h1>{_esc(name)}</h1>"
+        '<div class="subtitle">Prospect Snapshot</div>'
+        f'<div class="period">{_esc(period_end.isoformat())}</div>'
+        "</header>"
+        f"<main>{sections}</main>"
+        f"<footer>Prepared by {_esc(agency)} · {_esc(period_end.isoformat())}</footer>"
+        "</body></html>"
+    )
+    return html, title
+
+
 def generate_client_report(
     client_id: str,
     report_type: str = "monthly",
@@ -2174,6 +2420,13 @@ def generate_client_report(
     elif report_type == "maps":
         html, title = _build_maps_report(client_id, period_start, period_end)
         section_status = {"maps": "ok"}
+    elif report_type == "prospect_snapshot":
+        # A prospecting snapshot reads the LATEST captured data, so widen the
+        # window to ~1y — any recent on-demand scan is included regardless of
+        # the requested period.
+        wide_start = min(period_start, period_end - timedelta(days=365))
+        html, title = _build_prospect_report(client_id, wide_start, period_end)
+        section_status = {"prospect_snapshot": "ok"}
     else:
         data = gather_report_data(client_id, period_start, period_end)
 
