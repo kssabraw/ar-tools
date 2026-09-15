@@ -108,9 +108,15 @@ def test_decide_scan_action_lifecycle():
     # deferred, still snoozed vs elapsed
     assert PI.decide_scan_action(_row(status="deferred", deferred_until="2026-09-10"), today, **kw) == "skip"
     assert PI.decide_scan_action(_row(status="deferred", deferred_until="2026-08-20"), today, **kw) == "resurface"
-    # denied — cooldown window
-    recent = (datetime.now(timezone.utc)).isoformat()
-    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    # denied — cooldown window. Anchor the timestamps to `today` (which
+    # decide_scan_action measures decided_at against), NOT real now() — otherwise
+    # once wall-clock time drifts >~16 days past the frozen today, now()-30d lands
+    # inside the 14-day deny cooldown and the assertion flips create→skip (this
+    # test failed on every PR from 2026-09-15; test-only, decide_scan_action
+    # unchanged).
+    today_dt = datetime(today.year, today.month, today.day, tzinfo=timezone.utc)
+    recent = today_dt.isoformat()
+    old = (today_dt - timedelta(days=30)).isoformat()
     assert PI.decide_scan_action(_row(status="denied", decided_at=recent), today, **kw) == "skip"
     assert PI.decide_scan_action(_row(status="denied", decided_at=old), today, **kw) == "create"
     # executed — re-execute cooldown

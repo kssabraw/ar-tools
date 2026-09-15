@@ -51,6 +51,7 @@ from services.github_infer import run_github_infer_job
 from services.blog_media.pipeline import run_blog_media_publish_job
 from services.keyword_research import run_keyword_research_job
 from services.keyword_research_report import run_report_job as run_keyword_research_report_job
+from services.google_trends import run_google_trends_scan_job
 from services.freeze import FREEZE_GATED_JOB_TYPES, is_frozen, job_client_id, run_freeze_check_job
 from services.page_backlink_intel import run_page_backlink_job
 from services.notifications import run_notification_dispatch_job
@@ -1066,6 +1067,8 @@ async def _process_job(job: dict) -> None:
         await run_coverage_audit_job(job)
     elif job_type == "keyword_research":
         await run_keyword_research_job(job)
+    elif job_type == "google_trends_scan":
+        await run_google_trends_scan_job(job)
     elif job_type == "keyword_research_report":
         await run_keyword_research_report_job(job)
     elif job_type == "keyword_topic_research":
