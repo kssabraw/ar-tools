@@ -11,20 +11,23 @@ is ecommerce, **keyword-anchored** — a scan expands one or more seed keywords 
 their rising related queries, optionally filtered to a Google Trends category. Ships
 dark behind ``settings.google_trends_enabled`` (code default False).
 
-DataForSEO shape notes — verified against docs.dataforseo.com 2026-09-14, but NOT
-from a live call (the build sandbox is egress-blocked from api.dataforseo.com; a
-403 CONNECT tunnel). Run ``scripts/verify_google_trends.py`` from the Railway
-PLATFORM service (which holds the creds and has egress) to confirm the response
-shape before flipping the flag on. Known facts:
+DataForSEO shape notes — verified LIVE from Railway PLATFORM 2026-09-15
+(queries_list=True with 13 rising / 25 top, categories=1427 rows, graph=53 points):
   * endpoint  POST /v3/keywords_data/google_trends/explore/live
-  * request   [{keywords: [≤5], location_name|location_code, date_from, category_code, type}]
-  * DO NOT send ``item_types`` — the DOCUMENTED param is REJECTED live with task
-    error 40501 "Invalid Field: 'item_types'" ($0 charged). ``google_trends_queries_list``
-    is returned in the DEFAULT response, so we parse it from there.
+  * request   [{keywords: [≤5], location_name|location_code, date_from, category_code,
+    type, item_types}]
+  * ``item_types`` IS accepted and REQUIRED to get the queries list — the DEFAULT
+    response carries only ``google_trends_graph`` (interest_over_time) and no
+    queries list, so every rising-query scan MUST send
+    ``item_types: ["google_trends_queries_list"]``. The seasonal scan omits it and
+    parses the default graph.
   * response  tasks[0].result[0].items[] — the item with type="google_trends_queries_list"
     carries data.top[] / data.rising[] (each {query, value}; a rising value is a
-    percent int or the string "Breakout"). Parsed defensively.
-  * categories POST /v3/keywords_data/google_trends/categories (free) → a category tree.
+    percent int or the string "Breakout"). The graph item's points are
+    {date_from, date_to, timestamp, missing_data, values:[int]}; a missing_data
+    point is skipped. Parsed defensively.
+  * categories GET /v3/keywords_data/google_trends/categories (free) → a flat
+    {category_code, category_name, category_code_parent} list (a POST 404s).
   * cost ≈ $0.002 per explore task.
 """
 
@@ -75,11 +78,17 @@ def _auth_header() -> dict[str, str]:
     return {"Authorization": f"Basic {encoded}", "Content-Type": "application/json"}
 
 
-async def _post(path: str, payload: list[dict]) -> dict:
+async def _request(method: str, path: str, payload: Optional[list[dict]] = None) -> dict:
+    """One DataForSEO call (POST with a task array, or GET). Retries on 429/5xx
+    with jittered backoff. The explore endpoint is a POST; the categories endpoint
+    is a **GET** (a POST 404s — verified live 2026-09-15)."""
     attempt = 0
     while True:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(f"{_BASE_URL}{path}", headers=_auth_header(), json=payload)
+            if method == "GET":
+                resp = await client.get(f"{_BASE_URL}{path}", headers=_auth_header())
+            else:
+                resp = await client.post(f"{_BASE_URL}{path}", headers=_auth_header(), json=payload or [])
         if resp.status_code == 429 or resp.status_code >= 500:
             if attempt >= _DFS_MAX_RETRIES:
                 resp.raise_for_status()
@@ -98,6 +107,14 @@ async def _post(path: str, payload: list[dict]) -> dict:
             continue
         resp.raise_for_status()
         return resp.json()
+
+
+async def _post(path: str, payload: list[dict]) -> dict:
+    return await _request("POST", path, payload)
+
+
+async def _get(path: str) -> dict:
+    return await _request("GET", path)
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +334,11 @@ def _point_value(entry: dict) -> Optional[float]:
 
 def parse_interest_over_time(body: dict) -> list[dict]:
     """Extract the interest_over_time series from a DataForSEO explore response.
-    Pure. Defensive. Returns [{month, value}] points (month 1-12, value float)."""
+    Pure. Defensive. Returns [{month, value}] points (month 1-12, value float).
+
+    Live graph point shape (verified 2026-09-15): {date_from, date_to, timestamp,
+    missing_data, values:[int]} — ``values[0]`` for a single-keyword explore. A
+    point flagged ``missing_data: true`` carries no real reading and is skipped."""
     tasks = body.get("tasks") if isinstance(body, dict) else None
     if not isinstance(tasks, list):
         return []
@@ -336,6 +357,8 @@ def parse_interest_over_time(body: dict) -> list[dict]:
                     (data or {}).get("data") if isinstance(data, dict) else None)
                 for entry in points or []:
                     if not isinstance(entry, dict):
+                        continue
+                    if entry.get("missing_data") is True:
                         continue
                     month = _point_month(entry)
                     value = _point_value(entry)
@@ -381,11 +404,15 @@ async def explore_live(
     language_code: Optional[str] = None,
     trends_type: str = "web",
     date_from: Optional[str] = None,
+    item_types: Optional[list[str]] = None,
 ) -> tuple[dict, float]:
     """One Google Trends explore call (≤5 keywords). Returns (body, cost).
 
-    NOTE: no ``item_types`` — it is rejected live (40501); the queries list is in
-    the default response."""
+    ``item_types`` selects which item types the response carries. To get the
+    rising/top queries list you MUST pass ``["google_trends_queries_list"]`` — the
+    DEFAULT response carries only ``google_trends_graph`` (interest_over_time) and
+    no queries list (verified live 2026-09-15). The seasonal scan omits it so the
+    default graph is what comes back."""
     task: dict = {"keywords": keywords[:_EXPLORE_MAX_KEYWORDS], "type": trends_type or "web"}
     if category_code is not None:
         task["category_code"] = int(category_code)
@@ -395,6 +422,8 @@ async def explore_live(
         task["language_code"] = language_code
     if date_from:
         task["date_from"] = date_from
+    if item_types:
+        task["item_types"] = list(item_types)
     body = await _post(_EXPLORE_PATH, [task])
     cost = dataforseo_labs.cost_of(body) or 0.0
     return body, cost
@@ -402,12 +431,13 @@ async def explore_live(
 
 async def fetch_categories(force: bool = False) -> list[dict]:
     """The Google Trends category tree (free endpoint), cached per process.
-    Best-effort — an empty list on failure (the UI degrades to a free-text code)."""
+    Best-effort — an empty list on failure (the UI degrades to a free-text code).
+    This endpoint is a **GET** — a POST 404s (verified live 2026-09-15)."""
     global _CATEGORIES_CACHE
     if _CATEGORIES_CACHE is not None and not force:
         return _CATEGORIES_CACHE
     try:
-        body = await _post(_CATEGORIES_PATH, [{}])
+        body = await _get(_CATEGORIES_PATH)
         _CATEGORIES_CACHE = parse_categories(body)
     except Exception as exc:  # noqa: BLE001 — best-effort; the dropdown is optional
         logger.warning("google_trends.categories_failed", extra={"error": str(exc)})
@@ -502,6 +532,7 @@ async def _explore_and_qualify(
             body, cost = await explore_live(
                 group, category_code=category_code, location_code=location_code,
                 language_code=language_code, trends_type=trends_type,
+                item_types=["google_trends_queries_list"],
             )
         except Exception as exc:  # noqa: BLE001 — one dead chunk shouldn't kill the scan
             logger.warning("google_trends.explore_chunk_failed", extra={**log_ctx, "error": str(exc)})
