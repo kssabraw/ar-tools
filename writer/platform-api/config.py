@@ -802,6 +802,17 @@ class Settings(BaseSettings):
     brand_guide_naming_max_tokens: int = 2000
     brand_guide_synthesis_model: str = "claude-sonnet-4-6"
     brand_guide_synthesis_max_tokens: int = 3500
+    # Phase 3 — PDF render + render profiles (PRD §4.7). Deterministic assembly
+    # over the stored record (NO LLM at render time) → a portable PDF in the
+    # `reports` bucket + delivery to the client's Drive folder, rendered in both an
+    # `internal` (blunt coherence audit) and a `client` (opportunities-reframed +
+    # white-label footer) profile. `brand_guide_render_enabled` is the skip guard on
+    # top of `brand_guide_enabled`: with it off, a non-regulated generate job
+    # finalizes at the synthesis status without a PDF (turn render off while
+    # capture/synthesis are still being tuned). A regulated client always renders
+    # via the separate `brand_guide_render` job on human sign-off. Best-effort: a
+    # render failure records `status='error'` + an honest note, never crashes.
+    brand_guide_render_enabled: bool = True
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may

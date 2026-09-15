@@ -359,8 +359,15 @@ class TestSynthesisWiring:
         async def _synth(client, *, census, vibe_read=None, captured=None):
             return synth_result
 
+        # Phase 3 render fires inline for a non-regulated `done` guide (brand_guide_enabled
+        # is True here). Stub it — the render layer is exercised in test_brand_guide_render.py;
+        # this class only locks the synthesis→row wiring.
+        async def _render(guide_id, deliver=True):
+            return {"guide_id": guide_id, "status": "done", "pdf_url": "https://signed/client"}
+
         monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
         monkeypatch.setattr("services.brand_guide_synthesis.run_synthesis_for_guide", _synth)
+        monkeypatch.setattr("services.brand_guide_render.render_and_store_guide", _render)
         return await G.generate_brand_guide("g-1", "c-1", source_url)
 
     async def test_synthesized_and_done_folded_into_row(self, guide_row, monkeypatch):
@@ -372,6 +379,41 @@ class TestSynthesisWiring:
         assert row["captured"]["synthesis_note"] == "synthesis complete"
         assert result["synthesized"] is True
 
+    async def test_render_fires_inline_for_done_guide(self, guide_row, monkeypatch):
+        # Phase 3: a non-regulated `done` guide renders inline; the render status +
+        # pdf_url are folded into the generate result.
+        synth = {"positioning_statement": "For pros.", "coherence": {"flags": []}}
+        seen = {}
+
+        async def _render(guide_id, deliver=True):
+            seen["guide_id"], seen["deliver"] = guide_id, deliver
+            return {"guide_id": guide_id, "status": "done", "pdf_url": "https://signed/client"}
+
+        monkeypatch.setattr(G.settings, "brand_guide_enabled", True)
+
+        async def _cap(url, role):
+            return {"url": url, "role": role, "notes": [], "html_len": 10,
+                    "has_screenshot": True, "_html": "<html></html>",
+                    "_pixels": [((26, 43, 109), 800)], "_png": b"PNG"}
+
+        async def _vibe(captured, *, homepage_png=None):
+            return None, "vibe read skipped — disabled"
+
+        async def _synth(client, *, census, vibe_read=None, captured=None):
+            return synth, "synthesis complete", "done"
+
+        monkeypatch.setattr(G, "_capture_page", _cap)
+        monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
+        monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
+        monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
+        monkeypatch.setattr("services.brand_guide_synthesis.run_synthesis_for_guide", _synth)
+        monkeypatch.setattr("services.brand_guide_render.render_and_store_guide", _render)
+
+        result = await G.generate_brand_guide("g-1", "c-1", "https://acme.example")
+        assert seen == {"guide_id": "g-1", "deliver": True}
+        assert result["render_status"] == "done"
+        assert result["pdf_url"] == "https://signed/client"
+
     async def test_regulated_awaiting_signoff_reaches_row(self, guide_row, monkeypatch):
         synth = {"positioning_statement": "For patients.", "provenance": {"regulated": True}}
         result = await self._run(
@@ -380,7 +422,10 @@ class TestSynthesisWiring:
         row = guide_row.tables["brand_guides"][0]
         assert row["status"] == "awaiting_signoff"
         assert row["synthesized"] == synth
+        # Render does NOT fire for a regulated (awaiting_signoff) guide — had it, `_run`'s
+        # render stub would have overridden result["status"] to "done".
         assert result["status"] == "awaiting_signoff"
+        assert "render_status" not in result
 
     async def test_synthesis_none_omits_field(self, guide_row, monkeypatch):
         result = await self._run(guide_row, monkeypatch, (None, "synthesis produced no usable output", "done"))
@@ -415,11 +460,15 @@ class TestSynthesisWiring:
         async def _boom(*a, **k):
             raise RuntimeError("kaboom")
 
+        async def _render(guide_id, deliver=True):
+            return {"guide_id": guide_id, "status": "done"}
+
         monkeypatch.setattr(G, "_capture_page", _cap)
         monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
         monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
         monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
         monkeypatch.setattr("services.brand_guide_synthesis.run_synthesis_for_guide", _boom)
+        monkeypatch.setattr("services.brand_guide_render.render_and_store_guide", _render)
 
         result = await G.generate_brand_guide("g-1", "c-1", "https://acme.example")
         row = guide_row.tables["brand_guides"][0]
