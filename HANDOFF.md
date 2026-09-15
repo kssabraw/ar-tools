@@ -1,6 +1,19 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-15 · **Google Trends Discovery — Phases 1.1, 2, 3, 4 BUILT (continue), still DARK (PR [#1109](https://github.com/kssabraw/ar-tools/pull/1109))** (latest)
+## ⏩ Update — 2026-09-15 · **PAA → SEO Neo v1 (the CONTENT HALF) — BUILT, MERGED (PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117)), LIVE in production** (latest)
+
+The first build of the PAA → SEO Neo initiative (methodology reference #1110, plan #1112). v1 = the **content half only** — a first-class PAA Set object + the three PAA writing rules as reused writer constraints. **The SEO Neo authority layer (link blasts / RD 100 / GMBB Blast / Omega / PBNs) stays OUT of scope and is NEVER executed by the suite** (permanent guardrail, PRD §9). Authority: `docs/modules/paa-seo-neo-prd-v1_0.md` (§10 build order) + `docs/reference/paa-seo-neo-master-reference.md` (methodology).
+
+**Built + verified LIVE in production (tables in Supabase, all 6 routes in the PLATFORM `/openapi.json`):**
+- **Migration `20260915140000_paa_sets.sql` — APPLIED LIVE:** `paa_sets` (per client × service keyword × geo: `geo_mode` default `'geo'` + `'naked'` toggle, nullable `service_page_url`) + `paa_items` (one per PAA string: exact question, reused DataForSEO volume/CPC, `chosen`/candidate flag, `slug` cannibalization key, nullable `run_id`/`gbp_post_id`/`post_url`, `checks` jsonb). Both RLS-on, service-role only. **No new `async_jobs` type** — posts are ordinary blog `runs`.
+- **`services/paa_seo.py`** (pure, unit-tested `tests/test_paa_seo.py`, 37 cases): `geo_query` (geo_mode), PAA candidate assembly + slug dedup, `compose_writer_notes` (the three rules), the deterministic `check_exact_match` + `service_link_verdict` (reusing `local_seo_matrix.check_internal_links`), and `cannibalization_gates` (reusing `scale_gates` / `MATRIX_SIGNOFF_THRESHOLD`).
+- **`services/paa_sets_service.py`** (I/O; `tests/test_paa_sets_service.py` — mocked writer-constraint enforcement): pull PAA (reuses ONE billed `keyword_research_serp` SERP call + a market batch — no multiplication), save a set (service-page URL resolved explicit → `site_page_index` auto-match → prompt, PRD §8.3), a cannibalization preflight (`site_page_index` token match + scale gates), "create posts" → one blog run per PAA (seeded from the exact PAA string, `writer_notes` carrying the rules, idempotent per item via `source_ref=paa_item:{id}`) + best-effort GBP-post draft + syndication-queue refresh, then deterministic `verify_posts`.
+- **`routers/paa.py`** + `models/paa.py`, registered in `main.py`. **Frontend:** a **PAA Content** card in the workspace *Content Creation* section (`ClientWorkspace.tsx`) → `/clients/:id/paa-sets` (`pages/PaaSets.tsx`): pull → select ~4 → save → create posts, with the cannibalization sign-off + per-post verification badges; `[PROVEN]`/`[BELIEF]` confidence tags carried into the copy. Ships as a plain content surface (**no feature flag**).
+- **Docs:** the manual single-variable scan/verify workflow (`docs/modules/paa-seo-neo/single-variable-scan-verify-workflow.md`) — Maps geo-grid + response-episodes, **no new state machine in v1**.
+
+**Deferred (each needs its own owner greenlight — PRD §6):** the prep-sheet manifest, link-layer track/cost/QA, the campaign object + automated gate, audio/video/influencer rows. **Not wired into any agent loader** (the master reference stays in `docs/reference/`, `sop_library` never reads it). CI green on the merge (platform-api tests + lint/typecheck + Netlify); the pre-existing `test_pace_interventions.py` date-bomb passed in this run.
+
+## ⏩ Update — 2026-09-15 · **Google Trends Discovery — Phases 1.1, 2, 3, 4 BUILT (continue), still DARK (PR [#1109](https://github.com/kssabraw/ar-tools/pull/1109))**
 
 Continues the module (#1107 shared core + Phase 1, now merged). All four remaining phases built, still gated on `google_trends_enabled` (code default `False`). Authority: `docs/modules/google-trends-discovery-plan-v1_0.md`.
 
