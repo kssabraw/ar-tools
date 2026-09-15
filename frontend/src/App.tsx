@@ -39,6 +39,7 @@ import { DomainIntel } from './pages/DomainIntel'
 import { CoverageAudit } from './pages/CoverageAudit'
 import { KeywordResearch } from './pages/KeywordResearch'
 import { GoogleTrends } from './pages/GoogleTrends'
+import { PaaSets } from './pages/PaaSets'
 import { Forecast } from './pages/Forecast'
 import { Sops } from './pages/Sops'
 import { Guides } from './pages/Guides'
@@ -119,6 +120,7 @@ export default function App() {
                       <Route path="/clients/:id/icp" element={<Icp />} />
                       <Route path="/clients/:id/content" element={<ClientContent />} />
                       <Route path="/clients/:id/local-seo" element={<LocalSeoContent />} />
+                      <Route path="/clients/:id/paa-sets" element={<PaaSets />} />
                       <Route path="/clients/:id/ecommerce" element={<EcommerceProduct />} />
                       <Route path="/clients/:id/social" element={<SocialCompose />} />
                       <Route path="/clients/:id/wheelhouse" element={<Wheelhouse />} />

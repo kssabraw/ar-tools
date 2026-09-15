@@ -4,7 +4,24 @@
 > decisions, and next action** for the PAA → SEO Neo initiative. Root `/HANDOFF.md`
 > is the suite-wide changelog; this file is scoped to this initiative.
 
-## Status (2026-09-15) — PLAN MERGED · DECISIONS LOCKED · BUILD GREENLIT (v1 = content half)
+## Status (2026-09-15) — v1 (content half) BUILT · in PR on `claude/paa-seo-neo-v1-build-vakcd3`
+
+> v1 is built to PRD §10 and pushed. The migration (`paa_sets` + `paa_items`) is
+> **applied live** to the Supabase project. What shipped: the two tables; a **PAA
+> Content** card in the workspace "Content Creation" section → `/clients/:id/paa-sets`
+> (pull PAA via `keyword_research_serp` → select ~4 → save); the three writer
+> constraints (`services/paa_seo.compose_writer_notes` on the reused `writer_notes`
+> seam + deterministic `check_exact_match` / `service_link_verdict` reusing
+> `local_seo_matrix.check_internal_links`); the cannibalization guard
+> (`site_page_index` token match + `local_seo_matrix.scale_gates` /
+> `MATRIX_SIGNOFF_THRESHOLD`); the "create PAA posts" action (N blog runs + best-effort
+> GBP drafts + syndication refresh, all seeded from the exact PAA string); the manual
+> scan/verify workflow doc (`single-variable-scan-verify-workflow.md`); and pure +
+> enforcement tests (`tests/test_paa_seo.py`, `tests/test_paa_sets_service.py`). No
+> feature flag (a plain content surface). Guardrails (§9) held: nothing touches the
+> SEO Neo authority layer, no `sop_library` wiring, no audio/video generator.
+
+## Prior status (2026-09-15) — PLAN MERGED · DECISIONS LOCKED · BUILD GREENLIT (v1 = content half)
 
 - **The whole external corpus has been read and analyzed** (except SOP 07c, Video —
   not provided). A complete "how it all works together" synthesis exists.
@@ -110,4 +127,6 @@ tracking/costing/QA, no campaign object/automated gate, no audio/video generator
 - [x] Owner settles the four open decisions above.
 - [x] Plan / PRD written for the chosen v1 scope (`docs/modules/paa-seo-neo-prd-v1_0.md`).
 - [x] Owner greenlit the v1 build order (§10), 2026-09-15.
-- [ ] **v1 built** — the content half, per §10 (next session; schema first).
+- [x] **v1 built** — the content half, per §10 (migration applied live; content
+      surface + writer constraints + cannibalization guard + create-posts action +
+      scan/verify doc + tests; on `claude/paa-seo-neo-v1-build-vakcd3`).

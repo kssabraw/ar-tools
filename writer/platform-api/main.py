@@ -58,6 +58,7 @@ from routers.local_seo_matrix import router as local_seo_matrix_router
 from routers.maps import router as maps_router
 from routers.notifications import router as notifications_router
 from routers.outreach import router as outreach_router
+from routers.paa import router as paa_router
 from routers.pace import router as pace_router
 from routers.director import router as director_router
 from routers.publish import router as publish_router
@@ -393,6 +394,7 @@ app.include_router(local_seo_matrix_router)
 app.include_router(maps_router)
 app.include_router(notifications_router)
 app.include_router(outreach_router)
+app.include_router(paa_router)
 app.include_router(pace_router)
 app.include_router(director_router)
 app.include_router(qa_router)

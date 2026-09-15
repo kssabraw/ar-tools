@@ -2536,3 +2536,69 @@ export interface RevisionReport {
   by_member: RevisionMemberRow[]
   most_revised: MostRevisedTask[]
 }
+
+// ── PAA → SEO Neo (content half) ────────────────────────────────────────────
+export interface PaaCandidate {
+  question: string
+  slug?: string
+  volume: number | null
+  cpc_usd: number | null
+  competition: string | null
+}
+export interface PaaPullResponse {
+  service_keyword: string
+  location: string
+  location_code: number
+  geo_mode: string
+  geo_query: string
+  candidates: PaaCandidate[]
+  auto_service_page_url: string | null
+  service_page_source: string
+  cost_usd: number
+}
+export interface PaaCheck {
+  exact_match?: { ok: boolean; match: string; found_in: string | null }
+  service_link?: { ok: boolean | null; expected: number; present: string[] }
+}
+export interface PaaItem {
+  id: string
+  set_id: string
+  question: string
+  slug: string
+  volume: number | null
+  cpc_usd: number | null
+  competition: string | null
+  chosen: boolean
+  position: number | null
+  run_id: string | null
+  gbp_post_id: string | null
+  post_url: string | null
+  checks: PaaCheck | null
+}
+export interface PaaSet {
+  id: string
+  client_id: string
+  service_keyword: string
+  location: string | null
+  location_code: number | null
+  geo_mode: string
+  service_page_url: string | null
+  status: string
+  created_at: string
+  chosen_count?: number
+  post_count?: number
+  items?: PaaItem[]
+  service_page_source?: string
+}
+export interface PaaGate {
+  kind: string
+  message: string
+  blocking: boolean
+  acknowledgeable?: boolean
+}
+export interface PaaPreflight {
+  gates: PaaGate[]
+  chosen_count: number
+  slug_collisions: { slug: string }[]
+  existing_site_matches: { question: string; url: string }[]
+}
