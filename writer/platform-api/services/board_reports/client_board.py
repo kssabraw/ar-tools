@@ -13,6 +13,7 @@ per-client gather (`_client_row`) and `run` do the I/O.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, timedelta
 from typing import Optional
 
@@ -66,54 +67,134 @@ def client_line(row: dict) -> str:
     return " · ".join(bits) if bits else "no data yet"
 
 
+# The redundant short lead the drop-classifier prefixes, e.g. `[A] "Sitewide" — `
+# (the informative `[§A — Sitewide decline]` that follows is kept, unwrapped).
+_LEAD_JUNK_RE = re.compile(r'^\s*\[[A-Za-z0-9]{1,3}\]\s*[“"][^”"]*[”"]\s*[—-]\s*')
+# A leading `[CODE — Label]` classification tag → capture just "Label".
+_CODE_TAG_RE = re.compile(r'^\s*\[[^\]]*?[—-]\s*([^\]]+?)\]\s*')
+# Recommendation headlines too vague to be a board plan line on their own.
+_VAGUE_PLAN = {
+    "an indexing/visibility problem",
+    "standard diagnostic, in order",
+}
+
+
+def _clean(text) -> str:
+    """Collapse whitespace. Pure — no tag removal (that's per-field)."""
+    return " ".join(str(text or "").split()).strip()
+
+
+def _headline(text, cap: int = 170) -> str:
+    """The board-level directive from an SOP-style line: the first sentence, with
+    the '(SOP …)' runbook tail and numbered steps dropped, capped at a word
+    boundary (never mid-word). Pure. Does NOT strip classification tags."""
+    t = _clean(text)
+    if not t:
+        return ""
+    i = t.find("(SOP")
+    if i > 0:
+        t = t[:i].rstrip(" —-:;,")
+    end = t.find(". ")
+    if 0 < end < cap:
+        t = t[:end]
+    if len(t) > cap:
+        t = t[:cap].rsplit(" ", 1)[0].rstrip(" —-:;,") + "…"
+    return t.strip()
+
+
+def _diagnosis_headline(text, cap: int = 170) -> str:
+    """A classified drop diagnosis as a board line: drop the redundant `[A]
+    "Sitewide" —` lead, unwrap the `[§A — Sitewide decline]` code tag to
+    'Sitewide decline — …', then take the first sentence. Pure."""
+    t = _clean(text)
+    if not t:
+        return ""
+    t = _LEAD_JUNK_RE.sub("", t)
+    m = _CODE_TAG_RE.match(t)
+    if m:
+        t = f"{m.group(1).strip()} — {t[m.end():]}"
+    return _headline(t, cap)
+
+
+def _plan_line(plan_items: list[dict]) -> str:
+    """ONE board plan line: the lead 1–2 distinct directive headlines, SOP runbook
+    stripped, a vague indexing headline promoted to a concrete action. Pure."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for it in plan_items[:3]:
+        h = _headline(it.get("recommendation"))
+        if h.lower().rstrip(".") in _VAGUE_PLAN:
+            h = "Confirm indexing (URL-inspect → request re-indexing) on the flagged pages"
+        key = h.lower()
+        if h and key not in seen:
+            seen.add(key)
+            out.append(h)
+        if len(out) >= 2:
+            break
+    return "; ".join(out)
+
+
 def _client_case(r: dict) -> dict:
-    """Compose the who/what/where/why/how case for one non-green client. Pure —
-    reads the enriched row fields (goals_detail, at_risk_keywords, top_decliner,
-    plan_items, episodes, competitors, market)."""
-    why: list[str] = []
+    """Board-altitude case for one non-green client: root cause · goals · plan ·
+    competitors — the specifics a board needs, not the IC runbook. Pure — reads
+    the enriched row fields (goals_detail, at_risk_keywords, top_decliner,
+    plan_items, episodes, competitors, market). No repeated SOP recipe, no status
+    line (it's in the All-clients table), sentence-bounded (never truncated)."""
+    plan_items = r.get("plan_items") or []
+    detail: list[dict] = []
+
+    # Root cause — from structured fields + the lead classified diagnosis sentence.
+    rc: list[str] = []
     if r.get("frozen"):
-        why.append(f"Frozen — {r.get('frozen_reason') or 'manual action / deindex'}.")
-    for g in (r.get("goals_detail") or []):
-        cur, tgt = g.get("current"), g.get("target")
-        bit = f"Goal “{g.get('label')}” {g.get('status')}"
-        if cur is not None and tgt is not None:
-            bit += f" (now {cur:g} vs target {tgt:g})"
-        if g.get("due"):
-            bit += f", due {str(g['due'])[:10]}"
-        why.append(bit + ".")
-    if r.get("at_risk_keywords"):
-        why.append("Deindex risk: " + ", ".join(f"“{k}”" for k in r["at_risk_keywords"]) + ".")
+        rc.append(f"frozen — {r.get('frozen_reason') or 'manual action / deindex'}")
+    for it in plan_items:
+        lead = _diagnosis_headline(it.get("diagnosis"))
+        if lead:
+            rc.append(lead)
+            break
+    ark = r.get("at_risk_keywords") or []
+    if ark:
+        show = ", ".join(f"“{k}”" for k in ark[:3])
+        more = f" +{len(ark) - 3} more" if len(ark) > 3 else ""
+        rc.append(f"{len(ark)} page(s) at deindex risk: {show}{more}")
     dec = r.get("top_decliner")
     if dec and dec.get("delta"):
-        pos = f" to about #{round(dec['position'])}" if dec.get("position") is not None else ""
-        why.append(f"Biggest drop: “{dec.get('keyword')}” down ~{abs(dec['delta']):g}{pos}.")
-    for it in (r.get("plan_items") or [])[:2]:
-        if it.get("diagnosis"):
-            cls = f"[{it['classification']}] " if it.get("classification") else ""
-            kw = f"“{it['keyword']}” — " if it.get("keyword") else ""
-            why.append(f"{cls}{kw}{it['diagnosis']}")
+        pos = f" to ~#{round(dec['position'])}" if dec.get("position") is not None else ""
+        rc.append(f"biggest drop “{dec.get('keyword')}” −{abs(dec['delta']):g}{pos}")
+    if rc:
+        text = "; ".join(rc)
+        detail.append({"label": "Root cause", "text": text[0].upper() + text[1:] + "."})
 
-    doing: list[str] = []
-    for it in (r.get("plan_items") or [])[:3]:
-        if it.get("recommendation"):
-            kw = f"“{it['keyword']}”: " if it.get("keyword") else ""
-            doing.append(f"{kw}{it['recommendation']}")
-    for note in (r.get("episodes") or [])[:3]:
-        doing.append(f"Response open — {note}")
+    # Goals — behind/overdue with the numbers (current → target by due).
+    goal_bits: list[str] = []
+    for g in (r.get("goals_detail") or [])[:3]:
+        cur, tgt = g.get("current"), g.get("target")
+        b = f"“{g.get('label')}” {g.get('status')}"
+        if cur is not None and tgt is not None:
+            b += f" ({cur:g}→{tgt:g})"
+        if g.get("due"):
+            b += f" by {str(g['due'])[:10]}"
+        goal_bits.append(b)
+    if goal_bits:
+        detail.append({"label": "Goals", "text": "; ".join(goal_bits) + "."})
 
-    whowhere: list[str] = []
+    # Plan — ONE board line (lead directive), plus how many responses are in flight.
+    plan = _plan_line(plan_items)
+    eps = r.get("episodes") or []
+    if eps:
+        plan = (plan + "; " if plan else "") + f"{len(eps)} response{'s' if len(eps) != 1 else ''} open"
+    if plan:
+        detail.append({"label": "Plan", "text": plan + "."})
+
+    # Who & where — named competitors (+ market).
+    ww: list[str] = []
     if r.get("competitors"):
-        whowhere.append("Competitors: " + ", ".join(r["competitors"]) + ".")
+        ww.append("vs " + ", ".join(r["competitors"][:5]))
     if r.get("market"):
-        whowhere.append(f"Market: {r['market']}.")
+        ww.append(str(r["market"]))
+    if ww:
+        detail.append({"label": "Competitors", "text": " · ".join(ww)})
 
-    detail = [{"label": "Status", "text": r.get("line")}]
-    if why:
-        detail.append({"label": "Why", "text": " ".join(why)})
-    if doing:
-        detail.append({"label": "What's being done", "text": " ".join(doing)})
-    if whowhere:
-        detail.append({"label": "Who & where", "text": " ".join(whowhere)})
     return {"name": r.get("name") or "Client", "rag": r.get("rag"), "detail": detail}
 
 
@@ -160,9 +241,12 @@ def build_report(today: date, rows: list[dict]) -> dict:
     # Detailed per-client cases for every non-green client (why / what's being
     # done / who & where) — the depth beyond the one-line table.
     nongreen = [r for r in detail if r["rag"] != "green"]
+    case_items = [_client_case(r) for r in nongreen[:12]]
     cases = {
-        "title": "Client cases — why / what's being done / who & where",
-        "items": [_client_case(r) for r in nongreen[:12]],
+        "title": "Accounts that need attention",
+        # Drop bare-header cases with no detail — the account is already in the
+        # All-clients table; a case earns its space only when it has specifics.
+        "items": [c for c in case_items if c["detail"]],
     }
 
     # wins — biggest climbers across the portfolio
@@ -369,11 +453,14 @@ def _plan(supabase, cid: str, today: date, row: dict) -> None:
     if not rows:
         return
     items = rows[0].get("items") or []
+    # Keep enough text for a full sentence; the pure case builder trims to a
+    # board-level headline (sentence-bounded), so this cap only bounds memory —
+    # it must not clip mid-sentence, which is what produced truncated cases before.
     row["plan_items"] = [
         {"kind": a.get("kind"), "keyword": a.get("keyword"),
          "classification": a.get("classification"),
-         "diagnosis": (a.get("diagnosis") or "")[:280],
-         "recommendation": (a.get("recommendation") or "")[:280],
+         "diagnosis": (a.get("diagnosis") or "")[:600],
+         "recommendation": (a.get("recommendation") or "")[:600],
          "severity": a.get("severity")}
         for a in items[:3]
     ]

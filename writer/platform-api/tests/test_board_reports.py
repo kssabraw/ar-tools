@@ -239,6 +239,8 @@ def test_client_build_report_portfolio():
          "at_risk": 0, "striking": 4, "alerts": 0, "climbing": 3, "dropping": 0,
          "top_gainer": {"keyword": "roof repair", "delta": 5.0, "position": 3}},
         {"name": "Gamma", "goals_total": 1, "goals_ok": 0, "goals_behind": 1, "page_one": 2,
+         "goals_detail": [{"label": "leads/mo", "status": "behind",
+                           "current": 4, "target": 10, "due": "2026-12-31"}],
          "at_risk": 0, "striking": 1, "alerts": 0, "climbing": 1, "dropping": 0},
     ]
     r = client_board.build_report(MON, rows)
@@ -254,17 +256,70 @@ def test_client_build_report_portfolio():
     assert [it["name"] for it in r["rows"]["items"]] == ["Acme", "Gamma", "Beta"]
     # biggest climber surfaced as a win
     assert any("roof repair" in w for w in r["wins"])
-    # detailed cases: non-green clients only, worst-first, with who/what/why/how
+    # board-altitude cases: non-green clients only, worst-first, tightened to
+    # root cause / goals / plan / competitors (no repeated SOP runbook, no status line)
     assert [c["name"] for c in r["cases"]["items"]] == ["Acme", "Gamma"]
     acme = r["cases"]["items"][0]
     labels_c = {d["label"]: d["text"] for d in acme["detail"]}
-    assert "manual action" in labels_c["Why"]                 # frozen reason
-    assert "vs target 3" in labels_c["Why"]                   # overdue goal numbers
-    assert "AI Overview" in labels_c["Why"]                   # plan diagnosis
-    assert "AEO extractability" in labels_c["What's being done"]  # plan recommendation
-    assert "RivalRoofing" in labels_c["Who & where"] and "Tampa" in labels_c["Who & where"]
+    assert set(labels_c) == {"Root cause", "Goals", "Plan", "Competitors"}
+    assert "manual action" in labels_c["Root cause"]          # frozen reason
+    assert "AI Overview" in labels_c["Root cause"]            # lead plan diagnosis (sentence)
+    assert "8→3" in labels_c["Goals"] and "overdue" in labels_c["Goals"]  # goal numbers
+    assert "AEO extractability" in labels_c["Plan"]           # plan directive (SOP tail stripped)
+    assert "RivalRoofing" in labels_c["Competitors"] and "Tampa" in labels_c["Competitors"]
+    # Gamma (behind goal only) still earns a case via its Goals line
+    gamma = r["cases"]["items"][1]
+    assert {d["label"] for d in gamma["detail"]} == {"Goals"}
+    assert "4→10" in gamma["detail"][0]["text"]
     assert any("Acme" in a for a in r["asks"])
     assert r["outlook"] and "striking distance" in r["outlook"]
+
+
+def test_client_case_strips_sop_runbook_and_never_truncates_midword():
+    # The real regression: the diagnosis/recommendation carried the full SOP recipe
+    # and an appended algo note, hard-cut mid-word (…"hit 2026-09-1"). The case now
+    # takes the first sentence, drops the "(SOP …)" runbook, and never cuts mid-word.
+    r = {
+        "name": "IHBS", "rag": "red",
+        "at_risk_keywords": ["medical coding services", "credentialling company",
+                             "practice mgmt", "coding boca raton"],
+        "plan_items": [
+            {"keyword": None, "classification": "§A",
+             "diagnosis": '[A] "Sitewide" — [§A — Sitewide decline] 15 of 35 tracked '
+                          "keywords have open drops — this pattern points at a systemic "
+                          "cause, not per-keyword problems. ⚠ Opened during a suspected "
+                          "Google algorithm update (7 of 11 clients hit 2026-09-1",
+             "recommendation": "Many keywords are down together — work the §A ladder, in "
+                               "order (SOP): 1) manual actions / security issues in GSC → "
+                               "Freeze Protocol; 2) algo update → hold major changes"},
+            {"keyword": "medical coding services", "classification": "B4",
+             "diagnosis": "[B4 — Impressions drop / indexing] may be deindexed.",
+             "recommendation": "An indexing/visibility problem (SOP §B4): URL-inspect the "
+                               "page (indexed? canonical honored?); confirm sitemap presence."},
+        ],
+        "episodes": ["a", "b", "c"],
+        "competitors": ["Healthcare Profit Assurance", "VB Billing & Credentialing"],
+    }
+    case = client_board._client_case(r)
+    labels = {d["label"]: d["text"] for d in case["detail"]}
+    rc = labels["Root cause"]
+    assert "Sitewide decline" in rc and "15 of 35" in rc          # classified, counts kept
+    assert "[A]" not in rc and "[§A" not in rc                    # leading tag stripped
+    assert "hit 2026-09-1" not in rc and "…" not in rc            # algo tail dropped at sentence end, no mid-word cut
+    assert "4 page(s) at deindex risk" in rc                      # deindex count + list
+    plan = labels["Plan"]
+    assert "work the §A ladder" in plan                           # lead directive kept
+    assert "(SOP" not in plan and "1)" not in plan                # runbook steps stripped
+    assert "3 responses open" in plan                             # in-flight count folded in
+    assert "Status" not in labels                                 # no duplicate of the table line
+
+
+def test_client_case_promotes_vague_indexing_plan():
+    r = {"name": "X", "rag": "yellow",
+         "plan_items": [{"recommendation": "An indexing/visibility problem (SOP §B4): "
+                                           "URL-inspect the page; confirm sitemap presence."}]}
+    plan = {d["label"]: d["text"] for d in client_board._client_case(r)["detail"]}["Plan"]
+    assert "Confirm indexing" in plan and "(SOP" not in plan
 
 
 def test_client_build_report_all_green():
