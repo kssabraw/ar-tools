@@ -1,6 +1,21 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-10 · **Client-form "Roadmap" badges resolved: Search Console field now auto-registers (live); stale GitHub badge dropped** (latest)
+## ⏩ Update — 2026-09-15 · **Google Trends Discovery — shared core + Phase 1 (ecommerce) BUILT, ships DARK (PR [#1107](https://github.com/kssabraw/ar-tools/pull/1107))** (latest)
+
+The suite's demand-discovery front door: pull **rising** related queries from Google Trends (via DataForSEO), **qualify** each with the volume/CPC data the suite already buys, score by velocity × the existing opportunity model, and persist a run. An **input source, not a new pipeline** — everything downstream (cluster / draft / "Write this post") reuses existing modules. Prompted by the owner's "how can we automate this?" about the viral Google-Trends-category workflow; scoped + adversarially reviewed first (`docs/modules/google-trends-discovery-plan-v1_0.md` is the authority).
+
+**Built (shared core + Phase 1, ecommerce/keyword-anchored), all gated on `google_trends_enabled` — code default `False`, ships dark:**
+- **Migration `20260915120000_google_trends.sql` — APPLIED LIVE** (verified: 3 tables + RPC + widened CHECK): `google_trends_runs` / `google_trends_keywords` / `google_trends_usage` + the **fail-closed** `reserve_google_trends_calls` RPC + `async_jobs` CHECK += `google_trends_scan` (rebuilt from the LIVE constraint, which was much wider than any repo file).
+- `services/google_trends.py` — DataForSEO `keywords_data/google_trends/explore` wrapper (**NO `item_types`** — the documented param is rejected live with task error `40501`; the queries list is in the default response), defensive pure parsers, velocity/trend scoring (reuses `keyword_research.opportunity_score` — no second intent model), fail-closed budget meter, scan orchestration + `google_trends_scan` async job. `routers/google_trends.py` (scan / runs / estimate / job-status + free `/google-trends/categories`), wired into `main.py` + `job_worker`. Config `google_trends_*` block. `scripts/verify_google_trends.py` (the Railway smoke-test). Frontend `pages/GoogleTrends.tsx` + a "Google Trends Discovery" workspace card + route. Pure helpers unit-tested (`tests/test_google_trends.py`, 14).
+
+**⚠️ ACTIVATION (before flipping the flag on — the sandbox is egress-blocked from `api.dataforseo.com`, so the live response shape is UNCONFIRMED):**
+1. From the **Railway PLATFORM** service (holds `DATAFORSEO_LOGIN`/`_PASSWORD` + has egress): `python scripts/verify_google_trends.py --keyword "collagen peptides"`.
+2. Confirm it prints `google_trends_queries_list present: True` + the category tree. **If the live shape differs, reconcile `google_trends.parse_rising_queries` + `tests/test_google_trends.py` together** before enabling.
+3. Only then set `GOOGLE_TRENDS_ENABLED=true` on PLATFORM. Start with the conservative `GOOGLE_TRENDS_DAILY_CALL_BUDGET=100` (its own paid-call meter, separate from keyword_research) until the real DataForSEO ceiling is known.
+
+**Adversarial-review corrections baked into the code (not left as risks):** no `item_types`; categories fetched from the free endpoint + cached (not a vendored static JSON / no fabricated "~1,400" count); Phase 4 (local seasonal) re-scoped in the doc — it needs `interest_over_time` + a seasonality builder (not rising queries) and metro-geo only (the LeadOff ZIP-demand probe already found sub-metro Ads volume returns null). **Not built (documented follow-ups):** "Write this post" CTA from a qualified row (Phase 1.1); Phases 2 (informational → Topic Research), 3 (portfolio weekly digest), 4 (local seasonal). CI: lint/typecheck + Netlify green; the one `pytest` red was a pre-existing date-bomb flake in `test_pace_interventions.py` (fails on `main` + every PR from 2026-09-15) — ported PR #1106's deterministic fix into this branch.
+
+## ⏩ Update — 2026-09-10 · **Client-form "Roadmap" badges resolved: Search Console field now auto-registers (live); stale GitHub badge dropped**
 
 The client form's **"Roadmap"** (`ParkedBadge`) tag marked fields saved-but-not-yet-read. Two were stale, both fixed in **PR [#1055](https://github.com/kssabraw/ar-tools/pull/1055) (merged + auto-deployed to PLATFORM)** plus same-day follow-ups (this branch):
 
