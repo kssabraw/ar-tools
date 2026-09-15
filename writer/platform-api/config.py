@@ -783,6 +783,25 @@ class Settings(BaseSettings):
     brand_guide_vibe_enabled: bool = True
     brand_guide_vibe_model: str = "claude-sonnet-4-6"
     brand_guide_vibe_max_tokens: int = 1500
+    # Phase 2 — grounded synthesis (PRD §4.5 / §12 Q4): the Proposed layer
+    # (swatch names/roles + 60/30/10 + WCAG pairings, a named type scale,
+    # imagery/iconography direction, tagline, positioning + mission, worked voice
+    # examples, we-say/we-don't, key messages, boilerplate, the coherence check,
+    # a per-section gap analysis). Two bounded forced-tool calls: Haiku NAMES the
+    # measured tokens (cheap), Sonnet writes the messaging/examples/coherence
+    # narrative. The coherence flags + WCAG contrast + 60/30/10 mapping are pure
+    # Python (the LLM narrates, never computes — PRD §5.2). `brand_guide_synthesis_enabled`
+    # is the skip guard on top of the module-wide `brand_guide_enabled`; best-effort
+    # throughout — a disabled/failed call omits `synthesized` and the guide still
+    # finalizes. A regulated client (`content_compliance_mode != 'off'`) whose
+    # synthesis produced content finalizes `awaiting_signoff` (the §5.3b sign-off
+    # gate; render/approval is Phase 3/4), plus a deterministic claim-shape
+    # input-filter excises tripping sentences from the corpus before synthesis.
+    brand_guide_synthesis_enabled: bool = True
+    brand_guide_naming_model: str = "claude-haiku-4-5-20251001"
+    brand_guide_naming_max_tokens: int = 2000
+    brand_guide_synthesis_model: str = "claude-sonnet-4-6"
+    brand_guide_synthesis_max_tokens: int = 3500
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may

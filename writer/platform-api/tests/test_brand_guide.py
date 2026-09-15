@@ -334,6 +334,102 @@ class TestVibeWiring:
         assert result["vibe"] is False
 
 
+# ---------------------------------------------------------------------------
+# Phase 2 synthesis wiring — generate_brand_guide → _finalize_guide → synthesis.
+# The synthesis logic is tested in test_brand_guide_synthesis.py; here we lock the
+# wiring: the returned (synthesized, status) is folded into the row write, and a
+# regulated client's `awaiting_signoff` status reaches the row.
+# ---------------------------------------------------------------------------
+class TestSynthesisWiring:
+    async def _run(self, guide_row, monkeypatch, synth_result, *, source_url="https://acme.example"):
+        monkeypatch.setattr(G.settings, "brand_guide_enabled", True)
+
+        async def _cap(url, role):
+            return {"url": url, "role": role, "notes": [], "html_len": 10,
+                    "has_screenshot": True, "_html": "<html></html>",
+                    "_pixels": [((26, 43, 109), 800)], "_png": b"PNG"}
+
+        monkeypatch.setattr(G, "_capture_page", _cap)
+        monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
+        monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
+
+        async def _vibe(captured, *, homepage_png=None):
+            return None, "vibe read skipped — disabled"
+
+        async def _synth(client, *, census, vibe_read=None, captured=None):
+            return synth_result
+
+        monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
+        monkeypatch.setattr("services.brand_guide_synthesis.run_synthesis_for_guide", _synth)
+        return await G.generate_brand_guide("g-1", "c-1", source_url)
+
+    async def test_synthesized_and_done_folded_into_row(self, guide_row, monkeypatch):
+        synth = {"positioning_statement": "For pros.", "coherence": {"flags": []}}
+        result = await self._run(guide_row, monkeypatch, (synth, "synthesis complete", "done"))
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"
+        assert row["synthesized"] == synth
+        assert row["captured"]["synthesis_note"] == "synthesis complete"
+        assert result["synthesized"] is True
+
+    async def test_regulated_awaiting_signoff_reaches_row(self, guide_row, monkeypatch):
+        synth = {"positioning_statement": "For patients.", "provenance": {"regulated": True}}
+        result = await self._run(
+            guide_row, monkeypatch, (synth, "synthesis complete — awaiting sign-off (regulated client)", "awaiting_signoff")
+        )
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "awaiting_signoff"
+        assert row["synthesized"] == synth
+        assert result["status"] == "awaiting_signoff"
+
+    async def test_synthesis_none_omits_field(self, guide_row, monkeypatch):
+        result = await self._run(guide_row, monkeypatch, (None, "synthesis produced no usable output", "done"))
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"
+        assert "synthesized" not in row               # never written as null
+        assert result["synthesized"] is False
+
+    async def test_no_source_url_still_runs_synthesis(self, guide_row, monkeypatch):
+        # §5.4: a client with no site still gets the synthesized layer from assets.
+        synth = {"positioning_statement": "From ICP alone.", "coherence": {"flags": []}}
+        result = await self._run(guide_row, monkeypatch, (synth, "synthesis complete", "done"), source_url="")
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"
+        assert row["synthesized"] == synth
+        assert row["captured"]["no_source_url"] is True
+        assert result["no_source_url"] is True
+
+    async def test_synthesis_exception_still_finalizes_done(self, guide_row, monkeypatch):
+        # §5.4: an unexpected synthesis error must NOT error the guide — the census
+        # + vibe still persist and the guide finalizes `done`.
+        monkeypatch.setattr(G.settings, "brand_guide_enabled", True)
+
+        async def _cap(url, role):
+            return {"url": url, "role": role, "notes": [], "html_len": 10,
+                    "has_screenshot": True, "_html": "<html></html>",
+                    "_pixels": [((26, 43, 109), 800)], "_png": b"PNG"}
+
+        async def _vibe(captured, *, homepage_png=None):
+            return None, "vibe read skipped — disabled"
+
+        async def _boom(*a, **k):
+            raise RuntimeError("kaboom")
+
+        monkeypatch.setattr(G, "_capture_page", _cap)
+        monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
+        monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
+        monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
+        monkeypatch.setattr("services.brand_guide_synthesis.run_synthesis_for_guide", _boom)
+
+        result = await G.generate_brand_guide("g-1", "c-1", "https://acme.example")
+        row = guide_row.tables["brand_guides"][0]
+        assert row["status"] == "done"                    # not "error"
+        assert "synthesized" not in row
+        assert row["visual_census"]["colors"]             # census still persisted
+        assert row["captured"]["synthesis_note"].startswith("synthesis error")
+        assert result["synthesized"] is False
+
+
 class TestPixelCounts:
     def test_quantizes_a_two_colour_png(self):
         Image = pytest.importorskip("PIL.Image")
