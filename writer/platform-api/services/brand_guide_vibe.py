@@ -296,15 +296,26 @@ async def run_vibe_read_from_png(png: bytes) -> tuple[Optional[dict], str]:
     return vibe, "vibe read captured"
 
 
-async def run_vibe_read_for_capture(captured: Any) -> tuple[Optional[dict], str]:
+async def run_vibe_read_for_capture(
+    captured: Any, *, homepage_png: Optional[bytes] = None
+) -> tuple[Optional[dict], str]:
     """Orchestrate the vibe read over a stored `captured` record (PRD §4.3).
 
-    Gated on the module flag + the vibe skip guard. Reads the HOMEPAGE screenshot
-    back from the `brand-guides` bucket (no re-capture, no DataForSEO re-pay). A
-    capture that degraded to CSS-only (no screenshot path) skips the read with a
-    note rather than fabricating a vibe. Returns (vibe_read | None, note)."""
+    Gated on the module flag + the vibe skip guard. Never re-captures / never
+    re-pays DataForSEO — it reuses the homepage screenshot Phase-1 capture already
+    took, two ways:
+      - `homepage_png` given (the generate pipeline still holds the just-captured
+        bytes) → use them directly, no bucket round-trip.
+      - otherwise → read the HOMEPAGE screenshot back from the `brand-guides`
+        bucket via `captured.pages[].screenshot_path` (the standalone / re-run
+        entrypoint over an already-stored guide).
+    A capture that degraded to CSS-only (no bytes in hand and no stored path)
+    skips the read with a note rather than fabricating a vibe. Returns
+    (vibe_read | None, note)."""
     if not (settings.brand_guide_enabled and settings.brand_guide_vibe_enabled):
         return None, "vibe read skipped — disabled"
+    if homepage_png:
+        return await run_vibe_read_from_png(homepage_png)
     path = homepage_screenshot_path(captured)
     if not path:
         return None, "vibe read skipped — no homepage screenshot on file (capture was CSS-only)"

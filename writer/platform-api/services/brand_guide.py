@@ -240,6 +240,9 @@ async def generate_brand_guide(
     )
 
     # 4. Store screenshots + assemble the `captured` record.
+    #    Hold the homepage bytes before the loop pops them, so the vibe read (step
+    #    5) reuses the in-memory capture instead of a redundant bucket round-trip.
+    homepage_png = home.get("_png")
     captured_pages = []
     for rec in [home, *extra]:
         png = rec.pop("_png", None)
@@ -263,7 +266,9 @@ async def generate_brand_guide(
     #    `vibe_read` and the guide still finalizes `done` (§4.3 / §5.4).
     from services import brand_guide_vibe
 
-    vibe_read, vibe_note = await brand_guide_vibe.run_vibe_read_for_capture(captured)
+    vibe_read, vibe_note = await brand_guide_vibe.run_vibe_read_for_capture(
+        captured, homepage_png=homepage_png
+    )
     captured["vibe_note"] = vibe_note
 
     fields: dict = {

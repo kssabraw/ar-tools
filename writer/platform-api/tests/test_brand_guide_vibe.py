@@ -246,3 +246,39 @@ class TestOrchestrator:
         assert seen["path"] == "c/g/homepage.png"     # read back from the bucket
         assert seen["png"] == b"PNGBYTES"
         assert vibe["aesthetic_descriptors"][0]["descriptor"] == "bold"
+
+    async def test_in_memory_png_skips_bucket_download(self, monkeypatch):
+        # The generate hot path passes the just-captured bytes → no bucket read.
+        monkeypatch.setattr(settings, "brand_guide_enabled", True)
+        monkeypatch.setattr(settings, "brand_guide_vibe_enabled", True)
+        monkeypatch.setattr(V, "_download_screenshot", lambda _p: (_ for _ in ()).throw(AssertionError("no download")))
+        seen = {}
+
+        async def _from_png(png):
+            seen["png"] = png
+            return {"aesthetic_descriptors": [{"descriptor": "airy", "evidence": "space"}]}, "vibe read captured"
+
+        monkeypatch.setattr(V, "run_vibe_read_from_png", _from_png)
+        vibe, note = await V.run_vibe_read_for_capture(CAP, homepage_png=b"INMEM")
+        assert seen["png"] == b"INMEM"                # used the in-memory bytes
+        assert vibe["aesthetic_descriptors"][0]["descriptor"] == "airy"
+
+    async def test_disabled_ignores_in_memory_png(self, monkeypatch):
+        # the gate wins even when bytes are in hand — no vision call while dark
+        monkeypatch.setattr(settings, "brand_guide_enabled", False)
+        monkeypatch.setattr(settings, "brand_guide_vibe_enabled", True)
+        monkeypatch.setattr(V, "run_vibe_read_from_png",
+                            lambda png: (_ for _ in ()).throw(AssertionError("must not run")))
+        vibe, note = await V.run_vibe_read_for_capture(CAP, homepage_png=b"INMEM")
+        assert vibe is None and "disabled" in note
+
+
+# ---------------------------------------------------------------------------
+# Dependency sync-guard: the vibe read borrows qa_visual._fit_image (a private
+# helper with no import-time cross-check). Lock it so a rename/removal in
+# qa_visual breaks HERE, loudly, instead of at runtime on a real capture.
+# ---------------------------------------------------------------------------
+def test_fit_image_dependency_exists():
+    from services.qa_visual import _fit_image
+
+    assert callable(_fit_image)

@@ -308,7 +308,9 @@ class TestVibeWiring:
         monkeypatch.setattr(G, "_store_screenshot", lambda c, g, r, png: f"path/{r}.png")
         monkeypatch.setattr(bg, "discover_key_pages", lambda *a, **k: [])
 
-        async def _vibe(captured):
+        async def _vibe(captured, *, homepage_png=None):
+            # the generate flow reuses the in-memory homepage bytes (no bucket round-trip)
+            assert homepage_png == b"PNG"
             return vibe_result
 
         monkeypatch.setattr("services.brand_guide_vibe.run_vibe_read_for_capture", _vibe)
