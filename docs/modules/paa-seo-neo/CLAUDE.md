@@ -7,7 +7,10 @@
 > HALF) is BUILT, merged, and LIVE in production**; **Phase 2 (the prep-sheet
 > manifest — track / cost / QA / hand-off) is BUILT + MERGED** (PR
 > [#1120](https://github.com/kssabraw/ar-tools/pull/1120), squash `813b323`; migration
-> applied live) — see the module `HANDOFF.md`. PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), 2026-09-15:
+> applied live). **Phase 3 (the Service PAA Campaign + the automated single-variable
+> gate) is BUILT + MERGED** (PR [#1125](https://github.com/kssabraw/ar-tools/pull/1125),
+> to PRD §12, owner greenlit 2026-09-15), ships DARK behind `paa_campaign_enabled`
+> — the module's phased scope (§6) is now complete. See the module `HANDOFF.md`. PR [#1117](https://github.com/kssabraw/ar-tools/pull/1117), 2026-09-15:
 > the `paa_sets` + `paa_items` tables (migration applied live), a PAA Content card
 > in the workspace "Content Creation" section → `/clients/:id/paa-sets`, the three
 > writing rules as reused writer constraints, the cannibalization guard, the

@@ -632,6 +632,7 @@ async def gsc_scheduler() -> None:
     from services.page_backlink_intel import enqueue_due_page_backlinks
     from services.backlink_explorer import auto_track_client_domains, enqueue_due_backlink_snapshots
     from services.response_episodes import run_episode_sync
+    from services.paa_campaign_service import run_paa_campaign_sync
     from services.goal_escalation import run_goal_escalation_sweep
     from services.interventions import run_intervention_sync
     from services.qa_feedback import run_qa_feedback_sweep
@@ -710,6 +711,11 @@ async def gsc_scheduler() -> None:
                 _safe("gbp_profile_monitor", enqueue_due_gbp_profile_monitor)
                 # Daily response-episode sync (the SOPs' 2-week/6-week verify loop).
                 _safe("episode_sync", run_episode_sync)
+                # Daily PAA campaign sweep (PAA → SEO Neo Phase 3): advance the
+                # content→settle→scan→gate loop (self-gated on paa_campaign_enabled;
+                # no-ops while off). Only the cheap/free transitions — the paid scan
+                # + drill steps wait on a human confirm (hybrid propose-confirm).
+                _safe("paa_campaigns", run_paa_campaign_sync)
                 # Daily chronic-emergency escalation: re-surface a campaign goal
                 # that has stayed critically behind for weeks LOUDLY (both
                 # channels, latest reasoning), so a persistent emergency doesn't

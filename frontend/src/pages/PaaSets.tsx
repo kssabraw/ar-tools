@@ -4,12 +4,13 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft, HelpCircle, Link2, Check, X, Trash2, ExternalLink, AlertTriangle,
   FileText, Download, RefreshCw, ShieldCheck, FileSpreadsheet,
+  Radar, Search, Layers, Play, RotateCcw,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { supabase } from '../lib/supabase'
 import type {
-  Client, PaaSet, PaaCandidate, PaaPullResponse, PaaPreflight, PaaItem,
-  PaaManifest, PaaManifestAsset,
+  Client, PaaSet, PaaCandidate, PaaPullResponse, PaaPreflight, PaaItem, PaaGate,
+  PaaManifest, PaaManifestAsset, PaaCampaignView, PaaDrillPreview,
 } from '../lib/types'
 
 const API_BASE = import.meta.env.VITE_PLATFORM_API_URL as string
@@ -328,6 +329,8 @@ export function PaaSets() {
                     onClick={() => verify(s.id)}>Verify posts</button>
                 </div>
 
+                <CampaignPanel setId={s.id} />
+
                 <PrepSheet setId={s.id} />
 
                 {preflight && preflight.gates.some((g) => g.blocking) && (
@@ -576,6 +579,196 @@ function PrepSheet({ setId }: { setId: string }) {
         Authority-layer items are off-platform vendor work — tracked here, <strong>never executed by the suite</strong>.
         Confidence tags are the methodology's own working model, not Google guidance.
       </div>
+    </div>
+  )
+}
+
+// ── Phase 3 — the Service PAA Campaign + the automated single-variable gate ───
+
+const STATE_LABELS: Record<string, string> = {
+  draft: 'Draft', content: 'Writing posts', settling: 'Settling',
+  scan_ready: 'Ready to scan', scanning: 'Scanning', evaluating: 'Reading the gate',
+  moved: 'Moved', drill_ready: 'Drill deeper?', halted: 'Halted', maintenance: 'Maintenance',
+}
+function stateStyle(state: string): React.CSSProperties {
+  const good = state === 'moved' || state === 'maintenance'
+  const warn = state === 'drill_ready'
+  const bad = state === 'halted'
+  return {
+    fontSize: 11.5, fontWeight: 700, padding: '2px 8px', borderRadius: 6,
+    background: bad ? '#fee2e2' : warn ? '#fef9c3' : good ? '#dcfce7' : '#e0e7ff',
+    color: bad ? '#b91c1c' : warn ? '#854d0e' : good ? '#166534' : '#3730a3',
+  }
+}
+function whenText(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString()
+}
+
+function CampaignPanel({ setId }: { setId: string }) {
+  const qc = useQueryClient()
+  const { data: c, refetch, isFetching } = useQuery<PaaCampaignView>({
+    queryKey: ['paa-campaign', setId],
+    queryFn: () => api.get(`/paa-sets/${setId}/campaign`),
+    enabled: Boolean(setId),
+  })
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState('')
+  const [note, setNote] = useState('')
+  const [drill, setDrill] = useState<PaaDrillPreview | null>(null)
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+
+  async function run(fn: () => Promise<void>) {
+    setBusy(true); setErr(''); setNote('')
+    try { await fn() } catch (e) { setErr(e instanceof Error ? e.message : 'Failed') }
+    finally { setBusy(false) }
+  }
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['paa-campaign', setId] })
+
+  // Feature off → render nothing (keeps the set detail clean when Phase 3 is dark).
+  if (!c || c.enabled === false) return null
+
+  const box: React.CSSProperties = { marginTop: 14, borderTop: '1px solid #f1f5f9', paddingTop: 14 }
+  const header = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+      <Radar size={16} color="#4f46e5" />
+      <span style={{ fontWeight: 700, fontSize: 14 }}>Campaign</span>
+      <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
+        the single-variable loop — content → settle → scan → moved / drill / HALT → rinse
+      </span>
+    </div>
+  )
+
+  if (!c.exists) {
+    return (
+      <div style={box}>
+        {header}
+        <div style={{ fontSize: 13, color: '#64748b', marginBottom: 8 }}>
+          Run this set as a campaign: create the PAA posts, let them settle ~1 week, then
+          measure with a single-variable Maps scan and read the gate. The paid scan + any drill
+          round are confirmed by you (never auto-run).
+        </div>
+        <button style={{ ...btn, background: '#4f46e5', display: 'inline-flex', alignItems: 'center', gap: 6, opacity: busy ? 0.6 : 1 }}
+          disabled={busy}
+          onClick={() => run(async () => {
+            const created = await api.post<PaaCampaignView>(`/paa-sets/${setId}/campaign`, {})
+            const started = await api.post<{ blocked: boolean; created?: number; gates?: PaaGate[] }>(
+              `/paa-campaigns/${created.campaign!.id}/start`, {})
+            setNote(started.blocked
+              ? 'Cannibalization sign-off needed — use the set’s Create PAA posts button to review it first.'
+              : `Campaign started — ${started.created ?? 0} PAA post(s) writing.`)
+            await invalidate()
+          })}>
+          <Play size={13} /> {busy ? 'Starting…' : 'Start campaign'}
+        </button>
+        {note && <div style={{ fontSize: 12, color: '#166534', marginTop: 6 }}>{note}</div>}
+        {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 6 }}>{err}</div>}
+      </div>
+    )
+  }
+
+  const camp = c.campaign!
+  const na = c.next_action
+  const cid = camp.id
+
+  const confirmScan = () => run(async () => { await api.post(`/paa-campaigns/${cid}/confirm-scan`, {}); await invalidate() })
+  const reset = () => run(async () => { await api.post(`/paa-campaigns/${cid}/reset`, {}); await invalidate() })
+  const openDrill = () => run(async () => {
+    const p = await api.get<PaaDrillPreview>(`/paa-campaigns/${cid}/drill-preview`)
+    setDrill(p); setPicked(Object.fromEntries((p.candidates ?? []).slice(0, 4).map((x) => [x.question, true])))
+  })
+  const confirmDrill = () => run(async () => {
+    const items = (drill?.candidates ?? []).filter((x) => picked[x.question])
+    const res = await api.post<{ blocked: boolean; gates?: PaaGate[] }>(`/paa-campaigns/${cid}/drill`, { items })
+    setDrill(null)
+    setNote(res.blocked ? 'Cannibalization sign-off needed before drilling.' : 'Drill round started.')
+    await invalidate()
+  })
+
+  return (
+    <div style={box}>
+      {header}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center', marginBottom: 8 }}>
+        <span style={stateStyle(camp.state)}>{STATE_LABELS[camp.state] || camp.state}</span>
+        {camp.drill_level > 0 && <span style={{ fontSize: 11.5, color: '#64748b' }}>drill level {camp.drill_level}</span>}
+        {(camp.baseline_rank != null || camp.current_rank != null) && (
+          <span style={{ fontSize: 12, color: '#475569' }}>
+            avg rank {camp.baseline_rank ?? '—'} → {camp.current_rank ?? '—'}
+          </span>
+        )}
+        <span style={{ flex: 1 }} />
+        <button style={{ ...btnGhost, padding: '5px 9px' }} disabled={busy || isFetching} onClick={() => refetch()}>Refresh</button>
+      </div>
+
+      {na && (
+        <div style={{ fontSize: 13, color: '#334155', marginBottom: 8 }}>
+          <strong>Next:</strong> {na.label}
+          {na.when && <span style={{ color: '#94a3b8' }}> — {whenText(na.when)}</span>}
+        </div>
+      )}
+
+      {/* the two human-confirmed steps (hybrid propose-confirm) */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {na?.action === 'confirm_scan' && (
+          <button style={{ ...btn, background: '#4f46e5', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            disabled={busy} onClick={confirmScan}><Search size={13} /> Run single-variable scan</button>
+        )}
+        {na?.action === 'confirm_drill' && !drill && (
+          <button style={{ ...btn, background: '#ca8a04', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            disabled={busy} onClick={openDrill}><Layers size={13} /> Drill deeper — pull sub-PAAs</button>
+        )}
+        {camp.state === 'halted' && (
+          <button style={{ ...btnGhost, display: 'inline-flex', alignItems: 'center', gap: 6 }}
+            disabled={busy} onClick={reset}><RotateCcw size={13} /> Reset (on-page/entity re-checked)</button>
+        )}
+      </div>
+
+      {camp.state === 'halted' && camp.halted_reason && (
+        <div style={{ marginTop: 8, padding: 10, border: '1px solid #fecaca', background: '#fef2f2', borderRadius: 8, fontSize: 12.5, color: '#991b1b' }}>
+          <strong>HALT.</strong> {camp.halted_reason} <em style={{ color: '#b91c1c' }}>[PROVEN model — one local-SEO group’s working model, not Google guidance]</em>
+        </div>
+      )}
+
+      {/* drill preview — pick the sub-PAAs to add + create posts for */}
+      {drill && (
+        <div style={{ marginTop: 10, padding: 12, border: '1px solid #fde68a', background: '#fffbeb', borderRadius: 8 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: '#854d0e', marginBottom: 6 }}>
+            Sub-PAAs for drill level {drill.drill_level} (from: {drill.seeds.join(', ') || '—'})
+          </div>
+          {(drill.candidates ?? []).length === 0 && (
+            <div style={{ fontSize: 12.5, color: '#92400e' }}>No sub-questions found — the topic may be exhausted; consider HALT and an on-page/entity re-check.</div>
+          )}
+          {(drill.candidates ?? []).map((x) => (
+            <label key={x.question} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '3px 0', fontSize: 13 }}>
+              <input type="checkbox" checked={Boolean(picked[x.question])}
+                onChange={(e) => setPicked((p) => ({ ...p, [x.question]: e.target.checked }))} />
+              <span style={{ flex: 1 }}>{x.question}</span>
+              {x.volume != null && <span style={{ fontSize: 11.5, color: '#94a3b8' }}>{x.volume}/mo</span>}
+            </label>
+          ))}
+          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+            <button style={{ ...btn, background: '#ca8a04', opacity: busy ? 0.6 : 1 }} disabled={busy || !Object.values(picked).some(Boolean)}
+              onClick={confirmDrill}>Add {Object.values(picked).filter(Boolean).length} &amp; create posts</button>
+            <button style={{ ...btnGhost }} disabled={busy} onClick={() => setDrill(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* timeline */}
+      {(camp.history ?? []).length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginBottom: 3 }}>Timeline</div>
+          {[...camp.history].slice(-6).reverse().map((h, i) => (
+            <div key={i} style={{ fontSize: 11.5, color: '#64748b' }}>
+              {whenText(h.at)} · {h.from} → {h.to}{h.note ? ` — ${h.note}` : ''}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {note && <div style={{ fontSize: 12, color: '#166534', marginTop: 8 }}>{note}</div>}
+      {err && <div style={{ color: '#b91c1c', fontSize: 12.5, marginTop: 8 }}>{err}</div>}
     </div>
   )
 }

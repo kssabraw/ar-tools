@@ -21,15 +21,18 @@ import io
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Response
 
+from config import settings
 from middleware.auth import require_auth
 from models.paa import (
+    PaaCampaignStartRequest,
     PaaCreatePostsRequest,
+    PaaDrillConfirmRequest,
     PaaManifestAssetCreate,
     PaaManifestAssetUpdate,
     PaaPullRequest,
     PaaSetCreateRequest,
 )
-from services import paa_manifest_service, paa_sets_service
+from services import paa_campaign_service, paa_manifest_service, paa_sets_service
 from services.freeze import assert_not_frozen
 from services.orchestrator import orchestrate_run
 
@@ -212,3 +215,107 @@ async def export_manifest_sheet(manifest_id: UUID, auth: dict = Depends(require_
     """Export the prep sheet to a Google Sheet in the client's Drive folder (the
     hand-off artifact; reuses the Apps Script webhook)."""
     return await paa_manifest_service.export_to_sheet(str(manifest_id))
+
+
+# ── Phase 3 — the Service PAA Campaign + the automated single-variable gate ────
+# A campaign wraps a PAA set in a state machine that runs the methodology's
+# content→settle→scan→gate loop and hands off the (Phase-2) manifest. Autonomy is
+# hybrid propose-confirm: the two paid/content steps (scan, drill) are human-
+# confirmed here. Ships dark behind paa_campaign_enabled. Guardrail (PRD §9): the
+# campaign orchestrates + tracks + hands off — it NEVER executes the authority layer.
+
+
+def _require_campaigns_enabled() -> None:
+    if not settings.paa_campaign_enabled:
+        raise HTTPException(status_code=503, detail="paa_campaign_not_enabled")
+
+
+@router.get("/paa-sets/{set_id}/campaign")
+async def get_campaign_for_set(set_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """The campaign for a set (``{exists: false}`` if none / feature off)."""
+    if not settings.paa_campaign_enabled:
+        return {"exists": False, "enabled": False, "set_id": str(set_id)}
+    return paa_campaign_service.get_campaign(set_id=str(set_id))
+
+
+@router.post("/paa-sets/{set_id}/campaign", status_code=201)
+async def create_campaign(set_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Wrap a saved PAA set in a campaign (auto-adds the service keyword to the
+    Maps tracker, captures the baseline rank)."""
+    _require_campaigns_enabled()
+    return paa_campaign_service.create_campaign(str(set_id), user_id=auth["user_id"])
+
+
+@router.get("/paa-campaigns/{campaign_id}")
+async def get_campaign(campaign_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    _require_campaigns_enabled()
+    return paa_campaign_service.get_campaign(campaign_id=str(campaign_id))
+
+
+@router.post("/paa-campaigns/{campaign_id}/start", status_code=202)
+async def start_campaign(
+    campaign_id: UUID,
+    body: PaaCampaignStartRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Confirm the start step: create the PAA posts (one blog run per PAA), enter
+    the content state. Blocked (200 with gates) unless a cannibalization sign-off is
+    acknowledged. Content creation stops under a freeze."""
+    _require_campaigns_enabled()
+    campaign = paa_campaign_service.get_campaign(campaign_id=str(campaign_id))
+    if not campaign.get("exists"):
+        raise HTTPException(status_code=404, detail="paa_campaign_not_found")
+    assert_not_frozen(str(campaign["campaign"]["client_id"]))
+    result = await paa_campaign_service.start_campaign(
+        str(campaign_id), user_id=auth["user_id"], acknowledge=body.acknowledge
+    )
+    for run_id in result.get("run_ids", []):
+        background_tasks.add_task(orchestrate_run, run_id)
+    return result
+
+
+@router.post("/paa-campaigns/{campaign_id}/confirm-scan", status_code=202)
+async def confirm_scan(campaign_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Confirm the (paid) single-variable Maps geo-grid scan for the service
+    keyword; enter the scanning state (the sweep reads the gate when it completes)."""
+    _require_campaigns_enabled()
+    return paa_campaign_service.confirm_scan(str(campaign_id))
+
+
+@router.get("/paa-campaigns/{campaign_id}/drill-preview")
+async def drill_preview(campaign_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Preview the drill round: pull sub-PAAs seeded from the current level's
+    questions (read-only, does not persist)."""
+    _require_campaigns_enabled()
+    return await paa_campaign_service.propose_drill(str(campaign_id))
+
+
+@router.post("/paa-campaigns/{campaign_id}/drill", status_code=202)
+async def confirm_drill(
+    campaign_id: UUID,
+    body: PaaDrillConfirmRequest,
+    background_tasks: BackgroundTasks,
+    auth: dict = Depends(require_auth),
+) -> dict:
+    """Confirm a drill round: add the selected sub-PAAs at drill_level+1 + create
+    their posts, re-enter the content state. Content creation stops under a freeze."""
+    _require_campaigns_enabled()
+    campaign = paa_campaign_service.get_campaign(campaign_id=str(campaign_id))
+    if not campaign.get("exists"):
+        raise HTTPException(status_code=404, detail="paa_campaign_not_found")
+    assert_not_frozen(str(campaign["campaign"]["client_id"]))
+    result = await paa_campaign_service.confirm_drill(
+        str(campaign_id), items=[i.model_dump() for i in body.items],
+        user_id=auth["user_id"], acknowledge=body.acknowledge,
+    )
+    for run_id in result.get("run_ids", []):
+        background_tasks.add_task(orchestrate_run, run_id)
+    return result
+
+
+@router.post("/paa-campaigns/{campaign_id}/reset")
+async def reset_campaign(campaign_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+    """Reset a halted campaign after an on-page/entity re-check → re-scan."""
+    _require_campaigns_enabled()
+    return paa_campaign_service.reset_halted(str(campaign_id))

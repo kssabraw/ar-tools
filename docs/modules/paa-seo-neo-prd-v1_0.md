@@ -384,6 +384,165 @@ manifest QA just rides `qa_enabled`); authority/media rows are **status-only**
 *(Phase 3 — the Service PAA Campaign object + the automated single-variable gate —
 gets its own build order when greenlit.)*
 
+## 12. Phase 3 build order — the Service PAA Campaign object + the automated single-variable gate (GREENLIT 2026-09-15)
+
+> v1 (the content half, PR #1117) and Phase 2 (the prep-sheet manifest, PR #1120)
+> are built + live. This is the **Phase 3** build order — the campaign object +
+> the automated gate previewed in §3/§6, scoped concretely. Design forks locked by
+> the owner (2026-09-15) below; guardrails (§9) unchanged and load-bearing — the
+> campaign **orchestrates and tracks** the content→settle→scan→gate loop and hands
+> off the (Phase-2) manifest, but the suite still **executes nothing** at the
+> authority layer.
+
+### 12.1 What it automates (reference §5.2/§5.3 + the v1 manual workflow doc)
+
+The v1 `single-variable-scan-verify-workflow.md` is a **manual** loop: create posts
+→ settle ~1 wk → single-keyword Maps scan → read the branch (moved / drill / HALT)
+→ rinse. Phase 3 makes that a **state machine with a clock and an automated gate
+read** — a human no longer hand-tracks "has it been a week, should I scan, did it
+move, do I drill." The **load-bearing settle wait** (reference §5.2 — "model the
+waits as first-class steps, never fire the layers in parallel") becomes a real
+`settling` state; the **gate branch** (reference §5.3) is computed, not eyeballed.
+
+### 12.2 Phase 3 design forks — LOCKED (owner, 2026-09-15)
+
+1. **Autonomy posture → hybrid propose-confirm.** The cheap/free steps are
+   automatic (settle timer, scan-complete detection, the gate read, the drill/HALT
+   decision, maintenance scheduling, manifest refresh, notifications). The two
+   **paid/content** steps — kicking a paid Maps geo-grid scan, and creating a drill
+   round of blog posts — advance the campaign to a `*_ready` state + emit a
+   notification; a **human confirms** to proceed (reusing v1's create-posts path +
+   the existing scan enqueue). Matches SerMaStr's propose-never-execute discipline
+   and reinforces the "never parallel" wait rule. **Full per-campaign autopilot is
+   deferred** behind a future flag (not built in Phase 3).
+2. **Campaign ↔ set/manifest → 1:1 with one set; drilling adds `drill_level`
+   items.** `paa_campaigns` is 1:1 with ONE `paa_set` (unique `set_id`, mirroring
+   `paa_manifests`). Drilling adds `drill_level`-tagged `paa_items` to that **same
+   set** (the measurement target — the service keyword — is constant across levels;
+   drilling adds supporting content, it does not change what's scanned). ONE
+   manifest per set (Phase 2 unchanged) = the campaign's asset ledger. Truest to
+   "one service = one campaign = one prep sheet," and reuses Phase 2 untouched.
+3. **Scan-target keyword → auto-add to the Maps tracker on campaign start.** The
+   geo-grid only scans a client's **active** `maps_keywords`. On campaign start the
+   service keyword is upserted into `maps_keywords`
+   (`on_conflict=client_id,keyword, ignore_duplicates=True` — the same idempotent
+   pattern the maps router uses), so the gate scan just works. (Owner ruling —
+   smoother than blocking; it grows the tracked set by the one keyword the campaign
+   measures.)
+4. **Ship behind a new `paa_campaign_enabled` flag (default off — ships dark).**
+   Unlike v1 (a plain content surface), Phase 3 adds scheduled automation + a paid
+   scan step, so it gets a kill switch, dark by default (like Director/QA/autonomy).
+
+**Smaller defaults, locked by recommendation (owner-approved):**
+- **Maintenance re-scan piggybacks on the client's SCHEDULED geo-grid scans**
+  ($0 extra): the rinse loop reads the latest **scheduled** scan's result for the
+  service keyword rather than paying for its own. The *initial* post-settle
+  measurement still uses a deliberate (confirmed) scan, since its timing (after the
+  settle) is load-bearing.
+- **Drill sub-PAAs via PAA re-pull** (no new data source, no LLM): a drill round
+  re-`pull_paa` seeded from the current level's chosen questions — the natural PAA
+  tree — surfaced for human confirmation before the posts are created.
+- **HALT → a critical notification + best-effort SerMaStr escalation** (gated on
+  `strategist_enabled`; the same hook `response_episodes` uses) — "content hasn't
+  moved after N drill levels; STOP adding content and re-check on-page/entity"
+  **[PROVEN model]**.
+
+### 12.3 The state machine (states → transitions)
+
+`draft → content → settling → scan_ready → scanning → evaluating →`
+**`moved`** | **`drill_ready`** | **`halted`**, and `moved → maintenance` (rinse).
+
+- **draft** — campaign created; the root `paa_set` exists; service keyword auto-added
+  to `maps_keywords`; no posts yet.
+- **content** — the PAA posts for the current drill level are dispatched (v1
+  `create_posts`); waiting for the runs to finish + `verify_posts`. → `settling`.
+- **settling** — first-class wait; `settle_until = now + settle_days` (default 7,
+  reference §5.2). → `scan_ready` when `now ≥ settle_until`.
+- **scan_ready** — *propose*: notify "campaign ready to scan"; a human confirms →
+  enqueue a single-keyword `manual` geo-grid scan for the service keyword
+  (`enqueue_maps_scan(..., keywords=[service_kw])`) → `scanning`.
+- **scanning** — a scan is in flight; the sweep matches the client's newest
+  completed `manual` `maps_scans` row (after the scan request) carrying a result for
+  the service keyword. → `evaluating`.
+- **evaluating** (transient) — read that scan's `maps_scan_results.average_rank` +
+  `top3_pins` for the service keyword; `evaluate_gate(baseline, current,
+  drill_level, cap)` branches: **moved** (improvement ≥ threshold) → `moved`;
+  **no movement & `drill_level < cap` (~4)** → `drill_ready`; **no movement & at
+  cap** → `halted`.
+- **moved** — set `next_action_at = now + rinse_days` → `maintenance`. Surfaces the
+  authority hand-off (build/refresh the Phase-2 manifest — track/cost/QA, never
+  execute) and *suggests* (does not auto-create) a campaign for the next
+  topically-related service.
+- **drill_ready** — *propose*: pull sub-PAAs (seeded from this level's questions),
+  notify + preview them; a human confirms → add them as `drill_level+1` items →
+  `content`.
+- **maintenance** — the rinse loop; when `now ≥ next_action_at`, read the latest
+  scheduled scan's result → re-evaluate; a slip re-opens the surfaced action + resets
+  `next_action_at`. (Maintenance declines still flow through the existing
+  `maps_alerts → response_episodes` machinery, so the 6-week escalation still fires.)
+- **halted** — terminal until a human acts; critical notification + best-effort
+  strategist escalation. A human can reset (re-check on-page/entity done → re-run).
+
+### 12.4 The gate (single-variable, deterministic, unit-tested)
+
+Pure `evaluate_gate(baseline_rank, current_rank, top3_delta, drill_level, cap,
+thresholds) → {branch, improved, reason}`. "Single-variable" holds because the only
+thing the campaign changed since the baseline is **content** (the suite never runs
+authority; one service per campaign). `[PROVEN model]` tag carried into the UI.
+
+### 12.5 Honest note on the `response_episodes` reuse (spec-vs-reality)
+
+`response_episodes` is **alert-keyed and decline-oriented** (opens from open
+`rank_alerts`/`maps_alerts`, baseline at the drop, "recovered" when the alert
+resolves, escalate at 42 days). A campaign measures **improvement after adding
+content**, not decline-recovery — so the campaign carries its **own** settle/rinse
+clock (borrowing episodes' cadence constants: ~7-day settle, 14-day recheck, 42-day
+escalate) rather than force-fitting the alert table. Maintenance-loop *declines*
+still route through the existing episode machinery (scheduled scans feed it), so the
+6-week rule is not lost. This is a deliberate divergence from the HANDOFF's
+one-line "reuses response-episodes," recorded here because the code doesn't fit the
+loose description.
+
+### 12.6 Build checklist (for the build PR)
+
+1. **Data model + migration** — `paa_campaigns` (1:1 `set_id` unique: `state`,
+   `drill_level`, `settle_until`, `next_action_at`, `baseline_rank`,
+   `current_rank`, `last_scan_id`, `scan_requested_at`, `halted_reason`, `history`
+   jsonb transition log, `created_by`, timestamps) + `paa_items.drill_level`
+   (default 0). RLS service-role, matching the suite. **No new async-job type** —
+   the campaign advance is an inline scheduler sweep; expensive steps reuse existing
+   jobs/paths (`maps_scan`, the create-posts path).
+2. **Pure core** `services/paa_campaign.py` — the transition function, `evaluate_gate`,
+   the drill/HALT decision, cadence helpers, the "next action" descriptor, all pure +
+   unit-tested; confidence tags in surfaced copy.
+3. **I/O** `services/paa_campaign_service.py` — create campaign (auto-add the
+   Maps keyword; create the root set + posts), `run_paa_campaign_sync()` (the inline
+   sweep, best-effort per campaign, like `run_episode_sync`), the gate read over
+   `maps_scan_results`, confirm-scan / confirm-drill (pull + preview sub-PAAs),
+   moved→maintenance + manifest refresh, HALT notification + best-effort strategist
+   escalation.
+4. **Scheduler wiring** — `_safe("paa_campaigns", run_paa_campaign_sync)` in the
+   daily block; the whole thing gated on `paa_campaign_enabled` (config, default
+   False).
+5. **Router + models** (`routers/paa.py` + `models/paa.py`) — campaign CRUD, get
+   campaign (state + next action + timeline), confirm-scan, confirm-drill (with the
+   sub-PAA preview), advance/refresh, HALT ack/reset. Freeze-gated where it creates
+   content.
+6. **Frontend** — a Campaign section/tab on the PAA-set detail view (`pages/PaaSets.tsx`):
+   the state timeline, current state + next action + when, the gate read
+   (baseline→current + moved/drill/HALT), the two confirm buttons, the drill
+   preview, the HALT banner, a link to the manifest hand-off. Confidence tags carried.
+7. **Tests** — pure state-machine transitions (every branch: content→settle→scan→
+   moved / →drill→…→HALT / maintenance rinse), gate thresholds, cadence math, the
+   drill cap, mocked service flow, per the repo's conventions.
+
+### 12.7 Guardrails held (§9, load-bearing)
+
+No authority execution (moved→handoff only builds/costs/QAs the Phase-2 manifest);
+no audio/video/influencer generator; the master reference is never wired into
+`sop_library`; confidence tags carried into the UI + exports; HALT is a **stop**
+("more PAAs won't fix it"), never "keep writing."
+
 ---
 
 *Plan only — no implementation until the owner approves. Defer to

@@ -59,6 +59,24 @@ class PaaManifestAssetUpdate(BaseModel):
     position: Optional[int] = None
 
 
+# ── Phase 3 — the Service PAA Campaign + the automated single-variable gate ────
+
+
+class PaaCampaignStartRequest(BaseModel):
+    """Confirm the (paid/content) start step: create the PAA posts. Acknowledge
+    clears an acknowledgeable cannibalization gate."""
+
+    acknowledge: bool = False
+
+
+class PaaDrillConfirmRequest(BaseModel):
+    """Confirm a drill round: the selected sub-PAAs to add at drill_level+1 + create
+    posts for. Acknowledge clears an acknowledgeable cannibalization gate."""
+
+    items: list[PaaCandidateInput]
+    acknowledge: bool = False
+
+
 class PaaManifestAssetCreate(BaseModel):
     """Add a manual asset row (a hand-captured content/authority/media URL)."""
 
