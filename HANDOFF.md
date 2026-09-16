@@ -1,6 +1,6 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-16 · **Topic-Vector — BLOG REOPT GAIN COACHING — BUILT (report-only)** (latest)
+## ⏩ Update — 2026-09-16 · **Topic-Vector — BLOG REOPT GAIN COACHING — BUILT (report-only)** — PR [#1175](https://github.com/kssabraw/ar-tools/pull/1175) (draft) (latest)
 
 The last "beyond v1" follow-up of the topic-vector module (`docs/modules/topic-vector-information-gain-plan-v1_0.md` §6/§9/§12): wire the report-only Information-Gain **coaching** into the **blog** reopt path, mirroring the Local SEO wiring (PR #1171) but adapted to the fact that **the blog rewrite happens in pipeline-api — there is no nlp blog-rewrite endpoint**, so the guidance can't be injected inside an nlp rewrite prompt.
 
