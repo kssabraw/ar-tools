@@ -393,6 +393,70 @@ async def _build_coalesced(client_id: str, website_url: str) -> dict:
             del _inflight_builds[client_id]
 
 
+def select_stale(rows: list, ttl_days: int, now: Optional[datetime] = None) -> list:
+    """The client_ids whose cached index is past its TTL, preserving the caller's
+    row order (query oldest-first ⇒ stalest-first). Pure — reuses ``is_fresh``.
+    A row missing ``fetched_at`` reads as stale (safe: re-crawl)."""
+    out: list = []
+    for r in rows or []:
+        cid = (r or {}).get("client_id")
+        if cid and not is_fresh((r or {}).get("fetched_at"), ttl_days, now):
+            out.append(cid)
+    return out
+
+
+async def refresh_stale_indexes(now: Optional[datetime] = None) -> dict:
+    """Daily scheduled sweep: re-crawl the stalest EXISTING indexes ahead of the
+    next score, so a lapsed TTL doesn't silently suppress gain (thin/stale index)
+    AND make the next score pay the crawl on its hot path. Bounded per tick
+    (oldest-first; the rest ride the next daily tick). Only refreshes clients that
+    already have a row (are using the feature); new clients still build lazily on
+    first score. Best-effort throughout — never raises. Gated on
+    ``topic_vector_gain_enabled`` AND ``site_claim_index_refresh_enabled``."""
+    if not (settings.topic_vector_gain_enabled and settings.site_claim_index_refresh_enabled):
+        return {"skipped": "disabled"}
+    limit = max(0, int(settings.site_claim_index_refresh_max_per_tick or 0))
+    if limit == 0:
+        return {"skipped": "cap_zero"}
+    sb = get_supabase()
+    try:
+        res = (
+            sb.table(_TABLE).select("client_id, fetched_at")
+            .order("fetched_at", desc=False).limit(limit * 3).execute()
+        )
+    except Exception:  # noqa: BLE001 — a scheduled sweep must never crash the tick
+        logger.warning("site_claim_index.refresh_list_failed")
+        return {"skipped": "list_failed"}
+    considered = res.data or []
+    stale = select_stale(considered, settings.site_claim_index_days, now)[:limit]
+    if not stale:
+        return {"refreshed": 0, "considered": len(considered)}
+    # Rebuild against the client's CURRENT website (it may have changed since the
+    # row was written); skip archived clients (no point crawling a dropped site).
+    try:
+        crows = (
+            sb.table("clients").select("id, website_url, archived")
+            .in_("id", stale).execute()
+        ).data or []
+    except Exception:  # noqa: BLE001
+        logger.warning("site_claim_index.refresh_clients_failed")
+        return {"skipped": "clients_failed"}
+    by_id = {c.get("id"): c for c in crows}
+    refreshed = 0
+    for cid in stale:
+        c = by_id.get(cid)
+        if not c or c.get("archived"):
+            continue
+        try:
+            await _build_coalesced(cid, (c.get("website_url") or ""))
+            refreshed += 1
+        except Exception:  # noqa: BLE001 — one dead site never aborts the sweep
+            logger.warning("site_claim_index.refresh_build_failed", extra={"client_id": cid})
+    logger.info("site_claim_index.refreshed",
+                extra={"refreshed": refreshed, "stale": len(stale)})
+    return {"refreshed": refreshed, "stale": len(stale), "considered": len(considered)}
+
+
 async def resolve_index_for_request(client: dict) -> Optional[dict]:
     """The single entry point the ecommerce score/reopt paths call. Cache-first;
     on a miss it builds inline (capped, best-effort, single-flight per client) and

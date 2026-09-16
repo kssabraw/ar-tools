@@ -202,3 +202,100 @@ def test_distinct_clients_do_not_coalesce(monkeypatch):
     _run(_both())
     assert sorted(seen) == ["a", "b"]            # both clients crawled
     assert s._inflight_builds == {}
+
+
+# ── Scheduled refresh (§13 follow-up) ────────────────────────────────────────
+
+from unittest.mock import AsyncMock, patch  # noqa: E402
+
+
+def _iso(days_ago: float) -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+
+
+def test_select_stale_filters_and_preserves_order():
+    rows = [
+        {"client_id": "old", "fetched_at": _iso(40)},   # stale (>30d)
+        {"client_id": "fresh", "fetched_at": _iso(2)},   # fresh
+        {"client_id": "nofetch"},                        # missing → stale
+    ]
+    assert s.select_stale(rows, 30) == ["old", "nofetch"]
+
+
+def test_select_stale_empty_and_disabled_ttl():
+    assert s.select_stale([], 30) == []
+    # ttl<=0 → is_fresh always False → every row with a client_id is "stale".
+    assert s.select_stale([{"client_id": "x", "fetched_at": _iso(1)}], 0) == ["x"]
+
+
+class _FakeChain:
+    def __init__(self, table, data_by_table):
+        self.table_name = table
+        self._data_by_table = data_by_table
+
+    def select(self, *a, **k): return self
+    def order(self, *a, **k): return self
+    def limit(self, *a, **k): return self
+    def in_(self, *a, **k): return self
+    def eq(self, *a, **k): return self
+
+    def execute(self):
+        class _R: pass
+        r = _R()
+        r.data = self._data_by_table.get(self.table_name, [])
+        return r
+
+
+class _FakeSB:
+    def __init__(self, data_by_table):
+        self._d = data_by_table
+    def table(self, name):
+        return _FakeChain(name, self._d)
+
+
+def test_refresh_skips_when_disabled():
+    with patch.object(s.settings, "topic_vector_gain_enabled", False):
+        assert _run(s.refresh_stale_indexes())["skipped"] == "disabled"
+    with patch.object(s.settings, "topic_vector_gain_enabled", True), \
+         patch.object(s.settings, "site_claim_index_refresh_enabled", False):
+        assert _run(s.refresh_stale_indexes())["skipped"] == "disabled"
+
+
+def test_refresh_rebuilds_stale_nonarchived_clients_capped():
+    index_rows = [
+        {"client_id": "c_old1", "fetched_at": _iso(40)},
+        {"client_id": "c_old2", "fetched_at": _iso(50)},
+        {"client_id": "c_fresh", "fetched_at": _iso(1)},
+        {"client_id": "c_arch", "fetched_at": _iso(60)},
+    ]
+    client_rows = [
+        {"id": "c_old1", "website_url": "https://a.com", "archived": False},
+        {"id": "c_old2", "website_url": "https://b.com", "archived": False},
+        {"id": "c_arch", "website_url": "https://z.com", "archived": True},
+    ]
+    fake = _FakeSB({s._TABLE: index_rows, "clients": client_rows})
+    builds: list = []
+
+    async def _fake_build(cid, website):
+        builds.append((cid, website))
+        return {"facts": [], "claims": []}
+
+    with patch.object(s.settings, "topic_vector_gain_enabled", True), \
+         patch.object(s.settings, "site_claim_index_refresh_enabled", True), \
+         patch.object(s.settings, "site_claim_index_refresh_max_per_tick", 5), \
+         patch.object(s.settings, "site_claim_index_days", 30), \
+         patch.object(s, "get_supabase", lambda: fake), \
+         patch.object(s, "_build_coalesced", AsyncMock(side_effect=_fake_build)):
+        out = _run(s.refresh_stale_indexes())
+
+    # Rebuilt the two stale, non-archived clients with their CURRENT website;
+    # the fresh one and the archived one are skipped.
+    assert dict(builds) == {"c_old1": "https://a.com", "c_old2": "https://b.com"}
+    assert out["refreshed"] == 2
+
+
+def test_refresh_cap_zero_is_a_noop():
+    with patch.object(s.settings, "topic_vector_gain_enabled", True), \
+         patch.object(s.settings, "site_claim_index_refresh_enabled", True), \
+         patch.object(s.settings, "site_claim_index_refresh_max_per_tick", 0):
+        assert _run(s.refresh_stale_indexes())["skipped"] == "cap_zero"

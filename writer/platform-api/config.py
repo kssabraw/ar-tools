@@ -1729,6 +1729,14 @@ class Settings(BaseSettings):
     site_claim_index_max_claims: int = 60
     site_claim_index_scrape_timeout: int = 25
     site_claim_index_scrape_concurrency: int = 5  # parallel site scrapes per build
+    # Scheduled refresh: the index is built lazily on the first score after a
+    # cache miss, so once its TTL lapses the NEXT score silently suppresses gain
+    # (thin/stale index) AND pays the crawl on its hot path. A daily sweep re-
+    # crawls the stalest EXISTING indexes ahead of time (bounded per tick, oldest
+    # first). Only rebuilds clients already using the feature (a row exists); new
+    # clients still build lazily. Self-gated on topic_vector_gain_enabled.
+    site_claim_index_refresh_enabled: bool = True
+    site_claim_index_refresh_max_per_tick: int = 5
     # Structural-fidelity gate on SERVICE / LOCATION pages (the runs pipeline). The
     # reference (page_structures['service'|'location']) is already injected into the
     # brief; this scores the writer's output against it and, when it drifts, folds
