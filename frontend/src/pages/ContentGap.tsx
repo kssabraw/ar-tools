@@ -85,6 +85,17 @@ interface OnpageDiff {
   schema_gap?: { schema: string; covered_by: string[]; count: number }[]
   title?: { client?: string | null; competitors?: { domain?: string; title?: string | null }[] }
   meta_description?: { client?: string | null; client_present?: boolean | null; competitors_with_meta?: number }
+  freshness?: {
+    client?: string | null
+    client_basis?: string | null
+    client_available?: boolean
+    competitors?: { domain?: string; last_modified?: string; basis?: string | null }[]
+    competitors_with_date?: number
+    competitor_most_recent?: string | null
+    competitor_median?: string | null
+    client_days_behind_median?: number | null
+    stale?: boolean | null
+  }
 }
 interface KeywordRow {
   id: string
@@ -589,11 +600,39 @@ function OnpageDim({ diff, unavailable }: { diff?: OnpageDiff; unavailable: Set<
         </div>
       )}
       {(diff.schema_gap?.length ?? 0) > 0 && (
-        <div>
+        <div style={{ marginBottom: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Missing schema</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             {diff.schema_gap!.slice(0, 8).map((s, i) => <span key={i} style={chip('#eff6ff', '#1d4ed8')}>{s.schema}</span>)}
           </div>
+        </div>
+      )}
+      {diff.freshness && (diff.freshness.client || (diff.freshness.competitors_with_date ?? 0) > 0) && (
+        <div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 4 }}>Freshness (last updated)</div>
+          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap', fontSize: 12 }}>
+            <Metric
+              label="Your page"
+              value={diff.freshness.client ?? '—'}
+              hint={diff.freshness.client_basis ? `from ${diff.freshness.client_basis} date` : 'no date found on page'}
+            />
+            <Metric
+              label="Competitor most recent"
+              value={diff.freshness.competitor_most_recent ?? '—'}
+              hint={`${fmt(diff.freshness.competitors_with_date)} with a date · median ${diff.freshness.competitor_median ?? '—'}`}
+            />
+            {diff.freshness.client_days_behind_median != null && (
+              <Metric
+                label="Behind median"
+                value={diff.freshness.client_days_behind_median > 0 ? `${diff.freshness.client_days_behind_median}d older` : 'up to date'}
+              />
+            )}
+          </div>
+          {diff.freshness.stale && (
+            <div style={{ ...chip('#fffbeb', '#b45309'), marginTop: 6, display: 'inline-block' }}>
+              Your page is significantly older than the ranking set — a content refresh may help.
+            </div>
+          )}
         </div>
       )}
     </Section>
@@ -623,6 +662,7 @@ function ClientSummary({ gap, diff }: { gap: Gap; diff?: OnpageDiff }) {
   const el = diff?.element_gap?.length ?? 0
   if (el > 0) opps.push(`Add ${el} content element${el === 1 ? '' : 's'} (e.g. FAQ, table, CTA) the leaders use.`)
   if ((diff?.word_count?.delta ?? 0) < 0) opps.push('Deepen the page — it’s shorter than the ranking average.')
+  if (diff?.freshness?.stale) opps.push('Refresh this page — the top results have been updated more recently.')
   if ((gap.entities?.client_deficiencies?.length ?? 0) > 0) opps.push('Strengthen topical coverage of the key entities for this search.')
   if (opps.length === 0) opps.push('This page is close — small refinements should help it compete.')
   return (
