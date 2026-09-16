@@ -9775,6 +9775,11 @@ class ReoptimizePageRequest(BaseModel):
     # Content Gap Analyzer's "subtopics competitors cover that you don't". Rendered
     # as an advisory, additive prompt block, never as a scored deficiency.
     writer_notes: Optional[str] = None
+    # P1 grounding corpus for the report-only Information Gain measure (§7). When
+    # present, the rewrite is coached with the under-served on-vector subtopics +
+    # the site-invariant facts the client's own site asserts that this page omits
+    # (parity with /reoptimize-ecommerce-page). Absent/thin → no coaching block.
+    site_claim_index: Optional[dict] = None
 
 class ReoptimizePageResponse(BaseModel):
     content_html: str
@@ -9905,6 +9910,29 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
 
         internal_links_text = _internal_links_block(body.internal_links)
         writer_notes_text = _writer_notes_block(body.writer_notes)
+
+        # P1 — coach the reopt loop with the topic-vector / Information-Gain signal
+        # (§6/§9), parity with /reoptimize-ecommerce-page: the under-served
+        # on-vector subtopics to cover + the site-invariant facts the client's OWN
+        # site asserts that this page omits. Best-effort + report-only (never gates
+        # the composite, weight 0); a missing GEMINI key / thin site index yields an
+        # empty block, so the prompt is byte-identical when the measure is
+        # unavailable. include_gain=False: the guidance uses only the inverse-gain
+        # gap + deterministic missing-facts, so we skip the scored-gain embeddings
+        # on the page we're about to rewrite away.
+        gain_block = ""
+        try:
+            _gain_measure = await _measure_topic_vector(
+                existing_html, body.keyword, serp_analysis_dict, body.site_claim_index,
+                include_gain=False,
+            )
+            _gain_guidance = topic_vector.render_gain_guidance(
+                _gain_measure, body.site_claim_index, existing_page_text
+            )
+            gain_block = ("\n" + _gain_guidance + "\n") if _gain_guidance else ""
+        except Exception:  # pragma: no cover - guidance is best-effort
+            logger.warning("reoptimize-page: gain guidance failed; skipping.")
+
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -9926,7 +9954,7 @@ Full location: {body.location}
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}
 {voice_block}
-{internal_links_text}{writer_notes_text}
+{internal_links_text}{writer_notes_text}{gain_block}
 EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT invent any facts not present here):
 {existing_page_text[:4000]}"""
 
