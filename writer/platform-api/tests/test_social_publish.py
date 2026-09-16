@@ -82,3 +82,63 @@ def test_ensure_future_iso():
     assert publish._ensure_future_iso(naive, now).startswith("2026-09-05T13:00")
     with pytest.raises(HTTPException):
         publish._ensure_future_iso(now - timedelta(minutes=1), now)
+
+
+def test_publish_job_isolation_gate_fails_post_before_platform(monkeypatch):
+    """The authoritative isolation gate at publish time: a re-check failure fails
+    the post and NEVER reaches the platform (no budget reserve, no adapter.post)."""
+    import asyncio
+
+    from services import notifications
+    from services.social import budget
+
+    monkeypatch.setattr(
+        publish, "get_post",
+        lambda pid: {"id": pid, "platform": "facebook", "account_id": "foreign-acct",
+                     "draft_id": None, "status": "scheduled"},
+    )
+    monkeypatch.setattr(
+        publish, "_assert_account_allowed",
+        lambda *a, **k: (_ for _ in ()).throw(
+            HTTPException(status_code=403, detail="social_account_not_in_client_profile")
+        ),
+    )
+
+    def _no_reserve(*a, **k):
+        raise AssertionError("budget.reserve must not be called after an isolation failure")
+
+    def _no_post(*a, **k):
+        raise AssertionError("the platform must never be reached for a foreign account")
+
+    monkeypatch.setattr(budget, "reserve", _no_reserve)
+    monkeypatch.setattr(publish, "get_adapter", lambda *a, **k: type("A", (), {"post": _no_post})())
+
+    updates: list[dict] = []
+    emitted: list[str] = []
+    monkeypatch.setattr(notifications, "emit", lambda *a, **k: emitted.append(a[1] if len(a) > 1 else ""))
+
+    class _Q:
+        def __init__(self, tbl):
+            self.tbl = tbl
+
+        def update(self, fields):
+            if self.tbl == "social_posts":
+                updates.append(fields)
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def execute(self):
+            class _R:
+                data: list = []
+            return _R()
+
+    monkeypatch.setattr(publish, "_sb", lambda: type("SB", (), {"table": lambda self, t: _Q(t)})())
+
+    asyncio.run(publish.run_publish_job({"id": "job-1", "payload": {"post_id": "p1", "client_id": "c1"}}))
+
+    assert updates, "the post should have been marked failed"
+    assert updates[-1]["status"] == "failed"
+    assert updates[-1]["status_detail"] == "social_account_not_in_client_profile"
+    assert "social_post_failed" in emitted

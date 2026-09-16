@@ -116,34 +116,125 @@ def _client_name(client_id: str) -> str:
     return (rows[0].get("name") if rows else None) or "Client"
 
 
-def _assert_account_allowed(client_id: str, account_id: str) -> None:
-    """Enforce client isolation at the WRITE. The target account must belong to
-    THIS client's PostPeer profile (Social group). PostPeer has one account-wide
-    key with no per-profile access control, so this membership check — not the
-    picker's scoping (UX only) — is the actual boundary that stops one client's
-    content publishing to another client's account."""
+def _assert_account_allowed(client_id: str, account_id: str, *, require_live: bool = True) -> None:
+    """Enforce client isolation: the target account must belong to THIS client's
+    PostPeer profile (Social group). PostPeer has one account-wide key with no
+    per-profile access control, so this membership check — not the picker's
+    scoping (UX only) — is the actual boundary against publishing one client's
+    content to another client's account.
+
+    Two rungs:
+    - The profile MUST be set (a client with no Social group can't publish at all).
+      Cheap, DB-only, always enforced → 409 ``social_profile_not_set``.
+    - The account must be in that profile's live integration list. When PostPeer
+      is reachable, a non-member → 403. On a PostPeer transport/5xx/rate-limit
+      error the behaviour depends on ``require_live``:
+        * ``require_live=False`` (compose/schedule): swallow the error and proceed
+          — a brief PostPeer outage must not block composing or scheduling a post.
+          The publish job re-checks with ``require_live=True`` before it posts, so
+          a wrong account still never reaches the platform.
+        * ``require_live=True`` (the publish job, the authoritative gate): re-raise
+          — we never publish to an account whose membership we couldn't confirm.
+    """
     profile_id = _client_profile_id(client_id)
     if not profile_id:
         raise HTTPException(status_code=409, detail="social_profile_not_set")
-    allowed = {i.account_id for i in get_adapter().list_integrations(profile_id=profile_id)}
+    try:
+        allowed = {i.account_id for i in get_adapter().list_integrations(profile_id=profile_id)}
+    except HTTPException:
+        if require_live:
+            raise
+        logger.warning(
+            "social.membership_check_deferred",
+            extra={"client_id": client_id, "account_id": account_id},
+        )
+        return
     if account_id not in allowed:
         raise HTTPException(status_code=403, detail="social_account_not_in_client_profile")
 
 
 def ensure_profile_for_client(client_id: str, client_name: Optional[str] = None) -> str:
     """Return the client's PostPeer profile id, creating + storing one if absent.
-    Idempotent — a client that already has a Social group keeps it."""
+    Idempotent — a client that already has a Social group keeps it.
+
+    Concurrency/orphan hardening: two callers can race between the initial read and
+    the create (e.g. a provisioning background task and a first compose). Both would
+    call PostPeer's create_profile and one would win the clients UPDATE. We can't
+    make create+store atomic across two systems, so we re-read the clients row
+    immediately AFTER creating and, if a profile landed in the meantime, honour the
+    stored one — never overwrite an existing mapping. The loser's PostPeer group is
+    an empty, harmless orphan (no integrations); we log it for manual cleanup rather
+    than expand the adapter contract with a delete only this edge case would use. A
+    failure to persist is raised (the profile exists but isn't mapped) so the caller
+    — a background task or a compose — surfaces it rather than silently returning an
+    unmapped id."""
     _assert_enabled()
     existing = _client_profile_id(client_id)
     if existing:
         return existing
     name = (client_name or _client_name(client_id)).strip() or "Client"
     profile_id = get_adapter().create_profile(name=name, description=f"AR Tools client {client_id}")
-    _sb().table("clients").update(
-        {"social_profile_id": profile_id, "updated_at": "now()"}
-    ).eq("id", client_id).execute()
+
+    # Re-read after the create: if another caller stored a profile while we were
+    # calling PostPeer, honour theirs (never clobber a mapping) and leave ours as a
+    # logged orphan.
+    raced = _client_profile_id(client_id)
+    if raced:
+        logger.warning(
+            "social.profile_orphaned",
+            extra={"client_id": client_id, "orphan_profile_id": profile_id, "kept": raced},
+        )
+        return raced
+
+    try:
+        _sb().table("clients").update(
+            {"social_profile_id": profile_id, "updated_at": "now()"}
+        ).eq("id", client_id).execute()
+    except Exception as exc:  # noqa: BLE001 — a created-but-unmapped profile is an error
+        logger.error(
+            "social.profile_persist_failed",
+            extra={"client_id": client_id, "profile_id": profile_id, "error": str(exc)},
+        )
+        raise HTTPException(status_code=502, detail="social_profile_failed") from exc
     logger.info("social.profile_provisioned", extra={"client_id": client_id, "profile_id": profile_id})
     return profile_id
+
+
+def enqueue_profile_provision(client_id: str, client_name: Optional[str] = None) -> None:
+    """Enqueue the client's PostPeer profile provisioning as an async job.
+
+    Provisioning makes a synchronous PostPeer create_profile call; enqueuing keeps
+    it off the client-create request path (every other provisioning step enqueues
+    rather than blocking the HTTP response on an external call). Idempotent — the
+    job re-checks and no-ops when a profile already exists, so a duplicate enqueue
+    is harmless. Skipped when the module is off/unkeyed or a profile is already set.
+    Best-effort — never raise into the caller's provisioning flow."""
+    if not (settings.social_enabled and settings.postpeer_api_key):
+        return
+    try:
+        if _client_profile_id(client_id):
+            return
+        _sb().table("async_jobs").insert(
+            {
+                "job_type": "social_profile_provision",
+                "entity_id": client_id,
+                "payload": {"client_id": client_id, "client_name": client_name},
+            }
+        ).execute()
+    except Exception as exc:  # noqa: BLE001 — enqueue is best-effort
+        logger.warning(
+            "social.profile_provision_enqueue_failed",
+            extra={"client_id": client_id, "error": str(exc)},
+        )
+
+
+def run_profile_provision_job(job: dict) -> None:
+    """Worker entrypoint: provision the client's PostPeer profile. Idempotent."""
+    payload = job.get("payload") or {}
+    client_id = payload.get("client_id")
+    if not client_id:
+        return
+    ensure_profile_for_client(client_id, payload.get("client_name"))
 
 
 def connect_url_for_client(
@@ -263,7 +354,10 @@ def create_post(
     """Compose one platform-native post and publish it now, or schedule it for a
     future time. Validates against the Platform Spec (hard violation → 422) first."""
     _assert_enabled()
-    _assert_account_allowed(client_id, account_id)
+    # Compose-time gate: always enforce "profile is set" + a fast 403 when PostPeer
+    # is reachable, but tolerate a PostPeer outage (require_live=False) so a blip
+    # can't block composing/scheduling. run_publish_job re-checks authoritatively.
+    _assert_account_allowed(client_id, account_id, require_live=False)
     platform = (platform or "").lower()
     media = build_media(image_urls, video_urls)
     verdict = validate_post(platform, copy, media, _platform_spec(platform))
@@ -392,6 +486,17 @@ async def run_publish_job(job: dict) -> None:
         account_id = post.get("account_id")
         if not account_id:
             _fail("no_account_id")
+            return
+
+        # Authoritative isolation gate at the actual side-effect (require_live=True):
+        # the account must still belong to this client's profile now, catching a
+        # profile that changed after compose or a compose-time check deferred by a
+        # PostPeer outage. A non-member or an unconfirmable membership fails the
+        # post rather than risk publishing to a wrong account.
+        try:
+            _assert_account_allowed(client_id, account_id, require_live=True)
+        except HTTPException as exc:
+            _fail(str(getattr(exc, "detail", "social_account_not_in_client_profile")))
             return
 
         est = estimate_cost_usd(platform, copy)

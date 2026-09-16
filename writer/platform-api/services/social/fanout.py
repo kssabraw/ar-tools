@@ -385,8 +385,12 @@ def publish_existing_draft(
     if draft.get("status") == "published":
         raise HTTPException(status_code=409, detail="social_draft_already_published")
     # Client isolation at the write (see publish._assert_account_allowed): the
-    # target account must belong to this draft's client's Social group.
-    publish._assert_account_allowed(str(draft["client_id"]), account_id)
+    # target account must belong to this draft's client's Social group. Compose-time
+    # gate — tolerate a PostPeer outage (require_live=False); run_publish_job
+    # re-checks authoritatively before it posts.
+    publish._assert_account_allowed(
+        str(draft["client_id"]), account_id, require_live=False
+    )
 
     platform = draft["platform"]
     media = draft.get("media") or publish.build_media(draft.get("image_urls"), None)

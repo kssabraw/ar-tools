@@ -168,13 +168,15 @@ def _provision_full_client(client: dict, user_id: str) -> None:
     except Exception as exc:
         logger.warning("client_deliverables_provision_failed", extra={"client_id": client_id, "error": str(exc)})
     # Auto-provision the client's PostPeer profile (Social group) so the Social
-    # module is scoped from day one. Best-effort + idempotent; skipped when the
-    # module is off/unkeyed or a profile is already set.
-    if settings.social_enabled and settings.postpeer_api_key and not client.get("social_profile_id"):
+    # module is scoped from day one. Enqueued (not called inline) so the client-create
+    # response never blocks on a synchronous PostPeer call — matches every other
+    # provisioning step above. Best-effort + idempotent; the enqueue itself skips
+    # when the module is off/unkeyed or a profile is already set.
+    if not client.get("social_profile_id"):
         try:
             from services.social import publish as social_publish
 
-            social_publish.ensure_profile_for_client(client_id, client.get("name"))
+            social_publish.enqueue_profile_provision(client_id, client.get("name"))
         except Exception as exc:
             logger.warning(
                 "client_social_profile_autoprovision_failed",

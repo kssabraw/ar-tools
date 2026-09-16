@@ -377,6 +377,42 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'The social publishing module is disabled on this environment.',
     steps: ['Ask an admin to set SOCIAL_ENABLED=true on the PLATFORM service and redeploy.'],
   },
+  social_profile_not_set: {
+    title: 'This client has no Social group yet',
+    meaning:
+      'Every client gets its own PostPeer Social group so accounts stay isolated ' +
+      'to that client. This one doesn’t have one yet, so there’s nothing to connect ' +
+      'accounts to or publish from.',
+    steps: [
+      'Click “Connect accounts” to create the client’s Social group.',
+      'Then connect at least one platform account and try again.',
+    ],
+  },
+  social_account_not_in_client_profile: {
+    title: 'That account belongs to a different client',
+    meaning:
+      'The chosen account isn’t in this client’s Social group. To keep clients ' +
+      'isolated, a post can only go to an account connected under this client.',
+    steps: [
+      'Pick an account from this client’s connected list, or connect one for this client.',
+      'If the list looks wrong, refresh — the account may have been moved or disconnected.',
+    ],
+  },
+  social_profile_failed: {
+    title: 'Couldn’t set up the client’s Social group',
+    meaning:
+      'Creating the client’s PostPeer Social group failed — usually a temporary ' +
+      'PostPeer hiccup or a missing PostPeer API key.',
+    steps: [
+      'Try again in a moment.',
+      'If it keeps failing, ask an admin to check the PostPeer API key on the PLATFORM service.',
+    ],
+  },
+  social_connect_failed: {
+    title: 'Couldn’t start the account connection',
+    meaning: 'Getting the connect link from PostPeer failed — usually a temporary provider hiccup.',
+    steps: ['Try “Connect accounts” again in a moment.', 'If it persists, tell an admin.'],
+  },
   social_spec_violation: {
     title: 'The post doesn’t meet the platform’s rules',
     meaning:
