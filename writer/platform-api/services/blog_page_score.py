@@ -120,6 +120,19 @@ def _sections_to_markdown(article: list) -> str:
     return "\n\n".join(parts)
 
 
+def _reopt_gain_guidance(run_id: str) -> str:
+    """The report-only Topic-Vector / Information-Gain coaching string from the
+    run's latest `blog_score` (single-sourced by nlp at score time — reused here
+    with NO second nlp call). '' when no score exists or it carried no actionable
+    guidance → the writer payload is byte-identical to a run with no coaching. It
+    rides the writer payload as advisory writer-notes text, never a deficiency."""
+    score = _latest_output(run_id, "blog_score")
+    tv = ((score or {}).get("output_payload") or {}).get("topic_vector")
+    if not isinstance(tv, dict):
+        return ""
+    return (tv.get("gain_guidance") or "").strip()
+
+
 def _blog_title_h1(run_id: str) -> tuple[str, str]:
     """SEO title + on-page H1 from the Brief Generator output (v2.0 Step 3.5),
     so the title/H1 scoring signals fire. Falls back to the run keyword."""
@@ -314,8 +327,13 @@ async def reoptimize_run(
     prior_article = (writer.get("output_payload") or {}).get("article") or []
 
     # Base writer payload (client context + reference-structure mirroring) reused
-    # from the orchestrator, then switched into reoptimize mode.
-    writer_payload = _build_writer_payload(run, brief_p, sie_p, research_p, snapshot)
+    # from the orchestrator, then switched into reoptimize mode. The run's latest
+    # blog_score carries the report-only Information-Gain coaching (rendered by nlp
+    # at score time); thread it in as advisory steering — never a deficiency.
+    writer_payload = _build_writer_payload(
+        run, brief_p, sie_p, research_p, snapshot,
+        source_gain_guidance=_reopt_gain_guidance(run_id) or None,
+    )
     writer_payload["attempt"] = _next_attempt(run_id, "writer")
     writer_payload["mode"] = "reoptimize"
     writer_payload["prior_sections"] = prior_article

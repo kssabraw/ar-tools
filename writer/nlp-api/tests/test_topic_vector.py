@@ -512,6 +512,41 @@ def test_render_gain_guidance_excludes_per_product_and_transactional_facts():
     assert "storage_temp: -80 °c" in low
 
 
+def _attach_score_time_guidance(report, site_index, page_text):
+    """Mirror exactly what /score-blog-page does: attach the rendered coaching
+    string onto the report-only topic_vector field so a blog reopt (which rewrites
+    in pipeline-api, unable to call this nlp renderer) can reuse the SCORE's
+    already-computed measure with no second nlp call. Report-only — a string key,
+    never in `scores`."""
+    if isinstance(report, dict):
+        report["gain_guidance"] = tv.render_gain_guidance(report, site_index, page_text)
+    return report
+
+
+def test_blog_score_attaches_nonempty_gain_guidance_when_actionable():
+    # An actionable measure (an on-vector gap + a missing site-invariant fact) →
+    # /score-blog-page emits topic_vector.gain_guidance as a NON-EMPTY string that
+    # a blog reopt threads into the writer as advisory notes.
+    report = {"available": True, "inverse_gain_gap": [{"label": "Receptor Agonism"}]}
+    idx = {"facts": [{"type": "storage_temp", "value": "-20", "unit": "°C"}]}
+    out = _attach_score_time_guidance(report, idx, "a page without that temp")
+    assert isinstance(out["gain_guidance"], str)
+    assert out["gain_guidance"]  # non-empty
+    assert "Receptor Agonism" in out["gain_guidance"]
+    # Report-only: the string is a key on topic_vector, never in a scored block.
+    assert "gain_guidance" not in out.get("coverage", {})
+
+
+def test_blog_score_attaches_empty_gain_guidance_when_nothing_actionable():
+    # Nothing to coach → "" so the reopt prompt is byte-identical to a run with no
+    # measure (never a misleading number, never a fabricated addition).
+    report = {"available": True, "inverse_gain_gap": [], "coverage": {}}
+    assert _attach_score_time_guidance(report, {"facts": []}, "page")["gain_guidance"] == ""
+    # An unavailable measure (no GEMINI key / thin index) → "" too.
+    unavailable = {"available": False, "reason": "gemini_key_absent"}
+    assert _attach_score_time_guidance(unavailable, None, "page")["gain_guidance"] == ""
+
+
 def test_measure_does_not_add_gain_to_composite_inputs():
     # information_gain is a SEPARATE key — it never appears in the coverage/
     # centering blocks that a composite could read.

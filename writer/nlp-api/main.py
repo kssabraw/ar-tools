@@ -12260,6 +12260,19 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
     # stage"). Centering / coverage / gain still run.
     topic_vector_report = await _measure_topic_vector(
         page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
+    # Single-source the reopt-coaching string HERE (Approach A): the blog rewrite
+    # happens in pipeline-api (no nlp blog-rewrite endpoint), and platform-api can't
+    # import this pure nlp renderer — so a blog reopt reuses the SCORE's already-
+    # computed measure by reading `topic_vector.gain_guidance` off this report
+    # (no second nlp call). It stays report-only — a string on the report-only
+    # `topic_vector` field, never touching `scores`; "" when nothing actionable →
+    # the reopt prompt is byte-identical when the measure is unavailable/thin.
+    try:
+        if isinstance(topic_vector_report, dict):
+            topic_vector_report["gain_guidance"] = topic_vector.render_gain_guidance(
+                topic_vector_report, body.site_claim_index, page_text)
+    except Exception:  # pragma: no cover - guidance is best-effort, never a 500
+        logger.warning("score-blog: gain guidance render failed; skipping.")
 
     return BlogScoreResponse(
         composite_score=composite,

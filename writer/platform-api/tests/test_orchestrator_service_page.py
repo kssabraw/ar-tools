@@ -61,6 +61,35 @@ def test_build_service_writer_payload():
     assert p["client_context"]["website_analysis_unavailable"] is True
 
 
+def test_build_writer_payload_threads_gain_guidance_advisory_not_deficiency():
+    # The report-only Information-Gain coaching (blog reopt Stage B′) rides as
+    # advisory writer-notes text — a `reopt_gain_guidance` field, NEVER a
+    # deficiency (composite weight 0).
+    snap = {"brand_guide_text": "b", "icp_text": "i"}
+    gain = "TOPIC & INFORMATION-GAIN GUIDANCE\n  - subtopic: dosing protocols"
+    p = orch._build_writer_payload(
+        {"id": "r1"}, {"t": "brief"}, {}, {}, snap,
+        source_deficiencies=[{"engine": "AEO", "issues": ["x"], "recommendations": ["y"]}],
+        source_gain_guidance=gain,
+    )
+    assert p["reopt_gain_guidance"] == gain
+    assert p["mode"] == "reoptimize"
+    # The guidance is NEVER folded into the scored deficiencies.
+    assert gain not in str(p["deficiencies"])
+    assert p["deficiencies"] == [{"engine": "AEO", "issues": ["x"], "recommendations": ["y"]}]
+
+
+def test_build_writer_payload_no_gain_guidance_is_byte_identical():
+    # Absent coaching → no reopt_gain_guidance key (a normal generate/no-coaching
+    # payload is unchanged).
+    snap = {"brand_guide_text": "b", "icp_text": "i"}
+    p = orch._build_writer_payload({"id": "r1"}, {}, {}, {}, snap)
+    assert "reopt_gain_guidance" not in p
+    # Empty string is also ignored (only a non-empty string sets the key).
+    p2 = orch._build_writer_payload({"id": "r1"}, {}, {}, {}, snap, source_gain_guidance="")
+    assert "reopt_gain_guidance" not in p2
+
+
 # ----------------------------------------------------------------------
 # orchestrate_run branching
 # ----------------------------------------------------------------------
