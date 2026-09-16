@@ -1,8 +1,8 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-16 · **Topic-Vector — P1 reopt-COACHING live check → garbage fact FOUND + FIXED** (latest)
+## ⏩ Update — 2026-09-16 · **Topic-Vector — P1 reopt-COACHING garbage-fact FIX + gain coaching wired into the LOCAL SEO reopt loop — MERGED (PR [#1171](https://github.com/kssabraw/ar-tools/pull/1171), squash `f1ea9b6`)** (latest)
 
-The one pending P1 item ("Live reopt-coaching confirmation still deferred"), on branch `claude/topic-vector-information-gain-opepik`. Design authority `docs/modules/topic-vector-information-gain-plan-v1_0.md`; the decision is logged in root `decisions.md` ("reopt coaching pushes only SITE-INVARIANT facts").
+The one pending P1 item ("Live reopt-coaching confirmation still deferred"). **MERGED to `main` (PR #1171, squash `f1ea9b6`); all CI green (both pytest suites / ruff / mypy / Netlify).** Design authority `docs/modules/topic-vector-information-gain-plan-v1_0.md`; the decision is logged in root `decisions.md` ("reopt coaching pushes only SITE-INVARIANT facts").
 
 **How the check was done (no fresh paid reopt).** The reopt coaching block is **ephemeral** — `topic_vector.render_gain_guidance` injects it into the rewrite prompt and it is **never persisted**, so a live reoptimize can't reveal it. Instead: (1) read Nova Life Peptides' live `site_claim_index` (14 typed facts) + the **deployed** 05:58 `ecommerce_action` score run on its `shop/glp-3-reta/` PDP (real `topic_vector`: centering 77.1, `inverse_gain_gap` = the real subtopic "Certificate of Analysis & Safety Data", `information_gain` realized 2 / ungrounded 1), then (2) reconstruct `render_gain_guidance` **offline** on that exact real data (`render_gain_guidance` is pure, no network). That is the faithful check.
 
