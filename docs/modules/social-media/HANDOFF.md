@@ -4,6 +4,65 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
+## Update (2026-09-16) — Format-dropdown fix MERGED + the **client-isolation A-unit** (CI green, draft PR #1165)
+
+Two things shipped this session on top of the 2026-09-08 state below.
+
+**1. Format dropdown fix — MERGED (PR #1160).** The composer's Format dropdown offered
+Reel/Story for platforms that don't support them (e.g. LinkedIn). `FORMATS_BY_PLATFORM` in
+`SocialCompose.tsx` now scopes the offered formats per platform. Merged to `main`.
+
+**2. Client isolation "make account connection per-client and safe" (the A-unit) — DRAFT PR #1165, CI GREEN, awaiting owner review/merge.**
+This closes the real multi-client-safety gap: PostPeer has **one account-wide key with no
+per-profile access control** (see the "not a security boundary" note in `CLAUDE.md`), so before
+this the account picker listed **every** connected account regardless of client. What landed:
+- **A1 isolation** — `list_accounts` fails CLOSED (unmapped client → `[]`, adapter never called);
+  `publish._assert_account_allowed` enforces membership at the WRITE (`create_post` + fanout
+  `publish_existing_draft`): profile MUST be set (409 `social_profile_not_set`) and the account
+  must be in the client's PostPeer profile (403 `social_account_not_in_client_profile`). The
+  picker's scoping is UX; this membership check is the actual boundary.
+  - **Tolerant at compose, authoritative at publish**: `_assert_account_allowed(require_live=…)`.
+    Compose/schedule pass `require_live=False` (a PostPeer blip can't block composing); the
+    publish job re-checks `require_live=True` **before budget reserve / the platform call**, so a
+    wrong or unconfirmable account never posts.
+- **A2 connect flow** — `POST /clients/{id}/social/profile` (idempotent ensure) +
+  `GET /clients/{id}/social/connect-url?platform=` (per-client OAuth URL scoped to the client's
+  Social group); `SocialCompose` empty-state is a `ConnectAccountsPanel` (Set up Social group →
+  per-platform Connect buttons). Replaces the "connect manually in PostPeer" v1 stopgap.
+- **A3 LinkedIn** — migration `20260916150000_social_linkedin_spec.sql` seeds the `linkedin`
+  `social_platform_specs` row (3,000 chars, 9 images, feed-only) so `validate_post` enforces it.
+- **`clients.social_profile_id` is now settable + auto-provisioned at client creation**, but
+  provisioning is **enqueued** (new `social_profile_provision` async job, migration
+  `20260916190000`) so the client-create response never blocks on a synchronous PostPeer call.
+  `ensure_profile_for_client` is concurrency/orphan-hardened (re-reads after create, never clobbers
+  an existing mapping, raises `social_profile_failed` on a failed persist).
+- Four new error codes registered in `errorGuidance.ts` (`social_profile_not_set`,
+  `social_account_not_in_client_profile`, `social_profile_failed`, `social_connect_failed`).
+- Migrations `20260916150000` + `20260916190000` **applied live**. All CI green on the head commit
+  (`98f7079`): platform-api lint&typecheck ✅, platform-api tests ✅, nlp-api tests ✅, Netlify
+  preview ✅. It's a **draft** — owner marks ready + merges.
+
+**Behavior change to socialize:** fail-closed means an existing client whose accounts were
+connected before profiles existed shows an **empty picker until its Social group is set** — the
+correct trade-off vs the old cross-client leak. The connect panel is the path (Set up → Connect).
+
+**Owner decisions made this session (the b/c items):**
+- **b1 — IG scope: BOTH** (feed + Reels + Stories) in v1.
+- **b2 — IG carousel: YES** in v1 (≤10 items, one aspect ratio throughout; each slide is another
+  nano-banana Pro image ≈ $0.13, so a 5-slide carousel is ~5× the dominant cost line — plan for it).
+- **b3 — Default per-client monthly ceiling: STILL OPEN** ("let's discuss more").
+- **b4 — Autonomy rollout: case-by-case** (per-client decision, not a blanket tier).
+- **b5 — PostPeer billing: no monthly fee → PAYG** (pay-as-you-go non-expiring credit packs).
+- **c1 — P1 Competitor research: BUILD IT NEXT, Apify-ONLY. SKIP TwelveLabs** (we're not analyzing
+  full videos, so no per-video analysis vendor). Leaves `TWELVELABS_API_KEY` unneeded for v1;
+  `APIFY_API_TOKEN` is still required and unset.
+- **c2 — P4 autonomy: DISCUSS** (not started).
+- **c3 — Video Studio / P5: DISCUSS** (not started).
+
+Everything below (2026-09-08) remains accurate; the format fix and the A-unit are additive.
+
+---
+
 ## Current state (2026-09-08) — P0 publish path + the **full P2 Creator** are BUILT, MERGED & LIVE
 
 The module is a **working end-to-end Social Media manager PLUS the repurpose-engine Creator** on `main`.
@@ -161,8 +220,10 @@ posts; feed image aspect ratio 4:5–1.91:1.
   `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`) — ✅ all set; bucket + custom domain live in
   Cloudflare. Live write/read proof still pending (see above).
 - **`GEMINI_API_KEY`** — ✅ set (needed for the unbuilt nano-banana Pro image renderer / AI images).
-- **`APIFY_API_TOKEN`** — ❌ not set — needed for **P1 competitor research** (unbuilt).
-- **`TWELVELABS_API_KEY`** — ❌ not set — needed for **P1 competitor video analysis** (unbuilt).
+- **`APIFY_API_TOKEN`** — ❌ not set — needed for **P1 competitor research** (unbuilt, next major build).
+- **`TWELVELABS_API_KEY`** — ⛔ **NOT NEEDED (owner decision c1, 2026-09-16): SKIP TwelveLabs.** P1 is
+  Apify-ONLY; we're not analyzing full videos, so there's no per-video-analysis vendor in v1. Don't
+  provision it and don't build the TwelveLabs path.
 - **cobalt** — self-hosted; **P5 only**, not needed for v1.
 - Config settings that landed with #1027: `social_posting_provider`, `postpeer_api_key`,
   `postpeer_base_url`, `social_enabled`, `social_monthly_ceiling_default_usd` (75.0), `social_credit_usd`
@@ -172,16 +233,21 @@ posts; feed image aspect ratio 4:5–1.91:1.
   working defaults (no new env needed; copy/angles reuse `ANTHROPIC_API_KEY`, images reuse the already-set
   `GEMINI_API_KEY`). Still to add when P1 lands: `apify_api_token`, `twelvelabs_api_key`.
 
-## Open decisions for the owner (not yet made)
+## Open decisions for the owner
 
-- ~~**Mixed image path**~~ — **DECIDED (owner): Pro-only for now.** The 2.5-Flash-for-square /
+- ~~**Mixed image path**~~ — **DECIDED: Pro-only for now.** The 2.5-Flash-for-square /
   Pro-for-aspect-ratio cost-saver (halves the dominant image cost) is a future option, not built.
-- **v1 Instagram scope** — feed-only, or include single-media Reels/Stories? (Stories: Business account
-  only, no caption, no link stickers — a weak fit for repurposed content.)
-- **IG carousel Draft type in v1?** — PostPeer supports it (≤10 items). Each slide is another
-  nano-banana Pro image (~$0.13), so a 5-slide carousel is ~5× the dominant cost line per post.
-- **Default per-client monthly cost ceiling** in the Social Policy (the cost model says Base ≈ $45/client/mo).
-- **Autonomy rollout** — which clients (if any) reach the top tier for auto-publish, and when.
+- ~~**v1 Instagram scope**~~ — **DECIDED (b1): BOTH** — feed + Reels + Stories. (Not built yet — the
+  composer's format set + the seeded IG spec need extending to Reels/Stories; Stories is
+  Business-account-only, no caption/link stickers.)
+- ~~**IG carousel Draft type in v1?**~~ — **DECIDED (b2): YES.** Not built yet — needs a carousel Draft
+  type (≤10 items, one aspect ratio). Cost: each slide is another nano-banana Pro image (~$0.13).
+- ~~**PostPeer billing shape**~~ — **DECIDED (b5): PAYG** (non-expiring credit packs, no monthly plan).
+- ~~**Autonomy rollout**~~ — **DECIDED (b4): case-by-case** per client (not a blanket tier). The build
+  (P4) is still a separate "discuss first" item (c2).
+- **STILL OPEN — Default per-client monthly cost ceiling** (b3) in the Social Policy (cost model says
+  Base ≈ $45/client/mo). Owner: "let's discuss more."
+- **STILL OPEN — P4 autonomy build** (c2) and **Video Studio / P5** (c3): both "let's discuss" before building.
 
 ## Next actions, in order
 
@@ -197,12 +263,17 @@ posts; feed image aspect ratio 4:5–1.91:1.
    Draft type, default per-client monthly ceiling, autonomy rollout. (The **mixed image path** is DECIDED:
    Pro-only for now.)
 4. **Remaining build, roughly in order** (the repurpose-engine vision beyond P2):
-   - **P1 Competitor research** (Apify Signals + TwelveLabs analyze-in-place) — the next major build.
-     Analyze-in-place per ADR-0002 (public content, never re-hosted media). Extend `client_competitors`
-     via the child `social_competitor_handles` table (already migrated); output → `social_competitor_signals`.
-     **It also grounds Angle proposals in competitor signals** (the `propose_angles` prompt already leaves
-     room for this — the glossary says angles are grounded in "relevant Competitor Signals"). **Needs
-     `APIFY_API_TOKEN` + `TWELVELABS_API_KEY` provisioned on PLATFORM (both currently unset).**
+   - **P1 Competitor research — the NEXT major build (owner-greenlit c1). Apify-ONLY; TwelveLabs is
+     dropped from v1.** Analyze-in-place per ADR-0002 (public content, never re-hosted media). Extend
+     `client_competitors` via the child `social_competitor_handles` table (already migrated); output →
+     `social_competitor_signals`. **It also grounds Angle proposals in competitor signals** (the
+     `propose_angles` prompt already leaves room for this — the glossary says angles are grounded in
+     "relevant Competitor Signals"). **Needs `APIFY_API_TOKEN` provisioned on PLATFORM** (currently
+     unset). Since there's no TwelveLabs, "signals" are Apify post/engagement/text signals + captions,
+     not video-content analysis.
+   - **IG scope-out (b1) + IG carousel (b2)** — extend the composer format set + the seeded IG spec to
+     Reels/Stories, and add a carousel Draft type (≤10 images, one aspect ratio). Small-to-medium build;
+     do alongside or after P1.
    - **YouTube poster** — waiting on PostPeer's `/docs/platforms/youtube` (title/description/tags/
      thumbnail/Shorts fields) before mapping. Uploads existing videos, not generation.
    - **Big-video direct-to-R2 (presign)** — the `POST .../social/media/presign` endpoint exists; the UI
