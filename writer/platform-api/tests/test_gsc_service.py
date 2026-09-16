@@ -165,3 +165,89 @@ def test_get_service_account_email_unconfigured(monkeypatch):
     monkeypatch.setattr(gsc_service.settings, "google_service_account_key", "")
     with pytest.raises(RuntimeError):
         gsc_service.get_service_account_email()
+
+
+# ---------------------------------------------------------------------------
+# build_search_console_client — transport timeout (regression: 2026-09-16 outage)
+# ---------------------------------------------------------------------------
+def test_build_client_applies_transport_timeout(monkeypatch):
+    """The GSC client must carry gsc_http_timeout_seconds on its http transport,
+    and must be built with http= (never credentials=, which build() rejects
+    alongside http=). A no-timeout client once hung and wedged the event loop.
+    """
+    import sys
+    import types
+
+    captured: dict = {}
+
+    # --- fake httplib2.Http(timeout=...) ---
+    httplib2 = types.ModuleType("httplib2")
+
+    class _Http:
+        def __init__(self, timeout=None):
+            captured["http_timeout"] = timeout
+
+    httplib2.Http = _Http
+
+    # --- fake google_auth_httplib2.AuthorizedHttp(creds, http=...) ---
+    gah = types.ModuleType("google_auth_httplib2")
+
+    class _AuthorizedHttp:
+        def __init__(self, creds, http=None):
+            captured["authed_creds"] = creds
+            captured["authed_http"] = http
+
+    gah.AuthorizedHttp = _AuthorizedHttp
+
+    # --- fake google.oauth2.service_account.Credentials ---
+    google_pkg = sys.modules.get("google") or types.ModuleType("google")
+    oauth2 = types.ModuleType("google.oauth2")
+    service_account = types.ModuleType("google.oauth2.service_account")
+
+    class _Credentials:
+        @staticmethod
+        def from_service_account_info(info, scopes=None):
+            captured["scopes"] = scopes
+            return "fake-creds"
+
+    service_account.Credentials = _Credentials
+    oauth2.service_account = service_account
+
+    # --- fake googleapiclient.discovery.build(...) ---
+    googleapiclient = sys.modules.get("googleapiclient") or types.ModuleType("googleapiclient")
+    discovery = types.ModuleType("googleapiclient.discovery")
+
+    def _build(name, version, **kwargs):
+        captured["build_args"] = (name, version, kwargs)
+        return "fake-client"
+
+    discovery.build = _build
+
+    for name, mod in {
+        "httplib2": httplib2,
+        "google_auth_httplib2": gah,
+        "google": google_pkg,
+        "google.oauth2": oauth2,
+        "google.oauth2.service_account": service_account,
+        "googleapiclient": googleapiclient,
+        "googleapiclient.discovery": discovery,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    monkeypatch.setattr(gsc_service, "_load_key", lambda: {"client_email": "x@y.iam"})
+    monkeypatch.setattr(gsc_service.settings, "gsc_http_timeout_seconds", 137)
+
+    client = gsc_service.build_search_console_client()
+
+    assert client == "fake-client"
+    # The timeout from config reached the http transport,
+    assert captured["http_timeout"] == 137
+    # the timed http was authorized with the service-account creds,
+    assert captured["authed_creds"] == "fake-creds"
+    assert isinstance(captured["authed_http"], _Http)
+    # and build() got http= (not credentials=, which it rejects together).
+    name, version, kwargs = captured["build_args"]
+    assert (name, version) == ("searchconsole", "v1")
+    assert "credentials" not in kwargs
+    assert isinstance(kwargs["http"], _AuthorizedHttp)
+    assert kwargs["cache_discovery"] is False

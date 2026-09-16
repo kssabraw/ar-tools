@@ -240,6 +240,13 @@ async def lifespan(app: FastAPI):
         for _ in range(max(0, settings.bulk_lane_workers))
     ]
     scheduler_task = asyncio.create_task(gsc_scheduler())
+    # Event-loop lag watchdog: the scheduler + workers above share this loop, so a
+    # blocking call on it stalls the whole API (the 2026-09-16 outage). This makes
+    # a to_thread/run_in_threadpool regression observable (logs event_loop_lag_high)
+    # instead of silent. Best-effort; cancelled at shutdown with the other tasks.
+    from services.event_loop_watchdog import event_loop_watchdog
+
+    watchdog_task = asyncio.create_task(event_loop_watchdog())
     # Start the Topic Fanout in-process content scheduler (its own asyncio loop;
     # claims due scheduled article runs). Driven explicitly here rather than via
     # the vendored sub-app's lifespan, which is not invoked when its routers are
@@ -271,7 +278,7 @@ async def lifespan(app: FastAPI):
     # still self-heals via the reaper.
     tasks = [
         t
-        for t in (worker_task, interactive_worker_task, scheduler_task,
+        for t in (worker_task, interactive_worker_task, scheduler_task, watchdog_task,
                   *fanout_worker_tasks, *coverage_worker_tasks, *bulk_worker_tasks)
         if t
     ]

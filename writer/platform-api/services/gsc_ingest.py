@@ -12,6 +12,7 @@ manual ingest endpoint. See docs/modules/organic-rank-tracker-prd-v1_0.md §6.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -258,7 +259,12 @@ async def run_gsc_ingest_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         return
 
-    result = ingest_property(property_id, payload.get("start_date"), payload.get("end_date"))
+    # ingest_property does blocking Google API pagination + bulk Supabase upserts;
+    # run it off the event loop so a slow/hung GSC endpoint can never wedge the
+    # shared platform-api loop (the 2026-09-16 outage). See gsc_service timeout too.
+    result = await asyncio.to_thread(
+        ingest_property, property_id, payload.get("start_date"), payload.get("end_date")
+    )
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.status == "ok" else "failed",
@@ -294,7 +300,8 @@ async def run_gsc_page_ingest_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         return
 
-    result = ingest_property_pages(property_id)
+    # Blocking Google pagination + bulk upsert — keep it off the event loop.
+    result = await asyncio.to_thread(ingest_property_pages, property_id)
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.status == "ok" else "failed",

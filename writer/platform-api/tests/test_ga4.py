@@ -320,3 +320,69 @@ def test_verify_rejects_bad_property_without_calling(monkeypatch):
     monkeypatch.setattr(ga4_service, "run_report", boom)
     v = ga4_service.verify_property_access("not-a-property")
     assert v.status == "error"
+
+
+# ---------------------------------------------------------------------------
+# _mint_token — the OAuth refresh must carry a timeout (thread-leak hygiene).
+# google-auth's default Request has no timeout, so a stalled token endpoint
+# would hang the worker thread forever.
+# ---------------------------------------------------------------------------
+def test_mint_token_refreshes_over_a_timed_transport(monkeypatch):
+    import sys
+    import types
+
+    captured: dict = {}
+
+    httplib2 = types.ModuleType("httplib2")
+
+    class _Http:
+        def __init__(self, timeout=None):
+            captured["http_timeout"] = timeout
+
+    httplib2.Http = _Http
+
+    gah = types.ModuleType("google_auth_httplib2")
+
+    class _Request:
+        def __init__(self, http=None):
+            captured["request_http"] = http
+
+    gah.Request = _Request
+
+    google_pkg = sys.modules.get("google") or types.ModuleType("google")
+    oauth2 = types.ModuleType("google.oauth2")
+    service_account = types.ModuleType("google.oauth2.service_account")
+
+    class _Creds:
+        token = "ya29.fake-token"
+
+        def refresh(self, request):
+            captured["refresh_request"] = request
+
+    class _Credentials:
+        @staticmethod
+        def from_service_account_info(info, scopes=None):
+            captured["scopes"] = scopes
+            return _Creds()
+
+    service_account.Credentials = _Credentials
+    oauth2.service_account = service_account
+
+    for name, mod in {
+        "httplib2": httplib2,
+        "google_auth_httplib2": gah,
+        "google": google_pkg,
+        "google.oauth2": oauth2,
+        "google.oauth2.service_account": service_account,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    monkeypatch.setattr(ga4_service, "_load_key", lambda: {"client_email": "x@y.iam"})
+
+    token = ga4_service._mint_token()
+
+    assert token == "ya29.fake-token"
+    # The refresh transport carried the GA4 timeout (not an unbounded default).
+    assert captured["http_timeout"] == ga4_service._TIMEOUT
+    assert isinstance(captured["refresh_request"], _Request)
+    assert isinstance(captured["request_http"], _Http)

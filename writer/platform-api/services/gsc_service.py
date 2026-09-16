@@ -143,14 +143,31 @@ def get_service_account_email() -> str:
 
 
 def build_search_console_client():
-    """Build an authenticated Search Console API client (lazy Google imports)."""
+    """Build an authenticated Search Console API client (lazy Google imports).
+
+    Every request carries a transport-level timeout (``gsc_http_timeout_seconds``).
+    The Google client library defaults to *no* timeout, so a hung GSC endpoint
+    blocks the calling thread — or, when a caller runs on the shared event loop,
+    the entire platform-api process — indefinitely (that is exactly what caused
+    the 2026-09-16 outage). A timed ``httplib2.Http`` wrapped in an
+    ``AuthorizedHttp`` makes a stalled request raise ``socket.timeout`` instead,
+    which the callers already classify/record as a failed run.
+    """
+    import google_auth_httplib2  # noqa: PLC0415
+    import httplib2  # noqa: PLC0415
     from google.oauth2 import service_account  # noqa: PLC0415
     from googleapiclient.discovery import build  # noqa: PLC0415
 
     creds = service_account.Credentials.from_service_account_info(
         _load_key(), scopes=SCOPES
     )
-    return build("searchconsole", "v1", credentials=creds, cache_discovery=False)
+    timeout = max(1, int(settings.gsc_http_timeout_seconds))
+    # build() rejects credentials= and http= together, so authorize the timed
+    # transport ourselves and pass it as http=.
+    authed_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=timeout)
+    )
+    return build("searchconsole", "v1", http=authed_http, cache_discovery=False)
 
 
 def _run_test_query(client, site_url: str) -> None:

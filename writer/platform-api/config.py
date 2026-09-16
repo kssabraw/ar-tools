@@ -250,6 +250,18 @@ class Settings(BaseSettings):
         # run. (The durable fix — per-keyword jobs / resume — is a separate change.)
         "dataforseo_rank": 120,
     }
+    # Event-loop lag watchdog (2026-09-16). The scheduler + job-worker lanes share
+    # the HTTP server's event loop, so a blocking call on the loop stalls the whole
+    # API (that outage: a hung Google call froze the loop and nothing loaded). This
+    # background task periodically measures how late a fixed-interval sleep wakes —
+    # the "lag" is time the loop couldn't service timers, i.e. was blocked — and
+    # logs `event_loop_lag_high` past the threshold, so a to_thread regression is
+    # observable (grep the logs) before it becomes an outage. A total wedge freezes
+    # the watchdog too and is only reported on recovery; the everyday value is
+    # catching partial blocking early. Cheap: one timer wake per interval.
+    event_loop_watchdog_enabled: bool = True
+    event_loop_watchdog_interval_seconds: float = 5.0
+    event_loop_watchdog_lag_threshold_seconds: float = 1.0
     # Dedicated worker lane for the (long, blocking) Fanout pipeline jobs, so a
     # ~10-min expansion can't tie up the MAIN lane — which owns the stale-job
     # reaper and every other background job. The MAIN lane excludes these types;
@@ -619,6 +631,12 @@ class Settings(BaseSettings):
     gsc_backfill_days: int = 480
     # Weekly query×page ingest window (canonical-URL resolution + Pages view).
     gsc_page_window_days: int = 30
+    # Transport-level timeout (seconds) for every Google Search Console API call
+    # (searchanalytics.query, urlInspection). The Google client library has NO
+    # default timeout, so a hung endpoint would block forever; a no-timeout hang
+    # on the shared event loop once wedged the whole platform-api (2026-09-16
+    # outage). This bounds each request so a stalled upstream raises instead.
+    gsc_http_timeout_seconds: int = 120
     # ------------------------------------------------------------------
     # Google Analytics (GA4) ingestion — Client Reporting Phase 2.
     # DORMANT until (a) the GA4 Data + Admin APIs are enabled on the GCP
