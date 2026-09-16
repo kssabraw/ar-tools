@@ -58,7 +58,7 @@ from .heading_seo_optimizer import optimize_headings
 from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
 from .prose_llm import current_prose_provider, effective_prose_model, set_prose_provider
-from .reopt import reopt_directive
+from .reopt import compose_reopt_notes
 from .sections import SectionWriteResult, write_h2_group
 from .term_usage import compute_term_usage_by_zone
 from .voice_review import review_article_voice
@@ -607,14 +607,19 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
     # Per-run editorial guidance from the user - passed into every section
     # prompt (plus intro + conclusion) so a note like "mention <brand> as one
     # of the top 10" can land wherever it fits most naturally.
-    user_notes = (req.user_notes or "").strip() or None
-    # Reoptimize mode: fold the scorer's deficiency directive into user_notes so
-    # every section/intro/conclusion prompt is steered to fix the low-scoring
-    # dimensions. Reuses the existing user_notes threading (no prompt changes).
-    if getattr(req, "mode", "generate") == "reoptimize":
-        directive = reopt_directive(req.deficiencies, req.prior_sections)
-        if directive:
-            user_notes = f"{directive}\n\n{user_notes}" if user_notes else directive
+    # Reoptimize mode: fold the scorer's deficiency directive into the steering
+    # notes so every section/intro/conclusion prompt fixes the low-scoring
+    # dimensions. The report-only Topic-Vector / Information-Gain coaching
+    # (reopt_gain_guidance) rides ALONGSIDE as advisory steering but is kept out of
+    # the must-land notes-landed QA (notes_for_qa). Reuses the existing user_notes
+    # threading (no prompt changes). Both empty ⇒ byte-identical to prior behaviour.
+    user_notes, notes_for_qa = compose_reopt_notes(
+        req.user_notes,
+        mode=getattr(req, "mode", "generate"),
+        deficiencies=req.deficiencies,
+        prior_sections=req.prior_sections,
+        gain_guidance=getattr(req, "reopt_gain_guidance", None),
+    )
     preceding_summaries_running: list[str] = []
     for h2_idx, (h2_item, h3_items) in enumerate(h2_groups):
         section_budget = section_budgets.get(h2_item.get("order"), 0)
@@ -872,8 +877,10 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
 
     # ---- Notes-landed judge ----
     # Verifies the article honored the user's per-run writer notes (an LLM
-    # judge - paraphrase defeats string matching). Skipped when no notes.
-    notes_qa = await check_notes_landed(user_notes=user_notes, article=article)
+    # judge - paraphrase defeats string matching). Skipped when no notes. Uses
+    # notes_for_qa — the must-land notes only, EXCLUDING the advisory report-only
+    # Information-Gain coaching (which must not be graded as an unmet directive).
+    notes_qa = await check_notes_landed(user_notes=notes_for_qa, article=article)
 
     # ---- Metadata ----
     total_words = sum(s.word_count for s in article if s.type not in ("faq-header", "faq-question"))

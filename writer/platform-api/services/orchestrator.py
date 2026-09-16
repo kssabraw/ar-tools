@@ -597,6 +597,7 @@ def _build_writer_payload(
     research_output: dict,
     snapshot: dict,
     source_deficiencies: list[dict] | None = None,
+    source_gain_guidance: str | None = None,
 ) -> dict:
     brand_guide_text = snapshot.get("brand_guide_text") or ""
     brand_guide_format = snapshot.get("brand_guide_format") or "text"
@@ -649,6 +650,12 @@ def _build_writer_payload(
         payload["mode"] = "reoptimize"
         payload["deficiencies"] = source_deficiencies
         payload["prior_sections"] = []
+    # Report-only Topic-Vector / Information-Gain coaching (advisory writer-notes
+    # text the blog scorer rendered from its own measure — NEVER a deficiency).
+    # Only set when non-empty so a normal generate / no-coaching payload is
+    # byte-identical (the writer field defaults None).
+    if source_gain_guidance:
+        payload["reopt_gain_guidance"] = source_gain_guidance
     return payload
 
 
@@ -956,6 +963,7 @@ async def _orchestrate_run_impl(run_id: str) -> None:
             # its deficiencies into the writer's first pass (best-effort — a scrape
             # or scoring failure just degrades to a normal generation).
             source_deficiencies: list[dict] | None = None
+            source_gain_guidance: str | None = None
             reopt_url = (run.get("reoptimize_source_url") or "").strip()
             reopt_html = (run.get("reoptimize_source_html") or "").strip()
             if reopt_url or reopt_html:
@@ -969,6 +977,14 @@ async def _orchestrate_run_impl(run_id: str) -> None:
                         user_id=run.get("created_by"),
                     )
                     source_deficiencies = src_score.get("deficiencies") or []
+                    # Report-only Information-Gain coaching the blog scorer rendered
+                    # from the SOURCE's own measure — advisory steering, never a
+                    # deficiency (composite weight 0). Threaded into the writer's
+                    # first pass alongside the deficiencies.
+                    source_gain_guidance = (
+                        ((src_score.get("topic_vector") or {}).get("gain_guidance") or "").strip()
+                        or None
+                    )
                 except Exception as exc:  # noqa: BLE001 — never block the run
                     logger.warning(
                         "blog_reopt_source_score_failed",
@@ -977,6 +993,7 @@ async def _orchestrate_run_impl(run_id: str) -> None:
             writer_payload = _build_writer_payload(
                 run, brief_result, sie_result, research_result, snapshot,
                 source_deficiencies=source_deficiencies,
+                source_gain_guidance=source_gain_guidance,
             )
             writer_result = await _call_module("writer", run_id, writer_payload)
 

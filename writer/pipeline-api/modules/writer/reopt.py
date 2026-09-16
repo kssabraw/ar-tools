@@ -55,3 +55,38 @@ def reopt_directive(
         + "\n".join(lines)
         + prior_note
     )
+
+
+def compose_reopt_notes(
+    user_notes: Optional[str],
+    *,
+    mode: str = "generate",
+    deficiencies: Optional[list[dict]] = None,
+    prior_sections: Optional[list[dict]] = None,
+    gain_guidance: Optional[str] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Compose the writer's editorial notes for a (possibly reoptimize) run.
+
+    Returns ``(section_notes, notes_for_qa)``:
+      - ``section_notes`` — fed to every section/intro/conclusion prompt.
+      - ``notes_for_qa`` — fed to the notes-landed QA judge (the MUST-LAND
+        directives only: the user's own writer notes + the reopt deficiency
+        directive).
+
+    The report-only Topic-Vector / Information-Gain coaching (``gain_guidance``)
+    is ADVISORY — folded into ``section_notes`` so it can steer the rewrite, but
+    EXCLUDED from ``notes_for_qa`` so it is never graded as an unmet user
+    instruction ("improve where it fits", not a must-land note). It is never a
+    ``deficiencies`` entry (report-only, composite weight 0). Empty/absent
+    ``gain_guidance`` ⇒ ``section_notes == notes_for_qa`` — byte-identical to the
+    prior behaviour. Pure — no LLM, no network.
+    """
+    base = (user_notes or "").strip() or None
+    if mode == "reoptimize":
+        directive = reopt_directive(deficiencies or [], prior_sections)
+        if directive:
+            base = f"{directive}\n\n{base}" if base else directive
+    notes_for_qa = base
+    gain = (gain_guidance or "").strip() or None
+    section_notes = f"{base}\n\n{gain}" if (base and gain) else (base or gain)
+    return section_notes, notes_for_qa

@@ -79,6 +79,16 @@ class WriterRequest(BaseModel):
     mode: Literal["generate", "reoptimize"] = "generate"
     prior_sections: list[dict[str, Any]] = Field(default_factory=list)
     deficiencies: list[dict[str, Any]] = Field(default_factory=list)
+    # Report-only Topic-Vector / Information-Gain COACHING (§6/§9 of the
+    # topic-vector plan). An ADVISORY block rendered by nlp at score time (from the
+    # SCORE's already-computed measure — under-served on-vector subtopics + the
+    # site-invariant facts the client's OWN site asserts that the page omits) and
+    # threaded here on a blog reopt. It is folded into the per-section editorial
+    # steering ALONGSIDE user_notes but is NEVER a `deficiencies` entry and is
+    # deliberately EXCLUDED from the notes-landed QA (it's "improve where it fits",
+    # not a must-land user instruction). Report-only — composite weight 0. Input
+    # only — no output schema bump; None/absent ⇒ writing behaviour unchanged.
+    reopt_gain_guidance: Optional[str] = None
     # Which provider writes the DRAFT prose (title, intro, body sections, key
     # takeaways, FAQ, conclusion). "openai" routes those calls to
     # content_writer_openai_model (gpt-5.6-luna); every post-draft quality gate
