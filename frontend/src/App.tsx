@@ -50,6 +50,7 @@ import { MyTasks } from './pages/MyTasks'
 import { TeamWorkload } from './pages/TeamWorkload'
 import { TaskLibrary } from './pages/TaskLibrary'
 import { ClientReports } from './pages/ClientReports'
+import { BrandGuide } from './pages/BrandGuide'
 import { GscResearch } from './pages/GscResearch'
 import { LeadOff } from './pages/LeadOff'
 import { Outreach } from './pages/Outreach'
@@ -156,6 +157,7 @@ export default function App() {
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />
                       <Route path="/clients/:id/tasks" element={<Tasks />} />
                       <Route path="/clients/:id/reports" element={<ClientReports />} />
+                      <Route path="/clients/:id/brand-guide" element={<BrandGuide />} />
                       <Route path="/clients/:id/ai-visibility" element={<AiVisibility />} />
                       <Route path="/clients/:id/maps" element={<MapsGeogrid />} />
                       <Route path="/clients/:id/maps/report" element={<MapsReport />} />

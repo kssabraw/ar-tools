@@ -7,7 +7,7 @@ import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList, BookOpen, Share2, Send, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
-  LayoutGrid, HelpCircle,
+  LayoutGrid, HelpCircle, Palette,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -177,6 +177,13 @@ export function ClientWorkspace() {
           label="Client Reports"
           description="Generate a PDF performance report — organic rankings, local-pack geo-grids & Google Business Profile. (Analytics, Asana & a campaign-health summary land in later phases.)"
           to={id ? `/clients/${id}/reports` : undefined}
+          cta="Open"
+        />
+        <ActionCard
+          icon={<Palette size={22} />}
+          label="Brand Guide"
+          description="Generate a brand audit + brand guide — the live site's colours, type & aesthetic read against the client's voice & audience, as a client-facing PDF plus an internal audit."
+          to={id ? `/clients/${id}/brand-guide` : undefined}
           cta="Open"
         />
         <ActionCard

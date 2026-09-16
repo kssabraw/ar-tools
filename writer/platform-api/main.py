@@ -19,6 +19,7 @@ from routers.assistant import router as assistant_router
 from routers.backlinks import router as backlinks_router
 from routers.board_reports import router as board_reports_router
 from routers.brand import router as brand_router
+from routers.brand_guide import router as brand_guide_router
 from routers.brand_voice import router as brand_voice_router
 from routers.briefs import router as briefs_router
 from routers.citations import router as citations_router
@@ -355,6 +356,7 @@ app.include_router(assistant_router)
 app.include_router(backlinks_router)
 app.include_router(board_reports_router)
 app.include_router(brand_router)
+app.include_router(brand_guide_router)
 app.include_router(brand_voice_router)
 app.include_router(briefs_router)
 app.include_router(citations_router)
