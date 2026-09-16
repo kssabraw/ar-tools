@@ -56,6 +56,32 @@ const specFor = (platform: string): Spec =>
     requiresImage: false, enforced: false,
   }
 
+// Which post formats each platform actually supports. Reel/Story are Instagram/
+// Facebook concepts; everywhere else is feed-only. The backend doesn't enforce
+// format, so this keeps the picker from offering one the platform can't do
+// (e.g. a Reel/Story option on a LinkedIn or X account).
+const FORMATS_BY_PLATFORM: Record<string, string[]> = {
+  instagram: ['feed', 'reel', 'story'],
+  facebook: ['feed', 'reel', 'story'],
+  pinterest: ['feed'],
+  twitter: ['feed'],
+  linkedin: ['feed'],
+  youtube: ['feed'],
+  tiktok: ['reel'],
+  threads: ['feed'],
+}
+const FORMAT_LABELS: Record<string, string> = { feed: 'Feed post', reel: 'Reel', story: 'Story' }
+const formatsFor = (platform: string): string[] =>
+  FORMATS_BY_PLATFORM[(platform || '').toLowerCase()] ?? ['feed']
+// Fan-out applies ONE format to every selected platform, so only offer a format
+// all of them support (feed always survives; empty selection → feed-only).
+const formatsForMany = (platforms: string[]): string[] => {
+  if (!platforms.length) return ['feed']
+  const sets = platforms.map((p) => new Set(formatsFor(p)))
+  const shared = ['feed', 'reel', 'story'].filter((f) => sets.every((s) => s.has(f)))
+  return shared.length ? shared : ['feed']
+}
+
 const MAX_UPLOAD_MB = 200 // mirrors settings.social_max_upload_mb
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 const VIDEO_TYPES = ['video/mp4', 'video/quicktime']
@@ -460,6 +486,12 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
   const availablePlatforms = useMemo(
     () => Array.from(new Set(accounts.map((a) => a.platform.toLowerCase()))), [accounts])
 
+  // Formats valid for every selected platform; reset a now-invalid choice.
+  const formatOptions = useMemo(() => formatsForMany(platforms), [platforms])
+  React.useEffect(() => {
+    if (!formatOptions.includes(format)) setFormat(formatOptions[0])
+  }, [formatOptions, format])
+
   const anglesMut = useMutation({
     mutationFn: async () => { setError(null); return api.post<Angle[]>(`/clients/${clientId}/social/angles`, src.payload()) },
     onSuccess: (a) => { setAngles(a); setChosen(a.length ? 0 : null) },
@@ -564,9 +596,7 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
         <div>
           <label style={label}>Format</label>
           <select style={{ ...input, width: 160 }} value={format} onChange={(e) => setFormat(e.target.value)}>
-            <option value="feed">Feed post</option>
-            <option value="reel">Reel</option>
-            <option value="story">Story</option>
+            {formatOptions.map((f) => <option key={f} value={f}>{FORMAT_LABELS[f] ?? f}</option>)}
           </select>
         </div>
         <div>
@@ -762,6 +792,11 @@ export function SocialCompose() {
   const [images, setImages] = useState<string[]>([])
   const [video, setVideo] = useState<string | null>(null)
   const [format, setFormat] = useState('feed')
+  // Formats the selected account's platform supports; reset a now-invalid choice.
+  const formatOptions = useMemo(() => formatsFor(platform), [platform])
+  React.useEffect(() => {
+    if (!formatOptions.includes(format)) setFormat(formatOptions[0])
+  }, [formatOptions, format])
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
   const [scheduledLocal, setScheduledLocal] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -1020,9 +1055,7 @@ export function SocialCompose() {
           <div style={{ marginBottom: 14, maxWidth: 220 }}>
             <label style={label}>Format</label>
             <select style={input} value={format} onChange={(e) => setFormat(e.target.value)}>
-              <option value="feed">Feed post</option>
-              <option value="reel">Reel</option>
-              <option value="story">Story</option>
+              {formatOptions.map((f) => <option key={f} value={f}>{FORMAT_LABELS[f] ?? f}</option>)}
             </select>
           </div>
 
