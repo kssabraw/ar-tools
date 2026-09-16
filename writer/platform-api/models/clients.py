@@ -224,6 +224,10 @@ class ClientDetail(BaseModel):
     # Everhour project this client's time is logged against (opaque id like
     # "ev:123"/"as:123", not numeric). None → not yet onboarded to Everhour.
     everhour_project_id: Optional[str] = None
+    # The client's PostPeer profile ("Social group") — the Social module's
+    # isolation boundary. Every social account + post is scoped to it; None means
+    # the client isn't set up for social yet (fail-closed: no accounts listed).
+    social_profile_id: Optional[str] = None
     # Trust & Proof facts the Local SEO writer renders deterministically
     # (docs/modules/local-landing-page-structure.md). Media assets are the
     # separate client_assets table, surfaced via the assets endpoints.
@@ -337,6 +341,9 @@ class ClientCreateRequest(BaseModel):
     slack_channel_id: Optional[str] = None
     # Everhour project this client's time is logged against; None → unmapped.
     everhour_project_id: Optional[str] = None
+    # PostPeer profile ("Social group"); normally auto-provisioned after create.
+    # Provide to reuse an existing profile instead of minting a new one.
+    social_profile_id: Optional[str] = None
     # Trust & Proof facts (docs/modules/local-landing-page-structure.md).
     trust_signals: Optional[TrustSignals] = None
     # Reference page URLs to scrape + analyze for structure mirroring.
@@ -401,6 +408,10 @@ class ClientUpdateRequest(BaseModel):
     # Everhour project this client's time is logged against; pass an empty string
     # to clear the mapping.
     everhour_project_id: Optional[str] = None
+    # The client's PostPeer profile ("Social group"). Normally auto-provisioned at
+    # creation / via POST …/social/profile; settable here to map an existing
+    # profile or clear it (empty string → null).
+    social_profile_id: Optional[str] = None
     # Trust & Proof facts (docs/modules/local-landing-page-structure.md). Send the
     # full object to replace what's stored; omit to leave unchanged.
     trust_signals: Optional[TrustSignals] = None

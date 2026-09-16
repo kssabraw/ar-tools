@@ -16,6 +16,17 @@ class SocialAccountResponse(BaseModel):
     reconnect_required: bool = False
 
 
+class SocialProfileResponse(BaseModel):
+    """The client's PostPeer profile (Social group) id — created on demand."""
+    profile_id: str
+
+
+class SocialConnectUrlResponse(BaseModel):
+    """A per-client OAuth connect URL for one platform (open in a new tab)."""
+    platform: str
+    url: str
+
+
 class SocialPostCreateRequest(BaseModel):
     platform: str
     account_id: str

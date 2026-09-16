@@ -4,17 +4,25 @@
 > This does NOT replace the root `/CLAUDE.md` (the suite authority) — read that first for
 > suite architecture, then this for the module. **Read this before building the social module.**
 >
-> **Build status (2026-09-08):** **The module is fully wired and live.** P0 foundations + the backend
+> **Build status (2026-09-16):** **The module is fully wired and live.** P0 foundations + the backend
 > publish path + the R2 media store (PR #1027) and the frontend compose screen with image/video upload
 > (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all five `R2_*` vars,
-> `GEMINI_API_KEY`, and now **`POSTPEER_API_KEY` are set** — nothing left to provision. What exists today
+> `GEMINI_API_KEY`, and **`POSTPEER_API_KEY` are set** — nothing left to provision. What exists today
 > is a **manual composer → publish/schedule** flow (platform-general, Facebook-first) PLUS the full
 > **P2 Creator** — AI copy drafting, AI image generation (**nano-banana Pro, Pro-only** per owner ruling),
 > and **Angle fan-out** (one source → one angle → per-platform Drafts, reviewed/edited/published from a
-> Drafts tab). Still unbuilt toward the full repurpose engine: **P1 competitor research** (Apify/TwelveLabs,
-> which would also ground angle proposals in competitor signals), **P4 autonomy**, and **P5 video/YouTube**.
-> The one open confidence step is a live test post. See `HANDOFF.md` (this folder) for the live state and
-> next actions — start there.
+> Drafts tab). **Shipped since (2026-09-16):** the composer Format dropdown is now per-platform (PR #1160,
+> merged), and the **client-isolation A-unit** — the account picker is per-client and safe — is on a
+> **CI-green draft PR #1165** (awaiting owner review/merge; see `HANDOFF.md` 2026-09-16 update for the full
+> readout + the owner b/c decisions).
+> **Owner decisions (2026-09-16):** IG scope = **feed + Reels + Stories** (b1); **IG carousel in v1** (b2);
+> autonomy rollout **case-by-case** (b4); PostPeer billing **PAYG** (b5); **P1 competitor research is next,
+> Apify-ONLY — TwelveLabs is DROPPED** (c1). Still to discuss: default per-client monthly ceiling (b3),
+> the P4 autonomy build (c2), the P5 Video Studio (c3).
+> Still unbuilt toward the full repurpose engine: **P1 competitor research** (Apify-only; it also grounds
+> angle proposals in competitor signals), the **IG Reels/Stories + carousel** scope-out, **P4 autonomy**,
+> and **P5 video/YouTube**. The one open confidence step is a live test post. See `HANDOFF.md` (this
+> folder) for the live state and next actions — start there.
 
 ## What this module is
 
@@ -63,8 +71,8 @@ guardrails.
 | Copy / Angle / self-critique | **Claude Sonnet 5** (`claude-sonnet-5`) | $2/1M in, $10/1M out. |
 | Image gen | **nano-banana Pro** (Gemini 3 Pro Image) | **BUILT** — `nano_banana.generate_image_pro` (`gemini-3-pro-image-preview`) passes `generationConfig.imageConfig.aspectRatio`; social wiring in `services/social/image.py`. (The 2.5-Flash `generate_image` stays 1:1-only.) ~$0.134/img. `GEMINI_API_KEY` set on PLATFORM. |
 | Publish | **PostPeer** behind an adapter | Managed OAuth under its own reviewed apps (confirmed). **X link tax passed through: 5 credits plain / 50 with a URL; 1 credit elsewhere** (confirmed). **No SLA** (confirmed, accepted). Media by public URL; one platform per `POST /posts` call; `publishNow` from OUR scheduler, never `scheduledFor`. API facts: vendor-confirm doc §6. |
-| Competitor scrape | **Apify** (per-platform actors) | Public/logged-out content only. |
-| Competitor video analysis | **TwelveLabs** (Pegasus/Marengo) | Ingest by public URL; cap minutes/run. |
+| Competitor scrape | **Apify** (per-platform actors) | Public/logged-out content only. **P1 = Apify-only.** |
+| ~~Competitor video analysis~~ | ~~TwelveLabs~~ | **DROPPED from v1 (owner c1, 2026-09-16)** — not analyzing full videos. Don't provision/build. |
 | Media download | **cobalt.tools** (self-hosted) | **P5 only** — owned/licensed assets. Not provisioned in v1. |
 
 ## Confirmed PostPeer facts (live build, 2026-09-05)
@@ -185,7 +193,9 @@ Creator exists.
 - **Publish path (leaner than P3) — ✅ BUILT** (#1027): compose → freeze-gated idempotent publish job
   (GBP-Posts template) → status reconcile; media upload + presign; **R2 media store** (ADR-0004).
 - **Frontend compose screen + image/video upload — ✅ BUILT** (#1032): `SocialCompose.tsx`.
-- **P1 Competitor research** — ⬜ not built (Apify Signals + TwelveLabs analyze-in-place).
+- **P1 Competitor research** — ⬜ not built; **the next major build (owner-greenlit c1). Apify-ONLY —
+  TwelveLabs is DROPPED from v1** (no full-video analysis, so no per-video vendor). Signals are Apify
+  post/engagement/text + captions, not video-content analysis. Needs `APIFY_API_TOKEN` (unset).
 - **P2 Creator core** — ✅ **BUILT** (copy + image + angle fan-out + draft review/publish):
   - **AI copy drafting**: `services/social/creator.py` + `POST /clients/{id}/social/draft-copy` generate
     platform-native copy from a Source (topic / URL / blog run / saved Local SEO page) + optional
@@ -229,10 +239,11 @@ Creator exists.
 - **Don't couple module code to PostPeer** — go through the adapter interface.
 - **Don't download or re-host competitor media** — analyze-in-place (ADR-0002).
 - **Don't auto-publish by default** — top tier + explicit per-client opt-in only.
-- **Don't add an IG carousel Draft type until the owner scopes it** — PostPeer carousels ARE live
-  (≤10 items, one aspect ratio throughout), so this is now a product/cost call, not a vendor limit.
-  The v1 floor is single-image IG. (IG has **no text-only posts** — an image-less IG Draft is
-  `needs_image`, like Pinterest.)
+- **IG carousel + Reels/Stories are now IN v1 scope** (owner b1+b2, 2026-09-16) but **not built yet** —
+  the composer format set + the seeded IG `social_platform_specs` row are still feed/single-image. When
+  building: carousel is ≤10 images, one aspect ratio throughout (each slide is another ~$0.13 Pro image);
+  Stories is Business-account-only, no caption/link stickers. (IG has **no text-only posts** — an
+  image-less IG Draft is `needs_image`, like Pinterest.)
 - **Don't hand PostPeer the schedule (`scheduledFor`)** — publish with `publishNow` from our own
   freeze-gated job so the inline account-health check + `source_changed` guard run first.
 - **Don't use nano-banana 2.5 Flash where a non-1:1 aspect ratio is required** (Pinterest/9:16) — it
@@ -241,7 +252,9 @@ Creator exists.
 
 ## When stuck / ask the owner
 
-The mixed 2.5-Flash/Pro image cost lever (build in v1 or later); whether v1 IG includes single-media
-Reels/Stories or feed-only; whether an **IG carousel Draft type** is in v1; the default per-client
-monthly cost ceiling. The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the
-live open-items list.
+Still open (owner "let's discuss" as of 2026-09-16): the **default per-client monthly cost ceiling**
+(b3); the **P4 autonomy build** (c2); the **P5 Video Studio** (c3); the mixed 2.5-Flash/Pro image cost
+lever (deferred). Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
+(b2), autonomy case-by-case (b4), PostPeer PAYG (b5), P1 = Apify-only / TwelveLabs dropped (c1),
+Pro-only images. The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
+open-items list + the 2026-09-16 update.
