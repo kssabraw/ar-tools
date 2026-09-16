@@ -4,25 +4,30 @@
 > This does NOT replace the root `/CLAUDE.md` (the suite authority) — read that first for
 > suite architecture, then this for the module. **Read this before building the social module.**
 >
-> **Build status (2026-09-16):** **The module is fully wired and live.** P0 foundations + the backend
-> publish path + the R2 media store (PR #1027) and the frontend compose screen with image/video upload
-> (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all five `R2_*` vars,
-> `GEMINI_API_KEY`, and **`POSTPEER_API_KEY` are set** — nothing left to provision. What exists today
-> is a **manual composer → publish/schedule** flow (platform-general, Facebook-first) PLUS the full
+> **Build status (2026-09-16):** **The module is fully wired and live, and P1 competitor research is now BUILT + LIVE.**
+> P0 foundations + the backend publish path + the R2 media store (PR #1027) and the frontend compose screen
+> with image/video upload (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all
+> five `R2_*` vars, `GEMINI_API_KEY`, **`POSTPEER_API_KEY`**, and now **`APIFY_API_TOKEN` +
+> `SOCIAL_COMPETITOR_RESEARCH_ENABLED=true` are set** — nothing left to provision. What exists today is a
+> **manual composer → publish/schedule** flow (platform-general, Facebook-first) PLUS the full
 > **P2 Creator** — AI copy drafting, AI image generation (**nano-banana Pro, Pro-only** per owner ruling),
 > and **Angle fan-out** (one source → one angle → per-platform Drafts, reviewed/edited/published from a
-> Drafts tab). **Shipped since (2026-09-16):** the composer Format dropdown is now per-platform (PR #1160,
-> merged), and the **client-isolation A-unit** — the account picker is per-client and safe — is on a
-> **CI-green draft PR #1165** (awaiting owner review/merge; see `HANDOFF.md` 2026-09-16 update for the full
-> readout + the owner b/c decisions).
+> Drafts tab) PLUS **P1 Competitor research** (analyze-in-place, Apify-only — a Competitors tab: add per-platform
+> handles → Research now → per-`(client, competitor, platform)` signals that ground angle proposals).
+> **Shipped since (2026-09-16):** the composer Format dropdown is now per-platform (PR #1160, merged); the
+> **client-isolation A-unit** — the account picker is per-client and safe — merged (PR #1165); and **P1
+> Competitor research merged + enabled in production (PR #1177, squash `3f07eda`)** — see `HANDOFF.md`
+> 2026-09-16 update for the full P1 readout + the owner b/c decisions.
 > **Owner decisions (2026-09-16):** IG scope = **feed + Reels + Stories** (b1); **IG carousel in v1** (b2);
-> autonomy rollout **case-by-case** (b4); PostPeer billing **PAYG** (b5); **P1 competitor research is next,
-> Apify-ONLY — TwelveLabs is DROPPED** (c1). Still to discuss: default per-client monthly ceiling (b3),
+> autonomy rollout **case-by-case** (b4); PostPeer billing **PAYG** (b5); **P1 competitor research
+> Apify-ONLY — TwelveLabs is DROPPED** (c1, BUILT). Owner-confirmed P1 platform scope: Instagram, Facebook,
+> X, YouTube, Pinterest (LinkedIn deferred). Still to discuss: default per-client monthly ceiling (b3),
 > the P4 autonomy build (c2), the P5 Video Studio (c3).
-> Still unbuilt toward the full repurpose engine: **P1 competitor research** (Apify-only; it also grounds
-> angle proposals in competitor signals), the **IG Reels/Stories + carousel** scope-out, **P4 autonomy**,
-> and **P5 video/YouTube**. The one open confidence step is a live test post. See `HANDOFF.md` (this
-> folder) for the live state and next actions — start there.
+> Still unbuilt toward the full repurpose engine: the **IG Reels/Stories + carousel** scope-out, **P4 autonomy**,
+> and **P5 video/YouTube**. Remaining P1 confidence step: a **live research run from the dashboard** (the
+> sandbox is egress-blocked from Apify, so live scrape verification is deployed-only) + confirm/replace the
+> default Pinterest actor. The one open publish-path confidence step is a live test post. See `HANDOFF.md`
+> (this folder) for the live state and next actions — start there.
 
 ## What this module is
 
@@ -71,7 +76,7 @@ guardrails.
 | Copy / Angle / self-critique | **Claude Sonnet 5** (`claude-sonnet-5`) | $2/1M in, $10/1M out. |
 | Image gen | **nano-banana Pro** (Gemini 3 Pro Image) | **BUILT** — `nano_banana.generate_image_pro` (`gemini-3-pro-image-preview`) passes `generationConfig.imageConfig.aspectRatio`; social wiring in `services/social/image.py`. (The 2.5-Flash `generate_image` stays 1:1-only.) ~$0.134/img. `GEMINI_API_KEY` set on PLATFORM. |
 | Publish | **PostPeer** behind an adapter | Managed OAuth under its own reviewed apps (confirmed). **X link tax passed through: 5 credits plain / 50 with a URL; 1 credit elsewhere** (confirmed). **No SLA** (confirmed, accepted). Media by public URL; one platform per `POST /posts` call; `publishNow` from OUR scheduler, never `scheduledFor`. API facts: vendor-confirm doc §6. |
-| Competitor scrape | **Apify** (per-platform actors) | Public/logged-out content only. **P1 = Apify-only.** |
+| Competitor scrape | **Apify** (per-platform actors) | Public/logged-out content only. **P1 = Apify-only — BUILT + LIVE (`APIFY_API_TOKEN` set).** IG/FB/X/YouTube/Pinterest; env-overridable actor ids (`social_apify_actor_*`). |
 | ~~Competitor video analysis~~ | ~~TwelveLabs~~ | **DROPPED from v1 (owner c1, 2026-09-16)** — not analyzing full videos. Don't provision/build. |
 | Media download | **cobalt.tools** (self-hosted) | **P5 only** — owned/licensed assets. Not provisioned in v1. |
 
@@ -193,9 +198,27 @@ Creator exists.
 - **Publish path (leaner than P3) — ✅ BUILT** (#1027): compose → freeze-gated idempotent publish job
   (GBP-Posts template) → status reconcile; media upload + presign; **R2 media store** (ADR-0004).
 - **Frontend compose screen + image/video upload — ✅ BUILT** (#1032): `SocialCompose.tsx`.
-- **P1 Competitor research** — ⬜ not built; **the next major build (owner-greenlit c1). Apify-ONLY —
-  TwelveLabs is DROPPED from v1** (no full-video analysis, so no per-video vendor). Signals are Apify
-  post/engagement/text + captions, not video-content analysis. Needs `APIFY_API_TOKEN` (unset).
+- **P1 Competitor research** — ✅ **BUILT + LIVE** (PR #1177, squash `3f07eda`; `APIFY_API_TOKEN` +
+  `SOCIAL_COMPETITOR_RESEARCH_ENABLED=true` set on PLATFORM). **Apify-ONLY — TwelveLabs is DROPPED from v1**
+  (no full-video analysis, so no per-video vendor). Analyze-in-place (ADR-0002): public/logged-out content
+  only, signals keep post links + numbers + caption text, never re-hosted media. One
+  **`social_competitor_research`** job per client scrapes each competitor's public per-platform handle
+  (`social_competitor_handles`) via Apify → per-`(client, competitor, platform)` **`social_competitor_signals`**
+  row: **deterministic** `formats`/`cadence`/`top_performers` (links + numbers only, no media/identity) +
+  a **caption-only** LLM rollup (`themes`/`hook_patterns`/`whats_working`; our own Anthropic key, NOT
+  metered — only Apify is). `services/social/apify.py` (sync httpx `run-sync-get-dataset-items` wrapper +
+  per-platform input builders + pure post parsers for IG/FB/X/YouTube/Pinterest; config-driven,
+  env-overridable actor ids, LinkedIn deferred) + `services/social/competitor_research.py` (pure aggregators
+  + rollup + handle/signal CRUD + enqueue/job + weekly interval-gated scheduler sweep mirroring
+  `competitor_intel`). **Fail-CLOSED** `budget.reserve` before each Apify run (copies `autonomy_budget.reserve`).
+  **NOT freeze-gated** — research runs under freeze (PRD §3). Grounds `creator.propose_angles` via
+  `render_competitor_signals_block` (empty signals → prompt byte-identical). Routes on `routers/social.py`
+  (competitors + handles CRUD, research trigger + poll, signals read); frontend **Competitors** tab in
+  `SocialCompose.tsx`. Migration `20260916200000_social_competitor_research_job.sql` (widens the
+  `async_jobs` CHECK from the LIVE constraint; applied live). Config `apify_*` / `social_competitor_*` /
+  `social_apify_*` in `config.py`. Tests `tests/test_social_apify.py` + `tests/test_social_competitor_research.py`.
+  **Remaining confidence step:** a live research run from the dashboard (sandbox is egress-blocked from
+  Apify) + confirm/replace the default Pinterest actor (`epctex/pinterest-scraper`, env-overridable).
 - **P2 Creator core** — ✅ **BUILT** (copy + image + angle fan-out + draft review/publish):
   - **AI copy drafting**: `services/social/creator.py` + `POST /clients/{id}/social/draft-copy` generate
     platform-native copy from a Source (topic / URL / blog run / saved Local SEO page) + optional
@@ -255,6 +278,6 @@ Creator exists.
 Still open (owner "let's discuss" as of 2026-09-16): the **default per-client monthly cost ceiling**
 (b3); the **P4 autonomy build** (c2); the **P5 Video Studio** (c3); the mixed 2.5-Flash/Pro image cost
 lever (deferred). Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
-(b2), autonomy case-by-case (b4), PostPeer PAYG (b5), P1 = Apify-only / TwelveLabs dropped (c1),
-Pro-only images. The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
+(b2), autonomy case-by-case (b4), PostPeer PAYG (b5), P1 = Apify-only / TwelveLabs dropped (c1, **BUILT +
+LIVE**), Pro-only images. The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
 open-items list + the 2026-09-16 update.
