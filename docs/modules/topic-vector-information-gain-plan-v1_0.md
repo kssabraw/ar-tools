@@ -2,6 +2,7 @@
 
 **Status:** Design locked, not built. This doc is the design authority; nothing here has shipped.
 **Review:** Adversarially reviewed 2026-09-15; corrections folded in — the 11–20 tier is already-scraped (not an extra fetch), the site claim index is a cross-service platform→nlp integration, the measure runs *beside* the deterministic engine (not folded in) and is gated on `GEMINI_API_KEY`, plus empty-state / absent-AIO handling and acceptance criteria (§14).
+**Scope + governance (2026-09-16):** generalized to all content types (§10a — intent-lane-by-page-type, one-arc-per-awareness-stage, the voice-card-seeded emotional arc kept as the subordinate tail) and given an explicit brand-guide precedence rule (§10b).
 **Origin:** A reoptimize discussion on the Nova Life Peptides "buy retatrutide" page (page `22c93b10-…`, 2026-09-15, composite 58.8/fail) surfaced two blind spots in ecommerce page scoring: (1) we don't measure whether a page is *semantically about the right thing*, and (2) we don't measure whether it *adds anything the ranking set doesn't*. This module adds both, on top of the existing MCS embedding machinery.
 
 ---
@@ -38,7 +39,7 @@ All three tiers come from the SERP **we already scrape today** — there is **no
 
 ## 4. Measure 1 — Topic centering
 
-**The centroid is anchored on the EXPLICIT query only:** `explicit query terms + AIO text + top-10 competitor headings`. For a transactional "buy / where to buy" query these signals are already commercial, so the centroid's center of mass lands on **the offer** (product identity, price, sizes, stock, purchase mechanics, COA-as-purchase-gate) by construction — no hand-weighting needed.
+**The centroid is anchored on the EXPLICIT query only:** `explicit query terms + AIO text + top-10 competitor headings`. For a transactional "buy / where to buy" query these signals are already commercial, so the centroid's center of mass lands on **the offer** (product identity, price, sizes, stock, purchase mechanics, COA-as-purchase-gate) by construction — no hand-weighting needed. (For non-ecommerce page types the same construction holds, with the page type declaring the intent lane — see §10a.)
 
 **The implied query is deliberately NOT in the centroid.** It lives one layer down (§5), as coverage checklist items only. This is the load-bearing decision: it makes the implied/emotional layer structurally incapable of pulling the vector off "where to buy." A mechanism essay with no commercial core scores *low* on centering, correctly.
 
@@ -127,6 +128,30 @@ The reopt loop consumes the per-subtopic gaps + gain guidance as rewrite targets
 - **Emotional arc stays in the LLM rubric,** never the cosine.
 - **Deterministic engine untouched:** the new measure sits beside `_compute_serp_signal_coverage`, never inside it (§9).
 
+## 10a. Scope across content types
+
+The module was designed general and only *illustrated* with the Nova ecommerce PDP. It applies to **all clients** and **all content types** (ecommerce, Local SEO, service, blog) because it keys only on the SERP, the client's site, and the voice card's `never_use_terms` — nothing client- or vertical-specific. Caveats: gated on `GEMINI_API_KEY` (§9); information gain needs a usable client site (else suppressed, §6); Local SEO lands in an already-crowded scorer (the page-spec / structure-and-intent layer), so integration there is additive-but-careful (topic vector and structure are different axes — no conflict).
+
+**Intent is a per-page-type input, not a SERP guess.** For a money page (local landing, service, PDP) the intent *lane* is **declared** transactional by the page type — not deferred to a possibly-mixed SERP. The SERP informs the topic **neighborhood** (which subtopics exist); the page type fixes the **lane** (this is a sales page, not a guide). So informational competitors that rank for a `<service> <city>` query inform coverage but never pull the centroid into an informational lane. For a genuinely intent-ambiguous query the centroid can still self-discover intent from the SERP, but a declared page type always wins.
+
+**One page = one awareness stage = one arc.** A page serves a single audience awareness stage:
+- **Provider-aware** ("roof restoration melbourne", ready to hire) → the money page.
+- **Problem-/solution-aware** ("do I need roof restoration", "restoration vs replacement", "cost") → its own TOFU/MOFU blog/guide, which runs its *own* before/after arc and **hands off** to the money page via internal link + CTA.
+
+The keyword signals the stage (and its SERP differs accordingly), so a keyword routes to the right page type. Enforced by centering: a full education section on a money page reads as drift off the transactional centroid — the model turns "landing page or blog post?" into a *measurable* question, not a judgment call. **Exception:** a *light* touch of the earlier question belongs on the money page as **trust** ("not sure if you need repair or replacement? we assess honestly"), because it defuses the provider-aware buyer's upsell fear — a sentence or short block won't move the centroid; a 400-word treatment will and belongs on the blog. This is the pillar-cluster architecture the suite already has (topic-strategist pillars→clusters, the Website Builder content plan); the module's contribution is keeping TOFU education off the BOFU money page.
+
+**Emotional before/after arc — derived from the voice card, kept as the tail.** With intent and audience fixed, the before→after states fall out of the client's **already-auto-generated** voice card: **before** = `audience_pain_points` + `audience_objections` + `audience_triggers`; **after** = `audience_motivations` satisfied + objections answered. The emotional-arc rubric checks the page performs that transition for *this* client's audience. It stays the **subordinate tail** of the model — an LLM rubric dimension, never in the cosine, never a heavy composite weight — because affect isn't embeddable and over-indexing it recreates Nova's failure in reverse (a warm page that's off-vector and doesn't rank). **MCS-first, always:** centering + coverage + gain are the scored spine; the implied-query brief adds only coverage-checklist items; the emotional arc is one soft rubric dimension.
+
+## 10b. Brand-guide precedence
+
+Topic vector and the brand guide are **mostly orthogonal** — *what the page is about* vs *how it's expressed / what it may say* — so a subtopic gap and a voice rule are usually both satisfiable. The narrow real conflicts resolve by a fixed precedence:
+
+- **Hard brand constraints are inviolable.** `never_use_terms`, RUO/compliance, no-medical-claims — the module never pushes against them, by construction: centering is name-agnostic (credits the neighborhood without the forbidden term), information gain is site-grounded (can't credit a fabricated or forbidden claim), and coaching never names a forbidden word (§13 finding 1). There is **no "topic vector overrides the guide" path.**
+- **The forbidden-term-is-the-anchor residual is surfaced, not resolved.** When the topic anchor is a forbidden term (Nova's "retatrutide"), the module gets as close as the neighborhood allows and makes the *residual* ranking gap (the name is the strongest title/exact-match signal) **visible and measured** — a strategy decision, never auto-fixed.
+- **Guide-caused drift is surfaced as a separate score, human-resolved.** When following the guide's voice/positioning pulls the page off-topic (Nova's must-use verification terms → the vendor-trust vector), the module neither overrides the guide nor silently follows it off-vector — it reports voice and centering as **separate scores** (both visible, the way the voice scorecard already sits beside the SEO composite), so the tension is legible and a human/strategist rebalances. `force_voice` remains the explicit human override on publish.
+
+The module largely **consumes** the brand guide as input (`never_use_terms` → excluded targets; voice-card audience fields → the emotional arc), so guide and module are collaborators: the guide says what not to say and who the reader is; the module says when following the guide has pulled the page off what actually ranks.
+
 ## 11. Decisions
 
 **Locked:**
@@ -137,6 +162,10 @@ The reopt loop consumes the per-subtopic gaps + gain guidance as rewrite targets
 - Site claim index granularity = **structured facts.**
 - Ground truth = the client's whole site.
 - Centering / coverage / gain run as a **separate async measure** beside the composite, gated on `GEMINI_API_KEY` (§9) — never folded into the deterministic engine.
+- Applies to **all clients + all content types**; intent *lane* is declared by page type (money pages = transactional), the SERP informs the neighborhood not the lane (§10a).
+- **One page = one awareness stage = one before/after arc**; earlier-funnel stages get their own TOFU/MOFU asset that hands off via internal link (light trust-framing exception aside) (§10a).
+- Emotional before/after arc is **derived from the voice card's audience fields** and stays the subordinate tail — MCS-first (§10a).
+- **Brand-guide precedence (§10b):** hard constraints (`never_use_terms`/compliance) inviolable — no "topic overrides guide" path; soft voice-vs-topic tensions surfaced as separate scores + human-resolved; the module never coaches a forbidden/non-compliant addition.
 
 **Open:**
 - Structured-fact extractor scope (which fact types v1) + refresh cadence for the site index + the platform→nlp payload contract shape.
