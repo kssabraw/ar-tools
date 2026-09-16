@@ -603,6 +603,7 @@ async def gsc_scheduler() -> None:
     )
     from services.gbp_profile_service import enqueue_due_gbp_profile_syncs
     from services.social.publish import enqueue_due_social_posts
+    from services.social.competitor_research import enqueue_due_social_competitor_research
     from services.gbp_monitor import enqueue_due_gbp_profile_monitor
     from services.client_report_schedule import enqueue_due_report_schedules
     from services.content_batch import enqueue_due_content_items
@@ -760,6 +761,9 @@ async def gsc_scheduler() -> None:
                 # monthly page-level RD-imbalance captures.
                 _safe("citation_checks", enqueue_due_citation_checks)
                 _safe("competitor_intel", enqueue_due_competitor_intel)
+                # Social P1 — weekly competitor-signal refresh (per-client
+                # interval-gated; self-gated on the P1 gate + APIFY_API_TOKEN).
+                _safe("social_competitor_research", enqueue_due_social_competitor_research)
                 _safe("site_inventory", enqueue_due_site_inventory)
                 # Weekly Domain Intelligence keyword-gap refresh (per-client
                 # interval-gated; notifies on newly-opened gaps).

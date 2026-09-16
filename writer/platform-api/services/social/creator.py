@@ -399,9 +399,11 @@ _ANGLE_SCHEMA = {
 
 
 def build_angles_prompt(
-    client_context: str, source_title: Optional[str], source_text: str, voice_block: str, count: int
+    client_context: str, source_title: Optional[str], source_text: str, voice_block: str, count: int,
+    competitor_signals_block: str = "",
 ) -> str:
-    """Assemble the angle-proposal prompt. Pure."""
+    """Assemble the angle-proposal prompt. Pure. ``competitor_signals_block`` (P1)
+    is optional grounding — an empty string leaves the prompt byte-identical."""
     parts = [client_context, f"\nPropose {count} distinct social-post angles for this source."]
     src = (source_text or "").strip()
     if src:
@@ -411,6 +413,8 @@ def build_angles_prompt(
     elif source_title:
         parts.append(f"Topic: {source_title}")
     user = "\n".join(parts)
+    if competitor_signals_block:
+        user += "\n\n" + competitor_signals_block
     if voice_block:
         user += "\n\n" + voice_block
     return user
@@ -443,13 +447,24 @@ async def propose_angles(client_id: str, req, user_id: Optional[str] = None) -> 
     )
     card, voice_block, client_context = await resolve_voice_context(_client_row(client_id), user_id)
     count = int(settings.social_angles_count)
+    # P1 grounding: fold the client's latest competitor signals into the prompt so
+    # angles react to what's working in the niche (best-effort — empty when there's
+    # no research yet, leaving the prompt unchanged).
+    from services.social import competitor_research
+
+    signals_block = competitor_research.render_competitor_signals_block(
+        competitor_research.latest_signals_for_client(client_id)
+    )
     from services import report_llm
 
     try:
         out = await report_llm.run_forced_tool(
             provider="anthropic", model=settings.social_copy_model,
             system=_ANGLES_SYSTEM,
-            user=build_angles_prompt(client_context, source_title, source_text, voice_block, count),
+            user=build_angles_prompt(
+                client_context, source_title, source_text, voice_block, count,
+                competitor_signals_block=signals_block,
+            ),
             tool_name="emit_angles", tool_description="Return the proposed social-post angles.",
             input_schema=_ANGLE_SCHEMA, max_tokens=int(settings.social_angles_max_tokens),
             log_tag="social_angles",

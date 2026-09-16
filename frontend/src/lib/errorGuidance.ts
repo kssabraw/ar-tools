@@ -454,6 +454,44 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'That draft no longer exists (it may have been deleted).',
     steps: ['Refresh the Drafts list.'],
   },
+  social_competitor_research_disabled: {
+    title: 'Competitor research isn’t turned on',
+    meaning: 'Competitor research needs the module flag and an Apify token set on the platform service.',
+    steps: [
+      'Ask an admin to set SOCIAL_COMPETITOR_RESEARCH_ENABLED and APIFY_API_TOKEN on the PLATFORM service.',
+      'Once set, use “Research now” again.',
+    ],
+  },
+  social_competitor_research_failed: {
+    title: 'Competitor research didn’t finish',
+    meaning: 'The research job failed — usually a temporary scraper or network issue.',
+    steps: ['Try “Research now” again in a minute. If it keeps failing, check the Apify token/actors.'],
+  },
+  social_competitor_not_found: {
+    title: 'Competitor not found',
+    meaning: 'That competitor doesn’t belong to this client (or was removed).',
+    steps: ['Refresh the Competitors tab. Add competitors on the Competitive Intel page.'],
+  },
+  social_handle_required: {
+    title: 'Enter a handle',
+    meaning: 'Adding a competitor handle needs the account name (e.g. @brand).',
+    steps: ['Type the competitor’s handle for the chosen platform, then add it.'],
+  },
+  social_platform_unsupported: {
+    title: 'Platform not supported for research',
+    meaning: 'Competitor research supports Instagram, Facebook, X, YouTube and Pinterest.',
+    steps: ['Pick one of the supported platforms.'],
+  },
+  social_handle_add_failed: {
+    title: 'Couldn’t add the handle',
+    meaning: 'Saving the competitor handle failed — usually a temporary database hiccup.',
+    steps: ['Try adding it again.'],
+  },
+  social_handle_not_found: {
+    title: 'Handle not found',
+    meaning: 'That competitor handle no longer exists (it may have been removed).',
+    steps: ['Refresh the Competitors tab.'],
+  },
   social_draft_already_published: {
     title: 'Already published',
     meaning: 'This draft has already been published to an account.',

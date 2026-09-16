@@ -118,6 +118,35 @@ class Settings(BaseSettings):
     r2_secret_access_key: str = ""       # R2_SECRET_ACCESS_KEY
     r2_bucket: str = ""                  # R2_BUCKET
     r2_public_base_url: str = ""         # R2_PUBLIC_BASE_URL (custom domain or r2.dev)
+    # ── Social P1 — competitor research (analyze-in-place, Apify-only; ADR-0002) ──
+    # Apify scrapes PUBLIC/logged-out competitor content (post text + engagement +
+    # captions; never re-hosted media). One actor run per (competitor, platform)
+    # handle, budget-reserved (fail-closed) before spending. TwelveLabs is dropped
+    # from v1 (owner c1): no full-video analysis — YouTube signals are titles/
+    # descriptions/tags/engagement/thumbnail-links only.
+    apify_api_token: str = ""            # APIFY_API_TOKEN (PLATFORM) — unset ⇒ research is inert
+    apify_base_url: str = "https://api.apify.com/v2"
+    social_competitor_research_enabled: bool = False   # SOCIAL_COMPETITOR_RESEARCH_ENABLED
+    social_competitor_research_interval_days: int = 7  # weekly refresh cadence per client
+    # Per-platform Apify actor ids (username/actor-name form; the wrapper maps
+    # '/'→'~' for the API path). Env-overridable so an actor can be swapped without
+    # a code change; a platform whose actor id is blank is skipped with a note.
+    social_apify_actor_instagram: str = "apify/instagram-scraper"
+    social_apify_actor_facebook: str = "apify/facebook-posts-scraper"
+    social_apify_actor_twitter: str = "apidojo/tweet-scraper"        # apify/twitter-scraper is deprecated
+    social_apify_actor_youtube: str = "streamers/youtube-scraper"
+    social_apify_actor_pinterest: str = "epctex/pinterest-scraper"   # community actor — confirm/replace
+    social_apify_max_posts: int = 30            # items scraped per handle (bounded)
+    social_apify_run_cost_usd: float = 0.05     # est. USD reserved per actor run (errs high — fail-closed)
+    social_apify_timeout_secs: int = 300        # run-sync-get-dataset-items hard server limit
+    # Signal rollup (themes / hook patterns / what's-working) over CAPTIONS ONLY —
+    # never video. Our own Anthropic key (like the copy/angle writers), NOT metered
+    # against the social budget; only the Apify calls are metered.
+    social_competitor_signal_model: str = "claude-haiku-4-5-20251001"
+    social_competitor_signal_max_tokens: int = 1200
+    social_competitor_signal_caption_cap: int = 40      # captions fed to the rollup
+    social_competitor_top_performers: int = 5           # top-N by engagement kept (links + numbers only)
+    social_competitor_angle_signal_cap: int = 6         # signals folded into angle-proposal grounding
     # ── Content illustration (hero + inline body images/charts) ──────────────
     # Master switch for the auto path (after a run completes). Per-client opt-in
     # is clients.illustrate_content (default off); on-demand illustration ignores

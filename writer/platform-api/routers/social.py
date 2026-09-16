@@ -15,8 +15,12 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from middleware.auth import require_auth, require_staff
 from models.social import (
     SocialAccountResponse,
+    SocialAddHandleRequest,
     SocialAngle,
     SocialAnglesRequest,
+    SocialCompetitorHandle,
+    SocialCompetitorResponse,
+    SocialCompetitorSignalResponse,
     SocialConnectUrlResponse,
     SocialDraftCopyRequest,
     SocialDraftCopyResponse,
@@ -34,8 +38,10 @@ from models.social import (
     SocialPresignRequest,
     SocialPresignResponse,
     SocialProfileResponse,
+    SocialResearchTriggerResponse,
 )
 from services.freeze import assert_not_frozen
+from services.social import competitor_research as social_research
 from services.social import creator as social_creator
 from services.social import fanout as social_fanout
 from services.social import image as social_image
@@ -219,3 +225,76 @@ async def list_social_posts(client_id: UUID, auth: dict = Depends(require_auth))
 async def get_social_post(post_id: UUID, auth: dict = Depends(require_auth)):
     social_publish._assert_enabled()
     return social_publish.get_post(str(post_id))
+
+
+# ── P1 competitor research (analyze-in-place; ADR-0002) ───────────────────────
+
+@router.get(
+    "/clients/{client_id}/social/competitors",
+    response_model=list[SocialCompetitorResponse],
+)
+async def list_social_competitors(client_id: UUID, auth: dict = Depends(require_auth)):
+    """The client's competitors + their per-platform social handles (Competitors tab)."""
+    social_publish._assert_enabled()
+    return social_research.list_competitors_with_handles(str(client_id))
+
+
+@router.post(
+    "/clients/{client_id}/social/competitors/{competitor_id}/handles",
+    response_model=SocialCompetitorHandle,
+)
+async def add_social_competitor_handle(
+    client_id: UUID, competitor_id: UUID,
+    body: SocialAddHandleRequest, auth: dict = Depends(require_staff),
+):
+    """Add a per-platform social handle to one of the client's competitors."""
+    social_publish._assert_enabled()
+    return social_research.add_handle(
+        str(client_id), str(competitor_id), body.platform, body.handle
+    )
+
+
+@router.delete("/social/competitor-handles/{handle_id}")
+async def delete_social_competitor_handle(
+    handle_id: UUID, client_id: UUID, auth: dict = Depends(require_staff)
+):
+    """Remove a competitor social handle (client_id scopes the ownership check)."""
+    social_publish._assert_enabled()
+    return social_research.delete_handle(str(client_id), str(handle_id))
+
+
+@router.post(
+    "/clients/{client_id}/social/competitor-research",
+    response_model=SocialResearchTriggerResponse,
+)
+async def trigger_social_competitor_research(
+    client_id: UUID, auth: dict = Depends(require_staff)
+):
+    """Run competitor research now (background job). NOT freeze-gated — research
+    keeps running under freeze (PRD §3). 503 until the P1 gate is open
+    (social_enabled + social_competitor_research_enabled + APIFY_API_TOKEN)."""
+    social_publish._assert_enabled()
+    return social_research.enqueue_social_competitor_research(
+        str(client_id), user_id=auth.get("user_id")
+    )
+
+
+@router.get(
+    "/clients/{client_id}/social/competitor-research/{job_id}",
+    response_model=SocialJobStatusResponse,
+)
+async def get_social_competitor_research_status(
+    client_id: UUID, job_id: UUID, auth: dict = Depends(require_auth)
+):
+    social_publish._assert_enabled()
+    return social_research.get_research_job(str(job_id))
+
+
+@router.get(
+    "/clients/{client_id}/social/competitor-signals",
+    response_model=list[SocialCompetitorSignalResponse],
+)
+async def list_social_competitor_signals(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Stored competitor signals for a client, most-recent first."""
+    social_publish._assert_enabled()
+    return social_research.list_signals(str(client_id))

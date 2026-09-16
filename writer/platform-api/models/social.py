@@ -185,3 +185,51 @@ class SocialPostResponse(BaseModel):
     created_at: Optional[datetime] = None
 
     model_config = {"extra": "ignore"}
+
+
+# ── P1 competitor research ────────────────────────────────────────────────────
+
+class SocialCompetitorHandle(BaseModel):
+    id: Optional[UUID] = None
+    competitor_id: UUID
+    platform: str
+    handle: str
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialCompetitorResponse(BaseModel):
+    """A client's competitor plus its per-platform social handles (Competitors tab)."""
+    id: UUID
+    name: Optional[str] = None
+    domain: Optional[str] = None
+    handles: list[SocialCompetitorHandle] = Field(default_factory=list)
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialAddHandleRequest(BaseModel):
+    platform: str
+    handle: str
+
+
+class SocialCompetitorSignalResponse(BaseModel):
+    id: UUID
+    competitor_id: Optional[UUID] = None
+    competitor_name: Optional[str] = None
+    platform: str
+    themes: Optional[list[str]] = None
+    formats: Optional[dict] = None
+    hook_patterns: Optional[list[str]] = None
+    cadence: Optional[dict] = None
+    top_performers: Optional[list[dict]] = None
+    whats_working: Optional[str] = None
+    status: str
+    captured_at: Optional[datetime] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialResearchTriggerResponse(BaseModel):
+    job_id: UUID
+    already_running: bool = False
