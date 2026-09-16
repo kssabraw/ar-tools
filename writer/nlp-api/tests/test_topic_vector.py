@@ -594,3 +594,165 @@ def test_absent_index_skips_gain_claim_embeddings():
     assert r_absent["information_gain"]["available"] is False
     assert r_absent["information_gain"]["reason"] == "no_site_index"
     assert r_rich["information_gain"]["available"] is True
+
+
+# --- P2 — emotional-arc rubric (§10a). Pure logic; the LLM call lives in main.py
+# and is not exercised here (offline). ----------------------------------------
+
+_ARC_CARD = {
+    "audience_label": "Melbourne homeowner with a 20+ year old tile roof",
+    "audience_pain_points": ["worried the roof will leak in winter storms",
+                             "afraid of being upsold a full replacement"],
+    "audience_objections": ["not sure repair is enough", "concerned about cost"],
+    "audience_triggers": ["saw a water stain on the ceiling"],
+    "audience_motivations": ["a roof they can stop worrying about",
+                             "an honest assessment"],
+}
+
+
+def test_build_arc_states_assembles_before_after_from_audience_fields():
+    st = tv.build_arc_states(_ARC_CARD)
+    # before = pains + objections + triggers; after = motivations (§10a).
+    assert st["pains"] == _ARC_CARD["audience_pain_points"]
+    assert st["objections"] == _ARC_CARD["audience_objections"]
+    assert st["triggers"] == _ARC_CARD["audience_triggers"]
+    assert st["motivations"] == _ARC_CARD["audience_motivations"]
+    assert st["audience_label"].startswith("Melbourne homeowner")
+
+
+def test_has_arc_inputs_true_for_card_with_audience():
+    assert tv.has_arc_inputs(_ARC_CARD) is True
+
+
+def test_no_audience_fields_suppressed_not_zero():
+    # A card with a brand voice but NO audience signals → the arc is suppressed
+    # ("not measured"), never a 0 score (§10a subordinate-tail: no input, no verdict).
+    voice_only = {"brand_name": "Acme", "tone_adjectives": ["warm"], "person": "first"}
+    assert tv.has_arc_inputs(voice_only) is False
+    assert tv.has_arc_inputs(None) is False
+    assert tv.has_arc_inputs({}) is False
+    supp = tv.suppressed_arc("no_audience_fields")
+    assert supp["available"] is False
+    assert supp["reason"] == "no_audience_fields"
+    assert supp["composite_weight"] == 0.0
+    assert "score" not in supp  # suppressed ≠ scored 0
+
+
+def test_build_arc_prompt_carries_audience_signals_and_page_text():
+    st = tv.build_arc_states(_ARC_CARD)
+    prompt = tv.build_arc_prompt(st, "Our honest assessment tells you when a repair is enough.")
+    assert "afraid of being upsold a full replacement" in prompt
+    assert "an honest assessment" in prompt   # a motivation
+    assert "saw a water stain on the ceiling" in prompt  # a trigger
+    assert "honest assessment tells you when a repair is enough" in prompt  # the page text
+
+
+def test_sanitize_arc_drops_unevidenced_verdicts():
+    # A fabricated positive verdict with no page quote is NOT credited (mirrors
+    # the vibe_read sanitize; the §14 "gain never rewards fabrication" analog).
+    st = tv.build_arc_states(_ARC_CARD)
+    raw = {
+        "arc_present": True,
+        "before_acknowledged": True,
+        "before_evidence": "",  # claims yes but no quote → dropped
+        "after_resolved": True,
+        "after_evidence": "We give you a roof you can stop worrying about.",
+        "transitions": [
+            {"concern": "afraid of being upsold", "addressed": True,
+             "evidence": "We tell you honestly when a repair is all you need."},
+            {"concern": "concerned about cost", "addressed": True,
+             "evidence": ""},  # unevidenced → flipped to not-addressed
+        ],
+        "score": 88,
+    }
+    arc = tv.sanitize_arc(raw, st)
+    assert arc["available"] is True
+    assert arc["composite_weight"] == 0.0
+    assert arc["before_acknowledged"] is False        # unevidenced → dropped
+    assert arc["before_evidence"] == ""
+    assert arc["after_resolved"] is True              # had a quote → kept
+    # Only the evidenced transition counts as resolved.
+    assert arc["transition_count"] == 2
+    assert arc["resolved_count"] == 1
+    addressed = {t["concern"]: t["addressed"] for t in arc["transitions"]}
+    assert addressed["afraid of being upsold"] is True
+    assert addressed["concerned about cost"] is False
+    assert arc["grounded"] is True                    # at least one survived
+
+
+def test_sanitize_arc_clamps_score_and_survives_garbage():
+    st = tv.build_arc_states(_ARC_CARD)
+    assert tv.sanitize_arc({"score": 999}, st)["score"] == 100.0
+    assert tv.sanitize_arc({"score": -5}, st)["score"] == 0.0
+    assert tv.sanitize_arc({"score": "not a number"}, st)["score"] == 0.0
+    # Malformed / non-dict input never raises; degrades to safe defaults.
+    junk = tv.sanitize_arc(None, st)
+    assert junk["available"] is True
+    assert junk["score"] == 0.0
+    assert junk["transitions"] == []
+    assert junk["grounded"] is False
+
+
+def test_sanitize_arc_never_surfaces_a_forbidden_term():
+    # Non-negotiable (§10b): a never_use term must never appear in ANY arc string
+    # (verdict evidence, rationale, or a transition concern).
+    st = tv.build_arc_states(_ARC_CARD)
+    raw = {
+        "arc_present": True,
+        "before_acknowledged": True,
+        "before_evidence": "The retatrutide peptide worries them.",  # forbidden word
+        "after_resolved": True,
+        "after_evidence": "We deliver a roof you can stop worrying about.",
+        "transitions": [
+            {"concern": "unsure about retatrutide dosing", "addressed": True,
+             "evidence": "Our page explains it."},  # forbidden word in concern
+            {"concern": "concerned about cost", "addressed": True,
+             "evidence": "Buy retatrutide today at a fair price."},  # forbidden in evidence
+        ],
+        "rationale": "The page mentions retatrutide throughout.",  # forbidden word
+    }
+    arc = tv.sanitize_arc(raw, st, never_use_terms=["retatrutide"])
+
+    def _all_strings(obj):
+        if isinstance(obj, str):
+            yield obj
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                yield from _all_strings(v)
+        elif isinstance(obj, list):
+            for v in obj:
+                yield from _all_strings(v)
+
+    assert not any("retatrutide" in s.lower() for s in _all_strings(arc))
+    # The transition whose CONCERN carried the forbidden word is dropped entirely;
+    # the one with the forbidden word only in evidence keeps the concern but the
+    # evidence is blanked → its verdict is un-evidenced → not addressed.
+    concerns = [t["concern"] for t in arc["transitions"]]
+    assert "unsure about retatrutide dosing" not in " ".join(concerns).lower() and \
+        all("retatrutide" not in c.lower() for c in concerns)
+    cost = next((t for t in arc["transitions"] if t["concern"] == "concerned about cost"), None)
+    assert cost is not None
+    assert cost["addressed"] is False and cost["evidence"] == ""
+    # before_evidence carried the forbidden word → blanked → verdict dropped.
+    assert arc["before_acknowledged"] is False
+    assert arc["rationale"] == ""
+
+
+def test_arc_clean_str_scrubs_before_capping():
+    # A forbidden term straddling the cap boundary must not leave a surviving
+    # fragment — the scrub scans the FULL string, then truncates.
+    rx = tv._forbidden_regex(["retatrutide"])
+    straddle = "x" * 295 + " retatrutide tail"  # "retatrutide" spans the 300 cap
+    assert tv._arc_clean_str(straddle, rx, cap=300) == ""  # whole string dropped
+    # A clean over-length string is CAPPED, not blanked.
+    assert tv._arc_clean_str("y" * 500, rx, cap=300) == "y" * 300
+    # No forbidden terms configured → nothing is scrubbed (rx is None).
+    assert tv._arc_clean_str("buy retatrutide now", None, cap=300) == "buy retatrutide now"
+
+
+def test_arc_list_ignores_non_list_field():
+    # A hand-crafted card whose audience field is a bare string must yield [] —
+    # never char-iterate into single-character "items".
+    st = tv.build_arc_states({"audience_pain_points": "a leaky roof"})
+    assert st["pains"] == []
+    assert tv.has_arc_inputs({"audience_pain_points": "a leaky roof"}) is False
