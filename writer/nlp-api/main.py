@@ -408,6 +408,17 @@ VOICE_ENFORCEMENT_ENABLED = os.environ.get(
 # forbidden word is a fact, not a score, and gets its own targeted pass.
 MAX_VOICE_CORRECTION_PASSES = int(os.environ.get("MAX_VOICE_CORRECTION_PASSES", "3"))
 
+# Topic-vector P2 — the report-only emotional-arc rubric (§10a). One cheap Haiku
+# forced-tool call BESIDE the composite; report-only, composite weight 0, never
+# folded into `scores`. Enabled by default (a fraction-of-a-cent per score, like
+# the sibling VOICE_LOCALIZE / PAGE_SPEC_AUDIT Haiku audits) but easy to switch
+# off. Model mirrors the voice-localize / spec-audit Haiku choice.
+TOPIC_VECTOR_ARC_ENABLED = os.environ.get(
+    "TOPIC_VECTOR_ARC_ENABLED", "true"
+).lower() in ("1", "true", "yes", "on")
+TOPIC_VECTOR_ARC_MODEL = os.environ.get("TOPIC_VECTOR_ARC_MODEL", "claude-haiku-4-5-20251001")
+TOPIC_VECTOR_ARC_MAX_TOKENS = int(os.environ.get("TOPIC_VECTOR_ARC_MAX_TOKENS", "1200"))
+
 # The generate-page second pass now corrects BOTH axes: it fires when the voice
 # scorecard needs a rewrite OR the SEO composite fell short (voice is anchored in
 # pass 1 now, so a shortfall is most likely SEO). This is the SEO bar below which
@@ -8082,8 +8093,10 @@ async def score_page(request: Request, body: ScorePageRequest):
     composite, status = _composite_from_scores(scores, weights)
 
     # Report-only topic-vector measure BESIDE the composite (never folded in).
+    # voice_card + client thread the P2 emotional-arc rubric onto the report.
     topic_vector_report = await _measure_topic_vector(
-        page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
+        page_html, body.keyword, serp_analysis_dict, body.site_claim_index,
+        voice_card=voice_card, client=client)
 
     return ScorePageResponse(
         composite_score=composite,
@@ -11526,7 +11539,7 @@ async def _ecommerce_score_html_inline(
     return composite, deficiencies, scores, token_rec, voice
 
 
-async def _measure_topic_vector(
+async def _measure_topic_vector_embeddings(
     page_html: str,
     keyword: str,
     serp_analysis_dict: Optional[dict],
@@ -11593,6 +11606,100 @@ async def _measure_topic_vector(
     except Exception as exc:  # pragma: no cover - defensive; measure is best-effort
         logger.warning("topic-vector measure failed (%s); skipping.", exc)
         return {"available": False, "reason": "error"}
+
+
+async def _measure_emotional_arc(page_html: str, voice_card: Optional[dict], client) -> dict:
+    """P2 emotional-arc rubric — one cheap Haiku forced-tool call (§10a).
+
+    Report-only, best-effort, and NEVER raises. Returns the arc sub-object for
+    the ``topic_vector`` report's ``emotional_arc`` key, or a suppressed marker
+    (``suppressed_arc``) when there's nothing to measure. Affect is not
+    embeddable, so this is independent of GEMINI/the embedding measure — it runs
+    on Claude, which is always configured on this service.
+
+    Suppressed (never scored 0, §10a):
+      - flag off                       → ``arc_disabled``
+      - no voice card / audience fields → ``no_audience_fields``
+      - no Anthropic client            → ``no_client``
+      - the LLM call / parse failed    → ``arc_failed``
+    """
+    if not TOPIC_VECTOR_ARC_ENABLED:
+        return topic_vector.suppressed_arc("arc_disabled")
+    if not topic_vector.has_arc_inputs(voice_card):
+        return topic_vector.suppressed_arc("no_audience_fields")
+    if client is None:
+        return topic_vector.suppressed_arc("no_client")
+    try:
+        states = topic_vector.build_arc_states(voice_card)
+        # Visible page text (title included, markup excluded) — the arc judges
+        # what a reader sees, never class names / URLs / the JSON-LD block.
+        page_text = _page_text_for_voice_check(page_html or "")
+        prompt = topic_vector.build_arc_prompt(states, page_text)
+        msg = await client.messages.create(
+            model=TOPIC_VECTOR_ARC_MODEL,
+            max_tokens=TOPIC_VECTOR_ARC_MAX_TOKENS,
+            system=[{"type": "text", "text": topic_vector.ARC_SYSTEM,
+                     "cache_control": {"type": "ephemeral"}}],
+            tools=[topic_vector.ARC_TOOL],
+            tool_choice={"type": "tool", "name": "emit_emotional_arc"},
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = None
+        for block in msg.content:
+            if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "emit_emotional_arc":
+                raw = dict(block.input)
+                break
+        arc = topic_vector.sanitize_arc(
+            raw, states,
+            never_use_terms=(voice_card or {}).get("never_use_terms"),
+        )
+        # Log the (tiny) spend like the sibling Haiku audits do; kept inside the
+        # arc sub-object rather than folded into the handler's headline
+        # token_usage, so the score response's token contract is unchanged.
+        arc["token_usage"] = _token_record(
+            "topic-vector-arc", TOPIC_VECTOR_ARC_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
+        return arc
+    except Exception as exc:  # pragma: no cover - defensive; arc is best-effort
+        logger.warning("emotional-arc measure failed (%s); suppressing.", exc)
+        return topic_vector.suppressed_arc("arc_failed")
+
+
+async def _measure_topic_vector(
+    page_html: str,
+    keyword: str,
+    serp_analysis_dict: Optional[dict],
+    site_claim_index: Optional[dict] = None,
+    *,
+    include_gain: bool = True,
+    voice_card: Optional[dict] = None,
+    client=None,
+) -> dict:
+    """The report-only topic-vector measure attached to a scorer's ``topic_vector``
+    field. Runs the embedding measure (centering / coverage / inverse gap / P1
+    Information Gain) and — when a ``voice_card`` + Anthropic ``client`` are
+    supplied — the P2 emotional-arc rubric BESIDE it, as an ``emotional_arc``
+    sub-object (§10a). Every piece is report-only (composite weight 0) and never
+    folded into ``scores``.
+
+    The arc is independent of the embedding measure (affect is not embeddable),
+    so it attaches even when the embedding half is unavailable (no GEMINI key →
+    ``{available: False, …, emotional_arc: {…}}``). Callers that pass no
+    ``voice_card``/``client`` (the reopt coaching pass) get the pre-P2 report
+    byte-identical."""
+    report = await _measure_topic_vector_embeddings(
+        page_html, keyword, serp_analysis_dict, site_claim_index,
+        include_gain=include_gain,
+    )
+    # P2 emotional arc — only when the caller opted in (a scorer with a resolved
+    # voice card + client). Best-effort; a suppressed marker still attaches so the
+    # report is explicit about why the arc wasn't scored.
+    if TOPIC_VECTOR_ARC_ENABLED and voice_card is not None and client is not None:
+        arc = await _measure_emotional_arc(page_html, voice_card, client)
+        if isinstance(report, dict) and arc is not None:
+            report["emotional_arc"] = arc
+    return report
 
 
 _ECOMMERCE_GEN_SYSTEM_PROMPT = """You are an expert ecommerce SEO copywriter and conversion-rate specialist. You write publication-ready, on-page-optimized ecommerce pages as clean semantic HTML that ranks in Google AND converts shoppers.
@@ -11882,10 +11989,13 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, status = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
 
-    # P0 topic-vector measure — a SEPARATE async pass beside the deterministic
+    # Topic-vector measure — a SEPARATE async pass beside the deterministic
     # engine (which is left untouched above). Report-only: kept out of `scores`,
-    # so the composite is unchanged whether or not this runs.
-    topic_vector_report = await _measure_topic_vector(page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
+    # so the composite is unchanged whether or not this runs. voice_card + client
+    # thread the P2 emotional-arc rubric onto the report.
+    topic_vector_report = await _measure_topic_vector(
+        page_html, body.keyword, serp_analysis_dict, body.site_claim_index,
+        voice_card=voice_card, client=client)
 
     return EcommerceScoreResponse(
         composite_score=composite,
@@ -12133,8 +12243,10 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
     composite, status = _composite_from_scores(scores, _BLOG_ENGINE_WEIGHTS)
 
     # Report-only topic-vector measure BESIDE the composite (never folded in).
+    # voice_card + client thread the P2 emotional-arc rubric onto the report.
     topic_vector_report = await _measure_topic_vector(
-        page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
+        page_html, body.keyword, serp_analysis_dict, body.site_claim_index,
+        voice_card=voice_card, client=client)
 
     return BlogScoreResponse(
         composite_score=composite,

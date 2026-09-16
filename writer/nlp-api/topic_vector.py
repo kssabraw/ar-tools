@@ -1,7 +1,7 @@
-"""Topic-Vector Centering + Information Gain — P0 + P1 (report-only).
+"""Topic-Vector Centering + Information Gain — P0 + P1 + P2 (report-only).
 
-Implements the P0 subset + the P1 scored Information Gain of
-``docs/modules/topic-vector-information-gain-plan-v1_0.md``:
+Implements the P0 subset + the P1 scored Information Gain + the P2 emotional-arc
+rubric of ``docs/modules/topic-vector-information-gain-plan-v1_0.md``:
 
   1. **Topic centering** — cosine(page, centroid) where the centroid is anchored
      on the EXPLICIT query only: query terms + AIO text + top-10 competitor
@@ -12,6 +12,11 @@ Implements the P0 subset + the P1 scored Information Gain of
   3. **Inverse gain gap** — the on-vector subtopics the competitor corpus states
      that the page lacks (§6, "inverse — reported, not scored"). Grounded purely
      in what competitors demonstrably said — no site index, no fabrication risk.
+  4. **Emotional-arc rubric (P2)** — an LLM rubric dimension (NOT embedding-based,
+     never in the cosine): does the page move THIS client's buyer from an anxious
+     "before" to a confident "after", per the voice card's audience fields (§10a)?
+     Pure assembly + sanitize here; the one Haiku call lives in ``main.py``. The
+     SUBORDINATE TAIL — composite weight 0, never folded into ``scores``.
 
 Design constraints honoured here (plan §9/§3/§4/§6/§10):
 
@@ -686,6 +691,281 @@ def render_gain_guidance(measure_result: dict, site_claim_index: Optional[dict] 
     return ("TOPIC & INFORMATION-GAIN GUIDANCE (report-only signal — improve where it "
             "does not conflict with the SEO deficiencies or brand voice above):\n"
             + "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# Measure 4 — Emotional-arc rubric (P2, §10a). The subordinate tail.
+# ---------------------------------------------------------------------------
+# Report-only LLM rubric dimension: does the page move THIS client's buyer from
+# an anxious "before" to a confident "after"? The states come from the client's
+# ALREADY auto-generated voice card (§10a) — no new audience source:
+#   before = audience_pain_points + audience_objections + audience_triggers
+#   after  = audience_motivations satisfied + objections answered
+# Affect is NOT embeddable (embeddings capture topic, not feeling), so this is
+# deliberately NOT in the cosine — it rides BESIDE centering/coverage/gain on
+# the report-only ``topic_vector`` field at composite weight 0, and is never
+# added to ``scores``. MCS-first: the arc is the SUBORDINATE TAIL, never a heavy
+# signal — over-indexing it recreates Nova's failure in reverse (a warm page
+# that's off-vector and doesn't rank).
+#
+# Split of responsibility (mirrors ``voice_card.py`` / ``ecommerce_facts.py``):
+#   - everything here is pure + unit-tested (state assembly, prompt, sanitize)
+#   - the one cheap Haiku forced-tool call lives in ``main.py::_measure_emotional_arc``
+#
+# Governance: gated on availability — no voice card / no audience fields →
+# SUPPRESSED ("not measured", ``suppressed_arc``), never scored 0. Every string
+# the arc surfaces is scrubbed of ``never_use_terms`` (§10b / non-negotiable): a
+# forbidden word never appears in any arc verdict, evidence, or rationale.
+
+ARC_COMPOSITE_WEIGHT = 0.0  # NEVER folded into `scores` — report-only (§10a).
+MAX_ARC_TRANSITIONS = int(os.environ.get("TOPIC_VECTOR_ARC_MAX_TRANSITIONS", "8"))
+_ARC_PAGE_CHARS = int(os.environ.get("TOPIC_VECTOR_ARC_PAGE_CHARS", "9000"))
+# A "yes" verdict needs a page quote at least this long to count as evidenced —
+# a bare "" or a stray character is an unfounded verdict and is dropped.
+_ARC_MIN_EVIDENCE_CHARS = int(os.environ.get("TOPIC_VECTOR_ARC_MIN_EVIDENCE", "10"))
+
+_ARC_AUDIENCE_FIELDS = ("audience_pain_points", "audience_objections",
+                        "audience_triggers", "audience_motivations")
+
+
+def _arc_list(card: Optional[dict], key: str, cap: int = 6) -> list:
+    """One audience field as a deduped, capped, bounded list of strings."""
+    vals = card.get(key) if isinstance(card, dict) else None
+    out: list = []
+    seen: set = set()
+    for v in vals or []:
+        s = str(v).strip()
+        low = s.lower()
+        if s and low not in seen:
+            seen.add(low)
+            out.append(s[:240])
+        if len(out) >= cap:
+            break
+    return out
+
+
+def build_arc_states(voice_card: Optional[dict]) -> dict:
+    """The before/after emotional states from the voice card's audience fields
+    (§10a). ``before`` = pains + objections + triggers; ``after`` = motivations
+    (+ the objections answered). Pure; returns the four deduped lists plus the
+    audience label — reuses the client's ALREADY auto-generated card, inventing
+    no new audience source."""
+    card = voice_card if isinstance(voice_card, dict) else {}
+    return {
+        "audience_label": str(card.get("audience_label") or "").strip()[:200],
+        "pains": _arc_list(card, "audience_pain_points"),
+        "objections": _arc_list(card, "audience_objections"),
+        "triggers": _arc_list(card, "audience_triggers"),
+        "motivations": _arc_list(card, "audience_motivations"),
+    }
+
+
+def has_arc_inputs(voice_card: Optional[dict]) -> bool:
+    """True when the card carries at least one audience signal to build an arc
+    from. When False the arc is SUPPRESSED ("not measured"), never scored 0 —
+    no input, no verdict (§10a subordinate-tail)."""
+    st = build_arc_states(voice_card)
+    return bool(st["pains"] or st["objections"] or st["triggers"] or st["motivations"])
+
+
+def suppressed_arc(reason: str) -> dict:
+    """The 'not measured' arc sub-object (never scored 0, §10a). Used for no
+    audience fields, a disabled flag, or an LLM/parse failure."""
+    return {"available": False, "reason": reason, "composite_weight": ARC_COMPOSITE_WEIGHT}
+
+
+ARC_SYSTEM = (
+    "You are a conversion copy analyst. You judge ONLY whether a web page moves a "
+    "specific buyer from their anxious 'before' state to a confident 'after' state. "
+    "You never rewrite, prescribe, or invent — you assess what the page already does. "
+    "Judge strictly from the PAGE TEXT provided: cite a VERBATIM quote from the page "
+    "for every 'yes' verdict, and mark 'no' with an empty quote when the page does not "
+    "address a concern. A page that is fluent but never speaks to THIS buyer's specific "
+    "worries scores low, however polished it reads. Call the emit_emotional_arc tool "
+    "with your assessment."
+)
+
+# Forced-tool schema — the arc's structured output (per-transition evidence
+# quotes + a 0-100 arc score). Kept as module data so the pure sanitizer and the
+# main.py call site agree on the shape.
+ARC_TOOL = {
+    "name": "emit_emotional_arc",
+    "description": (
+        "Report whether the page performs this buyer's before->after emotional "
+        "transition, with a verbatim page quote as evidence for every 'yes'."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "arc_present": {
+                "type": "boolean",
+                "description": "Does the page perform any before->after emotional transition for this buyer at all?",
+            },
+            "before_acknowledged": {
+                "type": "boolean",
+                "description": "Does the page acknowledge this buyer's anxious 'before' state (their pains/worries/triggers)?",
+            },
+            "before_evidence": {
+                "type": "string",
+                "description": "A VERBATIM quote from the page that acknowledges the before-state; empty string if none.",
+            },
+            "after_resolved": {
+                "type": "boolean",
+                "description": "Does the page deliver the confident 'after' state (this buyer's motivations satisfied)?",
+            },
+            "after_evidence": {
+                "type": "string",
+                "description": "A VERBATIM quote from the page that delivers the after-state; empty string if none.",
+            },
+            "transitions": {
+                "type": "array",
+                "description": "One entry per specific concern (a pain or objection) this buyer holds. Set addressed=true ONLY with a verbatim page quote that answers it.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "concern": {"type": "string", "description": "The buyer concern, restated from the list provided."},
+                        "addressed": {"type": "boolean"},
+                        "evidence": {"type": "string", "description": "VERBATIM page quote answering the concern; empty string if not addressed."},
+                    },
+                    "required": ["concern", "addressed", "evidence"],
+                },
+            },
+            "score": {
+                "type": "number",
+                "description": "0-100: how completely the page moves THIS buyer from before to after. 0 = ignores them entirely; 100 = acknowledges and resolves every concern.",
+            },
+            "rationale": {"type": "string", "description": "One or two sentences on the verdict."},
+        },
+        "required": ["arc_present", "before_acknowledged", "after_resolved", "transitions", "score"],
+    },
+}
+
+
+def build_arc_prompt(states: dict, page_text: str) -> str:
+    """User prompt for the arc call. Pure so tests can assert that the audience
+    signals AND the page text both reach the model."""
+    def _blk(title: str, items: list) -> str:
+        body = "\n".join(f"    - {i}" for i in items) if items else "    (none stated)"
+        return f"  {title}:\n{body}"
+
+    states = states if isinstance(states, dict) else {}
+    parts = [
+        "THIS PAGE'S BUYER (from the client's brand/ICP guide):",
+        f"  Who they are: {states.get('audience_label') or '(unspecified)'}",
+        "",
+        "THE 'BEFORE' STATE — what makes this buyer anxious / hesitant / searching:",
+        _blk("Pain points", states.get("pains") or []),
+        _blk("Objections (why they hesitate)", states.get("objections") or []),
+        _blk("Triggers (what makes them search now)", states.get("triggers") or []),
+        "",
+        "THE 'AFTER' STATE — what this buyer wants to feel / achieve:",
+        _blk("Motivations", states.get("motivations") or []),
+        "",
+        "PAGE TEXT (judge strictly from this — quote verbatim):",
+        (page_text or "").strip()[:_ARC_PAGE_CHARS] or "(empty page)",
+        "",
+        "Assess whether the page moves this buyer from the before-state to the "
+        "after-state, answering each concern. Call emit_emotional_arc now.",
+    ]
+    return "\n".join(parts)
+
+
+def _forbidden_regex(never_use_terms: Optional[list]):
+    """A word-boundary matcher over the guide's forbidden terms, reusing the
+    canonical builder in ``voice_card`` (a sibling, stdlib-only module — safe to
+    import offline). Best-effort: any failure → no matcher (the scrub then no-ops
+    rather than raising)."""
+    if not never_use_terms:
+        return None
+    try:
+        from voice_card import build_term_regex
+        return build_term_regex([str(t) for t in never_use_terms if str(t).strip()])
+    except Exception:  # pragma: no cover - defensive import guard
+        return None
+
+
+def _arc_clean_str(text, forbidden_rx, cap: int = 300) -> str:
+    """A free-text string safe to surface in the report: whitespace-collapsed,
+    capped, and BLANKED when it contains a forbidden (never_use) term — the
+    report must never surface, and no coaching layer may echo, a term the guide
+    forbids (§10b / non-negotiable)."""
+    s = _NORM_WS_RE.sub(" ", str(text or "")).strip()[:cap]
+    if s and forbidden_rx is not None and forbidden_rx.search(s):
+        return ""
+    return s
+
+
+def sanitize_arc(raw, states: dict, *, never_use_terms: Optional[list] = None,
+                 min_evidence_chars: int = _ARC_MIN_EVIDENCE_CHARS) -> dict:
+    """Coerce the model's arc tool output into a well-formed, safe sub-object.
+
+    - clamps ``score`` to [0, 100];
+    - DROPS unevidenced verdicts: a before/after/transition marked positive with
+      no usable page quote is flipped to negative (mirrors the vibe_read
+      sanitize — a "yes" with no evidence is unfounded, §10a);
+    - SCRUBS every free-text string of forbidden terms so a ``never_use`` word
+      never appears in any arc string (§10b / non-negotiable);
+    - recomputes the deterministic ``resolved_count`` / ``transition_count`` and
+      a ``grounded`` flag from the SURVIVING evidence, so the report can't claim
+      an ungrounded resolution.
+
+    Never raises — a malformed field degrades to its safe default."""
+    rx = _forbidden_regex(never_use_terms)
+    raw = raw if isinstance(raw, dict) else {}
+
+    def _bool(key: str) -> bool:
+        val = raw.get(key)
+        return val if isinstance(val, bool) else False
+
+    def _evidenced(flag: bool, evidence) -> tuple:
+        ev = _arc_clean_str(evidence, rx)
+        ok = bool(flag) and len(ev) >= min_evidence_chars
+        return ok, (ev if ok else "")
+
+    before_ok, before_ev = _evidenced(_bool("before_acknowledged"), raw.get("before_evidence"))
+    after_ok, after_ev = _evidenced(_bool("after_resolved"), raw.get("after_evidence"))
+
+    transitions: list = []
+    for t in (raw.get("transitions") or [])[:MAX_ARC_TRANSITIONS]:
+        if not isinstance(t, dict):
+            continue
+        concern = _arc_clean_str(t.get("concern"), rx, cap=240)
+        if not concern:  # concern empty or scrubbed (forbidden term) → drop the verdict
+            continue
+        addressed = t.get("addressed") if isinstance(t.get("addressed"), bool) else False
+        ev_ok, ev = _evidenced(addressed, t.get("evidence"))
+        transitions.append({"concern": concern, "addressed": ev_ok, "evidence": ev})
+
+    resolved = [t for t in transitions if t["addressed"]]
+    try:
+        score = round(max(0.0, min(100.0, float(raw.get("score")))), 1)
+    except (TypeError, ValueError):
+        score = 0.0
+    # Grounded = at least one SURVIVING evidenced verdict. A high score with
+    # nothing grounded is surfaced with grounded=False (report-only; never gates).
+    grounded = bool(before_ok or after_ok or resolved)
+
+    return {
+        "available": True,
+        "composite_weight": ARC_COMPOSITE_WEIGHT,
+        "score": score,
+        "grounded": grounded,
+        "arc_present": _bool("arc_present"),
+        "before_acknowledged": before_ok,
+        "before_evidence": before_ev,
+        "after_resolved": after_ok,
+        "after_evidence": after_ev,
+        "transitions": transitions,
+        "resolved_count": len(resolved),
+        "transition_count": len(transitions),
+        "rationale": _arc_clean_str(raw.get("rationale"), rx, cap=400),
+        "states": states if isinstance(states, dict) else {},
+        "note": (
+            "Report-only emotional-arc rubric (composite weight 0) — the "
+            "subordinate tail beside centering/coverage/gain; affect is not "
+            "embeddable, so this is never in the cosine (§10a)."
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
