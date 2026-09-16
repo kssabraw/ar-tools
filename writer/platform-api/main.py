@@ -27,6 +27,7 @@ from routers.clients import router as clients_router
 from routers.competitors import router as competitors_router
 from routers.coverage_audit import router as coverage_audit_router
 from routers.domain_intel import router as domain_intel_router
+from routers.content_gap import router as content_gap_router
 from routers.keyword_research import router as keyword_research_router
 from routers.google_trends import router as google_trends_router
 from routers.content_schedule import router as content_schedule_router
@@ -370,6 +371,7 @@ app.include_router(deliverables_router)
 app.include_router(deliverables_analytics_router)
 app.include_router(cost_analytics_router)
 app.include_router(domain_intel_router)
+app.include_router(content_gap_router)
 app.include_router(ecommerce_router)
 app.include_router(everhour_router)
 app.include_router(feedback_router)
