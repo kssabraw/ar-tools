@@ -181,7 +181,18 @@ def test_page_signals_empty_html():
 # ===========================================================================
 # build_onpage_diff
 # ===========================================================================
-def _sig(headings=None, wc=0, elements=None, schema=None, title=None, meta=None, domain=None, available=True):
+def _sig(
+    headings=None,
+    wc=0,
+    elements=None,
+    schema=None,
+    title=None,
+    meta=None,
+    domain=None,
+    available=True,
+    last_modified=None,
+    freshness_basis=None,
+):
     return {
         "available": available,
         "domain": domain,
@@ -194,6 +205,8 @@ def _sig(headings=None, wc=0, elements=None, schema=None, title=None, meta=None,
         "block_types": [],
         "schema_types": schema or [],
         "elements": {k: False for k in cg._ELEMENT_LABELS} | (elements or {}),
+        "last_modified": last_modified,
+        "freshness_basis": freshness_basis,
     }
 
 
@@ -253,6 +266,122 @@ def test_onpage_diff_no_competitors():
     assert diff["competitors_compared"] == 0
     assert diff["subtopic_gap"] == []
     assert diff["word_count"]["competitor_median"] == 0
+
+
+# ===========================================================================
+# Freshness (PRD §3.2 freshness gap)
+# ===========================================================================
+def test_parse_date_variants():
+    assert cg._parse_date("2025-08-01").isoformat() == "2025-08-01"
+    assert cg._parse_date("2025-08-01T12:30:00Z").isoformat() == "2025-08-01"
+    assert cg._parse_date("2025-08-01T12:30:00+00:00").isoformat() == "2025-08-01"
+    # Junk / non-strings return None, never raise.
+    assert cg._parse_date("not a date") is None
+    assert cg._parse_date("") is None
+    assert cg._parse_date(None) is None
+    assert cg._parse_date(20250801) is None
+
+
+_FRESH_HTML = """
+<html><head>
+  <meta property="article:modified_time" content="2025-06-15T09:00:00Z">
+  <script type="application/ld+json">
+    {"@type": "Article", "datePublished": "2024-01-01", "dateModified": "2025-08-20"}
+  </script>
+</head><body><article><h1>x</h1><p>body text here for a bit of length.</p></article></body></html>
+"""
+
+_PUBLISHED_ONLY_HTML = """
+<html><head>
+  <script type="application/ld+json">{"@type": "BlogPosting", "datePublished": "2024-03-10"}</script>
+</head><body><article><h1>x</h1><p>body.</p></article></body></html>
+"""
+
+
+def test_page_signals_extracts_freshness_prefers_most_recent_modified():
+    sig = cg.page_signals_from_html(_FRESH_HTML, url="https://c.com/x")
+    # Most recent of the modified signals wins (JSON-LD 2025-08-20 > meta 2025-06-15).
+    assert sig["last_modified"] == "2025-08-20"
+    assert sig["freshness_basis"] == "modified"
+
+
+def test_page_signals_freshness_falls_back_to_published():
+    sig = cg.page_signals_from_html(_PUBLISHED_ONLY_HTML)
+    assert sig["last_modified"] == "2024-03-10"
+    assert sig["freshness_basis"] == "published"
+
+
+def test_page_signals_no_dates_is_none():
+    sig = cg.page_signals_from_html("<html><body><p>no dates</p></body></html>")
+    assert sig["last_modified"] is None
+    assert sig["freshness_basis"] is None
+
+
+def test_build_freshness_client_staler_than_competitors_is_flagged_stale():
+    client = _sig(domain="client.com", last_modified="2024-01-01", freshness_basis="modified")
+    comps = [
+        _sig(domain="a.com", last_modified="2025-08-01", freshness_basis="modified"),
+        _sig(domain="b.com", last_modified="2025-06-01", freshness_basis="modified"),
+        _sig(domain="c.com", last_modified="2025-04-01", freshness_basis="published"),
+    ]
+    fresh = cg.build_freshness(client, comps)
+    assert fresh is not None
+    assert fresh["client"] == "2024-01-01"
+    assert fresh["competitors_with_date"] == 3
+    assert fresh["competitor_most_recent"] == "2025-08-01"
+    assert fresh["competitor_median"] == "2025-06-01"
+    # Client is ~1.4y behind the median → positive delta, stale.
+    assert fresh["client_days_behind_median"] > cg.FRESHNESS_STALE_DAYS
+    assert fresh["stale"] is True
+    # Competitor rows sorted most-recent first.
+    assert [c["domain"] for c in fresh["competitors"]] == ["a.com", "b.com", "c.com"]
+
+
+def test_build_freshness_client_fresher_is_not_stale():
+    client = _sig(domain="client.com", last_modified="2025-09-01", freshness_basis="modified")
+    comps = [_sig(domain="a.com", last_modified="2025-01-01", freshness_basis="modified")]
+    fresh = cg.build_freshness(client, comps)
+    assert fresh["client_days_behind_median"] < 0
+    assert fresh["stale"] is False
+
+
+def test_build_freshness_none_when_no_dates_anywhere():
+    client = _sig(domain="client.com")
+    comps = [_sig(domain="a.com"), _sig(domain="b.com")]
+    assert cg.build_freshness(client, comps) is None
+
+
+def test_build_freshness_client_unavailable_reports_competitors_only():
+    client = _sig(available=False)
+    comps = [_sig(domain="a.com", last_modified="2025-08-01", freshness_basis="modified")]
+    fresh = cg.build_freshness(client, comps)
+    assert fresh is not None
+    assert fresh["client"] is None
+    assert fresh["client_available"] is False
+    assert fresh["client_days_behind_median"] is None
+    assert fresh["stale"] is None
+    assert fresh["competitors_with_date"] == 1
+
+
+def test_build_freshness_client_date_but_no_competitor_dates():
+    client = _sig(domain="client.com", last_modified="2025-05-01", freshness_basis="modified")
+    comps = [_sig(domain="a.com")]  # competitor has no parseable date
+    fresh = cg.build_freshness(client, comps)
+    assert fresh is not None
+    assert fresh["client"] == "2025-05-01"
+    assert fresh["competitors_with_date"] == 0
+    assert fresh["competitor_median"] is None
+    assert fresh["client_days_behind_median"] is None
+    assert fresh["stale"] is None
+
+
+def test_onpage_diff_includes_freshness_block():
+    client = _sig(domain="client.com", last_modified="2024-01-01", freshness_basis="modified")
+    comps = [_sig(domain="a.com", last_modified="2025-08-01", freshness_basis="modified")]
+    diff = cg.build_onpage_diff(client, comps)
+    assert diff["freshness"] is not None
+    assert diff["freshness"]["client"] == "2024-01-01"
+    assert diff["freshness"]["competitor_most_recent"] == "2025-08-01"
 
 
 # ===========================================================================
@@ -634,7 +763,10 @@ def test_build_run_csv_rows_full_row():
                 "authority": {"page_rd_gap": 12.0, "domain_rd_gap": 40.0, "dr_gap": 5.0},
                 "dimensions_unavailable": ["site_traffic"],
             },
-            "onpage_diff": {"word_count": {"client": 500, "competitor_median": 900, "delta": -400}},
+            "onpage_diff": {
+                "word_count": {"client": 500, "competitor_median": 900, "delta": -400},
+                "freshness": {"client_days_behind_median": 210},
+            },
         }
     ]
     rows = cg.build_run_csv_rows(keywords)
@@ -647,6 +779,7 @@ def test_build_run_csv_rows_full_row():
     assert row["page_rd_gap"] == 12.0
     assert row["dr_gap"] == 5.0
     assert row["word_count_delta"] == -400
+    assert row["freshness_days_behind"] == 210
     assert row["dimensions_unavailable"] == "site_traffic"
 
 
@@ -683,4 +816,5 @@ def test_csv_headers_stable():
     # The export contract the frontend + downstream consumers read.
     assert cg.CSV_HEADERS[0] == "keyword"
     assert "verdict" in cg.CSV_HEADERS
-    assert len(cg.CSV_HEADERS) == 13
+    assert "freshness_days_behind" in cg.CSV_HEADERS
+    assert len(cg.CSV_HEADERS) == 14

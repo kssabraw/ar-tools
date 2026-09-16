@@ -266,6 +266,96 @@ def _extract_schema_types(soup: BeautifulSoup) -> list[str]:
     return out
 
 
+# --- Freshness (PRD §3.2 freshness gap, [free] — parses HTML already scraped) --
+_MODIFIED_META_ATTRS = (
+    {"property": "article:modified_time"},
+    {"property": "og:updated_time"},
+    {"itemprop": "dateModified"},
+    {"name": "last-modified"},
+)
+_PUBLISHED_META_ATTRS = (
+    {"property": "article:published_time"},
+    {"itemprop": "datePublished"},
+    {"name": "date"},
+)
+
+
+def _parse_date(value: Any) -> Optional[date]:
+    """Parse a JSON-LD / meta date value to a `date`, leniently. Handles ISO
+    date-only, full ISO with offset, and a trailing `Z`. Returns None on junk."""
+    if not isinstance(value, str):
+        return None
+    s = value.strip()
+    if not s:
+        return None
+    iso = (s[:-1] + "+00:00") if s.endswith("Z") else s
+    for candidate in (iso, s[:10]):
+        try:
+            return datetime.fromisoformat(candidate).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _jsonld_dates(soup: BeautifulSoup) -> tuple[list[str], list[str]]:
+    """Collect raw (modified, published) date strings from every JSON-LD node."""
+    modified: list[str] = []
+    published: list[str] = []
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key in ("dateModified", "lastReviewed"):
+                v = node.get(key)
+                if isinstance(v, str):
+                    modified.append(v)
+            v = node.get("datePublished")
+            if isinstance(v, str):
+                published.append(v)
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    for script in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        raw = script.string or script.get_text() or ""
+        if not raw.strip():
+            continue
+        try:
+            _walk(json.loads(raw))
+        except (ValueError, TypeError):
+            continue
+    return modified, published
+
+
+def _extract_freshness(soup: BeautifulSoup) -> tuple[Optional[str], Optional[str]]:
+    """Return `(iso_date | None, basis)` for a page's last-updated date.
+
+    Prefers a *modified* signal (JSON-LD `dateModified`/`lastReviewed`,
+    `article:modified_time`, `og:updated_time`, itemprop `dateModified`,
+    `<meta name=last-modified>`); falls back to a *published* signal. `basis` is
+    `'modified' | 'published' | None` so the diff can say which it used. When a
+    page carries several, the most recent wins. Reuses only already-scraped HTML
+    — no new call (PRD §3.2 freshness gap, [free])."""
+    mod_raw, pub_raw = _jsonld_dates(soup)
+    for attrs in _MODIFIED_META_ATTRS:
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            mod_raw.append(tag["content"])
+    for attrs in _PUBLISHED_META_ATTRS:
+        tag = soup.find("meta", attrs=attrs)
+        if tag and tag.get("content"):
+            pub_raw.append(tag["content"])
+
+    mod_dates = [d for d in (_parse_date(v) for v in mod_raw) if d is not None]
+    if mod_dates:
+        return max(mod_dates).isoformat(), "modified"
+    pub_dates = [d for d in (_parse_date(v) for v in pub_raw) if d is not None]
+    if pub_dates:
+        return max(pub_dates).isoformat(), "published"
+    return None, None
+
+
 def page_signals_from_html(html: str, url: Optional[str] = None) -> dict[str, Any]:
     """Extract the on-page signals `build_onpage_diff` compares, from page HTML.
 
@@ -291,6 +381,7 @@ def page_signals_from_html(html: str, url: Optional[str] = None) -> dict[str, An
                 seen_h.add(norm)
                 headings.append(norm)
 
+    last_modified, freshness_basis = _extract_freshness(soup)
     return {
         "available": True,
         "url": url,
@@ -302,6 +393,8 @@ def page_signals_from_html(html: str, url: Optional[str] = None) -> dict[str, An
         "block_types": sorted(block_types),
         "schema_types": _extract_schema_types(soup),
         "elements": {k: bool(elements.get(k)) for k in _ELEMENT_LABELS},
+        "last_modified": last_modified,
+        "freshness_basis": freshness_basis,
     }
 
 
@@ -310,6 +403,78 @@ def page_signals_from_html(html: str, url: Optional[str] = None) -> dict[str, An
 # ===========================================================================
 def _label(domain: Optional[str], url: Optional[str]) -> str:
     return domain or _norm_domain(url) or "competitor"
+
+
+# Days behind the competitor median beyond which the client page is flagged stale.
+FRESHNESS_STALE_DAYS = 180
+
+
+def _median_date(dates: list[date]) -> Optional[str]:
+    """Median of a list of `date`s as an ISO string (via day-ordinals)."""
+    if not dates:
+        return None
+    ords = sorted(d.toordinal() for d in dates)
+    return date.fromordinal(int(median(ords))).isoformat()
+
+
+def build_freshness(
+    client_signals: dict[str, Any],
+    comps: list[dict[str, Any]],
+) -> Optional[dict[str, Any]]:
+    """Freshness gap (PRD §3.2): the client's last-updated date vs competitors'.
+
+    Pure. Dates come from `page_signals_from_html`'s `last_modified` (JSON-LD /
+    meta, [free]). Only pages that carried a parseable date contribute. Returns
+    None when NO page (client or competitor) had a date, so the dimension is
+    omitted rather than rendered empty (PRD §4.1). `client_days_behind_median`
+    is positive when the client is staler than the competitor median; `stale`
+    flags a client more than `FRESHNESS_STALE_DAYS` behind it.
+
+    `comps` is the available-filtered competitor list (from `build_onpage_diff`);
+    a competitor with no parseable date simply doesn't contribute.
+    """
+    client_ok = bool(client_signals.get("available"))
+    client_date = _parse_date(client_signals.get("last_modified")) if client_ok else None
+
+    comp_rows: list[dict[str, Any]] = []
+    comp_dates: list[date] = []
+    for c in comps:
+        d = _parse_date(c.get("last_modified"))
+        if d is None:
+            continue
+        comp_dates.append(d)
+        comp_rows.append(
+            {
+                "domain": _label(c.get("domain"), c.get("url")),
+                "last_modified": d.isoformat(),
+                "basis": c.get("freshness_basis"),
+            }
+        )
+
+    if client_date is None and not comp_dates:
+        return None
+
+    comp_rows.sort(key=lambda r: r["last_modified"], reverse=True)
+    most_recent = max(comp_dates).isoformat() if comp_dates else None
+    median_iso = _median_date(comp_dates)
+
+    days_behind: Optional[int] = None
+    stale: Optional[bool] = None
+    if client_date is not None and median_iso is not None:
+        days_behind = (date.fromisoformat(median_iso) - client_date).days
+        stale = days_behind > FRESHNESS_STALE_DAYS
+
+    return {
+        "client": client_date.isoformat() if client_date else None,
+        "client_basis": client_signals.get("freshness_basis") if client_ok else None,
+        "client_available": client_date is not None,
+        "competitors": comp_rows,
+        "competitors_with_date": len(comp_dates),
+        "competitor_most_recent": most_recent,
+        "competitor_median": median_iso,
+        "client_days_behind_median": days_behind,
+        "stale": stale,
+    }
 
 
 def build_onpage_diff(
@@ -417,6 +582,7 @@ def build_onpage_diff(
         "schema_gap": schema_gap,
         "title": title,
         "meta_description": meta,
+        "freshness": build_freshness(client_signals, comps),
     }
 
 
@@ -988,6 +1154,7 @@ CSV_HEADERS = [
     "domain_rd_gap",
     "dr_gap",
     "word_count_delta",
+    "freshness_days_behind",
     "dimensions_unavailable",
 ]
 
@@ -1004,6 +1171,7 @@ def build_run_csv_rows(keywords: list[dict]) -> list[list]:
         comps = k.get("competitors") if isinstance(k.get("competitors"), list) else []
         top = comps[0] if comps else {}
         word = diff.get("word_count") if isinstance(diff.get("word_count"), dict) else {}
+        fresh = diff.get("freshness") if isinstance(diff.get("freshness"), dict) else {}
         rows.append(
             [
                 k.get("keyword") or "",
@@ -1018,6 +1186,7 @@ def build_run_csv_rows(keywords: list[dict]) -> list[list]:
                 auth.get("domain_rd_gap"),
                 auth.get("dr_gap"),
                 word.get("delta"),
+                fresh.get("client_days_behind_median"),
                 "; ".join(gap.get("dimensions_unavailable") or []),
             ]
         )
