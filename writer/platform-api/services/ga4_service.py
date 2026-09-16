@@ -186,22 +186,23 @@ def get_service_account_email() -> str:
 def _mint_token() -> str:
     """Mint an OAuth token for the analytics.readonly scope (lazy Google imports).
 
-    Uses the same transport-fallback dance as scripts/verify_ga4_api_access.py so
-    it works whether or not ``requests`` is installed alongside google-auth."""
+    The refresh hits Google's token endpoint over a transport with an explicit
+    timeout (``_TIMEOUT``). google-auth's default ``Request`` has NO timeout, so a
+    stalled token endpoint would hang the calling thread indefinitely — a thread
+    leak (GA4 ingest runs off the event loop, so it can't wedge the loop like GSC
+    once did, but a never-returning refresh still leaks a worker thread and never
+    completes the job). httplib2 (a google-api-python-client dependency, always
+    present) is the one transport that takes a timeout cleanly, so we authorize a
+    timed ``httplib2.Http`` for the refresh rather than the default ``requests``
+    transport."""
+    import google_auth_httplib2  # noqa: PLC0415
+    import httplib2  # noqa: PLC0415
     from google.oauth2 import service_account  # noqa: PLC0415
 
     creds = service_account.Credentials.from_service_account_info(
         _load_key(), scopes=SCOPES
     )
-    try:
-        from google.auth.transport.requests import Request  # noqa: PLC0415
-
-        creds.refresh(Request())
-    except ImportError:  # pragma: no cover - depends on installed transport
-        import google_auth_httplib2  # noqa: PLC0415
-        import httplib2  # noqa: PLC0415
-
-        creds.refresh(google_auth_httplib2.Request(httplib2.Http()))
+    creds.refresh(google_auth_httplib2.Request(httplib2.Http(timeout=_TIMEOUT)))
     return creds.token
 
 
