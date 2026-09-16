@@ -816,6 +816,246 @@ function ConnectAccountsPanel({ clientId, hasProfile, onProfileCreated }: {
   )
 }
 
+// ── P1 competitor research (Competitors tab) ──────────────────────────────────
+interface CompetitorHandle { id: string; competitor_id: string; platform: string; handle: string }
+interface Competitor { id: string; name: string | null; domain: string | null; handles: CompetitorHandle[] }
+interface CompetitorSignal {
+  id: string; competitor_id: string | null; competitor_name: string | null; platform: string
+  themes: string[] | null; formats: Record<string, unknown> | null; hook_patterns: string[] | null
+  cadence: { per_week?: number | null; posts?: number; span_days?: number | null } | null
+  top_performers: Array<{ url: string; engagement?: number; media_type?: string }> | null
+  whats_working: string | null; status: string; captured_at: string | null
+}
+// Platforms we ship Apify parsers for (backend apify.SUPPORTED_PLATFORMS).
+const RESEARCH_PLATFORMS: Array<[string, string]> = [
+  ['instagram', 'Instagram'], ['facebook', 'Facebook'], ['twitter', 'X (Twitter)'],
+  ['youtube', 'YouTube'], ['pinterest', 'Pinterest'],
+]
+const chip: React.CSSProperties = {
+  display: 'inline-block', background: '#eef2ff', color: '#4338ca', fontSize: 11,
+  fontWeight: 600, padding: '2px 8px', borderRadius: 999, margin: '0 4px 4px 0',
+}
+
+function AddHandleForm({ clientId, competitorId, onAdded }: {
+  clientId: string; competitorId: string; onAdded: () => void
+}) {
+  const [platform, setPlatform] = useState('instagram')
+  const [handle, setHandle] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const add = useMutation({
+    mutationFn: async () => {
+      setError(null)
+      if (!handle.trim()) throw new Error('social_handle_required')
+      return api.post(`/clients/${clientId}/social/competitors/${competitorId}/handles`, { platform, handle: handle.trim() })
+    },
+    onSuccess: () => { setHandle(''); onAdded() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_handle_add_failed'),
+  })
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select style={{ ...input, width: 'auto', padding: '6px 8px' }} value={platform} onChange={(e) => setPlatform(e.target.value)}>
+          {RESEARCH_PLATFORMS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+        </select>
+        <input style={{ ...input, width: 160, padding: '6px 8px' }} placeholder="@handle" value={handle}
+          onChange={(e) => setHandle(e.target.value)} />
+        <button onClick={() => add.mutate()} disabled={add.isPending || !handle.trim()}
+          style={{ ...btn(add.isPending || !handle.trim() ? '#cbd5e1' : '#4f46e5'), padding: '6px 12px' }}>
+          {add.isPending ? <Loader2 size={13} className="spin" /> : '+ Add handle'}
+        </button>
+      </div>
+      {error && <div style={{ marginTop: 6 }}><ErrorDetails message={error} /></div>}
+    </div>
+  )
+}
+
+function SignalCard({ s }: { s: CompetitorSignal }) {
+  const perWeek = s.cadence?.per_week
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 12, marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
+          {s.competitor_name ?? 'Competitor'} <span style={{ color: '#64748b', fontWeight: 500 }}>· {specFor(s.platform).label}</span>
+        </div>
+        <span style={{ fontSize: 11, color: '#94a3b8' }}>
+          {s.captured_at ? new Date(s.captured_at).toLocaleDateString() : ''}
+        </span>
+      </div>
+      {s.status === 'insufficient_data' ? (
+        <p style={{ margin: 0, fontSize: 12, color: '#c2410c' }}>No public posts found for this handle.</p>
+      ) : (
+        <>
+          {(s.themes?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: '#64748b', marginRight: 4 }}>Themes:</span>
+              {s.themes!.map((t) => <span key={t} style={chip}>{t}</span>)}
+            </div>
+          )}
+          {(s.hook_patterns?.length ?? 0) > 0 && (
+            <div style={{ marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: '#64748b', marginRight: 4 }}>Hooks:</span>
+              {s.hook_patterns!.map((t) => <span key={t} style={{ ...chip, background: '#f0fdf4', color: '#15803d' }}>{t}</span>)}
+            </div>
+          )}
+          {s.whats_working && (
+            <p style={{ margin: '4px 0', fontSize: 12, color: '#334155' }}>{s.whats_working}</p>
+          )}
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 4 }}>
+            {typeof perWeek === 'number' ? `~${perWeek}/week` : 'cadence n/a'}
+            {s.formats?.dominant ? ` · mostly ${String(s.formats.dominant)}` : ''}
+            {(s.top_performers?.length ?? 0) > 0 ? ` · ${s.top_performers!.length} top performers` : ''}
+          </div>
+          {(s.top_performers?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {s.top_performers!.slice(0, 3).map((p, i) => (
+                <a key={p.url} href={p.url} target="_blank" rel="noreferrer"
+                  style={{ fontSize: 11, color: '#4f46e5', textDecoration: 'none' }}>
+                  #{i + 1} ({p.engagement ?? 0}) <ExternalLink size={10} />
+                </a>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function CompetitorsTab({ clientId }: { clientId: string }) {
+  const qc = useQueryClient()
+  const [jobId, setJobId] = useState<string | null>(null)
+  const [researchError, setResearchError] = useState<string | null>(null)
+
+  const compsQ = useQuery<Competitor[]>({
+    queryKey: ['social-competitors', clientId],
+    queryFn: () => api.get<Competitor[]>(`/clients/${clientId}/social/competitors`),
+    enabled: Boolean(clientId),
+  })
+  const signalsQ = useQuery<CompetitorSignal[]>({
+    queryKey: ['social-competitor-signals', clientId],
+    queryFn: () => api.get<CompetitorSignal[]>(`/clients/${clientId}/social/competitor-signals`),
+    enabled: Boolean(clientId),
+  })
+
+  const research = useMutation({
+    mutationFn: async () => {
+      setResearchError(null)
+      return api.post<{ job_id: string; already_running: boolean }>(`/clients/${clientId}/social/competitor-research`, {})
+    },
+    onSuccess: (r) => setJobId(r.job_id),
+    onError: (e) => setResearchError(e instanceof Error ? e.message : 'social_competitor_research_failed'),
+  })
+
+  // Poll the research job; refresh signals when it settles.
+  useQuery({
+    queryKey: ['social-research-job', clientId, jobId],
+    queryFn: async () => {
+      const j = await api.get<{ status: string; error?: string | null }>(`/clients/${clientId}/social/competitor-research/${jobId}`)
+      if (j.status === 'complete') {
+        setJobId(null)
+        void qc.invalidateQueries({ queryKey: ['social-competitor-signals', clientId] })
+        void qc.invalidateQueries({ queryKey: ['social-competitors', clientId] })
+      } else if (j.status === 'failed') {
+        setJobId(null)
+        setResearchError(j.error || 'social_competitor_research_failed')
+      }
+      return j
+    },
+    enabled: Boolean(jobId),
+    refetchInterval: 3000,
+  })
+
+  const competitors = compsQ.data ?? []
+  const signals = useMemo(() => signalsQ.data ?? [], [signalsQ.data])
+  const signalsByComp = useMemo(() => {
+    const m: Record<string, CompetitorSignal[]> = {}
+    for (const s of signals) {
+      const k = s.competitor_id ?? 'unknown'
+      ;(m[k] ??= []).push(s)
+    }
+    return m
+  }, [signals])
+  const researching = Boolean(jobId) || research.isPending
+
+  return (
+    <div>
+      <div style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>Competitor research</h3>
+          <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
+            Analyze competitors’ public posts to inform your angles. Never copies their content — signals only.
+          </p>
+        </div>
+        <button onClick={() => research.mutate()} disabled={researching || competitors.length === 0}
+          style={{ ...btn(researching || competitors.length === 0 ? '#cbd5e1' : '#4f46e5') }}>
+          {researching ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+          {researching ? 'Researching…' : 'Research now'}
+        </button>
+      </div>
+
+      {researchError && <div style={{ marginBottom: 16 }}><ErrorDetails message={researchError} /></div>}
+
+      {compsQ.isLoading && (
+        <div style={{ ...card, display: 'flex', gap: 8, color: '#64748b' }}>
+          <Loader2 size={16} className="spin" /> Loading competitors…
+        </div>
+      )}
+      {!compsQ.isLoading && competitors.length === 0 && (
+        <div style={card}>
+          <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
+            No competitors yet. Add competitors on the{' '}
+            <Link to={`/clients/${clientId}/competitors`} style={{ color: '#4f46e5' }}>Competitive Intel</Link>{' '}
+            page, then add their social handles here.
+          </p>
+        </div>
+      )}
+
+      {competitors.map((c) => (
+        <div key={c.id} style={card}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
+            {c.name ?? 'Competitor'}{c.domain ? <span style={{ color: '#94a3b8', fontWeight: 500, fontSize: 12 }}> · {c.domain}</span> : null}
+          </div>
+          {c.handles.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+              {c.handles.map((h) => (
+                <span key={h.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: '#f1f5f9', borderRadius: 999, padding: '3px 8px', fontSize: 12, color: '#334155' }}>
+                  {specFor(h.platform).label}: {h.handle}
+                  <HandleDeleteButton clientId={clientId} handleId={h.id}
+                    onDeleted={() => void qc.invalidateQueries({ queryKey: ['social-competitors', clientId] })} />
+                </span>
+              ))}
+            </div>
+          )}
+          <AddHandleForm clientId={clientId} competitorId={c.id}
+            onAdded={() => void qc.invalidateQueries({ queryKey: ['social-competitors', clientId] })} />
+
+          {(signalsByComp[c.id]?.length ?? 0) > 0 && (
+            <div style={{ marginTop: 12, borderTop: '1px solid #f1f5f9', paddingTop: 10 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 6 }}>Signals</div>
+              {signalsByComp[c.id].map((s) => <SignalCard key={s.id} s={s} />)}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function HandleDeleteButton({ clientId, handleId, onDeleted }: {
+  clientId: string; handleId: string; onDeleted: () => void
+}) {
+  const del = useMutation({
+    mutationFn: () => api.delete(`/social/competitor-handles/${handleId}?client_id=${clientId}`),
+    onSuccess: onDeleted,
+  })
+  return (
+    <button onClick={() => del.mutate()} disabled={del.isPending} title="Remove handle"
+      style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94a3b8', padding: 0, display: 'inline-flex' }}>
+      <X size={12} />
+    </button>
+  )
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 export function SocialCompose() {
   const { id } = useParams<{ id: string }>()
@@ -846,7 +1086,9 @@ export function SocialCompose() {
   })
 
   const accounts = accountsQ.data ?? []
-  const [tab, setTab] = useState<'compose' | 'create' | 'drafts'>('compose')
+  const [tab, setTab] = useState<'compose' | 'create' | 'drafts' | 'competitors'>('compose')
+  // Compose + Create need a connected account; Drafts + Competitors don't.
+  const needsAccounts = tab === 'compose' || tab === 'create'
   const [activeAngleSet, setActiveAngleSet] = useState<string | null>(null)
   const [accountId, setAccountId] = useState<string>('')
   const selected = accounts.find((a) => a.account_id === accountId) ?? accounts[0]
@@ -978,7 +1220,7 @@ export function SocialCompose() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
-        {([['compose', 'Compose'], ['create', 'Create with AI'], ['drafts', 'Drafts']] as const).map(([key, lbl]) => (
+        {([['compose', 'Compose'], ['create', 'Create with AI'], ['drafts', 'Drafts'], ['competitors', 'Competitors']] as const).map(([key, lbl]) => (
           <button key={key} onClick={() => setTab(key)}
             style={{ padding: '8px 14px', background: 'none', border: 'none', borderBottom: `2px solid ${tab === key ? '#4f46e5' : 'transparent'}`, color: tab === key ? '#4f46e5' : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: -1 }}>
             {lbl}
@@ -987,15 +1229,15 @@ export function SocialCompose() {
       </div>
 
       {/* Accounts state (compose + create tabs need connected accounts) */}
-      {tab !== 'drafts' && accountsQ.isLoading && (
+      {needsAccounts && accountsQ.isLoading && (
         <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 8, color: '#64748b' }}>
           <Loader2 size={16} className="spin" /> Loading connected accounts…
         </div>
       )}
-      {tab !== 'drafts' && accountsQ.isError && (
+      {needsAccounts && accountsQ.isError && (
         <ErrorDetails message={accountsQ.error instanceof Error ? accountsQ.error.message : 'accounts_load_failed'} />
       )}
-      {tab !== 'drafts' && !accountsQ.isLoading && !accountsQ.isError && accounts.length === 0 && (
+      {needsAccounts && !accountsQ.isLoading && !accountsQ.isError && accounts.length === 0 && (
         <ConnectAccountsPanel
           clientId={clientId}
           hasProfile={Boolean(client?.social_profile_id)}
@@ -1013,6 +1255,7 @@ export function SocialCompose() {
       {tab === 'drafts' && (
         <DraftsTab clientId={clientId} accounts={accounts} angleSetId={activeAngleSet} />
       )}
+      {tab === 'competitors' && <CompetitorsTab clientId={clientId} />}
 
       {/* Compose */}
       {tab === 'compose' && accounts.length > 0 && (
