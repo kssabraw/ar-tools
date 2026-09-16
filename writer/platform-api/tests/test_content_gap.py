@@ -8,6 +8,7 @@ build_onpage_diff assembler (§4). No I/O.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 from services import content_gap as cg
 
@@ -265,3 +266,330 @@ def test_snapshot_fresh_window():
     assert cg._snapshot_fresh(stale, 30, now=now) is False
     assert cg._snapshot_fresh(None, 30, now=now) is False
     assert cg._snapshot_fresh("garbage", 30, now=now) is False
+
+
+# ===========================================================================
+# Phase 1 pure helpers
+# ===========================================================================
+def test_estimate_deep_calls():
+    # 2 nlp + 1 bulk + (n+1) ranked + (n+1) scrapes
+    assert cg.estimate_deep_calls(0) == 5
+    assert cg.estimate_deep_calls(5) == 15
+    # page-traffic off drops the (n+1) ranked_keywords calls
+    assert cg.estimate_deep_calls(5, page_traffic=False) == 9
+    assert cg.estimate_deep_calls(-3) == 5  # negative coerced to 0
+
+
+def test_norm_url():
+    assert cg._norm_url("https://www.A.com/Path/") == "a.com/path"
+    assert cg._norm_url("http://a.com/x#frag") == "a.com/x"
+    assert cg._norm_url("https://a.com/p?x=1") == "a.com/p?x=1"  # query kept
+    assert cg._norm_url("") == ""
+    assert cg._norm_url(None) == ""
+
+
+def test_estimate_page_traffic_matches_target_url_only():
+    rows = [
+        {"url": "https://a.com/x", "position": 2, "volume": 1000},
+        {"url": "https://a.com/other", "position": 1, "volume": 9999},  # different page
+    ]
+    # only the /x row counts: 1000 × CTR(2)=0.155 = 155.0; www + trailing slash tolerated
+    assert cg.estimate_page_traffic(rows, "https://www.a.com/x/") == 155.0
+
+
+def test_estimate_page_traffic_no_match_is_none_not_zero():
+    rows = [{"url": "https://a.com/x", "position": 2, "volume": 1000}]
+    assert cg.estimate_page_traffic(rows, "https://a.com/nowhere") is None
+    assert cg.estimate_page_traffic([], "https://a.com/x") is None
+    assert cg.estimate_page_traffic(rows, None) is None
+
+
+def test_estimate_page_traffic_skips_volumeless_rows():
+    rows = [
+        {"url": "https://a.com/x", "position": 2, "volume": None},
+        {"url": "https://a.com/x", "position": 3, "volume": 500},
+    ]
+    # only the second row contributes: 500 × CTR(3)=0.105 = 52.5
+    assert cg.estimate_page_traffic(rows, "https://a.com/x") == 52.5
+
+
+def test_build_authority_gap_medians_and_deltas():
+    client = {"page_rd": 5, "page_ur": 10, "domain_rd": 100, "dr": 200}
+    comps = [
+        {"domain": "a.com", "page_rd": 50, "page_ur": 40, "domain_rd": 800, "dr": 600},
+        {"domain": "b.com", "page_rd": 30, "page_ur": 35, "domain_rd": 500, "dr": 400},
+    ]
+    g = cg.build_authority_gap(client, comps)
+    assert g["competitor_page_rd_median"] == 40
+    assert g["competitor_domain_rd_median"] == 650
+    assert g["competitor_dr_median"] == 500
+    # positive delta = competitors ahead (client must gain this much)
+    assert g["page_rd_gap"] == 35
+    assert g["domain_rd_gap"] == 550
+    assert g["dr_gap"] == 300
+    assert "DataForSEO" in g["caveat"]
+
+
+def test_build_authority_gap_client_none_and_missing_metrics():
+    comps = [{"domain": "a.com", "page_rd": None, "domain_rd": 500, "dr": 600}]
+    g = cg.build_authority_gap(None, comps)
+    assert g["client"] is None
+    # median over the one competitor with a value; deltas None without a client side
+    assert g["competitor_domain_rd_median"] == 500
+    assert g["page_rd_gap"] is None
+    assert g["dr_gap"] is None
+    assert g["competitor_page_rd_median"] is None  # no competitor page_rd values
+
+
+def test_assemble_authority_from_snapshot_rows():
+    result_rows = [
+        {"position": 2, "url": "https://client.com/roof", "domain": "client.com", "is_client": True, "referring_domains": 5, "url_rating": 10},
+        {"position": 1, "url": "https://a.com/x", "domain": "a.com", "referring_domains": 50, "url_rating": 40},
+        {"position": 3, "url": "https://b.com/y", "domain": "b.com", "referring_domains": 30, "url_rating": 35},
+    ]
+    domain_rows = [
+        {"domain": "client.com", "is_client": True, "domain_rating": 200, "referring_domains": 100},
+        {"domain": "a.com", "domain_rating": 600, "referring_domains": 800},
+        {"domain": "b.com", "domain_rating": 400, "referring_domains": 500},
+    ]
+    competitors = [
+        {"domain": "a.com", "url": "https://a.com/x", "position": 1},
+        {"domain": "b.com", "url": "https://www.b.com/y/", "position": 3},  # url-normalized match
+    ]
+    g = cg.assemble_authority("client.com", competitors, result_rows, domain_rows)
+    assert g["client"] == {"page_rd": 5, "page_ur": 10, "domain_rd": 100, "dr": 200}
+    a = next(c for c in g["competitors"] if c["domain"] == "a.com")
+    assert (a["page_rd"], a["page_ur"], a["domain_rd"], a["dr"]) == (50, 40, 800, 600)
+    b = next(c for c in g["competitors"] if c["domain"] == "b.com")
+    assert (b["page_rd"], b["domain_rd"]) == (30, 500)  # matched despite www/slash
+    assert g["dr_gap"] == 300  # median(600,400)=500 - client 200
+
+
+def test_assemble_authority_client_not_ranking_uses_domain_row():
+    # client absent from result rows (not ranking) — still gets domain-level RD/DR
+    result_rows = [{"position": 1, "url": "https://a.com/x", "domain": "a.com", "referring_domains": 50}]
+    domain_rows = [
+        {"domain": "client.com", "is_client": True, "domain_rating": 150, "referring_domains": 60},
+        {"domain": "a.com", "domain_rating": 600, "referring_domains": 800},
+    ]
+    g = cg.assemble_authority("client.com", [{"domain": "a.com", "url": "https://a.com/x"}], result_rows, domain_rows)
+    assert g["client"]["page_rd"] is None  # no client page row
+    assert g["client"]["dr"] == 150         # domain row still found via is_client
+
+
+def test_build_site_traffic_gap():
+    traffic = {"client.com": 100.0, "a.com": 500.0, "b.com": 300.0}
+    g = cg.build_site_traffic_gap(traffic, "client.com", ["a.com", "b.com"])
+    assert g["client"] == 100.0
+    assert g["competitor_median"] == 400.0
+    assert g["delta"] == 300.0
+    assert g["basis"] == "estimated (DataForSEO)"
+
+
+def test_build_page_traffic_gap_labelled_modeled():
+    g = cg.build_page_traffic_gap(
+        6.5, [{"domain": "a.com", "url": "u", "estimate": 155.0}, {"domain": "b.com", "url": "v", "estimate": 48.8}]
+    )
+    assert g["basis"] == "estimated (modeled)"
+    assert g["client"] == 6.5
+    assert g["competitor_median"] == 101.9
+    assert g["delta"] == 95.4
+
+
+def test_build_entity_gap_maps_serp_and_filters_client_deficiencies():
+    serp = [
+        {"name": "Shingle", "entity_type": "THING", "page_spread": 3, "page_spread_pct": 0.6, "recommended_mentions": 4, "wiki_link": "http://w"},
+    ]
+    defs = [
+        {"engine": "Entity establishment", "engine_key": "entity_establishment", "score": 40, "issues": ["x"]},
+        {"engine": "Organic ranking", "engine_key": "organic_ranking", "score": 70},
+        {"engine": "serp_signal_coverage", "score": 55},  # matched via `engine` when engine_key absent
+    ]
+    g = cg.build_entity_gap(serp, defs)
+    assert g["serp_entities"][0]["name"] == "Shingle"
+    assert g["serp_entities"][0]["type"] == "THING"
+    assert g["serp_entity_count"] == 1
+    keys = {d.get("engine_key") or d.get("engine") for d in g["client_deficiencies"]}
+    assert keys == {"entity_establishment", "serp_signal_coverage"}  # organic_ranking dropped
+
+
+# ===========================================================================
+# _reserve — fail-closed budget meter
+# ===========================================================================
+class _FakeSB:
+    def __init__(self, data):
+        self._data = data
+
+    def rpc(self, name, params):
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self._data)
+
+
+def test_reserve_confirmed_true(monkeypatch):
+    monkeypatch.setattr(cg.settings, "content_gap_daily_call_budget", 500)
+    monkeypatch.setattr(cg, "get_supabase", lambda: _FakeSB(True))
+    assert cg._reserve(10) is True
+
+
+def test_reserve_over_cap_false(monkeypatch):
+    monkeypatch.setattr(cg.settings, "content_gap_daily_call_budget", 500)
+    monkeypatch.setattr(cg, "get_supabase", lambda: _FakeSB(False))
+    assert cg._reserve(10) is False
+
+
+def test_reserve_cap_zero_disables_guard(monkeypatch):
+    monkeypatch.setattr(cg.settings, "content_gap_daily_call_budget", 0)
+    monkeypatch.setattr(cg, "get_supabase", lambda: (_ for _ in ()).throw(AssertionError("must not query")))
+    assert cg._reserve(10) is True  # guard off → allow without touching the DB
+
+
+def test_reserve_fail_closed_on_exception(monkeypatch):
+    class Boom:
+        def rpc(self, *a, **k):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(cg.settings, "content_gap_daily_call_budget", 500)
+    monkeypatch.setattr(cg, "get_supabase", lambda: Boom())
+    # fail-CLOSED: an accounting error blocks the spend (unlike domain_intel)
+    assert cg._reserve(10) is False
+
+
+# ===========================================================================
+# _deep_dimensions — the full deep pass (externals mocked)
+# ===========================================================================
+async def test_deep_dimensions_assembles_all(monkeypatch):
+    async def fake_post_nlp(path, payload, timeout=90.0):
+        if path == "/analyze":
+            return {
+                "google_entities": [
+                    {"name": "Shingle", "entity_type": "THING", "page_spread": 3, "recommended_mentions": 4, "wiki_link": "http://w"},
+                ]
+            }
+        if path == "/score-page":
+            assert payload["page_url"] == "https://client.com/roof"
+            assert payload["serp_analysis"] is not None  # /analyze reused, not recomputed
+            return {
+                "composite_score": 62.0,
+                "composite_status": "needs_work",
+                "engine_scores": {"entity_establishment": 40},
+                "deficiencies": [
+                    {"engine": "Entity", "engine_key": "entity_establishment", "score": 40, "issues": ["missing"]},
+                    {"engine": "Organic", "engine_key": "organic_ranking", "score": 70},
+                ],
+            }
+        return None
+
+    async def fake_bulk(targets, location_code=None):
+        assert "client.com" in targets and "a.com" in targets
+        return {"client.com": 100.0, "a.com": 500.0, "b.com": 300.0}, 0.01
+
+    async def fake_ranked(domain, location_code=None, **kw):
+        data = {
+            "a.com": [{"url": "https://a.com/x", "position": 2, "volume": 1000}],
+            "b.com": [{"url": "https://b.com/y", "position": 5, "volume": 800}],
+            "client.com": [{"url": "https://client.com/roof", "position": 15, "volume": 500}],
+        }
+        return data.get(domain, []), 0.01
+
+    async def fake_scrape(url):
+        if not url:
+            return {"available": False}
+        return {
+            "available": True, "url": url, "title": "T", "meta_description": "m", "word_count": 1000,
+            "headings": ["intro"], "heading_count": 1, "block_types": [], "schema_types": [],
+            "elements": {k: False for k in cg._ELEMENT_LABELS},
+        }
+
+    monkeypatch.setattr(cg, "_post_nlp", fake_post_nlp)
+    monkeypatch.setattr(cg.dataforseo_labs, "fetch_bulk_traffic", fake_bulk)
+    monkeypatch.setattr(cg.dataforseo_labs, "fetch_ranked_keywords", fake_ranked)
+    monkeypatch.setattr(cg, "_scrape_signals", fake_scrape)
+
+    competitors = [
+        {"domain": "a.com", "url": "https://a.com/x", "position": 1},
+        {"domain": "b.com", "url": "https://b.com/y", "position": 3},
+    ]
+    result_rows = [
+        {"position": 1, "url": "https://a.com/x", "domain": "a.com", "referring_domains": 50, "url_rating": 40},
+        {"position": 3, "url": "https://b.com/y", "domain": "b.com", "referring_domains": 30, "url_rating": 35},
+    ]
+    domain_rows = [
+        {"domain": "client.com", "is_client": True, "domain_rating": 200, "referring_domains": 100},
+        {"domain": "a.com", "domain_rating": 600, "referring_domains": 800},
+        {"domain": "b.com", "domain_rating": 400, "referring_domains": 500},
+    ]
+
+    gap, onpage_diff = await cg._deep_dimensions(
+        keyword="roof repair",
+        client_url="https://client.com/roof",
+        client_domain="client.com",
+        business={"business_name": "C", "gbp_category": "Roofer", "address": "A"},
+        competitors=competitors,
+        result_rows=result_rows,
+        domain_rows=domain_rows,
+        aio_present=True,
+        aio_sources=[{"domain": "a.com"}, {"domain": "client.com"}],
+        location_code=2840,
+        entity_provider=None,
+        page_traffic_enabled=True,
+    )
+
+    assert gap["dimensions_unavailable"] == []
+    # authority
+    assert gap["authority"]["competitor_dr_median"] == 500
+    # aio citation gap (a.com cited, client cited too → only a.com surfaces)
+    assert [s["domain"] for s in gap["aio_citation"]["cited_sources_not_client"]] == ["a.com"]
+    # entities: serp side mapped, client deficiencies filtered to entity engine
+    assert gap["entities"]["serp_entities"][0]["name"] == "Shingle"
+    assert [d["engine_key"] for d in gap["entities"]["client_deficiencies"]] == ["entity_establishment"]
+    # onpage score
+    assert gap["onpage_score"]["composite_score"] == 62.0
+    # site traffic: median(500,300)=400 vs client 100 → delta 300
+    assert gap["site_traffic"]["delta"] == 300.0
+    # page traffic (modeled): a=1000×0.155=155, b=800×0.061=48.8, client=500×0.013=6.5
+    assert gap["page_traffic"]["client"] == 6.5
+    a_est = next(c for c in gap["page_traffic"]["competitors"] if c["domain"] == "a.com")["estimate"]
+    assert a_est == 155.0
+    # on-page diff assembled over 2 scraped competitors
+    assert onpage_diff["competitors_compared"] == 2
+
+
+async def test_deep_dimensions_degrades_when_nlp_and_client_url_missing(monkeypatch):
+    async def fail_nlp(path, payload, timeout=90.0):
+        return None  # nlp unavailable
+
+    async def fake_bulk(targets, location_code=None):
+        return {}, 0.0
+
+    async def fake_scrape(url):
+        return {"available": False}
+
+    monkeypatch.setattr(cg, "_post_nlp", fail_nlp)
+    monkeypatch.setattr(cg.dataforseo_labs, "fetch_bulk_traffic", fake_bulk)
+    monkeypatch.setattr(cg, "_scrape_signals", fake_scrape)
+
+    gap, onpage_diff = await cg._deep_dimensions(
+        keyword="kw",
+        client_url=None,  # client not ranking, no canonical
+        client_domain="client.com",
+        business={"business_name": "C", "gbp_category": "", "address": ""},
+        competitors=[],
+        result_rows=[],
+        domain_rows=[{"domain": "client.com", "is_client": True, "domain_rating": 100}],
+        aio_present=False,
+        aio_sources=[],
+        location_code=None,
+        entity_provider=None,
+        page_traffic_enabled=False,  # off → no ranked_keywords calls
+    )
+    # /analyze failed AND no client URL → both entity sources unavailable
+    assert "serp_entities" in gap["dimensions_unavailable"]
+    assert "onpage_score_no_client_url" in gap["dimensions_unavailable"]
+    assert "entities" not in gap  # neither side produced anything
+    assert "aio_citation" not in gap  # no AIO on this SERP
+    # authority still assembled from the domain row (free)
+    assert gap["authority"]["client"]["dr"] == 100
+    # on-page diff still returns (client unavailable, no competitors)
+    assert onpage_diff["client_available"] is False

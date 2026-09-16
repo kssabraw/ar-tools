@@ -1344,6 +1344,21 @@ class Settings(BaseSettings):
     # Cap on competitors scraped for the deep on-page/entity dimensions per
     # gapped keyword (strongest-first by position), to bound scrape cost.
     content_gap_max_competitors: int = 5
+    # Phase 1 deep dimensions ------------------------------------------------
+    # Kill-switch for the modeled page-traffic estimate (§3.1 #6): one billed
+    # dataforseo_labs.fetch_ranked_keywords call per competitor (the priciest
+    # per-keyword sub-dimension). Off → the page-traffic column is omitted and
+    # those calls are not reserved/spent; every other dimension still runs.
+    content_gap_page_traffic_enabled: bool = True
+    # A fresh serp_snapshots capture costs ~20-25 DataForSEO calls (§8). When a
+    # keyword has no reusable snapshot the scan reserves this many calls against
+    # its own meter BEFORE enqueuing the capture, so a brand-new client with
+    # many keywords can't fan out an unbounded fresh-capture spend past the
+    # daily ceiling. Errs high (the capture runs in a separate job).
+    content_gap_snapshot_call_estimate: int = 22
+    # Hard cap on fresh serp_snapshot captures a single scan will enqueue, on
+    # top of the budget meter — a second guard against a fresh-client fan-out.
+    content_gap_max_fresh_captures: int = 10
 
     # Keyword Research module (the seed-keyword explorer) — per-client keyword
     # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.
