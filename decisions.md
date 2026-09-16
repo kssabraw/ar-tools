@@ -590,3 +590,57 @@ which supports function tools WITH a non-`none` reasoning_effort. That is a
 larger change (different request/response surface + parsing in
 `fanout/llm/openai_writer_client.py`) and was deliberately deferred. Only the
 tool-call path needs it; `complete_text` is unaffected either way.
+
+---
+
+## Topic-Vector Information-Gain — reopt coaching pushes only SITE-INVARIANT facts (2026-09-16)
+
+**Status: DECIDED** (built this session; the P1 reopt-coaching live-check follow-up).
+
+**What was found.** Inspecting Nova Life Peptides' live `site_claim_index` (the P1
+grounding corpus) plus the deployed 05:58 score run on its "buy retatrutide" PDP,
+and reconstructing `topic_vector.render_gain_guidance` offline on that exact data,
+the reopt COACHING block for a retatrutide reoptimize would push **6 bad facts of
+8**: a garbage `price: 0.00 USD` (an empty-cart / chrome artifact the price regex
+scraped from `/blog/`) and five cross-product `size` facts (25 / 4 / 5 / 6 / 75 mg
+— semaglutide dosage-comparison numbers from a blog, not this product's 10mg/30mg
+vials). Only `coa: present` and `storage_temp: -20 °C` were defensible.
+
+**Root cause (deeper than the zero price).** The site-claim index is CLIENT-level
+(the whole site — every product + blog), but the coaching PUSHES a fact onto ONE
+page ("state this"). For a multi-product client (Nova sells dozens of peptides),
+per-product (`size`), per-compound (`cas` / `molecular_weight` / `molecular_formula`)
+and transactional (`price`) facts belong to some OTHER page; coaching them onto a
+retatrutide PDP is a factual error, not fabrication-prevention. (The scored-gain
+GROUNDING path is unaffected — it corroborates the page's OWN claim against the
+index, which is safe for every fact type.)
+
+**Decision / fix.**
+1. **Extraction (source):** drop `$0` / `$0.00` price matches — an empty-cart /
+   discount-widget artifact is never a real product price
+   (`site_claim_index.extract_facts`). Keeps the corpus clean for every consumer
+   (also stops a `0.00` claim false-grounding via `_site_fact_values`).
+2. **Coaching (correctness):** `render_gain_guidance` pushes only SITE-INVARIANT
+   fact types — the quality/handling facts a vendor asserts site-wide:
+   `_COACHABLE_FACT_TYPES = {coa, purity, storage_temp}`. The identity / commerce
+   facts (`price` / `size` / `cas` / `molecular_weight` / `molecular_formula`) are
+   never coached because the client-level index can't guarantee they belong to the
+   target page's product.
+
+**Tradeoff (accepted).** For a genuinely SINGLE-product client the excluded facts
+ARE that product's facts, so coaching loses some grounding for them — but the
+scored-gain grounding still credits the page's own CAS/MW/size claim, so
+single-product clients are not penalised; only the PUSH coaching is narrowed. The
+subtopic-gap coaching (keyword-anchored, from the SERP) is the primary signal and
+is unchanged.
+
+**Not a new defect elsewhere.** The age-gate chrome ("I acknowledge that I am age
+21 or older.") still scoring as `realized` gain in the 05:58 run is the #1169
+`_CHROME_CLAIM_RE` fix not-yet-deployed (merge-queue lag), not a new issue.
+
+**Live-reopt confirmation.** Not re-run for a fresh paid reoptimize: the coaching
+block is ephemeral (prompt-only, never persisted), so a live reopt cannot reveal
+it — the offline reconstruction on the deployed 05:58 measure + the real index is
+the faithful check. Post-deploy, delete Nova's `site_claim_index` row (or wait the
+30-day TTL) to force a clean re-crawl so the stale `price: 0.00` clears from the
+grounding fast-path too.

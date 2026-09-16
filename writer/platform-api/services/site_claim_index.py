@@ -143,6 +143,15 @@ def extract_facts(text: str, url: str = "") -> list[dict]:
         out.append({"type": ftype, "value": value, "unit": unit, "raw": _norm(raw)[:120], "url": url})
 
     for m in _PRICE_RE.finditer(text):
+        # A $0 / $0.00 is an empty-cart / discount-widget / chrome artifact, never
+        # a real product price. Leaving it in the corpus polluted reopt coaching
+        # ("state price: 0.00 USD" — a live Nova run) and could false-ground a
+        # "0.00" page claim via _site_fact_values. Drop it at the source.
+        try:
+            if float(m.group(1)) == 0:
+                continue
+        except ValueError:  # pragma: no cover - regex guarantees a number
+            pass
         _add("price", m.group(1), "USD", m.group(0))
     # Purity only when a purity/HPLC context word is nearby (a bare "50%" is not).
     for m in _PURITY_RE.finditer(text):
