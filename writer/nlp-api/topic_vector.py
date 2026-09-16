@@ -621,6 +621,21 @@ def score_information_gain(claim_verdicts: list, coverage_verdicts: list,
     }
 
 
+# Fact TYPES safe to PUSH onto a specific page as "state this" coaching. The
+# site-claim index is CLIENT-level (the whole site — every product + blog), but
+# the coaching pushes a fact onto ONE page. For a multi-product client (e.g. a
+# peptide vendor selling dozens of compounds) the per-product / per-compound /
+# transactional facts belong to some OTHER page: a `size` mined from a
+# semaglutide comparison blog, a `cas` from a different compound, or a
+# transactional `price`, coached onto a retatrutide PDP is a factual error, not
+# fabrication-prevention. So coaching pushes only the QUALITY & HANDLING facts a
+# vendor asserts SITE-WIDE (a CoA policy, a purity standard, storage temps) —
+# never the IDENTITY / COMMERCE facts that are page-specific. (The scored-gain
+# GROUNDING path is unaffected: it corroborates the page's OWN claims against the
+# index, which is safe for every fact type — see _claim_value_grounded.)
+_COACHABLE_FACT_TYPES = frozenset({"coa", "purity", "storage_temp"})
+
+
 def render_gain_guidance(measure_result: dict, site_claim_index: Optional[dict] = None,
                          page_text: str = "") -> str:
     """A compact rewrite-prompt block coaching the reopt loop (§6/§9): cover the
@@ -647,6 +662,11 @@ def render_gain_guidance(measure_result: dict, site_claim_index: Optional[dict] 
     missing: list = []
     for f in ((site_claim_index or {}).get("facts") or []):
         if not isinstance(f, dict):
+            continue
+        # Only push SITE-INVARIANT fact types (see _COACHABLE_FACT_TYPES) — never
+        # a per-product size / per-compound CAS / transactional price scraped from
+        # a different page of a multi-product site.
+        if str(f.get("type") or "").strip().lower() not in _COACHABLE_FACT_TYPES:
             continue
         val = str(f.get("value") or "").strip()
         if not val:

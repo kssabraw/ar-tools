@@ -49,6 +49,18 @@ def test_extract_facts_pulls_typed_number_entities():
     assert all(f["url"] == "u1" for f in facts)
 
 
+def test_extract_facts_drops_zero_price_chrome():
+    # A $0.00 / $0 is an empty-cart / discount-widget artifact, never a real
+    # product price. It polluted reopt coaching ("state price: 0.00 USD") on a
+    # live Nova crawl — drop it at the source; a real price is unaffected.
+    facts = s.extract_facts("Your cart is empty. Total: $ 0.00. Buy GLP-3RT for $90.00.", "u")
+    prices = [f["value"] for f in facts if f["type"] == "price"]
+    assert "0.00" not in prices
+    assert prices == ["90.00"]
+    facts0 = s.extract_facts("Total $0 today", "u")
+    assert not any(f["type"] == "price" for f in facts0)
+
+
 def test_extract_facts_purity_needs_context():
     # A bare percentage with no purity/HPLC context is NOT a purity fact.
     facts = s.extract_facts("Save 50% off your first order.", "u")

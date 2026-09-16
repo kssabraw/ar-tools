@@ -474,15 +474,42 @@ def test_render_gain_guidance_lists_gaps_and_missing_site_facts():
     measure_result = {"available": True,
                       "inverse_gain_gap": [{"label": "Receptor Agonism"}]}
     idx = {"facts": [
-        {"type": "cas", "value": "2381089-83-2", "unit": ""},
-        {"type": "price", "value": "90", "unit": "USD"},
+        {"type": "storage_temp", "value": "-20", "unit": "°C"},
+        {"type": "purity", "value": "99", "unit": "%"},
     ]}
-    page_text = "this page already mentions the $90 price but not the cas number"
+    page_text = "this page already mentions 99% purity but not the storage temperature"
     block = tv.render_gain_guidance(measure_result, idx, page_text)
     assert "Receptor Agonism" in block            # under-served subtopic coached
-    assert "2381089-83-2" in block                # missing site fact coached
-    # A fact already on the page is NOT re-coached (anti-noise; value "90" present).
-    assert "cas: 2381089-83-2" in block.lower()
+    assert "-20" in block                         # missing site-invariant fact coached
+    assert "storage_temp: -20 °c" in block.lower()
+    # A fact already on the page is NOT re-coached (anti-noise; value "99" present).
+    assert "purity" not in block.lower()
+
+
+def test_render_gain_guidance_excludes_per_product_and_transactional_facts():
+    """Coaching PUSHES a fact onto ONE page; the site-claim index is client-level
+    (whole site). Per-product (size), per-compound (cas / molecular_weight) and
+    transactional (price — incl. the $0.00 empty-cart artifact) facts belong to
+    some OTHER page and must never be coached onto a specific product page
+    (a live Nova reoptimize surfaced 'price: 0.00 USD' + five cross-product
+    semaglutide sizes onto a retatrutide PDP)."""
+    measure_result = {"available": True, "inverse_gain_gap": []}
+    idx = {"facts": [
+        {"type": "price", "value": "0.00", "unit": "USD"},   # empty-cart garbage
+        {"type": "size", "value": "75", "unit": "mg"},        # cross-product size
+        {"type": "cas", "value": "2381089-83-2", "unit": ""}, # per-compound identity
+        {"type": "molecular_weight", "value": "4731", "unit": "da"},
+        {"type": "coa", "value": "present", "unit": ""},      # site-invariant → kept
+        {"type": "storage_temp", "value": "-80", "unit": "°C"},  # site-invariant → kept
+    ]}
+    block = tv.render_gain_guidance(measure_result, idx, page_text="a page with none of these values")
+    low = block.lower()
+    assert "0.00" not in block
+    assert "75" not in block
+    assert "2381089-83-2" not in block
+    assert "4731" not in block
+    assert "coa: present" in low
+    assert "storage_temp: -80 °c" in low
 
 
 def test_measure_does_not_add_gain_to_composite_inputs():

@@ -360,6 +360,25 @@ async def test_reoptimize_page_writer_notes_defaults_none():
 
 
 @pytest.mark.asyncio
+async def test_reoptimize_page_threads_site_claim_index_to_nlp():
+    # The P1 grounding corpus rides in the /reoptimize-page payload so nlp can
+    # coach the Information-Gain guidance the rewrite acts on (parity with the
+    # ecommerce reopt path). Resolved best-effort from the client.
+    inserted = {"id": "page-sci", "client_id": "client-1", "keyword": "plumber"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    reopt_result = {"content_html": "<article/>", "composite_score": 88.0, "composite_status": "good"}
+    index = {"facts": [{"type": "coa", "value": "present"}], "claims": ["x"]}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.site_claim_index, "resolve_index_for_request",
+                      new=AsyncMock(return_value=index)), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=reopt_result)) as stream:
+        await local_seo_service.reoptimize_page(
+            "client-1", "plumber", "Anaheim, CA", "<article/>", None, [], {"serp": 1}, "user-1",
+        )
+    assert stream.await_args[0][1]["site_claim_index"] == index
+
+
+@pytest.mark.asyncio
 async def test_reoptimize_url_forwards_writer_notes():
     supabase = _supabase_for_client(_client_row())
     score = {"composite_score": 54.0, "composite_status": "poor", "deficiencies": []}

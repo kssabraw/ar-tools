@@ -1601,6 +1601,10 @@ async def reoptimize_page(
         "internal_links": internal_links or None,
         "writer_notes": (writer_notes or None),
         "page_spec": spec,
+        # P1 grounding corpus — coaches the Information-Gain guidance the rewrite
+        # acts on (§7/§9), parity with the ecommerce reopt path. Best-effort:
+        # None (no key / thin index) → nlp suppresses the coaching block.
+        "site_claim_index": await site_claim_index.resolve_index_for_request(client),
     }, on_progress=on_progress)
     link_coverage = _guarantee_internal_links(result, internal_links)
     result = attach_length_verdict(result, spec)
