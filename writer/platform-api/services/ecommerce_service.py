@@ -28,7 +28,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import content_writer, ecommerce_facts_cache, job_priority
+from services import content_writer, ecommerce_facts_cache, job_priority, site_claim_index
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -514,6 +514,8 @@ async def score_page(
         "serp_analysis": serp_analysis,
         "entity_provider": entity_provider,
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
+        # P1 grounding corpus for the report-only Information Gain measure (§7).
+        "site_claim_index": await site_claim_index.resolve_index_for_request(client),
     }, user_id=user_id)
     _record_score_run(client_id, keyword, page_type, "score", result, page_id=None, page_url=page_url, user_id=user_id)
     return result
@@ -561,6 +563,8 @@ async def reoptimize_from(
         "product_input": (product_input or "").strip() or None,
         "notes": (notes or "").strip() or None,
         "score_threshold": score_threshold,
+        # P1 grounding corpus — coaches the gain guidance the rewrite acts on (§7/§9).
+        "site_claim_index": await site_claim_index.resolve_index_for_request(client),
     }, on_progress=on_progress)
     result = _apply_term_substitutions(client, result)
     page = _persist_page(client_id, keyword, page_type, existing_page_url, product_input, "reoptimize", result, user_id, notes=notes)

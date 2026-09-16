@@ -11438,9 +11438,12 @@ async def _measure_topic_vector(
     page_html: str,
     keyword: str,
     serp_analysis_dict: Optional[dict],
+    site_claim_index: Optional[dict] = None,
 ) -> dict:
-    """Run the P0 topic-vector measure (centering / per-subtopic coverage /
-    inverse gain gap) BESIDE the composite — report-only, never folded into it.
+    """Run the topic-vector measure (centering / per-subtopic coverage / inverse
+    gain gap / the P1 scored Information Gain) BESIDE the composite — report-only,
+    never folded into it. ``site_claim_index`` (P1) is the client's grounding
+    corpus from platform-api; absent/thin → gain is suppressed (§6).
 
     Best-effort + gated on GEMINI_API_KEY: an absent key or any failure returns a
     structured skip (``{available: False, reason: …}``), never a numeric default
@@ -11485,6 +11488,7 @@ async def _measure_topic_vector(
             aio_text=serp.get("aio_text") or "",
             top10_headings=top10 or [],
             tier2_headings=tier2 or [],
+            site_claim_index=site_claim_index if isinstance(site_claim_index, dict) else None,
         )
     except Exception as exc:  # pragma: no cover - defensive; measure is best-effort
         logger.warning("topic-vector measure failed (%s); skipping.", exc)
@@ -11680,6 +11684,10 @@ class EcommerceScoreRequest(BaseModel):
     brand_voice: Optional[dict] = None
     detected_icp: Optional[dict] = None
     voice_card: Optional[dict] = None
+    # P1 grounding corpus for the report-only Information Gain measure (§7): the
+    # client's site-claim index, built + cached in platform-api and passed here
+    # (nlp has no DB). {facts:[...], claims:[...]}; absent/thin → gain suppressed.
+    site_claim_index: Optional[dict] = None
 
 
 class EcommerceScoreResponse(BaseModel):
@@ -11777,7 +11785,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     # P0 topic-vector measure — a SEPARATE async pass beside the deterministic
     # engine (which is left untouched above). Report-only: kept out of `scores`,
     # so the composite is unchanged whether or not this runs.
-    topic_vector_report = await _measure_topic_vector(page_html, body.keyword, serp_analysis_dict)
+    topic_vector_report = await _measure_topic_vector(page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
 
     return EcommerceScoreResponse(
         composite_score=composite,
@@ -12560,6 +12568,10 @@ class ReoptimizeEcommerceRequest(BaseModel):
     # supplied → the web_search research pass is skipped. See the twin field on
     # GenerateEcommerceRequest.
     researched_facts: Optional[List[dict]] = None
+    # P1 grounding corpus for the Information Gain measure (§7) — the client's
+    # site-claim index, passed from platform-api. Coaches the gain guidance the
+    # rewrite acts on; absent/thin → gain suppressed + no guidance block.
+    site_claim_index: Optional[dict] = None
 
 
 def _ecommerce_deficiency_text(defs: Optional[List[dict]]) -> str:
@@ -12645,6 +12657,24 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         if (body.product_input or "").strip():
             extra_facts = "ADDITIONAL PRODUCT DETAILS (authoritative — use these facts):\n" + body.product_input.strip()
 
+        # P1 — coach the reopt loop with the topic-vector / Information-Gain
+        # signal (§6/§9): the under-served on-vector subtopics to cover + the
+        # verifiable facts the client's OWN site asserts that this page omits.
+        # Best-effort + report-only: it never gates the composite (weight 0), and
+        # a missing GEMINI key / thin site index yields an empty block, so the
+        # prompt is byte-identical to before when the measure is unavailable.
+        gain_guidance = ""
+        try:
+            _gain_measure = await _measure_topic_vector(
+                existing_html, body.keyword, body.serp_analysis, body.site_claim_index
+            )
+            gain_guidance = topic_vector.render_gain_guidance(
+                _gain_measure, body.site_claim_index, existing_page_text
+            )
+        except Exception:  # pragma: no cover - guidance is best-effort
+            logger.warning("reoptimize-ecommerce: gain guidance failed; skipping.")
+        gain_block = ("\n" + gain_guidance + "\n") if gain_guidance else ""
+
         def _build_reopt_prompt(page_text: str, deficiency_text: str) -> str:
             return f"""STORE / BUSINESS DATA
 Store name: {body.business_name}
@@ -12660,7 +12690,7 @@ Primary keyword: {body.keyword}
 
 {researched_section}SEO DEFICIENCIES TO FIX — address ALL of these in the rewritten page:
 {deficiency_text}
-
+{gain_block}
 {extra_facts}
 {voice_block}
 
@@ -12807,7 +12837,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
         # beside the composite (does NOT influence keep-best above, which already
         # picked the page). Skipped structurally without GEMINI_API_KEY.
         topic_vector_report = await _measure_topic_vector(
-            content_html, body.keyword, body.serp_analysis
+            content_html, body.keyword, body.serp_analysis, body.site_claim_index
         )
 
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
