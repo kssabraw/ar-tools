@@ -1072,6 +1072,10 @@ async def _process_job(job: dict) -> None:
         from services import guide_sync
 
         await guide_sync.run_guide_sync_job(job)
+    elif job_type == "content_gap_scan":
+        from services import content_gap
+
+        await content_gap.run_content_gap_scan_job(job)
     elif job_type == "internal_link_analyze":
         await run_internal_link_analyze_job(job)
     elif job_type == "internal_link_apply":
