@@ -1,6 +1,29 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-16 · **Content Gap Analyzer — Phase 2 (the surface) BUILT + MERGED — v1 COMPLETE (PR [#1161](https://github.com/kssabraw/ar-tools/pull/1161))** (latest)
+## ⏩ Update — 2026-09-16 · **Content Gap Analyzer — v1.1 follow-ups (a)+(b) BUILT + MERGED (PR [#1166](https://github.com/kssabraw/ar-tools/pull/1166), squash `e4f3f2d`)** (latest)
+
+The two owner-approved v1.1 follow-ups on top of the merged v1 (#1143/#1158/#1161). **Still ships dark behind `content_gap_enabled` (default False) — nothing runs until it's flipped on.** Per PRD §11.1, gap findings ride as **supplementary `writer_notes`-style guidance, NEVER as scored `deficiencies`.** Owner confirmed the (b) mechanism before wiring (it touches the reopt request schema); **(c) client-facing per-run PDF deferred** (needs the §11.2 tone ruling first).
+
+**(a) Reopt deep-link prefill** *(frontend only, lowest blast radius):*
+- `ReoptimizePanel` gained optional `initialUrl` / `initialKeyword` / `initialNotes` props (lazy `useState` init from props — no refactor). `initialUrl` opens single-URL mode with the URL seeded; `seededUrl` is gated on `adapter.supportsUrl`.
+- `LocalSeoContent`'s reopt tab reads `?url=` / `?keyword=` / `?gapnotes=` and forwards them through `ReoptimizeView` → `ReoptimizePanel`.
+- `ContentGap.reoptLink` builds the deep-link with `url` **+ `keyword`** — Local SEO reopt *requires* a keyword, so a URL alone left the run button disabled; prefilling the keyword (already on the gap row) makes the handoff runnable.
+
+**(b) Gap subtopics → `writer_notes` (end-to-end, the Local SEO reopt path had NO notes carrier before):**
+- Frontend: `localSeoAdapter` now declares `supportsNotes:true` + passes `notes`; `localSeoApi.reoptimizeBulk` carries `notes`; `ContentGap.gapNotesFor` composes a compact string from the row's `subtopic_gap` (subtopics competitors cover that this page doesn't) threaded via `&gapnotes=` into the editable Notes field.
+- platform-api: `LocalSeoReoptimizeBulkRequest.notes` → `enqueue_reoptimize_bulk(writer_notes=…)` (job payload `writer_notes`) → `run_reoptimize_url_job` → `reoptimize_url(writer_notes=…)` → `reoptimize_page(writer_notes=…)` → the nlp `/reoptimize-page` payload. The new params were inserted **before** the trailing `job_id`/`on_progress` kwargs — every caller uses kwargs for those, so no positional breakage (verified: `run_reoptimize_url_job`, the score→reoptimize `run_reoptimize_job` path passes nothing → None, the SerMaStr `_act_reoptimize_page` 3-positional call binds cleanly, ecommerce has its OWN `enqueue_reoptimize_bulk`).
+- nlp-api: new `ReoptimizePageRequest.writer_notes` (Optional[str], default None) rendered by the pure `_writer_notes_block` (`_WRITER_NOTES_MAX_CHARS`=1500) as an **advisory, additive** prompt block — labelled "NOT a scored deficiency", must not override business facts/voice/layout, must not invent facts — injected at the user-prompt seam **beside** (never inside) `deficiencies`.
+- **Empty is byte-identical to today:** `notes.trim() || null` → `writer_notes or None` → `_writer_notes_block(None)` → `""`, so every existing reopt flow is unchanged.
+
+**Review-follow-up hardening (folded into the same PR):** (1) `ReoptimizePanel.run()` gates `notes` on `adapter.supportsNotes`, so a seeded/typed value can never leak to an adapter without a Notes field; (2) `gapNotesFor` collapses internal whitespace (`\s+`→` `) in each subtopic heading so a scraped multi-line H2/H3 can't break the single-line `; `-joined string.
+
+**Tests:** nlp `tests/test_writer_notes.py` (4 — block render/empty/truncation + the `writer_notes` field & default); platform `tests/test_local_seo_service.py` (+4 — `writer_notes` reaches the `/reoptimize-page` payload and is NOT a deficiency, defaults None, forwards through `reoptimize_url`, rides the `enqueue_reoptimize_bulk` job payload). Full suites green (nlp 307, platform 6351; the 4 platform collection errors are the sandbox-only missing `python-louvain` wheel, unrelated). Frontend `tsc -b` clean + no new eslint errors on changed files. Netlify preview green; merged.
+
+**Still deferred (v1.1+):** (c) a client-facing per-run PDF/report (owner: needs the §11.2 tone ruling first); a URL-prefill that also lands the page in the reopt box beyond the tab (the current deep-link seeds URL+keyword+notes, which covers this); and — **the one live open item** — the **DataForSEO daily-ceiling meter is still a 500/day placeholder**; the owner should set the real number when the module is enabled.
+
+---
+
+## ⏩ Update — 2026-09-16 · **Content Gap Analyzer — Phase 2 (the surface) BUILT + MERGED — v1 COMPLETE (PR [#1161](https://github.com/kssabraw/ar-tools/pull/1161))**
 
 Phase 2 of the **Content Gap Analyzer** (authority: `docs/modules/content-gap-analyzer-prd-v1_0.md` — §8 API, §9 frontend, §11.1 the reopt handoff). Builds on the merged Phase 0/1 (#1143/#1158). **Still ships dark: `content_gap_enabled` default False; nothing auto-enqueues until it's flipped on. NO migration** (reuses the Phase 0 `content_gap_*` tables + the `content_gap_scan` job). **v1 is now COMPLETE — every phase (0–2) built.**
 
