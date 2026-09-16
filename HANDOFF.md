@@ -1,6 +1,31 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-16 · **Brand Guide Generator — Phase 5 (Applications / in-context mockups) — BUILT + MERGED (PR [#1157](https://github.com/kssabraw/ar-tools/pull/1157), squash `ddc784f9`)** (latest)
+## ⏩ Update — 2026-09-16 · **Topic-Vector Centering + Information Gain — P0 (report-only) — BUILT + MERGED (PR [#1156](https://github.com/kssabraw/ar-tools/pull/1156))** (latest)
+
+P0 of the topic-vector module (design authority `docs/modules/topic-vector-information-gain-plan-v1_0.md`), on the **ecommerce scorer**. **Report-only** — nothing is folded into the composite or fed to the reopt loop yet (§12 P0). Origin: the Nova "buy retatrutide" reoptimize discussion surfaced that the scorers don't measure whether a page is *about the right thing* or whether it *adds anything the ranking set lacks*.
+
+**Built — three signals, all report-only:**
+- **Topic centering** — `cosine(page, centroid)`, centroid = explicit query + AIO text + top-10 competitor headings (§4). The *implied* query is deliberately NOT in the centroid. AIO-absent → centroid falls back to query + headings, and the output carries `aio_present` + a comparability note (never rank an AIO-present score against an AIO-absent one). Reported as a drift gauge.
+- **Per-subtopic coverage** — deterministic token-clustering of the competitor headings (top-10 + qualifying 11–20) into subtopics, each embedded, the page's best-matching-section cosine per cluster → covered/missing (§5).
+- **Inverse gain gap** — the on-vector subtopics the competitor corpus states that the page lacks (§6 inverse; grounded in what competitors demonstrably said — **no site claim index, no fabrication risk**).
+
+**Where it lives:** pure core `writer/nlp-api/topic_vector.py` (tiering / clustering / centroid / mean-pool / section-extraction / coverage-verdict math) + the async orchestrator `topic_vector.measure`; wired into `_measure_topic_vector` in `main.py` and attached as a report-only `topic_vector` field on `EcommerceScoreResponse` (score) + the reoptimize done-result.
+
+**Non-negotiables honoured (plan §9/§3/§4/§6/§10):**
+- Runs as a **SEPARATE async measure BESIDE `_compute_serp_signal_coverage`** — that deterministic engine is left **byte-identical** (never touched, kept out of the `scores` composite; the `test_serp_signal_coverage` guard passes).
+- **Gated on `GEMINI_API_KEY`** — no key → a structured skip `{available:false, reason:"gemini_key_absent"}`, never a numeric default.
+- **Reuses `ecommerce_mcs.cosine` + the `_gemini_embed` EmbedFn** (wired into the scoring path for the first time).
+- The **11–20 tier is a re-partition of the ALREADY-scraped set** (`SERP_RESULT_COUNT=20`) — not a second fetch. `scrape_urls` now returns the kept SERP indices, so `_run_serp_analysis` retains each scraped page's rank and emits `competitor_heading_tiers` on `AnalysisResponse` (top-10 consensus / 11–20 differentiation, ≥2-page-spread guarded). This **also fixed a latent url↔html misalignment** when a mid-list scrape fails.
+- Empty-state (no AIO / no headings / no embeddings) each degrade explicitly — never a misleading number. `_measure_topic_vector`'s whole body is best-effort so a malformed/legacy `serp_analysis` can never 500 the score endpoint.
+
+**Config (calibration-pending on live runs):** `TOPIC_VECTOR_CENTERING_FLOOR` (0.45) / `_COVERAGE_FLOOR` (0.55) / `_TIER2_MIN_SPREAD` (2) / `_CLUSTER_JACCARD` (0.5) / `_MAX_SUBTOPICS` (15) / `_MAX_SECTIONS` (40).
+
+**Tests:** `writer/nlp-api/tests/test_topic_vector.py` (22 cases incl. the §14 acceptance mini-set offline via a deterministic fake embedder — a vendor-trust-drift page centers **below** an on-vector PDP and the mechanism cluster surfaces in the inverse gap, name-agnostically via the coded name). Full nlp-api suite green (303 passed); CI (nlp-api pytest) green on the merged head.
+
+**⚠️ LIVE VALIDATION PENDING (do this on the deployed nlp — Railway shell; sandbox is egress-blocked from the private nlp / DataForSEO / Gemini):** score the Nova "buy retatrutide" page against a strong on-vector competitor PDP for the same keyword and confirm (per §14) the Nova page centers **below** the competitor, the inverse gap surfaces the mechanism cluster (receptor/metabolic/triple-agonist), and `_compute_serp_signal_coverage` output is byte-identical. `GEMINI_API_KEY` is already set on the `nlp` service, so the measure runs live today.
+
+**NOT built — the next phases (need their own build):** **P1** — the per-client structured-fact **site claim index** + its platform→nlp payload contract + the *scored* Information Gain dimension coached into the reopt loop (the load-bearing anti-fabrication grounding). **P2** — the emotional-arc rubric dimension. Extending the measure to the Local SEO / service / blog scorers is also deferred. Related §13 fixes (`never_use_terms` coverage-exclusion + title-in-scorer, empty-entity diagnosis) are separate task cards P0 doesn't touch.
+## ⏩ Update — 2026-09-16 · **Brand Guide Generator — Phase 5 (Applications / in-context mockups) — BUILT + MERGED (PR [#1157](https://github.com/kssabraw/ar-tools/pull/1157), squash `ddc784f9`)**
 
 Phase 5 of the Brand Guide Generator (PRD `docs/modules/brand-guide-generator-prd-v1_0.md` §3 section 9 Applications / §10 Phase 5 / §13). **This is the last deferred piece — with it, v1 is COMPLETE (Phases 0–5 all built).** Renders the brand system *in use* — a **website hero, social post, business card, letterhead, and product label** — as an **Applications** section in the existing brand-guide PDF (dropped in after Imagery). Owner scope confirmed before build: self-contained HTML/CSS mockups, all five, one PDF section (not a separate artifact). **No migration, no new job type, no schema/API change** — reuses `render_and_store_guide` wholesale. Still gated on `brand_guide_enabled`.
 
