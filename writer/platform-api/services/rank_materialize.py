@@ -14,6 +14,7 @@ on keyword add) and on demand. See PRD §2, §6, §7.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -526,7 +527,10 @@ async def run_gsc_materialize_job(job: dict) -> None:
         ).eq("id", job_id).execute()
         return
 
-    result = materialize_client(client_id)
+    # materialize_client does heavy Supabase I/O and, for flagged keywords, up to
+    # _MAX_INSPECTIONS_PER_RUN blocking GSC URL Inspection calls — keep it off the
+    # event loop so it can never wedge the shared platform-api loop.
+    result = await asyncio.to_thread(materialize_client, client_id)
     supabase.table("async_jobs").update(
         {
             "status": "complete" if result.status == "ok" else "failed",

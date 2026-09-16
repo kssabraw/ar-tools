@@ -5,6 +5,8 @@ GSC API and Supabase are fully mocked — nothing hits the network or a DB.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -193,6 +195,48 @@ def test_ingest_no_rows_still_records_ok(monkeypatch):
     assert result.rows == 0
     assert fake.upserted == []
     assert fake.sync_runs[0]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# run_gsc_ingest_job — must run the blocking body OFF the event loop
+# (regression: 2026-09-16 outage, where a hung GSC call on the shared loop
+# wedged the whole platform-api process).
+# ---------------------------------------------------------------------------
+async def test_ingest_job_runs_blocking_body_off_the_event_loop(monkeypatch):
+    loop_thread = threading.get_ident()
+    ran_on: dict = {}
+
+    def fake_ingest_property(property_id, start_date=None, end_date=None):
+        ran_on["thread"] = threading.get_ident()
+        return gsc_ingest.IngestResult(status="failed", rows=0, error="boom")
+
+    monkeypatch.setattr(gsc_ingest, "ingest_property", fake_ingest_property)
+    monkeypatch.setattr(gsc_ingest, "get_supabase", lambda: _FakeSupabase(_property_row()))
+
+    await gsc_ingest.run_gsc_ingest_job(
+        {"id": "job-1", "payload": {"property_id": "prop-1"}}
+    )
+
+    # The blocking ingest ran on a worker thread, not the event-loop thread.
+    assert ran_on["thread"] != loop_thread
+
+
+async def test_page_ingest_job_runs_blocking_body_off_the_event_loop(monkeypatch):
+    loop_thread = threading.get_ident()
+    ran_on: dict = {}
+
+    def fake_ingest_pages(property_id):
+        ran_on["thread"] = threading.get_ident()
+        return gsc_ingest.IngestResult(status="failed", rows=0, error="boom")
+
+    monkeypatch.setattr(gsc_ingest, "ingest_property_pages", fake_ingest_pages)
+    monkeypatch.setattr(gsc_ingest, "get_supabase", lambda: _FakeSupabase(_property_row()))
+
+    await gsc_ingest.run_gsc_page_ingest_job(
+        {"id": "job-1", "payload": {"property_id": "prop-1"}}
+    )
+
+    assert ran_on["thread"] != loop_thread
 
 
 # ---------------------------------------------------------------------------

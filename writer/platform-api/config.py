@@ -619,6 +619,12 @@ class Settings(BaseSettings):
     gsc_backfill_days: int = 480
     # Weekly query×page ingest window (canonical-URL resolution + Pages view).
     gsc_page_window_days: int = 30
+    # Transport-level timeout (seconds) for every Google Search Console API call
+    # (searchanalytics.query, urlInspection). The Google client library has NO
+    # default timeout, so a hung endpoint would block forever; a no-timeout hang
+    # on the shared event loop once wedged the whole platform-api (2026-09-16
+    # outage). This bounds each request so a stalled upstream raises instead.
+    gsc_http_timeout_seconds: int = 120
     # ------------------------------------------------------------------
     # Google Analytics (GA4) ingestion — Client Reporting Phase 2.
     # DORMANT until (a) the GA4 Data + Admin APIs are enabled on the GCP

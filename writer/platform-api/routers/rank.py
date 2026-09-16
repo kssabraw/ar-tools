@@ -17,6 +17,7 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from starlette.concurrency import run_in_threadpool
 
 from config import settings
 from db.supabase_client import get_supabase
@@ -448,7 +449,8 @@ async def check_index(keyword_id: UUID, auth: dict = Depends(require_auth)) -> K
         raise HTTPException(status_code=422, detail="needs_gsc_property_and_canonical_url")
     try:
         site_url = gsc_service.normalize_site_url(prop["site_url"], prop["property_type"])
-        result = gsc_service.inspect_url(site_url, k["canonical_url"])
+        # Blocking Google URL Inspection — run off the event loop (async handler).
+        result = await run_in_threadpool(gsc_service.inspect_url, site_url, k["canonical_url"])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"url_inspection_failed: {exc}")
     updated = supabase.table("tracked_keywords").update(

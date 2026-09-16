@@ -17,6 +17,7 @@ from uuid import UUID
 from config import settings
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from starlette.concurrency import run_in_threadpool
 
 from db.supabase_client import get_supabase
 from middleware.auth import require_auth
@@ -123,7 +124,10 @@ async def verify_property(
         raise HTTPException(status_code=404, detail="not_found")
     prop = found.data[0]
 
-    result = gsc_service.verify_property_access(prop["site_url"], prop["property_type"])
+    # Blocking Google test query — run off the event loop (async handler).
+    result = await run_in_threadpool(
+        gsc_service.verify_property_access, prop["site_url"], prop["property_type"]
+    )
 
     # The access_status column only stores ok/no_access/pending. A transient
     # 'error' (e.g. key not configured) leaves the stored status unchanged and
@@ -170,7 +174,10 @@ async def trigger_ingest(
     (poll ``GET .../ingest/{job_id}``). An explicit start_date/end_date still runs
     synchronously — that path is only used for a bounded, deliberate re-pull."""
     if start_date or end_date:
-        result = gsc_ingest.ingest_property(str(property_id), start_date, end_date)
+        # Blocking Google pagination + bulk upsert — run off the event loop.
+        result = await run_in_threadpool(
+            gsc_ingest.ingest_property, str(property_id), start_date, end_date
+        )
         return IngestResponse(
             property_id=property_id, status=result.status, rows=result.rows, error=result.error,
         )
