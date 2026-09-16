@@ -29,16 +29,19 @@ from datetime import date, datetime, timedelta, timezone
 from statistics import median
 from typing import Any, Optional
 
+import httpx
 from bs4 import BeautifulSoup
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import dataforseo_labs, serp_snapshot
 from services.dataforseo_rank import extract_domain
+from services.forecasting import ctr_for_position
 from services.page_structure_eval import (
     block_types_of,
     extract_outline_from_html,
-    word_count_of,
 )
+from services.website_scraper import scrapeowl_fetch
 
 logger = logging.getLogger(__name__)
 
@@ -418,6 +421,231 @@ def build_onpage_diff(
 
 
 # ===========================================================================
+# Pure: Phase 1 deep-dimension builders (authority / traffic / entities)
+# ===========================================================================
+# The score-page deficiency engines whose findings ARE the client side of the
+# entity/signal gap (PRD §3.1 #1 — there is no endpoint for a raw client entity
+# list, so /score-page's engines carry the client-vs-SERP entity coverage).
+_ENTITY_DEFICIENCY_ENGINES = {"entity_establishment", "serp_signal_coverage"}
+
+
+def estimate_deep_calls(competitor_count: int, page_traffic: bool = True) -> int:
+    """The number of paid external calls one gapped keyword's deep pass makes —
+    reserved against the meter BEFORE spending (PRD §8). Pure.
+
+    Per keyword: 1 nlp /analyze + 1 nlp /score-page + 1 batched bulk_traffic +
+    (page_traffic → one ranked_keywords per competitor + one for the client) +
+    (one scrape per competitor + one for the client). An upper bound — a
+    sub-call skipped because a URL is missing simply under-spends the
+    reservation (fail-closed errs high, which is the safe direction)."""
+    n = max(0, int(competitor_count))
+    calls = 2  # /analyze + /score-page
+    calls += 1  # bulk_traffic (batched over client + competitor domains)
+    if page_traffic:
+        calls += n + 1  # ranked_keywords: one per competitor + the client
+    calls += n + 1  # scrapes: competitors + client
+    return calls
+
+
+def _norm_url(url: Optional[str]) -> str:
+    """Normalize a URL for page matching: drop scheme/www/fragment/trailing
+    slash (query kept — some pages differ only by query). Pure."""
+    if not url:
+        return ""
+    u = str(url).strip().lower()
+    if "://" in u:
+        u = u.split("://", 1)[1]
+    if u.startswith("www."):
+        u = u[4:]
+    u = u.split("#", 1)[0]
+    if len(u) > 1 and u.endswith("/"):
+        u = u[:-1]
+    return u
+
+
+def estimate_page_traffic(rows: list[dict], target_url: Optional[str]) -> Optional[float]:
+    """Modeled monthly organic traffic for ONE page = Σ(volume × CTR(position))
+    over the domain's ranked-keyword rows that rank with this exact URL. Pure.
+
+    `rows` are `dataforseo_labs.fetch_ranked_keywords` rows ({url, position,
+    volume, ...}); a domain-scoped call returns rows for many URLs, so we filter
+    to the target page. Returns None when no row matches the URL (no signal —
+    NOT zero, which would misreport a page the labs pull just didn't surface),
+    else a float. This is the §3.1 #6 labelled modeled estimate — ranked_keywords
+    carries volume, not ETV, so per-page ETV can't be summed directly."""
+    tnorm = _norm_url(target_url)
+    if not tnorm:
+        return None
+    matched = [r for r in (rows or []) if _norm_url(r.get("url")) == tnorm]
+    if not matched:
+        return None
+    total = 0.0
+    for r in matched:
+        vol = r.get("volume")
+        if not vol:
+            continue
+        total += float(vol) * ctr_for_position(r.get("position"))
+    return round(total, 1)
+
+
+def _median_of(values: list) -> Optional[float]:
+    nums = [v for v in values if isinstance(v, (int, float))]
+    return round(median(nums), 1) if nums else None
+
+
+def _gap_delta(client_val: Optional[float], comp_median: Optional[float]) -> Optional[float]:
+    """A positive delta = competitors are AHEAD (the client must gain this much
+    to reach the competitor median). None when either side is unknown. Pure."""
+    if client_val is None or comp_median is None:
+        return None
+    return round(comp_median - client_val, 1)
+
+
+def build_authority_gap(
+    client_auth: Optional[dict], competitor_auths: list[dict]
+) -> dict:
+    """Assemble the referring-domain / domain-rating gap for one keyword. Pure.
+
+    `client_auth`/each `competitor_auth`: {page_rd, page_ur, domain_rd, dr}
+    (page-level from the snapshot's result rows, domain-level from its domain
+    rows — already captured, no new calls). Deltas are competitor-median minus
+    client (positive = competitors ahead)."""
+    ca = client_auth or {}
+    page_rd_med = _median_of([c.get("page_rd") for c in competitor_auths])
+    domain_rd_med = _median_of([c.get("domain_rd") for c in competitor_auths])
+    dr_med = _median_of([c.get("dr") for c in competitor_auths])
+    return {
+        "client": client_auth,
+        "competitors": competitor_auths,
+        "competitor_page_rd_median": page_rd_med,
+        "competitor_domain_rd_median": domain_rd_med,
+        "competitor_dr_median": dr_med,
+        "page_rd_gap": _gap_delta(ca.get("page_rd"), page_rd_med),
+        "domain_rd_gap": _gap_delta(ca.get("domain_rd"), domain_rd_med),
+        "dr_gap": _gap_delta(ca.get("dr"), dr_med),
+        # The suite-standard caveat: these are DataForSEO tool reads (0–1000),
+        # roughly ×10 a Moz-style DA, not Moz DA itself.
+        "caveat": "RD/DR are DataForSEO tool reads (0–1000), ~×10 of a Moz-style DA — not Moz DA.",
+    }
+
+
+def build_site_traffic_gap(
+    traffic_by_domain: dict[str, Optional[float]],
+    client_domain: str,
+    competitor_domains: list[str],
+) -> dict:
+    """Domain-level estimated organic traffic gap (§3.1 #5), from one batched
+    `bulk_traffic` call. Pure. Deltas: competitor-median minus client."""
+    client_t = traffic_by_domain.get(_norm_domain(client_domain)) if client_domain else None
+    comps = [
+        {"domain": d, "organic_traffic_est": traffic_by_domain.get(_norm_domain(d))}
+        for d in competitor_domains
+    ]
+    comp_median = _median_of([c["organic_traffic_est"] for c in comps])
+    return {
+        "basis": "estimated (DataForSEO)",
+        "client": client_t,
+        "competitors": comps,
+        "competitor_median": comp_median,
+        "delta": _gap_delta(client_t, comp_median),
+    }
+
+
+def build_page_traffic_gap(
+    client_est: Optional[float], competitor_ests: list[dict]
+) -> dict:
+    """Page-level MODELED traffic gap (§3.1 #6). Pure. `competitor_ests`:
+    [{domain, url, estimate}]. Explicitly labelled 'estimated (modeled)' — this
+    is Σ(volume × position-CTR), not a measured ETV."""
+    comp_median = _median_of([c.get("estimate") for c in competitor_ests])
+    return {
+        "basis": "estimated (modeled)",
+        "method": "sum(search_volume × position-CTR) over the page's ranked keywords",
+        "client": client_est,
+        "competitors": competitor_ests,
+        "competitor_median": comp_median,
+        "delta": _gap_delta(client_est, comp_median),
+    }
+
+
+def build_entity_gap(
+    serp_entities: list[dict], score_deficiencies: list[dict], top_n: int = 25
+) -> dict:
+    """The entity gap (§3.1 #1). Pure. SERP side = the aggregated entities from
+    nlp `/analyze` (already grouped with a `page_spread` count across
+    competitors — the right shape for a gap). Client side = the entity/signal
+    deficiencies from nlp `/score-page` (no endpoint returns a raw client entity
+    list, so the score engines carry client-vs-SERP coverage)."""
+    ents = [
+        {
+            "name": e.get("name"),
+            "type": e.get("entity_type"),
+            "page_spread": e.get("page_spread"),
+            "page_spread_pct": e.get("page_spread_pct"),
+            "recommended_mentions": e.get("recommended_mentions"),
+            "wiki_link": e.get("wiki_link") or None,
+        }
+        for e in (serp_entities or [])[: max(0, top_n)]
+    ]
+    client_defs = [
+        d
+        for d in (score_deficiencies or [])
+        if (d.get("engine_key") or d.get("engine")) in _ENTITY_DEFICIENCY_ENGINES
+    ]
+    return {
+        "serp_entities": ents,
+        "serp_entity_count": len(serp_entities or []),
+        "client_deficiencies": client_defs,
+    }
+
+
+def assemble_authority(
+    client_domain: str,
+    competitors: list[dict],
+    result_rows: list[dict],
+    domain_rows: list[dict],
+) -> dict:
+    """Build the authority gap from the snapshot's already-captured page rows
+    (RD/UR) and domain rows (RD/DR) — no new calls (§3.1 #2/#3). Pure.
+
+    `result_rows` are `serp_snapshot_results` (page-level referring_domains /
+    url_rating); `domain_rows` are `serp_snapshot_domains` (domain_rating +
+    domain-level referring_domains). Matches competitor page rows by URL and
+    domain rows by domain; the client's own row is found via `is_client`."""
+    by_url = {_norm_url(r.get("url")): r for r in result_rows if r.get("url")}
+    by_domain = {_norm_domain(r.get("domain")): r for r in domain_rows if r.get("domain")}
+
+    client_page = next((r for r in result_rows if r.get("is_client")), None)
+    client_domain_row = by_domain.get(_norm_domain(client_domain)) or next(
+        (r for r in domain_rows if r.get("is_client")), None
+    )
+    client_auth: Optional[dict] = None
+    if client_page or client_domain_row:
+        client_auth = {
+            "page_rd": (client_page or {}).get("referring_domains"),
+            "page_ur": (client_page or {}).get("url_rating"),
+            "domain_rd": (client_domain_row or {}).get("referring_domains"),
+            "dr": (client_domain_row or {}).get("domain_rating"),
+        }
+
+    competitor_auths: list[dict] = []
+    for c in competitors or []:
+        page = by_url.get(_norm_url(c.get("url"))) or {}
+        drow = by_domain.get(_norm_domain(c.get("domain"))) or {}
+        competitor_auths.append(
+            {
+                "domain": c.get("domain"),
+                "position": c.get("position"),
+                "page_rd": page.get("referring_domains"),
+                "page_ur": page.get("url_rating"),
+                "domain_rd": drow.get("referring_domains"),
+                "dr": drow.get("domain_rating"),
+            }
+        )
+    return build_authority_gap(client_auth, competitor_auths)
+
+
+# ===========================================================================
 # Snapshot read (the cost-critical reuse, PRD §8)
 # ===========================================================================
 def _snapshot_fresh(captured_at: Optional[str], max_age_days: int, now: Optional[datetime] = None) -> bool:
@@ -470,13 +698,96 @@ def _snapshot_result_rows(supabase, snapshot_id: str) -> list[dict]:
     return res.data or []
 
 
+def _snapshot_domain_rows(supabase, snapshot_id: str) -> list[dict]:
+    """Per-domain backlink rows for a snapshot (domain-level RD + DR)."""
+    res = (
+        supabase.table("serp_snapshot_domains")
+        .select("domain, is_client, domain_rating, referring_domains")
+        .eq("snapshot_id", snapshot_id)
+        .execute()
+    )
+    return res.data or []
+
+
+# ===========================================================================
+# Budget meter (fail-closed, PRD §7)
+# ===========================================================================
+def _today() -> str:
+    return date.today().isoformat()
+
+
+def _reserve(n: int) -> bool:
+    """Reserve `n` paid calls against today's content-gap budget. Returns True
+    only when the reservation is CONFIRMED within the cap — fail-CLOSED (PRD §7):
+    an accounting error blocks the spend rather than proceeding, so no paid call
+    ever runs without a confirmed reservation. (Deliberately stricter than
+    domain_intel's fail-open reserve_budget.) A cap of 0 disables the guard."""
+    cap = settings.content_gap_daily_call_budget
+    if cap <= 0 or n <= 0:
+        return True
+    try:
+        res = get_supabase().rpc(
+            "reserve_content_gap_calls", {"p_day": _today(), "p_n": int(n), "p_cap": cap}
+        ).execute()
+        return res.data is True
+    except Exception as exc:  # noqa: BLE001 — fail-closed: no confirmed reservation → no spend
+        logger.warning("content_gap.budget_accounting_failed", extra={"error": str(exc), "n": n})
+        return False
+
+
+# ===========================================================================
+# nlp + scrape helpers (job-friendly: best-effort, return None/unavailable)
+# ===========================================================================
+async def _post_nlp(path: str, payload: dict, timeout: float = 90.0) -> Optional[dict]:
+    """POST to a plain-JSON nlp endpoint; return the parsed body or None.
+
+    Job-friendly (unlike local_seo_service._post_nlp, which raises
+    HTTPException): a dimension degrades to 'unavailable' on any failure (§4.1),
+    it never aborts the scan. platform-api → nlp over HTTP — nlp is never
+    imported (separate Railway service)."""
+    url = f"{settings.nlp_api_url}{path}"
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code != 200:
+            logger.warning(
+                "content_gap.nlp_http_error",
+                extra={"path": path, "status_code": resp.status_code, "body": resp.text[:300]},
+            )
+            return None
+        return resp.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("content_gap.nlp_request_error", extra={"path": path, "error": str(exc)[:200]})
+        return None
+
+
+async def _scrape_signals(url: Optional[str]) -> dict:
+    """Scrape a page and extract its on-page signals, or {"available": False}
+    on any failure (404 / bot-block / empty) — PRD §4.1."""
+    if not url:
+        return {"available": False}
+    try:
+        html = await scrapeowl_fetch(url)
+    except Exception as exc:  # noqa: BLE001 — a scrape failure degrades the column, never fatal
+        logger.warning("content_gap.scrape_failed", extra={"url": url, "error": str(exc)[:200]})
+        return {"available": False}
+    if not html or not html.strip():
+        return {"available": False}
+    try:
+        return page_signals_from_html(html, url=url)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("content_gap.signals_failed", extra={"url": url, "error": str(exc)[:200]})
+        return {"available": False}
+
+
 # ===========================================================================
 # Scope resolution (§7 — money pages from tracked_keywords.canonical_url)
 # ===========================================================================
 def resolve_scope(supabase, client_id: str) -> list[dict]:
     """The client's active tracked keywords + their canonical (money-page) URL —
     the monthly auto-scope (owner ruling 2026-09-15). Keyed on the keyword, which
-    is how `serp_snapshots` are stored. Returns [{keyword, page_url}]."""
+    is how `serp_snapshots` are stored. Returns [{keyword, page_url, keyword_id}]
+    — `keyword_id` drives the fresh-capture enqueue when no snapshot is reusable."""
     props = (
         supabase.table("gsc_properties").select("id").eq("client_id", client_id).execute()
     ).data or []
@@ -485,7 +796,7 @@ def resolve_scope(supabase, client_id: str) -> list[dict]:
         return []
     kws = (
         supabase.table("tracked_keywords")
-        .select("keyword, canonical_url")
+        .select("id, keyword, canonical_url")
         .in_("property_id", prop_ids)
         .eq("active", True)
         .execute()
@@ -497,7 +808,9 @@ def resolve_scope(supabase, client_id: str) -> list[dict]:
         if not kw or kw.lower() in seen:
             continue
         seen.add(kw.lower())
-        scope.append({"keyword": kw, "page_url": k.get("canonical_url")})
+        scope.append(
+            {"keyword": kw, "page_url": k.get("canonical_url"), "keyword_id": k.get("id")}
+        )
     return scope
 
 
@@ -549,16 +862,166 @@ def enqueue_content_gap_scan(client_id: str, trigger: str = "manual") -> Optiona
     return run["id"]
 
 
+# ===========================================================================
+# Deep-dimension pass (Phase 1) — assumes the budget is already reserved
+# ===========================================================================
+async def _page_traffic_gap(
+    client_domain: str,
+    client_url: Optional[str],
+    competitors: list[dict],
+    location_code: Optional[int],
+) -> dict:
+    """Modeled page-traffic gap (§3.1 #6): one `fetch_ranked_keywords` call per
+    competitor domain (filtered to the ranking URL) + one for the client."""
+    competitor_ests: list[dict] = []
+    for c in competitors:
+        dom, url = c.get("domain"), c.get("url")
+        est: Optional[float] = None
+        if dom and url:
+            try:
+                rows, _ = await dataforseo_labs.fetch_ranked_keywords(dom, location_code)
+                est = estimate_page_traffic(rows, url)
+            except Exception as exc:  # noqa: BLE001 — one competitor degrading is not fatal
+                logger.warning("content_gap.page_traffic_failed", extra={"domain": dom, "error": str(exc)[:200]})
+        competitor_ests.append({"domain": dom, "url": url, "estimate": est})
+
+    client_est: Optional[float] = None
+    if client_url and client_domain:
+        try:
+            rows, _ = await dataforseo_labs.fetch_ranked_keywords(client_domain, location_code)
+            client_est = estimate_page_traffic(rows, client_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("content_gap.page_traffic_failed", extra={"domain": client_domain, "error": str(exc)[:200]})
+    return build_page_traffic_gap(client_est, competitor_ests)
+
+
+async def _deep_dimensions(
+    *,
+    keyword: str,
+    client_url: Optional[str],
+    client_domain: str,
+    business: dict,
+    competitors: list[dict],
+    result_rows: list[dict],
+    domain_rows: list[dict],
+    aio_present: bool,
+    aio_sources: list[dict],
+    location_code: Optional[int],
+    entity_provider: Optional[str],
+    page_traffic_enabled: bool,
+) -> tuple[dict, Optional[dict]]:
+    """Run the deep-dimension pass for one gapped keyword. Best-effort per
+    dimension (PRD §4.1): a failed dimension is recorded in
+    `dimensions_unavailable`, the rest still assemble. Returns
+    `(gap, onpage_diff)`. Assumes the caller already reserved the budget."""
+    gap: dict[str, Any] = {}
+    unavailable: list[str] = []
+
+    # --- Authority (free — the snapshot rows are already in hand) ---
+    try:
+        gap["authority"] = assemble_authority(client_domain, competitors, result_rows, domain_rows)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("content_gap.authority_failed", extra={"keyword": keyword, "error": str(exc)[:200]})
+        unavailable.append("authority")
+
+    # --- AIO citation gap (free) — who's cited in the AIO that the client isn't ---
+    if aio_present:
+        gap["aio_citation"] = {"cited_sources_not_client": aio_gap_sources(aio_sources, client_domain)}
+
+    # --- SERP entities (nlp /analyze) — also reused as /score-page's serp_analysis ---
+    analyze_result = await _post_nlp(
+        "/analyze",
+        {"keyword": keyword, "location": "", "location_code": location_code, "entity_provider": entity_provider},
+    )
+    if analyze_result is None:
+        unavailable.append("serp_entities")
+
+    # --- Client entity/structure/signal deficiencies (nlp /score-page on the client URL) ---
+    score_result: Optional[dict] = None
+    if client_url:
+        score_result = await _post_nlp(
+            "/score-page",
+            {
+                "keyword": keyword,
+                "location": "",
+                "location_code": location_code,
+                "page_url": client_url,
+                "page_content": None,
+                "business_name": business.get("business_name") or "",
+                "gbp_category": business.get("gbp_category") or "",
+                "address": business.get("address") or "",
+                "serp_analysis": analyze_result,
+                "entity_provider": entity_provider,
+            },
+        )
+        if score_result is None:
+            unavailable.append("onpage_score")
+    else:
+        unavailable.append("onpage_score_no_client_url")
+
+    if analyze_result is not None or score_result is not None:
+        gap["entities"] = build_entity_gap(
+            (analyze_result or {}).get("google_entities") or [],
+            (score_result or {}).get("deficiencies") or [],
+        )
+    if score_result is not None:
+        gap["onpage_score"] = {
+            "composite_score": score_result.get("composite_score"),
+            "composite_status": score_result.get("composite_status"),
+            "engine_scores": score_result.get("engine_scores"),
+            "deficiencies": score_result.get("deficiencies"),
+        }
+
+    # --- Site traffic (one batched bulk_traffic call) ---
+    comp_domains = [c["domain"] for c in competitors if c.get("domain")]
+    try:
+        targets = [d for d in dict.fromkeys([client_domain, *comp_domains]) if d]
+        traffic_by_domain, _ = await dataforseo_labs.fetch_bulk_traffic(targets, location_code)
+        gap["site_traffic"] = build_site_traffic_gap(traffic_by_domain, client_domain, comp_domains)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("content_gap.site_traffic_failed", extra={"keyword": keyword, "error": str(exc)[:200]})
+        unavailable.append("site_traffic")
+
+    # --- Page traffic (modeled; the priciest sub-dimension, config-gated) ---
+    if page_traffic_enabled:
+        try:
+            gap["page_traffic"] = await _page_traffic_gap(client_domain, client_url, competitors, location_code)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("content_gap.page_traffic_dim_failed", extra={"keyword": keyword, "error": str(exc)[:200]})
+            unavailable.append("page_traffic")
+
+    # --- On-page diff (scrape client + capped competitors) ---
+    onpage_diff: Optional[dict] = None
+    try:
+        client_signals = await _scrape_signals(client_url)
+        competitor_signals: list[dict] = []
+        for c in competitors:
+            sig = await _scrape_signals(c.get("url"))
+            sig["domain"] = c.get("domain")
+            sig["url"] = c.get("url")
+            sig["position"] = c.get("position")
+            competitor_signals.append(sig)
+        onpage_diff = build_onpage_diff(client_signals, competitor_signals)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("content_gap.onpage_diff_failed", extra={"keyword": keyword, "error": str(exc)[:200]})
+        unavailable.append("onpage_diff")
+
+    gap["dimensions_unavailable"] = unavailable
+    return gap, onpage_diff
+
+
 async def run_content_gap_scan_job(job: dict) -> None:
     """async_jobs handler for `content_gap_scan`.
 
-    Phase 0 scope: resolve the client's keyword × money-page scope, read the
-    latest reusable `serp_snapshots` row per keyword (the cost-critical reuse,
-    PRD §8), compute the win/gap verdict + competitor set, and persist one
-    `content_gap_keywords` row per keyword. The deep dimensions (live-page
-    scrapes, nlp `/analyze` + `/score-page`, dataforseo_labs traffic, calling
-    `build_onpage_diff` end-to-end) are added in later phases — those rows land
-    with `gap`/`onpage_diff` null for now.
+    Resolve the client's keyword × money-page scope; per keyword read the latest
+    reusable `serp_snapshots` row (the cost-critical reuse, PRD §8), compute the
+    win/gap verdict + competitor set, and — for a GAP (wins short-circuit, PRD
+    §8) — reserve the deep-pass budget then run the deep dimensions (authority /
+    site + modeled page traffic / SERP + client entities via nlp /analyze +
+    /score-page / the competitor-anchored on-page diff), writing `gap` +
+    `onpage_diff`. A keyword with no reusable snapshot enqueues a fresh
+    `serp_snapshot` capture (budget-reserved + count-bounded) and defers to the
+    next run rather than fabricating a verdict.
     """
     payload = job.get("payload") or {}
     client_id = payload.get("client_id")
@@ -592,30 +1055,56 @@ async def run_content_gap_scan_job(job: dict) -> None:
     # recovery path for a genuinely transient failure.
     try:
         client = (
-            supabase.table("clients").select("id, website_url").eq("id", client_id).limit(1).execute()
+            supabase.table("clients")
+            .select("id, name, website_url, gbp, business_location")
+            .eq("id", client_id)
+            .limit(1)
+            .execute()
         ).data or []
         if not client:
             _fail("client_not_found")
             return
-        client_domain = _norm_domain(client[0].get("website_url"))
+        client_row = client[0]
+        client_domain = _norm_domain(client_row.get("website_url"))
+        gbp = client_row.get("gbp") if isinstance(client_row.get("gbp"), dict) else {}
+        business = {
+            "business_name": (gbp or {}).get("business_name") or client_row.get("name") or "",
+            "gbp_category": (gbp or {}).get("gbp_category") or "",
+            "address": (gbp or {}).get("address") or client_row.get("business_location") or "",
+        }
 
         scope = resolve_scope(supabase, client_id)
         registry = _registry_domains(supabase, client_id)
         max_age = settings.content_gap_snapshot_max_age_days
         max_comp = settings.content_gap_max_competitors
+        page_traffic_enabled = settings.content_gap_page_traffic_enabled
+        max_fresh = settings.content_gap_max_fresh_captures
+        snap_estimate = settings.content_gap_snapshot_call_estimate
+        entity_provider = None  # nlp defaults to textrazor; a per-run choice is a later phase
 
-        analyzed = wins = gaps = no_snapshot = 0
+        analyzed = wins = gaps = 0
+        no_snapshot = pending_capture = budget_limited = deep_analyzed = 0
+        fresh_enqueued = 0
         rows: list[dict] = []
         for item in scope:
             keyword = item["keyword"]
             snap = latest_reusable_snapshot(supabase, client_id, keyword, max_age)
             if snap is None:
-                # Phase 0 reads EXISTING snapshots only. A keyword with no fresh
-                # snapshot is UNKNOWN, not a gap — the verdict enum can't express
-                # that, and fabricating 'organic_gap' would inflate the gap count
-                # with unmeasured keywords. Skip it (counted separately); the
-                # later fresh-capture phase enqueues serp_snapshot and re-reads.
-                no_snapshot += 1
+                # No reusable snapshot → enqueue a fresh capture (budget-reserved +
+                # count-bounded) and defer this keyword to the NEXT run: a
+                # freshly-enqueued serp_snapshot job hasn't run yet, and the scan
+                # never blocks on another job. A keyword with no keyword_id, or once
+                # the per-run capture cap is hit, is left as no_snapshot.
+                kid = item.get("keyword_id")
+                if kid and fresh_enqueued < max_fresh:
+                    if _reserve(snap_estimate):
+                        serp_snapshot.enqueue_serp_snapshot(client_id, kid)
+                        fresh_enqueued += 1
+                        pending_capture += 1
+                    else:
+                        budget_limited += 1
+                else:
+                    no_snapshot += 1
                 continue
 
             aio_present = bool(snap.get("aio_present"))
@@ -623,25 +1112,54 @@ async def run_content_gap_scan_job(job: dict) -> None:
             client_position = snap.get("client_rank")
             in_aio = client_cited_in_aio(aio_sources, client_domain) if aio_present else False
             verdict = compute_verdict(client_position, aio_present, in_aio)
+            page_url = item.get("page_url") or snap.get("client_url")
 
-            competitors = None
+            competitors: Optional[list[dict]] = None
+            gap: Optional[dict] = None
+            onpage_diff: Optional[dict] = None
             if is_gap(verdict):
-                organic = _snapshot_result_rows(supabase, snap["id"])
+                result_rows = _snapshot_result_rows(supabase, snap["id"])
                 competitors = resolve_competitors(
-                    organic, client_position, registry, client_domain, max_comp
+                    result_rows, client_position, registry, client_domain, max_comp
                 )
+                # Wins short-circuit (no deep spend, PRD §8); a gap reserves its
+                # whole deep-pass budget BEFORE any paid call (fail-closed §7). A
+                # refused reservation keeps the shallow verdict row and marks the
+                # keyword budget_limited — a re-run recovers it once budget frees.
+                n = estimate_deep_calls(len(competitors), page_traffic_enabled)
+                if _reserve(n):
+                    domain_rows = _snapshot_domain_rows(supabase, snap["id"])
+                    gap, onpage_diff = await _deep_dimensions(
+                        keyword=keyword,
+                        client_url=page_url,
+                        client_domain=client_domain,
+                        business=business,
+                        competitors=competitors,
+                        result_rows=result_rows,
+                        domain_rows=domain_rows,
+                        aio_present=aio_present,
+                        aio_sources=aio_sources,
+                        location_code=snap.get("location_code"),
+                        entity_provider=entity_provider,
+                        page_traffic_enabled=page_traffic_enabled,
+                    )
+                    deep_analyzed += 1
+                else:
+                    budget_limited += 1
 
             rows.append(
                 {
                     "run_id": run_id,
                     "client_id": client_id,
                     "keyword": keyword,
-                    "page_url": item.get("page_url") or snap.get("client_url"),
+                    "page_url": page_url,
                     "client_position": client_position,
                     "aio_present": aio_present,
                     "in_aio": in_aio,
                     "verdict": verdict,
                     "competitors": competitors,
+                    "gap": gap,
+                    "onpage_diff": onpage_diff,
                     "serp_snapshot_id": snap["id"],
                     "captured_fresh": False,
                 }
@@ -655,33 +1173,32 @@ async def run_content_gap_scan_job(job: dict) -> None:
         if rows:
             supabase.table("content_gap_keywords").insert(rows).execute()
 
+        # 'partial' when any keyword was deferred (pending a fresh capture, budget
+        # limited, or left unmeasured) — an honest signal a re-run has work left.
+        deferred = pending_capture + budget_limited + no_snapshot
+        run_status = "partial" if deferred else "complete"
         supabase.table("content_gap_runs").update(
             {
-                "status": "complete",
+                "status": run_status,
                 "keywords_analyzed": analyzed,
                 "wins": wins,
                 "gaps": gaps,
                 "completed_at": "now()",
             }
         ).eq("id", run_id).execute()
+        result = {
+            "analyzed": analyzed,
+            "wins": wins,
+            "gaps": gaps,
+            "deep_analyzed": deep_analyzed,
+            "no_snapshot": no_snapshot,
+            "pending_capture": pending_capture,
+            "budget_limited": budget_limited,
+        }
         supabase.table("async_jobs").update(
-            {
-                "status": "complete",
-                "result": {"analyzed": analyzed, "wins": wins, "gaps": gaps, "no_snapshot": no_snapshot},
-                "completed_at": "now()",
-            }
+            {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job_id).execute()
-        logger.info(
-            "content_gap_scan_complete",
-            extra={
-                "client_id": client_id,
-                "run_id": run_id,
-                "analyzed": analyzed,
-                "wins": wins,
-                "gaps": gaps,
-                "no_snapshot": no_snapshot,
-            },
-        )
+        logger.info("content_gap_scan_complete", extra={"client_id": client_id, "run_id": run_id, **result})
     except Exception as exc:  # noqa: BLE001 — settle failed so the reaper can't re-run + duplicate
         logger.exception("content_gap_scan_failed", extra={"client_id": client_id, "run_id": run_id})
         _fail(f"content_gap_error: {str(exc)[:400]}")
