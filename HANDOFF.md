@@ -1,6 +1,6 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-16 · **Brand Guide Generator — Phase 5 (Applications / in-context mockups) — BUILT (PR [#1157](https://github.com/kssabraw/ar-tools/pull/1157))** (latest)
+## ⏩ Update — 2026-09-16 · **Brand Guide Generator — Phase 5 (Applications / in-context mockups) — BUILT + MERGED (PR [#1157](https://github.com/kssabraw/ar-tools/pull/1157), squash `ddc784f9`)** (latest)
 
 Phase 5 of the Brand Guide Generator (PRD `docs/modules/brand-guide-generator-prd-v1_0.md` §3 section 9 Applications / §10 Phase 5 / §13). **This is the last deferred piece — with it, v1 is COMPLETE (Phases 0–5 all built).** Renders the brand system *in use* — a **website hero, social post, business card, letterhead, and product label** — as an **Applications** section in the existing brand-guide PDF (dropped in after Imagery). Owner scope confirmed before build: self-contained HTML/CSS mockups, all five, one PDF section (not a separate artifact). **No migration, no new job type, no schema/API change** — reuses `render_and_store_guide` wholesale. Still gated on `brand_guide_enabled`.
 
