@@ -12251,10 +12251,15 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
     composite, status = _composite_from_scores(scores, _BLOG_ENGINE_WEIGHTS)
 
     # Report-only topic-vector measure BESIDE the composite (never folded in).
-    # voice_card + client thread the P2 emotional-arc rubric onto the report.
+    # The P2 emotional-arc rubric is DELIBERATELY NOT run for blog / Fanout
+    # content (no voice_card/client passed): those pages are informational
+    # (TOFU/MOFU), and the arc's before->after is a BUYER/BOFU transition from
+    # the voice card's purchase-decision audience fields — judging an explainer
+    # by it would penalise good informational copy for conversion work it isn't
+    # meant to do (owner ruling 2026-09-16; §10a "one page = one awareness
+    # stage"). Centering / coverage / gain still run.
     topic_vector_report = await _measure_topic_vector(
-        page_html, body.keyword, serp_analysis_dict, body.site_claim_index,
-        voice_card=voice_card, client=client)
+        page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
 
     return BlogScoreResponse(
         composite_score=composite,
