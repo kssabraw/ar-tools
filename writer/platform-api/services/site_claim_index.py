@@ -37,6 +37,7 @@ fabrication risk in the corpus itself. The two shapes it stores:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -48,6 +49,13 @@ from db.supabase_client import get_supabase
 logger = logging.getLogger(__name__)
 
 _TABLE = "site_claim_index"
+
+# Single-flight registry: coalesces concurrent cache-miss BUILDS for the same
+# client onto one crawl. platform-api runs the worker on one event loop with
+# several lanes (interactive + bulk), so a bulk reoptimize of N pages for one
+# client can miss the cache on N lanes at once; without this each would crawl the
+# site independently. Keyed by client_id; process-local (PLATFORM is one replica).
+_inflight_builds: dict[str, "asyncio.Future[dict]"] = {}
 
 # ── Deterministic typed-fact extraction ─────────────────────────────────────
 # Conservative number-entity patterns — the "verifiable number-entity" facts
@@ -307,14 +315,23 @@ async def build_site_claim_index(client_id: str, website_url: str) -> dict:
     if not urls and not note:
         note = "no_urls"
 
-    pages: list[dict] = []
-    for url in urls:
-        try:
-            html = await scrapeowl_fetch(url, timeout=settings.site_claim_index_scrape_timeout)
-            if html:
-                pages.append(extract_page(html, url))
-        except Exception:  # noqa: BLE001 — one dead page never aborts the crawl
-            logger.info("site_claim_index.scrape_failed", extra={"client_id": client_id, "url": url})
+    # Scrape concurrently under a bounded semaphore (was serial — up to
+    # max_pages × scrape_timeout of blocking wall-clock; parallel cuts it to
+    # roughly one timeout). One dead/slow page never aborts the crawl; order is
+    # not load-bearing (merge_index dedupes first-seen, and gather preserves it).
+    sem = asyncio.Semaphore(max(1, settings.site_claim_index_scrape_concurrency))
+
+    async def _scrape_one(url: str) -> Optional[dict]:
+        async with sem:
+            try:
+                html = await scrapeowl_fetch(url, timeout=settings.site_claim_index_scrape_timeout)
+            except Exception:  # noqa: BLE001 — one dead page never aborts the crawl
+                logger.info("site_claim_index.scrape_failed", extra={"client_id": client_id, "url": url})
+                return None
+            return extract_page(html, url) if html else None
+
+    results = await asyncio.gather(*(_scrape_one(u) for u in urls))
+    pages: list[dict] = [p for p in results if p]
 
     index = merge_index(
         pages,
@@ -327,12 +344,30 @@ async def build_site_claim_index(client_id: str, website_url: str) -> dict:
     return index
 
 
+async def _build_coalesced(client_id: str, website_url: str) -> dict:
+    """Run at most one build per client at a time: a concurrent caller awaits the
+    in-flight build instead of starting its own. The dict get/create is atomic
+    under asyncio (no await between them), so two simultaneous misses share one
+    crawl. The starter clears its own entry in `finally`; awaiters never touch the
+    registry, so there is no leak and no cross-clearing."""
+    existing = _inflight_builds.get(client_id)
+    if existing is not None and not existing.done():
+        return await existing
+    fut = asyncio.ensure_future(build_site_claim_index(client_id, website_url))
+    _inflight_builds[client_id] = fut
+    try:
+        return await fut
+    finally:
+        if _inflight_builds.get(client_id) is fut:
+            del _inflight_builds[client_id]
+
+
 async def resolve_index_for_request(client: dict) -> Optional[dict]:
     """The single entry point the ecommerce score/reopt paths call. Cache-first;
-    on a miss it builds inline (capped, best-effort) and caches for next time.
-    Returns the index dict, or None when the gain measure is disabled / the
-    client has no id. NEVER raises — a failure degrades to None (gain suppressed
-    downstream)."""
+    on a miss it builds inline (capped, best-effort, single-flight per client) and
+    caches for next time. Returns the index dict, or None when the gain measure is
+    disabled / the client has no id. NEVER raises — a failure degrades to None
+    (gain suppressed downstream)."""
     if not settings.topic_vector_gain_enabled:
         return None
     client_id = (client or {}).get("id")
@@ -342,7 +377,7 @@ async def resolve_index_for_request(client: dict) -> Optional[dict]:
         cached = get_cached_index(client_id)
         if cached is not None:
             return cached
-        return await build_site_claim_index(client_id, (client or {}).get("website_url") or "")
+        return await _build_coalesced(client_id, (client or {}).get("website_url") or "")
     except Exception:  # noqa: BLE001 — grounding is best-effort, never a page failure
         logger.warning("site_claim_index.resolve_failed", extra={"client_id": client_id})
         return None

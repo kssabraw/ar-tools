@@ -467,3 +467,25 @@ def test_measure_does_not_add_gain_to_composite_inputs():
     assert "information_gain" in r
     assert "information_gain" not in r["coverage"]
     assert "information_gain" not in r["centering"]
+
+
+def test_include_gain_false_skips_scored_gain_but_keeps_coverage():
+    # The reopt coaching pass opts out of the scored gain (and its extra
+    # embeddings) — the measure still runs centering + coverage + inverse gap,
+    # but Information Gain is 'not_requested', NOT scored, even with a rich index.
+    idx = {
+        "claims": ["GLP-3RT ships in 10mg vials at $90 with a verified COA",
+                   "GLP-3RT has 99% HPLC purity per batch",
+                   "Every batch includes a certificate of analysis"],
+        "facts": [{"type": "price", "value": "90", "unit": "USD"}],
+    }
+    r = run(tv.measure(
+        embed_fn=fake_embed, query=_QUERY, page_title="Buy GLP-3RT",
+        page_html=_NOVA_HTML, aio_present=True, aio_text=_AIO,
+        top10_headings=_TOP10, tier2_headings=_TIER2, site_claim_index=idx,
+        include_gain=False,
+    ))
+    assert r["available"] is True                        # P0 still runs
+    assert "centering" in r and "coverage" in r and "inverse_gain_gap" in r
+    assert r["information_gain"]["available"] is False
+    assert r["information_gain"]["reason"] == "not_requested"

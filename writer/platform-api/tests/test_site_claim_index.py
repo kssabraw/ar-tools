@@ -7,6 +7,7 @@ integration testing.
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -14,6 +15,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from services import site_claim_index as s  # noqa: E402
+
+
+def _run(coro):
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 _SPEC_TEXT = (
@@ -104,3 +113,60 @@ def test_index_is_thin():
     assert s.index_is_thin({"claims": ["one"], "facts": []}, 3)   # <3 claims, no facts
     assert not s.index_is_thin({"claims": ["a", "b", "c"], "facts": []}, 3)
     assert not s.index_is_thin({"claims": [], "facts": [{"type": "cas"}]}, 3)  # a fact grounds
+
+
+def test_single_flight_coalesces_concurrent_builds(monkeypatch):
+    """Two concurrent cache-miss resolves for the same client share ONE build
+    (the single-flight registry), then the registry is cleared."""
+    monkeypatch.setattr(s.settings, "topic_vector_gain_enabled", True, raising=False)
+    monkeypatch.setattr(s, "get_cached_index", lambda cid: None)          # force miss
+    calls = {"n": 0}
+
+    async def _fake_build(client_id, website_url):
+        calls["n"] += 1
+        await asyncio.sleep(0.02)   # hold the build so the 2nd caller coalesces
+        return {"claims": ["x"], "facts": [], "url_count": 1, "source": "sitemap"}
+
+    monkeypatch.setattr(s, "build_site_claim_index", _fake_build)
+    s._inflight_builds.clear()
+    client = {"id": "c1", "website_url": "https://example.com"}
+
+    async def _both():
+        return await asyncio.gather(
+            s.resolve_index_for_request(client),
+            s.resolve_index_for_request(client),
+        )
+
+    a, b = _run(_both())
+    assert calls["n"] == 1                       # one crawl shared by both callers
+    assert a == b and a["source"] == "sitemap"
+    assert s._inflight_builds == {}              # starter cleared its entry
+
+    # A LATER resolve (registry empty) builds again — coalescing is only in-flight.
+    _run(s.resolve_index_for_request(client))
+    assert calls["n"] == 2
+
+
+def test_distinct_clients_do_not_coalesce(monkeypatch):
+    """Concurrent misses for DIFFERENT clients each build (keyed by client_id)."""
+    monkeypatch.setattr(s.settings, "topic_vector_gain_enabled", True, raising=False)
+    monkeypatch.setattr(s, "get_cached_index", lambda cid: None)
+    seen: list = []
+
+    async def _fake_build(client_id, website_url):
+        seen.append(client_id)
+        await asyncio.sleep(0.01)
+        return {"claims": [], "facts": [{"type": "cas"}], "url_count": 1, "source": "serp"}
+
+    monkeypatch.setattr(s, "build_site_claim_index", _fake_build)
+    s._inflight_builds.clear()
+
+    async def _both():
+        return await asyncio.gather(
+            s.resolve_index_for_request({"id": "a", "website_url": "https://a.com"}),
+            s.resolve_index_for_request({"id": "b", "website_url": "https://b.com"}),
+        )
+
+    _run(_both())
+    assert sorted(seen) == ["a", "b"]            # both clients crawled
+    assert s._inflight_builds == {}

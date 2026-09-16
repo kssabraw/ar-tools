@@ -11456,11 +11456,18 @@ async def _measure_topic_vector(
     keyword: str,
     serp_analysis_dict: Optional[dict],
     site_claim_index: Optional[dict] = None,
+    *,
+    include_gain: bool = True,
 ) -> dict:
     """Run the topic-vector measure (centering / per-subtopic coverage / inverse
     gain gap / the P1 scored Information Gain) BESIDE the composite — report-only,
     never folded into it. ``site_claim_index`` (P1) is the client's grounding
     corpus from platform-api; absent/thin → gain is suppressed (§6).
+
+    ``include_gain=False`` skips the scored Information Gain (and its page-claim +
+    site-claim embeddings) — used by the reopt COACHING pass, which needs only
+    centering + coverage + the inverse-gain gap and would otherwise embed ~85
+    extra strings and score gain on a page it is about to rewrite away.
 
     Best-effort + gated on GEMINI_API_KEY: an absent key or any failure returns a
     structured skip (``{available: False, reason: …}``), never a numeric default
@@ -11506,6 +11513,7 @@ async def _measure_topic_vector(
             top10_headings=top10 or [],
             tier2_headings=tier2 or [],
             site_claim_index=site_claim_index if isinstance(site_claim_index, dict) else None,
+            include_gain=include_gain,
         )
     except Exception as exc:  # pragma: no cover - defensive; measure is best-effort
         logger.warning("topic-vector measure failed (%s); skipping.", exc)
@@ -12680,10 +12688,15 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         # Best-effort + report-only: it never gates the composite (weight 0), and
         # a missing GEMINI key / thin site index yields an empty block, so the
         # prompt is byte-identical to before when the measure is unavailable.
+        # include_gain=False: the guidance uses only the inverse-gain gap +
+        # deterministic missing-facts, so we skip the scored-gain embeddings (~85
+        # extra strings) on the page we are about to rewrite; the FINAL report
+        # measure below runs the full gain on the rewritten page.
         gain_guidance = ""
         try:
             _gain_measure = await _measure_topic_vector(
-                existing_html, body.keyword, body.serp_analysis, body.site_claim_index
+                existing_html, body.keyword, body.serp_analysis, body.site_claim_index,
+                include_gain=False,
             )
             gain_guidance = topic_vector.render_gain_guidance(
                 _gain_measure, body.site_claim_index, existing_page_text

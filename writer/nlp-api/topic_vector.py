@@ -661,6 +661,7 @@ async def measure(
     top10_headings: list,
     tier2_headings: list,
     site_claim_index: Optional[dict] = None,
+    include_gain: bool = True,
     centering_floor: float = CENTERING_FLOOR,
     coverage_floor: float = COVERAGE_FLOOR,
 ) -> dict:
@@ -671,6 +672,12 @@ async def measure(
     ``site_claim_index`` (P1) is the client's grounding corpus built in platform-
     api and passed in the request body (§7). When absent/thin the scored gain
     dimension is SUPPRESSED ('not measured', §6), never scored 0.
+
+    ``include_gain=False`` skips the scored Information Gain and, with it, the
+    page-claim + site-claim embeddings — so the batch drops back to the P0 size.
+    The reopt COACHING pass uses this: it needs only centering + coverage + the
+    inverse-gain gap, so embedding/scoring gain on a page about to be rewritten
+    away is wasted work.
 
     Degrades explicitly (never a misleading number):
       - no ``embed_fn`` (GEMINI_API_KEY absent) → ``{available: False, reason:
@@ -705,10 +712,11 @@ async def measure(
     labels = [st.label for st in subtopics]
     # P1: the page's own claim sentences (the gain unit) + the client's site-claim
     # phrases (the grounding corpus). Both ride in the SAME batched embedding call
-    # as the P0 vectors — sliced back out in order below.
-    page_claims = extract_page_claims(sections)
-    site_claims = _site_claim_texts(site_claim_index)
-    site_values = _site_fact_values(site_claim_index)
+    # as the P0 vectors — sliced back out in order below. Skipped entirely (no
+    # extraction, no embeddings) when the caller doesn't want the scored gain.
+    page_claims = extract_page_claims(sections) if include_gain else []
+    site_claims = _site_claim_texts(site_claim_index) if include_gain else []
+    site_values = _site_fact_values(site_claim_index) if include_gain else set()
     # One batched embedding call: page, centroid components, subtopic labels,
     # page sections, page claims, site claims — sliced back out in that order.
     batch = ([page_text] + centroid_texts + labels + sections
@@ -754,8 +762,11 @@ async def measure(
     )
 
     # P1 scored Information Gain — suppressed (not zeroed) when the site index is
-    # thin/absent or the page yields no claims (§6).
-    if _index_is_thin(site_claim_index, GAIN_MIN_SITE_CLAIMS):
+    # thin/absent or the page yields no claims (§6). Skipped when the caller opted
+    # out (include_gain=False — the reopt coaching pass).
+    if not include_gain:
+        information_gain = {"available": False, "reason": "not_requested"}
+    elif _index_is_thin(site_claim_index, GAIN_MIN_SITE_CLAIMS):
         information_gain = {
             "available": False,
             "reason": "no_site_index" if not site_claim_index else "site_index_thin",

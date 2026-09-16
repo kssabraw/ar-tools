@@ -1728,6 +1728,7 @@ class Settings(BaseSettings):
     site_claim_index_max_facts: int = 40
     site_claim_index_max_claims: int = 60
     site_claim_index_scrape_timeout: int = 25
+    site_claim_index_scrape_concurrency: int = 5  # parallel site scrapes per build
     # Structural-fidelity gate on SERVICE / LOCATION pages (the runs pipeline). The
     # reference (page_structures['service'|'location']) is already injected into the
     # brief; this scores the writer's output against it and, when it drifts, folds
