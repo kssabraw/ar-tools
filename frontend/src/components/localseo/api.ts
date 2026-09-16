@@ -85,6 +85,8 @@ export const localSeoApi = {
       publish_to_doc?: boolean
       // Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
       entity_provider?: string | null
+      // Supplementary rewrite guidance (writer_notes-style) applied to every target.
+      notes?: string | null
     },
   ) => api.post<{ jobs: Array<{ job_id: string; page_url: string }> }>(
     `/clients/${clientId}/local-seo/reoptimize-bulk`, body,

@@ -47,9 +47,16 @@ interface Props {
   adapter: ReoptAdapter
   // Ecommerce drives page type from the parent page; the panel reads it here.
   pageType?: string
+  // Deep-link prefills (e.g. the Content Gap Analyzer's "Reoptimize this page"
+  // handoff). initialUrl opens single-URL mode with the live URL seeded;
+  // initialKeyword/initialNotes seed the keyword + notes so the handoff arrives
+  // ready to run. All optional — absent = today's empty inputs.
+  initialUrl?: string
+  initialKeyword?: string
+  initialNotes?: string
 }
 
-export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
+export function ReoptimizePanel({ adapter, pageType: pageTypeProp, initialUrl, initialKeyword, initialNotes }: Props) {
   const noun = adapter.itemNoun ?? 'page'
   const threshold = adapter.scoreThreshold
 
@@ -59,13 +66,15 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
   if (adapter.supportsDiscover) modes.push('discover')
   if (adapter.supportsPaste) modes.push('paste')
   if (adapter.supportsExisting) modes.push('existing')
-  const [mode, setMode] = useState<PanelMode>(modes[0] ?? 'url')
+  // A deep-linked URL opens straight on single-URL mode (when the tool supports it).
+  const seededUrl = adapter.supportsUrl ? (initialUrl?.trim() ?? '') : ''
+  const [mode, setMode] = useState<PanelMode>(seededUrl ? 'url' : (modes[0] ?? 'url'))
 
   // ── Shared inputs ──
-  const [keyword, setKeyword] = useState('')
+  const [keyword, setKeyword] = useState(initialKeyword?.trim() ?? '')
   const [location, setLocation] = useState('')
   const [locationCode, setLocationCode] = useState<number | null>(null)
-  const [notes, setNotes] = useState('')
+  const [notes, setNotes] = useState(initialNotes?.trim() ?? '')
   // Entity-extraction engine for the nlp SERP analysis (Local SEO + Ecommerce).
   const [entityProvider, setEntityProvider] = useState<EntityProvider>('textrazor')
 
@@ -77,7 +86,7 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp }: Props) {
 
   // URL mode inputs.
   const [urlSub, setUrlSub] = useState<'single' | 'bulk'>('single')
-  const [singleUrl, setSingleUrl] = useState('')
+  const [singleUrl, setSingleUrl] = useState(seededUrl)
   const [bulkText, setBulkText] = useState('')
 
   // Paste mode.
