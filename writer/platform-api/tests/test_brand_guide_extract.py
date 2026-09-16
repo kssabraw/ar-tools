@@ -173,6 +173,21 @@ class TestColorCensusTwoTier:
         assert swatches == []
         assert source == "none"
 
+    def test_two_clusters_snapping_to_one_hex_are_folded(self):
+        # Two distinct pixel clusters (30 apart, >cluster tolerance) each within
+        # snap tolerance (15) of ONE declared colour must not appear twice.
+        m = (100, 100, 100)
+        pixels = [((100, 100, 85), 500), ((100, 100, 115), 400)]
+        swatches, source = bg.build_color_census(
+            pixel_counts=pixels, css_declarations_list=[("color", bg.rgb_to_hex(m))]
+        )
+        assert source == "pixel"
+        assert [s.hex for s in swatches] == ["#646464"]  # folded to a single swatch
+        folded = swatches[0]
+        assert folded.source == "both"
+        assert folded.member_count == 2  # both clusters counted
+        assert folded.share == pytest.approx(1.0)  # shares summed
+
 
 class TestTypeScale:
     def test_scale_is_descending_and_rem_normalised(self):
@@ -394,3 +409,22 @@ class TestDiscoverKeyPages:
         ]
         assert bg.discover_key_pages("<nav><a href='/'>Home</a></nav>", base_url="https://acme.example") == []
         assert bg.discover_key_pages("", base_url="https://acme.example") == []
+
+    def test_www_prefix_stripped_as_prefix_not_charset(self):
+        # `www.`-prefixed base: same-host links (with/without www) are kept, and a
+        # LOOKALIKE domain that only shares letters after the leading w's is NOT
+        # folded onto the base (the `.lstrip("www.")` footgun would have matched it).
+        html = (
+            '<a href="https://www.foo.com/services">Services</a>'
+            '<a href="https://foo.com/about">About</a>'
+            '<a href="https://wfoo.com/services">Lookalike</a>'
+        )
+        pages = bg.discover_key_pages(html, base_url="https://www.foo.com")
+        assert pages == ["https://www.foo.com/services", "https://foo.com/about"]
+        assert not any("wfoo.com" in u for u in pages)  # different domain, excluded
+
+    def test_same_host_prefix_helper(self):
+        assert bg._same_host("https://www.foo.com/x", "https://www.foo.com")
+        assert bg._same_host("https://foo.com/x", "https://www.foo.com")   # www ↔ apex
+        assert not bg._same_host("https://wfoo.com/x", "https://www.foo.com")  # lookalike
+        assert not bg._same_host("https://www.bar.com/x", "https://www.foo.com")

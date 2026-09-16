@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Iterable, Optional
 
 # --------------------------------------------------------------------------
@@ -498,7 +498,7 @@ def build_color_census(
                 )
             else:
                 merged.append(sw)
-        return merged, "pixel"
+        return _fold_duplicate_hex(merged), "pixel"
 
     if css_counter:
         swatches = cluster_colors(
@@ -521,6 +521,35 @@ def build_color_census(
         return out, "css"
 
     return [], "none"
+
+
+def _fold_duplicate_hex(swatches: list[Swatch]) -> list[Swatch]:
+    """Merge swatches that ended up on the same reported hex.
+
+    In the two-tier snap two *distinct* pixel clusters (>``tolerance`` apart, so
+    ``cluster_colors`` rightly keeps them separate) can each land within
+    ``snap_tolerance`` of the *same* declared CSS colour and both be rewritten to
+    it — which would show one swatch twice in the palette. Fold them into one:
+    sum ``share`` + ``member_count``, keep the rest (identical for a shared hex),
+    then re-sort by share. Only snapped (``source='both'``) swatches can collide —
+    an unsnapped pixel swatch that equalled a declared hex would have snapped — so
+    a genuinely distinct pixel colour is never folded away.
+    """
+    by_hex: dict[str, Swatch] = {}
+    for sw in swatches:
+        prev = by_hex.get(sw.hex)
+        by_hex[sw.hex] = (
+            sw
+            if prev is None
+            else replace(
+                prev,
+                share=prev.share + sw.share,
+                member_count=prev.member_count + sw.member_count,
+            )
+        )
+    folded = list(by_hex.values())
+    folded.sort(key=lambda s: s.share, reverse=True)
+    return folded
 
 
 def _nearest(target: RGB, candidates: list[RGB], tolerance: float) -> Optional[RGB]:
@@ -808,7 +837,10 @@ _ABOUT_PAGE_RE = re.compile(
 def _same_host(url: str, base_url: str) -> bool:
     def host(u: str) -> str:
         m = re.match(r"https?://([^/]+)", u.lower())
-        return (m.group(1) if m else "").lstrip("www.")
+        h = m.group(1) if m else ""
+        # Strip a leading "www." PREFIX only — never `.lstrip("www.")`, which
+        # strips the character set {w, .} and would fold "wfoo.com" onto "foo.com".
+        return h[4:] if h.startswith("www.") else h
 
     b = host(base_url)
     return not b or host(url) == b

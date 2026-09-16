@@ -2304,9 +2304,14 @@ def _section_prospect_competitors(ci: Optional[dict]) -> str:
 
 def _build_prospect_report(client_id: str, period_start: date, period_end: date) -> tuple[str, str]:
     """(html, title) for the 'prospect_snapshot' report type — a combined
-    prospecting deliverable aggregating the latest already-captured Organic
-    (Domain Intelligence), Maps geo-grid, AI-visibility and Competitive-Intel
-    data for a prospect. Deterministic; reads stored data only."""
+    prospecting deliverable aggregating the latest Organic (Domain Intelligence),
+    Maps geo-grid, AI-visibility and Competitive-Intel data for a prospect.
+
+    Reads already-captured data for Maps/AI/CI (which need setup a website alone
+    can't provide). For Organic it will, when enabled (prospect_snapshot_auto_organic)
+    and none is on file, auto-run the website-only Domain Intelligence overview —
+    one budget-gated, best-effort paid pull — so the organic section is populated
+    on the first snapshot rather than prompting."""
     from services import competitor_intel, domain_intel
 
     supabase = get_supabase()
@@ -2318,11 +2323,28 @@ def _build_prospect_report(client_id: str, period_start: date, period_end: date)
     client = rows[0] if rows else {}
     name = client.get("name") or "Prospect"
 
-    # Organic — latest Domain Intelligence overview + top keywords + keyword gaps.
+    # Organic — Domain Intelligence overview + top keywords + keyword gaps.
+    # Auto-run the (website-only, zero-setup) overview when the prospect has none
+    # yet, so the organic section is populated on the first snapshot instead of
+    # just prompting. Budget-gated + best-effort: run_domain_overview re-serves a
+    # fresh snapshot without paying, raises BudgetExceeded when the daily cap is
+    # hit, and any failure falls back to whatever is stored (or the prompt). This
+    # is the ONE section auto-run — Maps/AI/CI need setup a website alone can't
+    # provide. Gated by prospect_snapshot_auto_organic.
     organic: Optional[dict] = None
     try:
         domain = domain_intel._client_domain(client_id)
         if domain:
+            if settings.prospect_snapshot_auto_organic:
+                try:
+                    asyncio.run(domain_intel.run_domain_overview(client_id, domain, role="prospect"))
+                except domain_intel.BudgetExceeded:
+                    logger.info("prospect_report_organic_budget_exceeded", extra={"client_id": client_id})
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "prospect_report_organic_autofetch_failed",
+                        extra={"client_id": client_id, "error": str(exc)},
+                    )
             ov = domain_intel.get_latest_overview(client_id, domain)
             if ov and ov.get("snapshot"):
                 organic = {

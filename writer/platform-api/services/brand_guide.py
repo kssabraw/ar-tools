@@ -9,12 +9,19 @@ existing ScrapeOwl (`render_js`) + DataForSEO `page_screenshot` production paths
 run the deterministic census, and store `captured` + `visual_census` on a
 versioned `brand_guides` row.
 
-Phase 1 does capture → extract → store census ONLY. There is no synthesis (Phase
-2), no aesthetic/vibe read (Phase 1.5), and no PDF render (Phase 3) here — so the
-`brand_guide_generate` job finalizes `done` after storing the census, and the
-regulated `awaiting_signoff` gate (which gates *synthesis* output for
-`content_compliance_mode != 'off'` clients) does not engage yet (nothing
-synthesized to sign off).
+Phase 1 does capture → extract → store census; Phase 1.5 adds the aesthetic/vibe
+read (`brand_guide_vibe`, one Sonnet-vision call over the stored homepage
+screenshot); Phase 2 (`brand_guide_synthesis`) adds the grounded Proposed layer —
+two best-effort forced-tool calls over the census + vibe + the client's owned
+voice/ICP/differentiator assets, the deterministic coherence check + WCAG
+pairings, and the regulated guardrail. Phase 3 (`brand_guide_render`) renders the
+assembled record to a portable PDF (both an `internal` + a `client` profile) into
+the `reports` bucket + delivers it to the client's Drive folder. For a NON-regulated
+client the `brand_guide_generate` job renders inline right after synthesis (status
+→ rendering → done, `renders`/`pdf_url` set); a regulated client
+(`content_compliance_mode != 'off'`) whose synthesis produced content stops at
+`awaiting_signoff` (the §5.3b sign-off gate) and is rendered LATER by the separate
+`brand_guide_render` job on a human approval (the approve endpoint/UI is Phase 4).
 
 Everything is gated on `settings.brand_guide_enabled` and best-effort: a dead
 page, a ScrapeOwl bot-block (401), a missing screenshot, or a client with no site
@@ -188,6 +195,117 @@ def _set(guide_id: str, fields: dict) -> None:
     get_supabase().table("brand_guides").update(fields).eq("id", guide_id).execute()
 
 
+def _get_client_row(client_id: str) -> dict:
+    """Best-effort client row for synthesis grounding (voice/ICP/differentiators +
+    the compliance mode). A miss/error returns {} so synthesis degrades to the
+    deterministic layers rather than aborting the guide (PRD §5.4)."""
+    try:
+        rows = (
+            get_supabase().table("clients").select("*").eq("id", client_id).limit(1).execute().data
+            or []
+        )
+        return rows[0] if rows else {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("brand_guide.client_fetch_failed", extra={"client_id": client_id, "error": str(exc)})
+        return {}
+
+
+async def _finalize_guide(
+    guide_id: str,
+    client_id: str,
+    source_url: str,
+    census: "bg.VisualCensus",
+    captured: dict,
+    homepage_png: Optional[bytes],
+) -> dict:
+    """Shared finalize: vibe read (1.5) → synthesis (2) → write the row.
+
+    Both the captured path and the no-site path route through here so a client with
+    no site still gets the synthesized Proposed layer from its voice/ICP assets
+    (§5.4). Status is `done`, except a regulated client whose synthesis produced
+    content finalizes `awaiting_signoff` (§5.3b). Best-effort throughout."""
+    from services import brand_guide_synthesis, brand_guide_vibe
+
+    census_dict = census.as_dict()
+
+    # Aesthetic / vibe read (Phase 1.5) — ONE Sonnet-vision call over the stored
+    # HOMEPAGE screenshot (no DataForSEO re-pay; the +2 pages are not sent). A
+    # no-site capture has no homepage screenshot, so this skips with a note.
+    vibe_read, vibe_note = await brand_guide_vibe.run_vibe_read_for_capture(
+        captured, homepage_png=homepage_png
+    )
+    captured["vibe_note"] = vibe_note
+
+    # Grounded synthesis (Phase 2) — best-effort. Returns the status the guide
+    # finalizes in (`done` | `awaiting_signoff` for a regulated client). Wrapped so
+    # an unexpected synthesis error (a malformed asset, a helper raising) degrades
+    # to a done guide with the census + vibe intact, never an errored guide (§5.4).
+    client = _get_client_row(client_id)
+    try:
+        synthesized, synth_note, status = await brand_guide_synthesis.run_synthesis_for_guide(
+            client, census=census_dict, vibe_read=vibe_read, captured=captured
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("brand_guide.synthesis_failed", extra={"guide_id": guide_id, "error": str(exc)[:300]})
+        synthesized, synth_note, status = None, f"synthesis error: {type(exc).__name__}", "done"
+    captured["synthesis_note"] = synth_note
+
+    fields: dict = {
+        "status": status,
+        "source_url": source_url or None,
+        "captured": captured,
+        "visual_census": census_dict,
+        "generated_at": "now()",
+    }
+    if vibe_read is not None:
+        fields["vibe_read"] = vibe_read
+    if synthesized is not None:
+        fields["synthesized"] = synthesized
+    _set(guide_id, fields)
+
+    logger.info(
+        "brand_guide.finalize",
+        extra={"guide_id": guide_id, "client_id": client_id, "status": status,
+               "pages": captured.get("page_count", 0), "palette_source": census.palette_source,
+               "colors": len(census.colors), "vibe": bool(vibe_read),
+               "synthesized": bool(synthesized)},
+    )
+    result = {
+        "guide_id": guide_id,
+        "status": status,
+        "pages": captured.get("page_count", 0),
+        "palette_source": census.palette_source,
+        "colors": len(census.colors),
+        "fonts": len(census.fonts),
+        "logo_candidates": len(census.logo_candidates),
+        "vibe": bool(vibe_read),
+        "vibe_note": vibe_note,
+        "synthesized": bool(synthesized),
+        "synthesis_note": synth_note,
+    }
+    if captured.get("no_source_url"):
+        result["no_source_url"] = True
+
+    # Render (Phase 3). A NON-regulated guide (status resolved to `done`) renders
+    # inline right after synthesis (PRD §6 / §4.7): status → rendering → done with
+    # per-profile PDFs + Drive delivery. A regulated guide stopped at
+    # `awaiting_signoff` renders LATER via the separate `brand_guide_render` job on
+    # a human approval — it is deliberately NOT rendered here. Best-effort: a render
+    # failure records `status='error'` on the row (the census/vibe/synthesized data
+    # already written survives) and is reflected in the result, never raised.
+    if status == "done" and settings.brand_guide_enabled and settings.brand_guide_render_enabled:
+        from services import brand_guide_render
+
+        render_result = await brand_guide_render.render_and_store_guide(guide_id, deliver=True)
+        result["render_status"] = render_result.get("status")
+        result["status"] = render_result.get("status", status)
+        if render_result.get("pdf_url"):
+            result["pdf_url"] = render_result["pdf_url"]
+        if render_result.get("status") == "error":
+            result["render_error"] = render_result.get("error")
+    return result
+
+
 async def generate_brand_guide(
     guide_id: str,
     client_id: str,
@@ -205,17 +323,13 @@ async def generate_brand_guide(
     source_url = (source_url or "").strip()
     _set(guide_id, {"status": "capturing"})
 
-    # No site → a guide with the visual layer marked unavailable (§5.4). Phase 1
-    # stores an empty census + a note; Phase 2 generates the prescriptive layer.
+    # No site → a guide with the visual layer marked unavailable (§5.4), but still
+    # finalized through the shared path so synthesis generates the prescriptive
+    # Proposed layer from the client's voice/ICP assets (§4.4 / §5.4).
     if not source_url:
         census = bg.VisualCensus(notes=["No source URL — visual capture skipped; guide will rest on voice/ICP assets."])
-        _set(guide_id, {
-            "status": "done",
-            "captured": {"pages": [], "page_count": 0, "no_source_url": True},
-            "visual_census": census.as_dict(),
-            "generated_at": "now()",
-        })
-        return {"guide_id": guide_id, "pages": 0, "palette_source": "none", "no_source_url": True}
+        captured = {"pages": [], "page_count": 0, "no_source_url": True}
+        return await _finalize_guide(guide_id, client_id, "", census, captured, None)
 
     # 1. Homepage — the visual authority.
     home = await _capture_page(source_url, "homepage")
@@ -239,6 +353,9 @@ async def generate_brand_guide(
     )
 
     # 4. Store screenshots + assemble the `captured` record.
+    #    Hold the homepage bytes before the loop pops them, so the vibe read (step
+    #    5) reuses the in-memory capture instead of a redundant bucket round-trip.
+    homepage_png = home.get("_png")
     captured_pages = []
     for rec in [home, *extra]:
         png = rec.pop("_png", None)
@@ -254,27 +371,11 @@ async def generate_brand_guide(
             "dom_digest": _dom_digest(html),
             "notes": rec.get("notes", []),
         })
+    captured = {"pages": captured_pages, "page_count": len(captured_pages)}
 
-    _set(guide_id, {
-        "status": "done",
-        "source_url": source_url,
-        "captured": {"pages": captured_pages, "page_count": len(captured_pages)},
-        "visual_census": census.as_dict(),
-        "generated_at": "now()",
-    })
-    logger.info(
-        "brand_guide.capture_complete",
-        extra={"guide_id": guide_id, "client_id": client_id, "pages": len(captured_pages),
-               "palette_source": census.palette_source, "colors": len(census.colors)},
-    )
-    return {
-        "guide_id": guide_id,
-        "pages": len(captured_pages),
-        "palette_source": census.palette_source,
-        "colors": len(census.colors),
-        "fonts": len(census.fonts),
-        "logo_candidates": len(census.logo_candidates),
-    }
+    # 5. Vibe read (Phase 1.5) → synthesis (Phase 2) → write the row — the shared
+    #    finalize path (§4.3 / §4.5 / §5.4).
+    return await _finalize_guide(guide_id, client_id, source_url, census, captured, homepage_png)
 
 
 # --------------------------------------------------------------------------

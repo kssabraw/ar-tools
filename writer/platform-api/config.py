@@ -771,6 +771,48 @@ class Settings(BaseSettings):
     # is always captured and is the sole palette/fonts/type source; these extras
     # add logo candidates + imagery variety only. Operator-overridable per run.
     brand_guide_max_pages: int = 2
+    # Phase 1.5 — the aesthetic/"vibe" read (PRD §4.3 / §12 Q4). ONE bounded Claude
+    # vision call over the HOMEPAGE screenshot the Phase-1 capture already stored
+    # (read back from the brand-guides bucket — no re-pay of DataForSEO; the +2
+    # pages are NOT sent). Sonnet (one tier above the QA visual-check's Haiku)
+    # because the read is interpretive and feeds the whole Aesthetic section +
+    # coherence check. `brand_guide_vibe_enabled` is the skip guard — turn the vibe
+    # read off while capture keeps running; the read also requires the module-wide
+    # `brand_guide_enabled` (the "nothing spends until on" gate). Best-effort: a
+    # failed/disabled/degraded read omits `vibe_read` and the guide still finalizes.
+    brand_guide_vibe_enabled: bool = True
+    brand_guide_vibe_model: str = "claude-sonnet-4-6"
+    brand_guide_vibe_max_tokens: int = 1500
+    # Phase 2 — grounded synthesis (PRD §4.5 / §12 Q4): the Proposed layer
+    # (swatch names/roles + 60/30/10 + WCAG pairings, a named type scale,
+    # imagery/iconography direction, tagline, positioning + mission, worked voice
+    # examples, we-say/we-don't, key messages, boilerplate, the coherence check,
+    # a per-section gap analysis). Two bounded forced-tool calls: Haiku NAMES the
+    # measured tokens (cheap), Sonnet writes the messaging/examples/coherence
+    # narrative. The coherence flags + WCAG contrast + 60/30/10 mapping are pure
+    # Python (the LLM narrates, never computes — PRD §5.2). `brand_guide_synthesis_enabled`
+    # is the skip guard on top of the module-wide `brand_guide_enabled`; best-effort
+    # throughout — a disabled/failed call omits `synthesized` and the guide still
+    # finalizes. A regulated client (`content_compliance_mode != 'off'`) whose
+    # synthesis produced content finalizes `awaiting_signoff` (the §5.3b sign-off
+    # gate; render/approval is Phase 3/4), plus a deterministic claim-shape
+    # input-filter excises tripping sentences from the corpus before synthesis.
+    brand_guide_synthesis_enabled: bool = True
+    brand_guide_naming_model: str = "claude-haiku-4-5-20251001"
+    brand_guide_naming_max_tokens: int = 2000
+    brand_guide_synthesis_model: str = "claude-sonnet-4-6"
+    brand_guide_synthesis_max_tokens: int = 3500
+    # Phase 3 — PDF render + render profiles (PRD §4.7). Deterministic assembly
+    # over the stored record (NO LLM at render time) → a portable PDF in the
+    # `reports` bucket + delivery to the client's Drive folder, rendered in both an
+    # `internal` (blunt coherence audit) and a `client` (opportunities-reframed +
+    # white-label footer) profile. `brand_guide_render_enabled` is the skip guard on
+    # top of `brand_guide_enabled`: with it off, a non-regulated generate job
+    # finalizes at the synthesis status without a PDF (turn render off while
+    # capture/synthesis are still being tuned). A regulated client always renders
+    # via the separate `brand_guide_render` job on human sign-off. Best-effort: a
+    # render failure records `status='error'` + an honest note, never crashes.
+    brand_guide_render_enabled: bool = True
     # ------------------------------------------------------------------
     # GBP OAuth (alternative to the service account for the Posts/GBP APIs).
     # Google's Business Profile API is OAuth-first; a bare service account may
@@ -998,6 +1040,12 @@ class Settings(BaseSettings):
     client_report_health_max_tokens: int = 1100
     # White-label: the agency name shown in the client-facing report footer.
     client_report_agency_name: str = "Amazing Rankings"
+    # Prospect Snapshot: when a prospect has no Domain Intelligence overview yet,
+    # auto-run the website-only overview (one budget-gated paid pull) during
+    # snapshot generation so the organic section is populated on first build.
+    # Off → the organic section prompts to run it manually. Maps/AI/CI are never
+    # auto-run (they need setup a website alone can't provide).
+    prospect_snapshot_auto_organic: bool = True
     # GBP reviews this-period-vs-last-period: fetch the dated review list (one paid
     # Outscraper call per report) to count new reviews per period + surface recent
     # highlights. Off → the report falls back to the review-count snapshot series.

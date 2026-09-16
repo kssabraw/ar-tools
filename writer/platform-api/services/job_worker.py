@@ -1192,14 +1192,13 @@ async def _process_job(job: dict) -> None:
 
         await run_brand_guide_generate_job(job)
     elif job_type == "brand_guide_render":
-        # The render half (Phase 3) lands with the PDF template + the regulated
-        # sign-off gate (PRD §6 — enqueued on a human "approve & render"). The job
-        # TYPE exists in the CHECK now so that phase needs no migration; nothing
-        # enqueues it in Phase 1, so an early enqueue settles as an honest defect.
-        get_supabase().table("async_jobs").update(
-            {"status": "failed", "error": "brand_guide_render_not_implemented",
-             "completed_at": "now()"}
-        ).eq("id", job["id"]).execute()
+        # Phase 3: render + store + deliver a guide a human approved out of
+        # `awaiting_signoff` (regulated clients — PRD §6 / §5.3b). Non-regulated
+        # guides render inline in `brand_guide_generate`; this job is the separate
+        # sign-off render seam (jobs can't pause mid-run).
+        from services.brand_guide_render import run_brand_guide_render_job
+
+        await run_brand_guide_render_job(job)
     else:
         logger.warning("job_worker.unknown_job_type", extra={"job_type": job_type})
         # Settle as failed, not complete: an unroutable job type is a real
