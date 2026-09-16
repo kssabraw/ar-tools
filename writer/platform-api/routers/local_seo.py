@@ -136,6 +136,7 @@ async def reoptimize_local_seo_pages_bulk(
         score_threshold=body.score_threshold,
         publish_to_doc=body.publish_to_doc,
         entity_provider=body.entity_provider,
+        writer_notes=body.notes,
     )
     return LocalSeoReoptimizeBulkJob(jobs=jobs)
 

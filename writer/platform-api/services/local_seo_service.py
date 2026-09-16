@@ -1212,12 +1212,13 @@ async def enqueue_generate_bulk(
 async def enqueue_reoptimize_bulk(
     client_id: str, targets: list[dict], user_id: str,
     score_threshold: Optional[float] = None, publish_to_doc: bool = False,
-    entity_provider: Optional[str] = None,
+    entity_provider: Optional[str] = None, writer_notes: Optional[str] = None,
 ) -> list[dict]:
     """Enqueue one `local_seo_reoptimize_url` job per target. Each target is
     ``{page_url, keyword, location, location_code}``; the area is resolved inside
-    the job (so a bad line fails its own row, not the batch). Returns
-    ``[{job_id, page_url}]`` in input order."""
+    the job (so a bad line fails its own row, not the batch). `writer_notes` is
+    optional supplementary rewrite guidance applied to every target (advisory,
+    never a scored deficiency). Returns ``[{job_id, page_url}]`` in input order."""
     _get_client(client_id)  # validate client exists
     threshold = REOPT_SCORE_THRESHOLD if score_threshold is None else score_threshold
     rows = []
@@ -1241,6 +1242,7 @@ async def enqueue_reoptimize_bulk(
                     "score_threshold": threshold,
                     "publish_to_doc": bool(publish_to_doc),
                     "entity_provider": entity_provider,
+                    "writer_notes": (writer_notes or None),
                 },
             }
         )
@@ -1281,6 +1283,7 @@ async def run_reoptimize_url_job(job: dict) -> None:
                 score_threshold=payload.get("score_threshold", REOPT_SCORE_THRESHOLD),
                 publish_to_doc=bool(payload.get("publish_to_doc")),
                 entity_provider=payload.get("entity_provider"),
+                writer_notes=payload.get("writer_notes"),
                 on_progress=_job_progress_writer(job_id),
                 job_id=job_id,
             )
@@ -1543,12 +1546,14 @@ async def reoptimize_page(
     entity_provider: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     internal_links: Optional[list[dict]] = None,
+    writer_notes: Optional[str] = None,
     job_id: Optional[str] = None,
 ) -> dict:
     """Reoptimize an existing page to lift its score, re-score the result, and
     persist it as a `mode='reoptimize'` row. `internal_links` (matrix sibling
     pages) are kept through the rewrite and guaranteed afterwards, exactly as on
-    generate — a reoptimize pass must not strip the silo."""
+    generate — a reoptimize pass must not strip the silo. `writer_notes` is
+    optional supplementary rewrite guidance (advisory, never a scored deficiency)."""
     client = _get_client(client_id)
     fields = _business_fields(client)
     writer_provider = content_writer.resolve_content_writer_provider(None, client)
@@ -1591,6 +1596,7 @@ async def reoptimize_page(
         # Keep the decision-fit treatment on reoptimization (parity with generate).
         "include_decision_map": True,
         "internal_links": internal_links or None,
+        "writer_notes": (writer_notes or None),
         "page_spec": spec,
     }, on_progress=on_progress)
     link_coverage = _guarantee_internal_links(result, internal_links)
@@ -1654,12 +1660,15 @@ async def reoptimize_url(
     score_threshold: float = REOPT_SCORE_THRESHOLD,
     publish_to_doc: bool = False,
     entity_provider: Optional[str] = None,
+    writer_notes: Optional[str] = None,
     on_progress: Optional[Callable[[Optional[int], Optional[str]], Awaitable[None]]] = None,
     job_id: Optional[str] = None,
 ) -> dict:
     """Score a live page (by URL) and reoptimize it only if it scores below
     `score_threshold`. Strong pages (>= threshold) are skipped with a note rather
     than rewritten. Optionally publishes each reoptimized page to a Google Doc.
+    `writer_notes` is optional supplementary rewrite guidance passed through to
+    the rewrite (advisory, never a scored deficiency).
 
     Backs the Reoptimization tab's single + bulk URL flows. The SERP analysis is
     computed once and reused for both the score and the rewrite so neither
@@ -1758,6 +1767,7 @@ async def reoptimize_url(
         serp_analysis=serp,
         user_id=user_id,
         entity_provider=entity_provider,
+        writer_notes=writer_notes,
         on_progress=on_progress,
         job_id=job_id,
     )

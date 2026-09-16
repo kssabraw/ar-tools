@@ -121,6 +121,37 @@ function gapArrow(delta: number | null | undefined): string {
   return 'even'
 }
 
+// Cap the deep-linked gap notes so the whole URL stays well within browser
+// limits (the reopt panel + nlp also truncate defensively).
+const GAP_NOTES_MAX_SUBTOPICS = 8
+
+// Compact writer_notes-style guidance from the on-page diff's subtopic gap — the
+// subtopics the top competitors cover that this page doesn't (§11.1: supplementary
+// rewrite guidance, NOT a scored deficiency). Returns '' when there's nothing to add.
+function gapNotesFor(row: KeywordRow): string {
+  const subs = (row.onpage_diff?.subtopic_gap ?? [])
+    // Collapse any internal whitespace (a scraped H2/H3 can carry newlines/tabs)
+    // so each heading stays one clean segment in the single-line notes string.
+    .map(s => s.heading?.replace(/\s+/g, ' ').trim())
+    .filter((h): h is string => Boolean(h))
+    .slice(0, GAP_NOTES_MAX_SUBTOPICS)
+  if (subs.length === 0) return ''
+  return `Content-gap analysis — the top-ranking competitors cover these subtopics that this page doesn't. Add them where they fit naturally (don't invent facts): ${subs.join('; ')}.`
+}
+
+// The "Reoptimize this page" deep-link (§11.1). LocalSeoContent's reopt tab
+// reads url + keyword and prefills the ReoptimizePanel's single-URL + keyword
+// inputs, so the handoff arrives runnable (Local SEO reopt requires a keyword);
+// gapnotes seeds the (editable) Notes field with the subtopic gaps.
+function reoptLink(clientId: string, row: KeywordRow): string {
+  const params = new URLSearchParams({ tab: 'reopt' })
+  if (row.page_url) params.set('url', row.page_url)
+  if (row.keyword) params.set('keyword', row.keyword)
+  const gapNotes = gapNotesFor(row)
+  if (gapNotes) params.set('gapnotes', gapNotes)
+  return `/clients/${clientId}/local-seo?${params.toString()}`
+}
+
 // ── styles ───────────────────────────────────────────────────────────────────
 const card: React.CSSProperties = { background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 16 }
 const chip = (bg: string, fg: string): React.CSSProperties => ({
@@ -427,9 +458,9 @@ function Drill({ row, clientView, clientId }: { row: KeywordRow; clientView: boo
       {row.page_url && (
         <div style={{ borderTop: '1px dashed #e5e7eb', paddingTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Link
-            to={`/clients/${clientId}/local-seo?tab=reopt&url=${encodeURIComponent(row.page_url)}`}
+            to={reoptLink(clientId, row)}
             style={{ ...primaryBtn, textDecoration: 'none' }}
-            title="Opens the Reoptimize tool — paste this page's URL to score it against the SERP and rewrite to threshold."
+            title="Opens the Reoptimize tool with this page's URL + keyword prefilled — scores it against the SERP and rewrites to threshold."
           >
             <Wand2 size={15} /> Reoptimize this page <ArrowRight size={14} />
           </Link>

@@ -536,6 +536,11 @@ export function LocalSeoContent() {
           clientId={clientId}
           clientName={client?.name}
           onOpenSaved={() => { refreshSaved(); setTab('saved') }}
+          // Deep-link prefills from the Content Gap Analyzer handoff
+          // (?tab=reopt&url=…&keyword=…&gapnotes=…).
+          initialUrl={searchParams.get('url') ?? undefined}
+          initialKeyword={searchParams.get('keyword') ?? undefined}
+          initialNotes={searchParams.get('gapnotes') ?? undefined}
         />
       ) : tab === 'matrix' ? (
         <MatrixTab key={matrixFocusId ?? 'list'} clientId={clientId} focusMatrixId={matrixFocusId} onOpenPage={openSaved} />

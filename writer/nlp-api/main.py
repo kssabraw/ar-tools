@@ -8696,6 +8696,33 @@ def _internal_links_block(links: Optional[List[dict]]) -> str:
     )
 
 
+# Cap the supplementary writer-notes block so a pasted gap report can't crowd out
+# the deficiency/voice/layout instructions it rides alongside.
+_WRITER_NOTES_MAX_CHARS = 1500
+
+
+def _writer_notes_block(notes: Optional[str]) -> str:
+    """Render optional SUPPLEMENTARY editorial guidance for the rewrite, or ""
+    when empty. This carries writer_notes-style guidance (e.g. the Content Gap
+    Analyzer's "subtopics competitors cover that you don't") — it is advisory and
+    ADDITIVE, never a scored deficiency and never overriding the business facts,
+    the brand voice, or the layout/length rules. Truncated at
+    ``_WRITER_NOTES_MAX_CHARS`` so it can't swamp the prompt."""
+    text = (notes or "").strip()
+    if not text:
+        return ""
+    if len(text) > _WRITER_NOTES_MAX_CHARS:
+        text = text[:_WRITER_NOTES_MAX_CHARS].rstrip() + "…"
+    return (
+        "\nSUPPLEMENTARY GUIDANCE (advisory, additive — NOT a scored deficiency). "
+        "Weave the following editorial notes into the rewrite wherever they fit "
+        "naturally and are supported by the business facts. They never override the "
+        "business facts, the brand voice, or the layout/length rules above, and you "
+        "must not invent facts to satisfy them:\n"
+        f"{text}\n"
+    )
+
+
 class GeneratePageRequest(BaseModel):
     keyword: str
     entity_provider: Optional[str] = None  # 'textrazor' (default) | 'google'
@@ -9712,6 +9739,10 @@ class ReoptimizePageRequest(BaseModel):
     # Sibling pages the rewrite must keep linking to (a reoptimize pass without
     # them would strip the silo the page was generated into).
     internal_links: Optional[List[dict]] = None
+    # Optional SUPPLEMENTARY editorial guidance (writer_notes-style) — e.g. the
+    # Content Gap Analyzer's "subtopics competitors cover that you don't". Rendered
+    # as an advisory, additive prompt block, never as a scored deficiency.
+    writer_notes: Optional[str] = None
 
 class ReoptimizePageResponse(BaseModel):
     content_html: str
@@ -9841,6 +9872,7 @@ async def reoptimize_page(request: Request, body: ReoptimizePageRequest):
         length_budget_text = _length_budget_line(serp_analysis_dict, length_target)
 
         internal_links_text = _internal_links_block(body.internal_links)
+        writer_notes_text = _writer_notes_block(body.writer_notes)
         user_prompt = f"""BUSINESS DATA
 Name: {body.business_name}
 Category: {body.gbp_category}
@@ -9862,7 +9894,7 @@ Full location: {body.location}
 SEO DEFICIENCIES TO FIX — address ALL of these in the new page:
 {deficiency_text}
 {voice_block}
-{internal_links_text}
+{internal_links_text}{writer_notes_text}
 EXISTING PAGE CONTENT (extract accurate business facts from this — do NOT invent any facts not present here):
 {existing_page_text[:4000]}"""
 

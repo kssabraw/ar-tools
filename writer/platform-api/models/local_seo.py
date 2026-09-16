@@ -104,6 +104,10 @@ class LocalSeoReoptimizeBulkRequest(BaseModel):
     publish_to_doc: bool = False
     # Entity-extraction engine for the nlp SERP analysis ("textrazor"|"google").
     entity_provider: Optional[str] = None
+    # Optional supplementary editorial guidance for the rewrite (writer_notes-style,
+    # e.g. the Content Gap Analyzer's subtopic gaps). Applied to every target in the
+    # batch; rendered as advisory guidance, never as a scored deficiency.
+    notes: Optional[str] = None
 
 
 class LocalSeoReoptimizeJobHandle(BaseModel):
