@@ -1854,6 +1854,35 @@ export interface ClientReport {
   completed_at: string | null
 }
 
+// Brand Guide Generator — a versioned brand-audit + brand-guide record (Phase 4).
+export type BrandGuideStatus =
+  | 'queued'
+  | 'capturing'
+  | 'synthesizing'
+  | 'rendering'
+  | 'awaiting_signoff'
+  | 'done'
+  | 'error'
+
+export interface BrandGuide {
+  id: string
+  client_id: string
+  version: number
+  status: BrandGuideStatus
+  source_url: string | null
+  captured: Record<string, unknown> | null
+  visual_census: Record<string, unknown> | null
+  vibe_read: Record<string, unknown> | null
+  synthesized: Record<string, unknown> | null
+  edited: boolean
+  renders: Record<string, { storage_path?: string; pdf_url?: string; rendered_at?: string; delivery?: Record<string, string> }> | null
+  storage_path: string | null
+  pdf_url: string | null
+  error: string | null
+  generated_at: string | null
+  created_at: string
+}
+
 // Client Reporting Phase 5 — per-client delivery recipients + schedule.
 export type ReportPeriod = '30d' | '60d' | '90d' | '120d' | '1y' | 'all'
 
