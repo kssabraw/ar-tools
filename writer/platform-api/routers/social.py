@@ -17,6 +17,7 @@ from models.social import (
     SocialAccountResponse,
     SocialAngle,
     SocialAnglesRequest,
+    SocialConnectUrlResponse,
     SocialDraftCopyRequest,
     SocialDraftCopyResponse,
     SocialDraftPublishRequest,
@@ -32,6 +33,7 @@ from models.social import (
     SocialPostResponse,
     SocialPresignRequest,
     SocialPresignResponse,
+    SocialProfileResponse,
 )
 from services.freeze import assert_not_frozen
 from services.social import creator as social_creator
@@ -47,8 +49,32 @@ router = APIRouter(tags=["social"])
 @router.get("/clients/{client_id}/social/accounts", response_model=list[SocialAccountResponse])
 async def list_social_accounts(client_id: UUID, auth: dict = Depends(require_auth)):
     """The client's connected social accounts, live from PostPeer (scoped to their
-    Social group when set). Use an account_id here as the publish target."""
+    Social group). Empty until the client has a Social group with connected
+    accounts. Use an account_id here as the publish target."""
     return social_publish.list_accounts(str(client_id))
+
+
+@router.post("/clients/{client_id}/social/profile", response_model=SocialProfileResponse)
+async def ensure_social_profile(client_id: UUID, auth: dict = Depends(require_staff)):
+    """Create (or return) this client's PostPeer profile (Social group) — the
+    isolation boundary every account and post is scoped to. Idempotent."""
+    social_publish._assert_enabled()
+    return {"profile_id": social_publish.ensure_profile_for_client(str(client_id))}
+
+
+@router.get("/clients/{client_id}/social/connect-url", response_model=SocialConnectUrlResponse)
+async def social_connect_url(
+    client_id: UUID, platform: str, redirect_uri: str | None = None,
+    auth: dict = Depends(require_staff),
+):
+    """A per-client OAuth connect URL for one platform, scoped to the client's
+    Social group so the authorized account lands in the right profile. 409 if the
+    client has no Social group yet (call POST …/social/profile first)."""
+    social_publish._assert_enabled()
+    return {
+        "platform": (platform or "").lower(),
+        "url": social_publish.connect_url_for_client(str(client_id), platform, redirect_uri),
+    }
 
 
 @router.post("/clients/{client_id}/social/posts", response_model=SocialPostResponse)

@@ -167,6 +167,19 @@ def _provision_full_client(client: dict, user_id: str) -> None:
         deliverables_sheet.enqueue_provision(client_id)
     except Exception as exc:
         logger.warning("client_deliverables_provision_failed", extra={"client_id": client_id, "error": str(exc)})
+    # Auto-provision the client's PostPeer profile (Social group) so the Social
+    # module is scoped from day one. Best-effort + idempotent; skipped when the
+    # module is off/unkeyed or a profile is already set.
+    if settings.social_enabled and settings.postpeer_api_key and not client.get("social_profile_id"):
+        try:
+            from services.social import publish as social_publish
+
+            social_publish.ensure_profile_for_client(client_id, client.get("name"))
+        except Exception as exc:
+            logger.warning(
+                "client_social_profile_autoprovision_failed",
+                extra={"client_id": client_id, "error": str(exc)},
+            )
 
 
 def _enqueue_page_structure_scrape(client_id: str, page_type: str, url: str) -> None:
@@ -499,6 +512,8 @@ async def create_client(
         row["slack_channel_id"] = (body.slack_channel_id.strip() or None)
     if body.everhour_project_id is not None:
         row["everhour_project_id"] = (body.everhour_project_id.strip() or None)
+    if body.social_profile_id is not None:
+        row["social_profile_id"] = (body.social_profile_id.strip() or None)
     if body.trust_signals is not None:
         row["trust_signals"] = body.trust_signals.model_dump()
     # Reference page structures: seed the pending entries so the row reflects the
@@ -707,6 +722,9 @@ async def update_client(
     # Explicit-set semantics: an empty string clears the Everhour project mapping.
     if "everhour_project_id" in body.model_fields_set:
         updates["everhour_project_id"] = ((body.everhour_project_id or "").strip() or None)
+    # PostPeer profile (Social group) — explicit-set; empty string clears it.
+    if "social_profile_id" in body.model_fields_set:
+        updates["social_profile_id"] = ((body.social_profile_id or "").strip() or None)
     if body.gbp_place_id is not None:
         updates["gbp_place_id"] = body.gbp_place_id
     if body.gbp is not None:

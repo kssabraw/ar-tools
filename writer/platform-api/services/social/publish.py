@@ -109,6 +109,57 @@ def _client_profile_id(client_id: str) -> Optional[str]:
     return (rows[0].get("social_profile_id") if rows else None) or None
 
 
+def _client_name(client_id: str) -> str:
+    rows = (
+        _sb().table("clients").select("name").eq("id", client_id).limit(1).execute()
+    ).data or []
+    return (rows[0].get("name") if rows else None) or "Client"
+
+
+def _assert_account_allowed(client_id: str, account_id: str) -> None:
+    """Enforce client isolation at the WRITE. The target account must belong to
+    THIS client's PostPeer profile (Social group). PostPeer has one account-wide
+    key with no per-profile access control, so this membership check — not the
+    picker's scoping (UX only) — is the actual boundary that stops one client's
+    content publishing to another client's account."""
+    profile_id = _client_profile_id(client_id)
+    if not profile_id:
+        raise HTTPException(status_code=409, detail="social_profile_not_set")
+    allowed = {i.account_id for i in get_adapter().list_integrations(profile_id=profile_id)}
+    if account_id not in allowed:
+        raise HTTPException(status_code=403, detail="social_account_not_in_client_profile")
+
+
+def ensure_profile_for_client(client_id: str, client_name: Optional[str] = None) -> str:
+    """Return the client's PostPeer profile id, creating + storing one if absent.
+    Idempotent — a client that already has a Social group keeps it."""
+    _assert_enabled()
+    existing = _client_profile_id(client_id)
+    if existing:
+        return existing
+    name = (client_name or _client_name(client_id)).strip() or "Client"
+    profile_id = get_adapter().create_profile(name=name, description=f"AR Tools client {client_id}")
+    _sb().table("clients").update(
+        {"social_profile_id": profile_id, "updated_at": "now()"}
+    ).eq("id", client_id).execute()
+    logger.info("social.profile_provisioned", extra={"client_id": client_id, "profile_id": profile_id})
+    return profile_id
+
+
+def connect_url_for_client(
+    client_id: str, platform: str, redirect_uri: Optional[str] = None
+) -> str:
+    """A per-client OAuth connect URL for one platform, scoped to the client's
+    Social group so the newly-authorized account lands in the right profile."""
+    _assert_enabled()
+    profile_id = _client_profile_id(client_id)
+    if not profile_id:
+        raise HTTPException(status_code=409, detail="social_profile_not_set")
+    return get_adapter().connect_url(
+        profile_id=profile_id, platform=(platform or "").lower(), redirect_uri=redirect_uri
+    )
+
+
 def _platform_spec(platform: str) -> Optional[dict]:
     rows = (
         _sb().table("social_platform_specs").select("*").eq("platform", (platform or "").lower())
@@ -119,9 +170,15 @@ def _platform_spec(platform: str) -> Optional[dict]:
 
 def list_accounts(client_id: str) -> list[dict]:
     """The client's connected accounts, live from PostPeer, scoped to their Social
-    group when set. Read-only (accounts are connected manually)."""
+    group. Read-only (accounts are connected manually). Fail-closed: a client with
+    no Social group mapped returns [] rather than PostPeer's whole account — with
+    no per-profile access control on PostPeer's side, listing an unscoped set would
+    leak other clients' accounts. The UI prompts to connect a Social group first."""
     _assert_enabled()
-    integrations = get_adapter().list_integrations(profile_id=_client_profile_id(client_id))
+    profile_id = _client_profile_id(client_id)
+    if not profile_id:
+        return []
+    integrations = get_adapter().list_integrations(profile_id=profile_id)
     return [
         {"account_id": i.account_id, "platform": i.platform, "handle": i.handle,
          "reconnect_required": i.reconnect_required}
@@ -206,6 +263,7 @@ def create_post(
     """Compose one platform-native post and publish it now, or schedule it for a
     future time. Validates against the Platform Spec (hard violation → 422) first."""
     _assert_enabled()
+    _assert_account_allowed(client_id, account_id)
     platform = (platform or "").lower()
     media = build_media(image_urls, video_urls)
     verdict = validate_post(platform, copy, media, _platform_spec(platform))

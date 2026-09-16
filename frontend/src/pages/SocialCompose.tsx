@@ -9,7 +9,7 @@ import { api } from '../lib/api'
 import { ErrorDetails } from '../components/ErrorDetails'
 
 // ── types ────────────────────────────────────────────────────────────────────
-interface Client { id: string; name: string }
+interface Client { id: string; name: string; social_profile_id?: string | null }
 interface SocialAccount {
   account_id: string
   platform: string
@@ -46,7 +46,7 @@ const SPECS: Record<string, Spec> = {
   instagram: { label: 'Instagram', charLimit: 2200, maxImages: 10, maxVideos: 1, requiresImage: true, note: 'Instagram requires at least one image or video.', enforced: true },
   pinterest: { label: 'Pinterest', charLimit: 500, maxImages: 1, maxVideos: 0, requiresImage: true, note: 'A pin requires exactly one image.', enforced: true },
   youtube: { label: 'YouTube', charLimit: 5000, maxImages: 0, maxVideos: 1, requiresImage: true, enforced: true },
-  linkedin: { label: 'LinkedIn', charLimit: 3000, maxImages: 9, maxVideos: 1, requiresImage: false, enforced: false },
+  linkedin: { label: 'LinkedIn', charLimit: 3000, maxImages: 9, maxVideos: 1, requiresImage: false, note: 'Feed posts only; mentions org-only.', enforced: true },
   tiktok: { label: 'TikTok', charLimit: 2200, maxImages: 0, maxVideos: 1, requiresImage: true, enforced: false },
   threads: { label: 'Threads', charLimit: 500, maxImages: 10, maxVideos: 1, requiresImage: false, enforced: false },
 }
@@ -751,6 +751,71 @@ function DraftsTab({ clientId, accounts, angleSetId }: {
   )
 }
 
+// ── connect / setup panel (shown when a client has no connected accounts) ─────
+const CONNECT_PLATFORMS = [
+  { key: 'facebook', label: 'Facebook' },
+  { key: 'instagram', label: 'Instagram' },
+  { key: 'twitter', label: 'X (Twitter)' },
+  { key: 'pinterest', label: 'Pinterest' },
+  { key: 'linkedin', label: 'LinkedIn' },
+]
+
+function ConnectAccountsPanel({ clientId, hasProfile, onProfileCreated }: {
+  clientId: string; hasProfile: boolean; onProfileCreated: () => void
+}) {
+  const [err, setErr] = useState<string | null>(null)
+  const [connecting, setConnecting] = useState<string | null>(null)
+  const profileMut = useMutation({
+    mutationFn: async () => api.post<{ profile_id: string }>(`/clients/${clientId}/social/profile`, {}),
+    onSuccess: () => { setErr(null); onProfileCreated() },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'social_profile_failed'),
+  })
+  const connect = async (platform: string) => {
+    setErr(null); setConnecting(platform)
+    try {
+      const redirect = encodeURIComponent(window.location.href)
+      const res = await api.get<{ url: string }>(
+        `/clients/${clientId}/social/connect-url?platform=${platform}&redirect_uri=${redirect}`)
+      window.open(res.url, '_blank', 'noopener')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'social_connect_failed')
+    } finally { setConnecting(null) }
+  }
+  return (
+    <div style={card}>
+      <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>No connected accounts</h3>
+      {!hasProfile ? (
+        <>
+          <p style={{ margin: '0 0 10px', fontSize: 13, color: '#64748b' }}>
+            This client isn’t set up for social yet. Create its <strong>Social group</strong> — an
+            isolated PostPeer profile that every account and post for this client is scoped to — then
+            connect accounts into it.
+          </p>
+          <button onClick={() => profileMut.mutate()} disabled={profileMut.isPending} style={btn('#7c3aed')}>
+            {profileMut.isPending ? <Loader2 size={14} className="spin" /> : <Share2 size={14} />} Set up Social group
+          </button>
+        </>
+      ) : (
+        <>
+          <p style={{ margin: '0 0 10px', fontSize: 13, color: '#64748b' }}>
+            Social group ready. Connect an account — authorization opens in a new tab and the account
+            lands in <em>this client’s</em> group. Refresh once it’s done.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {CONNECT_PLATFORMS.map((p) => (
+              <button key={p.key} onClick={() => void connect(p.key)} disabled={connecting === p.key}
+                style={btn('#fff', '#334155')}>
+                {connecting === p.key ? <Loader2 size={13} className="spin" /> : <ExternalLink size={13} />} {p.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {err && <div style={{ marginTop: 8 }}><ErrorDetails message={err} /></div>}
+    </div>
+  )
+}
+
 // ── page ─────────────────────────────────────────────────────────────────────
 export function SocialCompose() {
   const { id } = useParams<{ id: string }>()
@@ -931,13 +996,14 @@ export function SocialCompose() {
         <ErrorDetails message={accountsQ.error instanceof Error ? accountsQ.error.message : 'accounts_load_failed'} />
       )}
       {tab !== 'drafts' && !accountsQ.isLoading && !accountsQ.isError && accounts.length === 0 && (
-        <div style={card}>
-          <h3 style={{ margin: '0 0 6px', fontSize: 15 }}>No connected accounts</h3>
-          <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-            This client has no social accounts connected yet. Accounts are connected manually in
-            PostPeer (added to the client’s Social group), then they appear here automatically.
-          </p>
-        </div>
+        <ConnectAccountsPanel
+          clientId={clientId}
+          hasProfile={Boolean(client?.social_profile_id)}
+          onProfileCreated={() => {
+            void qc.invalidateQueries({ queryKey: ['client', clientId] })
+            void accountsQ.refetch()
+          }}
+        />
       )}
 
       {tab === 'create' && (
