@@ -122,6 +122,7 @@ import ecommerce_facts as ecom_facts  # invariant public-spec auto-research (cit
 import ecommerce_loop as ecom_loop  # auto-retry loop stop decisions (pure)
 import voice_card as vcard  # brand voice + ICP: distilled card, prompt block, hard checks
 import length_fit  # deterministic length-fit engine (SERP avg +20% target)
+import topic_vector  # P0 topic-vector centering + coverage + inverse gain gap (report-only)
 import page_spec as pspec  # vendored from platform-api (sync-guarded): the kept page spec
 import section_edit  # split/splice generated pages by <section> for scoped corrective passes
 from blog_structure import (  # deterministic blog/AEO structure checks (R4/R6/R7)
@@ -1280,6 +1281,7 @@ class AnalysisResponse(BaseModel):
     serp_bold_keywords: List[dict] = []       # bolded terms from SERP snippets + competitor usage
     zone_targets: Dict[str, dict] = {}        # max term/entity counts per zone across competitors
     competitor_headings: List[dict] = []      # H2/H3 strings scraped from competitor pages
+    competitor_heading_tiers: dict = {}       # SERP-rank-tiered headings for the topic-vector measure (top10 / 11-20)
     aio_present: bool = False                 # live AI Overview shown for this query
     aio_text: str = ""                        # the AIO answer text (MCS target)
     aio_sources: List[str] = []               # domains the AIO cites
@@ -1959,14 +1961,18 @@ async def _scrape_one(
         return None
 
 
-async def scrape_urls(urls: List[str]) -> tuple[List[str], dict]:
+async def scrape_urls(urls: List[str]) -> tuple[List[str], dict, List[int]]:
     """
     Hybrid two-pass scraper:
       Pass 1 — render_js=False (fast, cheap) for all URLs concurrently.
       Pass 2 — render_js=True  (JS rendering) only for URLs that failed/returned thin HTML.
 
-    Returns (pages, cost_info) where pages contains only non-empty HTML strings.
-    cost_info breaks down pages scraped at each tier for billing.
+    Returns (pages, cost_info, kept_indices) where pages contains only non-empty
+    HTML strings, cost_info breaks down pages scraped at each tier for billing,
+    and kept_indices[i] is the original position of pages[i] in `urls` (ascending)
+    — so the caller can recover each scraped page's SERP rank (position + 1) for
+    the topic-vector tiering, and align each page with its true source URL rather
+    than a shifted one when scrapes fail in the middle.
     """
     sem = asyncio.Semaphore(10)
     rate_limited: set = set()
@@ -1999,6 +2005,7 @@ async def scrape_urls(urls: List[str]) -> tuple[List[str], dict]:
     ]
 
     pages = [html for html in merged if html]
+    kept_indices = [i for i, html in enumerate(merged) if html]
     js_success = sum(1 for html in pass2 if html)
     no_js_success = len(pages) - js_success
     logger.info(
@@ -2009,7 +2016,7 @@ async def scrape_urls(urls: List[str]) -> tuple[List[str], dict]:
         "no_js_pages": no_js_success,
         "js_pages": js_success,
     }
-    return pages, cost_info
+    return pages, cost_info, kept_indices
 
 
 # ── HTML parsing ──────────────────────────────────────────────────────────────
@@ -2675,13 +2682,21 @@ async def _run_serp_analysis(
         if not serp_urls:
             raise HTTPException(status_code=502, detail="DataForSEO returned no usable URLs")
 
-    # Step 2: scrape (hybrid: no-JS first, retry failures with JS rendering)
-    pages, scrape_cost_info = await scrape_urls(serp_urls)
+    # Step 2: scrape (hybrid: no-JS first, retry failures with JS rendering).
+    # kept_indices[i] is pages[i]'s position in serp_urls, so we recover each
+    # scraped page's SERP rank (index + 1) for topic-vector tiering and align
+    # each page with its TRUE source URL (a mid-list scrape failure would
+    # otherwise shift the url↔html pairing).
+    pages, scrape_cost_info, kept_indices = await scrape_urls(serp_urls)
     if len(pages) < 2:
         raise HTTPException(
             status_code=502,
             detail=f"Only {len(pages)} pages scraped successfully — need at least 2"
         )
+    kept_urls = [serp_urls[i] for i in kept_indices]
+    # 1-based SERP rank of each scraped page (position among the kept organic
+    # results, which are already in DataForSEO rank order).
+    page_ranks: List[int] = [i + 1 for i in kept_indices]
 
     # Step 3: parse zones
     zone_buckets: Dict[str, List[str]] = {z: [] for z in ZONES}
@@ -2690,7 +2705,7 @@ async def _run_serp_analysis(
     scraped_urls: List[str] = []
     # Store full page text per page for bold keyword counting
     full_page_texts: List[str] = []
-    for url, html in zip(serp_urls, pages):
+    for url, html in zip(kept_urls, pages):
         zones = extract_zones(html)
         for z in ZONES:
             zone_buckets[z].append(zones[z])
@@ -2845,6 +2860,15 @@ async def _run_serp_analysis(
                 "page_pct": round(count / total_pages, 2),
             })
 
+    # Rank-tiered competitor headings for the topic-vector measure (§3): a
+    # re-partition of the ALREADY-scraped set (no extra fetch) into the top-10
+    # consensus tier (centroid + must-cover baseline) and the 11-20
+    # differentiation-within-reach tier (≥2-page-spread guarded). Additive — the
+    # untiered `competitor_headings` above is unchanged.
+    competitor_heading_tiers = topic_vector.build_heading_tiers(
+        h2_per_page, h3_per_page, page_ranks
+    )
+
     no_js_pages = scrape_cost_info["no_js_pages"]
     js_pages = scrape_cost_info["js_pages"]
     scrapeowl_cost = round(
@@ -2876,6 +2900,7 @@ async def _run_serp_analysis(
         aio_text=aio_insights.get("text", ""),
         aio_sources=aio_insights.get("sources", []),
         aio_fanout=aio_insights.get("fanout", []),
+        competitor_heading_tiers=competitor_heading_tiers,
         serp_avg_word_count=int(round(serp_avg_words)) if serp_avg_words else None,
         serp_word_target=serp_word_target,
         analysis_cost=analysis_cost,
@@ -11409,6 +11434,63 @@ async def _ecommerce_score_html_inline(
     return composite, deficiencies, scores, token_rec, voice
 
 
+async def _measure_topic_vector(
+    page_html: str,
+    keyword: str,
+    serp_analysis_dict: Optional[dict],
+) -> dict:
+    """Run the P0 topic-vector measure (centering / per-subtopic coverage /
+    inverse gain gap) BESIDE the composite — report-only, never folded into it.
+
+    Best-effort + gated on GEMINI_API_KEY: an absent key or any failure returns a
+    structured skip (``{available: False, reason: …}``), never a numeric default
+    and never raises. Reads the rank-tiered headings + AIO from the serp_analysis
+    dict; degrades to the untiered competitor_headings when a pre-upgrade cached
+    serp_analysis carries no tiers.
+    """
+    # Whole body is best-effort: reading a malformed/legacy serp_analysis (e.g. a
+    # non-dict competitor_headings entry) must degrade to a skip, never 500 the
+    # score endpoint. Honours the "never raises" contract literally.
+    embed_fn = _gemini_embed if GEMINI_API_KEY else None
+    if embed_fn is None:
+        return {"available": False, "reason": "gemini_key_absent"}
+    try:
+        serp = serp_analysis_dict if isinstance(serp_analysis_dict, dict) else {}
+        tiers = serp.get("competitor_heading_tiers")
+        tiers = tiers if isinstance(tiers, dict) else {}
+        top10 = tiers.get("top10_headings")
+        tier2 = tiers.get("tier2_headings")
+        if top10 is None and tier2 is None:
+            # Pre-tiering cached serp_analysis: approximate the consensus set from
+            # the untiered headings; no 11-20 differentiation tier is recoverable.
+            top10 = [
+                {"text": h.get("text", ""), "page_spread": h.get("page_count", 1)}
+                for h in (serp.get("competitor_headings") or [])
+                if isinstance(h, dict)
+            ]
+            tier2 = []
+
+        page_title = ""
+        from bs4 import BeautifulSoup as _BS
+        _soup = _BS(page_html or "", "html.parser")
+        _t = _soup.find("title") or _soup.find("h1")
+        page_title = _t.get_text(" ", strip=True) if _t else ""
+
+        return await topic_vector.measure(
+            embed_fn=embed_fn,
+            query=keyword,
+            page_title=page_title,
+            page_html=page_html or "",
+            aio_present=bool(serp.get("aio_present")),
+            aio_text=serp.get("aio_text") or "",
+            top10_headings=top10 or [],
+            tier2_headings=tier2 or [],
+        )
+    except Exception as exc:  # pragma: no cover - defensive; measure is best-effort
+        logger.warning("topic-vector measure failed (%s); skipping.", exc)
+        return {"available": False, "reason": "error"}
+
+
 _ECOMMERCE_GEN_SYSTEM_PROMPT = """You are an expert ecommerce SEO copywriter and conversion-rate specialist. You write publication-ready, on-page-optimized ecommerce pages as clean semantic HTML that ranks in Google AND converts shoppers.
 
 OUTPUT CONTRACT — return EXACTLY these parts in order, and NOTHING else (no markdown, no code fences, no commentary):
@@ -11609,6 +11691,10 @@ class EcommerceScoreResponse(BaseModel):
     serp_analysis: Optional[dict] = None
     analysis_cost: Optional[dict] = None
     voice_compliance: Optional[dict] = None
+    # P0 topic-vector measure (centering / per-subtopic coverage / inverse gain
+    # gap) — report-only, computed BESIDE the composite and never folded into it.
+    # {available: False, ...} when GEMINI_API_KEY is absent or inputs are thin.
+    topic_vector: Optional[dict] = None
 
 
 @app.post('/score-ecommerce-page', response_model=EcommerceScoreResponse)
@@ -11688,6 +11774,11 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, status = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
 
+    # P0 topic-vector measure — a SEPARATE async pass beside the deterministic
+    # engine (which is left untouched above). Report-only: kept out of `scores`,
+    # so the composite is unchanged whether or not this runs.
+    topic_vector_report = await _measure_topic_vector(page_html, body.keyword, serp_analysis_dict)
+
     return EcommerceScoreResponse(
         composite_score=composite,
         composite_status=status,
@@ -11697,6 +11788,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
         token_usage=token_rec,
         serp_analysis=serp_analysis_dict if inline_serp else None,
         analysis_cost=inline_serp.analysis_cost if inline_serp else None,
+        topic_vector=topic_vector_report,
     )
 
 
@@ -12711,6 +12803,13 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
         )
         _accumulate(voice_tok)
 
+        # P0 topic-vector measure on the winning page — report-only, computed
+        # beside the composite (does NOT influence keep-best above, which already
+        # picked the page). Skipped structurally without GEMINI_API_KEY.
+        topic_vector_report = await _measure_topic_vector(
+            content_html, body.keyword, body.serp_analysis
+        )
+
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})
         await q.put({
             "step": "done",
@@ -12727,6 +12826,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
                 "content_gaps": content_gaps,
                 "researched_facts": researched_facts,
                 "voice_compliance": voice_scorecard,
+                "topic_vector": topic_vector_report,
             },
         })
 
