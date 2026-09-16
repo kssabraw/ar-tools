@@ -28,6 +28,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import site_claim_index
 from services.local_seo_service import _post_nlp  # reuse the nlp transport
 from services.markdown_html import markdown_to_html
 
@@ -164,6 +165,8 @@ async def _score_html(run: dict, page_html: str, user_id: Optional[str]) -> dict
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    # P1 grounding corpus for the report-only topic-vector Information Gain measure.
+    payload["site_claim_index"] = await site_claim_index.resolve_index_for_request(client)
     return await _post_nlp("/score-blog-page", payload, user_id=user_id)
 
 
@@ -257,6 +260,8 @@ async def score_external_client(
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    # P1 grounding corpus for the report-only topic-vector Information Gain measure.
+    payload["site_claim_index"] = await site_claim_index.resolve_index_for_request(client)
     result = await _post_nlp("/score-blog-page", payload, user_id=user_id)
     logger.info(
         "blog_page.external_scored",

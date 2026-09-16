@@ -65,6 +65,26 @@ def test_extract_claims_keeps_fact_bearing_only():
     assert not any("genuinely care" in c for c in claims)  # no fact signal → dropped
 
 
+def test_extract_claims_drops_site_chrome():
+    # The site-index mirror of the nlp page-claim chrome filter: age-gate /
+    # cart / discount-popup / "N min read" chrome carries a stray number so it
+    # passes the fact-signal gate, but it must not become a grounding claim
+    # (a live Nova run had the age-gate self-ground a matching page claim into
+    # a false realized Information Gain).
+    text = ("I acknowledge that I am age 21 or older. "
+            "Want 25% Off Your First Order? "
+            "Your Cart Is Empty. Cart Total: Total $ 0.00. "
+            "FEATURED Uncategorized 17 min read GLP-2TZ Reviews in 2026. "
+            "GLP-3RT is verified to 99% purity with a COA on every 10mg batch.")
+    claims = [c["text"].lower() for c in s.extract_claims(text, "u")]
+    joined = " || ".join(claims)
+    assert "age 21" not in joined
+    assert "25% off" not in joined
+    assert "cart is empty" not in joined and "cart total" not in joined
+    assert "min read" not in joined and "uncategorized" not in joined
+    assert any("99% purity" in c for c in claims)  # the real claim survives
+
+
 def test_merge_index_dedupes_and_caps():
     p1 = {"facts": [{"type": "price", "value": "90", "unit": "USD"}],
           "claims": [{"text": "a claim with 10mg", "url": "u1"}]}

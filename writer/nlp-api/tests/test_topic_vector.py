@@ -348,6 +348,31 @@ def test_extract_page_claims_keeps_fact_bearing_only():
     assert not any("care deeply" in c for c in claims)
 
 
+def test_extract_page_claims_drops_site_chrome():
+    # Chrome/boilerplate sentences carry a stray number (age-gate, cart, discount
+    # popup, "N min read" blog-index blurb) so they pass the fact-signal gate, but
+    # they are NOT product claims — left in, they self-ground and corrupt gain
+    # (a live Nova run credited the age-gate as a realized gain). They must drop.
+    secs = [
+        "I acknowledge that I am age 21 or older.",
+        "Want 25% Off Your First Order? Fill out the form below and we'll send your discount code.",
+        "Your Cart Is Empty. Cart Total: Total $ 0.00.",
+        "FEATURED Uncategorized 17 min read GLP-2TZ Reviews and Side Effects in 2026.",
+        "Added to cart. Check out our shop to see what's available.",
+        # A real product claim in the same batch survives.
+        "GLP-3RT is verified to 99% purity with a COA on every 10mg batch.",
+    ]
+    claims = tv.extract_page_claims(secs)
+    low = " || ".join(c.lower() for c in claims)
+    assert "age 21" not in low
+    assert "25% off" not in low and "discount code" not in low
+    assert "cart is empty" not in low and "cart total" not in low
+    assert "min read" not in low and "uncategorized" not in low
+    assert "added to cart" not in low
+    # The genuine claim is kept.
+    assert any("99% purity" in c.lower() for c in claims)
+
+
 def test_site_fact_values_and_value_grounding():
     idx = {"facts": [
         {"type": "cas", "value": "2381089-83-2", "unit": ""},
@@ -489,3 +514,56 @@ def test_include_gain_false_skips_scored_gain_but_keeps_coverage():
     assert "centering" in r and "coverage" in r and "inverse_gain_gap" in r
     assert r["information_gain"]["available"] is False
     assert r["information_gain"]["reason"] == "not_requested"
+
+
+def test_absent_index_skips_gain_claim_embeddings():
+    # Every /score-page / /score-blog-page consumer that passes NO site index
+    # (content-gap, the strategist audit_page, a raw score) still runs the P0
+    # measure — but must NOT embed the page's claim sentences for a gain score
+    # that will only be suppressed. Assert the batch is the P0 size (no extra
+    # page-claim / site-claim vectors) and gain suppresses with the right reason.
+    batches = []
+
+    async def counting_embed(texts):
+        batches.append(list(texts))
+        return [_vec(t) for t in texts]
+
+    def _n(idx):
+        batches.clear()
+        run(tv.measure(
+            embed_fn=counting_embed, query=_QUERY, page_title="Buy GLP-3RT",
+            page_html=_NOVA_HTML, aio_present=True, aio_text=_AIO,
+            top10_headings=_TOP10, tier2_headings=_TIER2, site_claim_index=idx,
+            include_gain=True,
+        ))
+        return len(batches[0])
+
+    n_absent = _n(None)
+    rich = {
+        "claims": ["GLP-3RT ships in 10mg vials at $90 with a verified COA",
+                   "GLP-3RT has 99% HPLC purity per batch",
+                   "Every batch includes a certificate of analysis"],
+        "facts": [{"type": "price", "value": "90", "unit": "USD"}],
+    }
+    batches.clear()
+    r_rich = run(tv.measure(
+        embed_fn=counting_embed, query=_QUERY, page_title="Buy GLP-3RT",
+        page_html=_NOVA_HTML, aio_present=True, aio_text=_AIO,
+        top10_headings=_TOP10, tier2_headings=_TIER2, site_claim_index=rich,
+        include_gain=True,
+    ))
+    n_rich = len(batches[0])
+    # A usable index embeds MORE (the page-claim + site-claim vectors); an absent
+    # one embeds only the P0 vectors.
+    assert n_rich > n_absent
+    # Absent index → gain suppressed (not scored 0), P0 still available.
+    r_absent = run(tv.measure(
+        embed_fn=counting_embed, query=_QUERY, page_title="Buy GLP-3RT",
+        page_html=_NOVA_HTML, aio_present=True, aio_text=_AIO,
+        top10_headings=_TOP10, tier2_headings=_TIER2, site_claim_index=None,
+        include_gain=True,
+    ))
+    assert r_absent["available"] is True
+    assert r_absent["information_gain"]["available"] is False
+    assert r_absent["information_gain"]["reason"] == "no_site_index"
+    assert r_rich["information_gain"]["available"] is True

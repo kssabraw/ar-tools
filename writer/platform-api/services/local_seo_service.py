@@ -23,7 +23,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import analysis_cache, content_writer, job_priority, locations_service, page_spec, page_spec_store
+from services import analysis_cache, content_writer, job_priority, locations_service, page_spec, page_spec_store, site_claim_index
 from services.gbp_service import normalize_website_url
 from services.google_docs import resolve_drive_folder
 from services.wordpress_publish import WordPressPublishError, publish_to_wordpress
@@ -1510,6 +1510,9 @@ async def score_page(
         # audience from the keyword and nothing scored brand voice at all.
         "voice_card": await voice_card_service.get_voice_card(client, user_id=user_id),
         "page_spec": spec,
+        # P1 grounding corpus for the report-only topic-vector Information Gain
+        # measure (§7). Built + cached here; nlp has no DB. Best-effort → None.
+        "site_claim_index": await site_claim_index.resolve_index_for_request(client),
     }, user_id=user_id)
     # A standalone score has no page row — log it against page_url (may be None
     # when scoring raw HTML) so the verdict is still kept in the run history.

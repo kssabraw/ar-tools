@@ -392,6 +392,26 @@ _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 # degree, or a currency amount. Bleached marketing prose carries none.
 _FACT_SIGNAL_RE = re.compile(r"\d|%|°|\$")
 _NUM_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+# Site-chrome/boilerplate sentences that carry a stray number (an age-gate,
+# a cart/discount popup, a blog-index "N min read" blurb) pass the fact-signal
+# gate but are NOT product claims. Left in, they corrupt Information Gain: a
+# live Nova run credited "I acknowledge that I am age 21 or older." as a
+# realized gain (it self-grounds against the same chrome in the site index).
+# html_to_text strips nav/footer/header/form TAGS; this catches the modal/popup
+# chrome that lives in ordinary <div>s. Kept deliberately narrow so a real
+# product claim can never match. Must stay in sync with the platform-api
+# site-claim extractor (services/site_claim_index.py::_CHROME_CLAIM_RE).
+_CHROME_CLAIM_RE = re.compile(
+    r"(?:"
+    r"add(?:ed)?\s+to\s+cart|your\s+cart\s+is\s+empty|cart\s+total|check\s+out\s+our\s+shop|"
+    r"close\s+cart|view\s+cart|"
+    r"i\s+acknowledge\s+that\s+i\s+am|are\s+you\s+(?:18|21)|age\s+verification|"
+    r"\d+\s*%\s*off|off\s+your\s+first\s+order|discount\s+code|"
+    r"\d+\s*min\s+read|read\s+article|"
+    r"uncategorized"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def extract_page_claims(sections: list, *, limit: int = MAX_PAGE_CLAIMS,
@@ -409,6 +429,8 @@ def extract_page_claims(sections: list, *, limit: int = MAX_PAGE_CLAIMS,
             if not (min_words <= len(words) <= max_words):
                 continue
             if not _FACT_SIGNAL_RE.search(sent):
+                continue
+            if _CHROME_CLAIM_RE.search(sent):  # drop age-gate/cart/popup chrome
                 continue
             key = re.sub(r"[^a-z0-9]+", " ", sent.lower()).strip()
             if not key or key in seen:
@@ -712,11 +734,16 @@ async def measure(
     labels = [st.label for st in subtopics]
     # P1: the page's own claim sentences (the gain unit) + the client's site-claim
     # phrases (the grounding corpus). Both ride in the SAME batched embedding call
-    # as the P0 vectors — sliced back out in order below. Skipped entirely (no
-    # extraction, no embeddings) when the caller doesn't want the scored gain.
-    page_claims = extract_page_claims(sections) if include_gain else []
-    site_claims = _site_claim_texts(site_claim_index) if include_gain else []
-    site_values = _site_fact_values(site_claim_index) if include_gain else set()
+    # as the P0 vectors — sliced back out in order below. Extracted + embedded
+    # only when the scored gain will actually be computed: the caller wants it
+    # AND the site index is usable. A thin/absent index suppresses gain downstream
+    # regardless (§6), so embedding the page's claim sentences would be wasted
+    # work — which every /score-page consumer that passes no index (content-gap,
+    # the strategist audit_page, a raw score with no client) would otherwise pay.
+    want_gain = include_gain and not _index_is_thin(site_claim_index, GAIN_MIN_SITE_CLAIMS)
+    page_claims = extract_page_claims(sections) if want_gain else []
+    site_claims = _site_claim_texts(site_claim_index) if want_gain else []
+    site_values = _site_fact_values(site_claim_index) if want_gain else set()
     # One batched embedding call: page, centroid components, subtopic labels,
     # page sections, page claims, site claims — sliced back out in that order.
     batch = ([page_text] + centroid_texts + labels + sections

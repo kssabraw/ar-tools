@@ -21,6 +21,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import site_claim_index
 from services.local_seo_service import _post_nlp  # reuse the nlp transport
 
 logger = logging.getLogger(__name__)
@@ -138,6 +139,8 @@ async def score_run(run_id: str, user_id: Optional[str] = None) -> dict:
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    # P1 grounding corpus for the report-only topic-vector Information Gain measure.
+    payload["site_claim_index"] = await site_claim_index.resolve_index_for_request(client)
     result = await _post_nlp("/score-page", payload, user_id=user_id)
     cost = (result.get("token_usage") or {}).get("cost_usd")
     _insert_output(run_id, "service_score", result, cost)
@@ -191,6 +194,8 @@ async def score_external_page(
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    # P1 grounding corpus for the report-only topic-vector Information Gain measure.
+    payload["site_claim_index"] = await site_claim_index.resolve_index_for_request(client)
     result = await _post_nlp("/score-page", payload, user_id=user_id)
     cost = (result.get("token_usage") or {}).get("cost_usd")
     _insert_output(run_id, "source_page_score", result, cost)
@@ -250,6 +255,8 @@ async def score_external_client(
     from services import voice_card_service
 
     payload["voice_card"] = await voice_card_service.get_voice_card(client, user_id=user_id)
+    # P1 grounding corpus for the report-only topic-vector Information Gain measure.
+    payload["site_claim_index"] = await site_claim_index.resolve_index_for_request(client)
     result = await _post_nlp("/score-page", payload, user_id=user_id)
     logger.info(
         "service_page.external_scored",
