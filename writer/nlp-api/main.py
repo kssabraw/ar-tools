@@ -7956,6 +7956,10 @@ class ScorePageRequest(BaseModel):
     # The kept page spec (platform-api resolves it): when present its target
     # drives length_fit, so a lifted/edited band scores as the band it is.
     page_spec: Optional[dict] = None
+    # P1 grounding corpus for the report-only topic-vector Information Gain
+    # measure (§7). Built + cached by platform-api and passed here (nlp has no
+    # DB). Absent/thin → gain is SUPPRESSED ('not measured'), never scored 0.
+    site_claim_index: Optional[dict] = None
 
 class ScorePageResponse(BaseModel):
     composite_score: float
@@ -7969,6 +7973,12 @@ class ScorePageResponse(BaseModel):
     # phrasing missing, grammatical person, CTA language. `{"passed": true, …}`
     # with an empty violation list when the client has no guide on file.
     voice_compliance: Optional[dict] = None
+    # Report-only topic-vector measure (centering / per-subtopic coverage /
+    # inverse gain gap / scored Information Gain) BESIDE the composite — NEVER
+    # folded into it (composite weight 0). Gated on GEMINI_API_KEY; a
+    # structured skip when the key/headings/embeddings are absent. MUST be
+    # declared here or FastAPI's response_model strips it before the caller.
+    topic_vector: Optional[dict] = None
 
 
 @app.post('/score-page', response_model=ScorePageResponse)
@@ -8071,6 +8081,10 @@ async def score_page(request: Request, body: ScorePageRequest):
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, status = _composite_from_scores(scores, weights)
 
+    # Report-only topic-vector measure BESIDE the composite (never folded in).
+    topic_vector_report = await _measure_topic_vector(
+        page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
+
     return ScorePageResponse(
         composite_score=composite,
         composite_status=status,
@@ -8080,6 +8094,7 @@ async def score_page(request: Request, body: ScorePageRequest):
         token_usage=token_rec,
         serp_analysis=serp_analysis_out if inline_serp else None,
         analysis_cost=inline_serp.analysis_cost if inline_serp else None,
+        topic_vector=topic_vector_report,
     )
 
 
@@ -11993,6 +12008,9 @@ class BlogScoreRequest(BaseModel):
     brand_voice: Optional[dict] = None
     detected_icp: Optional[dict] = None
     voice_card: Optional[dict] = None
+    # P1 grounding corpus for the report-only topic-vector Information Gain
+    # measure (§7). Built + cached by platform-api; absent/thin → gain suppressed.
+    site_claim_index: Optional[dict] = None
 
 
 class BlogScoreResponse(BaseModel):
@@ -12004,6 +12022,9 @@ class BlogScoreResponse(BaseModel):
     serp_analysis: Optional[dict] = None
     analysis_cost: Optional[dict] = None
     voice_compliance: Optional[dict] = None
+    # Report-only topic-vector measure BESIDE the composite (never folded in).
+    # MUST be declared or FastAPI's response_model strips it.
+    topic_vector: Optional[dict] = None
 
 
 @app.post('/score-blog-page', response_model=BlogScoreResponse)
@@ -12083,6 +12104,10 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, status = _composite_from_scores(scores, _BLOG_ENGINE_WEIGHTS)
 
+    # Report-only topic-vector measure BESIDE the composite (never folded in).
+    topic_vector_report = await _measure_topic_vector(
+        page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
+
     return BlogScoreResponse(
         composite_score=composite,
         composite_status=status,
@@ -12092,6 +12117,7 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
         token_usage=token_rec,
         serp_analysis=serp_analysis_dict if inline_serp else None,
         analysis_cost=inline_serp.analysis_cost if inline_serp else None,
+        topic_vector=topic_vector_report,
     )
 
 

@@ -81,6 +81,26 @@ _SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 # unit, percentage, degree sign, or a currency amount. Bleached marketing prose
 # ("we care about quality") carries none and is dropped.
 _FACT_SIGNAL_RE = re.compile(r"\d|%|°|\$")
+# Site-chrome/boilerplate sentences that carry a stray number (an age-gate, a
+# cart/discount popup, a blog-index "N min read" blurb) pass the fact-signal
+# gate but are NOT product claims. Left in the SITE index they self-ground a
+# matching page claim: a live Nova run credited "I acknowledge that I am age 21
+# or older." as a realized Information Gain (site_cosine 1.0 against the same
+# chrome here). html_to_text strips nav/footer/header/form TAGS; this catches
+# the modal/popup chrome that lives in ordinary <div>s. Kept narrow so a real
+# product claim can never match. Must stay in sync with the nlp-api page-claim
+# extractor (nlp-api/topic_vector.py::_CHROME_CLAIM_RE).
+_CHROME_CLAIM_RE = re.compile(
+    r"(?:"
+    r"add(?:ed)?\s+to\s+cart|your\s+cart\s+is\s+empty|cart\s+total|check\s+out\s+our\s+shop|"
+    r"close\s+cart|view\s+cart|"
+    r"i\s+acknowledge\s+that\s+i\s+am|are\s+you\s+(?:18|21)|age\s+verification|"
+    r"\d+\s*%\s*off|off\s+your\s+first\s+order|discount\s+code|"
+    r"\d+\s*min\s+read|read\s+article|"
+    r"uncategorized"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _norm(text: object) -> str:
@@ -159,6 +179,8 @@ def extract_claims(text: str, url: str = "", *, max_words: int = 45,
         if not (min_words <= len(words) <= max_words):
             continue
         if not _FACT_SIGNAL_RE.search(sent):
+            continue
+        if _CHROME_CLAIM_RE.search(sent):  # drop age-gate/cart/popup chrome
             continue
         key = re.sub(r"[^a-z0-9]+", " ", sent.lower()).strip()
         if not key or key in seen:
