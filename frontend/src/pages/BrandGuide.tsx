@@ -77,6 +77,20 @@ export function BrandGuide() {
     },
   })
 
+  // Regenerating never overwrites — it always creates a NEW version — but if the
+  // latest guide carries operator edits, warn before spending a fresh build (§6).
+  function onGenerate() {
+    if (
+      guides[0]?.edited &&
+      !window.confirm(
+        "The latest guide has your edits. Generating creates a NEW version (your edited one is kept); it won't be overwritten. Continue?",
+      )
+    ) {
+      return
+    }
+    generate.mutate()
+  }
+
   return (
     <div style={{ padding: 32, maxWidth: 980 }}>
       <button style={backLink} onClick={() => navigate(`/clients/${clientId}`)}>
@@ -95,7 +109,7 @@ export function BrandGuide() {
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 8, flexShrink: 0 }}>
           <button
             style={{ ...primaryBtn, opacity: enabled ? 1 : 0.5 }}
-            onClick={() => generate.mutate()}
+            onClick={onGenerate}
             disabled={generate.isPending || !enabled}
           >
             <RefreshCw size={14} style={generate.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />

@@ -97,6 +97,17 @@ def test_swatch_rename_flag_drop():
     assert "#FFFFFF" not in roles.get("neutral", {}).get("hexes", [])  # flagged not_brand
 
 
+def test_flag_alone_recomputes_usage_map():
+    # Flagging a swatch not-brand (with NO accompanying drop) must remove it from
+    # the 60/30/10 usage map the render reads — a drop is not required to trigger it.
+    out, applied = E.apply_edits(_synth(), [{"op": "swatch_flag_not_brand", "hex": "#FF0000"}])
+    assert applied == 1
+    roles = out["color"]["usage_ratios"]["roles"]
+    assert "#FF0000" not in roles.get("accent", {}).get("hexes", [])
+    # The primary swatch is untouched and still in the map.
+    assert "#01162F" in roles.get("primary", {}).get("hexes", [])
+
+
 def test_swatch_op_no_match_is_not_applied():
     out, applied = E.apply_edits(_synth(), [{"op": "swatch_drop", "hex": "#123456"}])
     assert applied == 0

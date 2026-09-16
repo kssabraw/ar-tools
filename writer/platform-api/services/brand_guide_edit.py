@@ -142,6 +142,9 @@ def _apply_swatch_op(synth: dict, kind: str, op: dict) -> bool:
                 s["name"] = _clean(op.get("name"), 60)
             elif kind == "swatch_flag_not_brand":
                 s["not_brand"] = True
+                # A flagged not-brand swatch drops out of the 60/30/10 usage map
+                # too (the render reads it), same as a drop — keep it honest.
+                color["usage_ratios"] = _usage_ratios_from_roles(swatches)
             return True
     return False
 
