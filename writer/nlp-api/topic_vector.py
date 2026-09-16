@@ -204,6 +204,8 @@ def _heading_entries(top10: list, tier2: list) -> list:
     out = []
     for items, tier in ((top10 or [], "top10"), (tier2 or [], "tier2")):
         for it in items:
+            if it is None:
+                continue  # a None entry must not become a "None" garbage subtopic
             if isinstance(it, dict):
                 text, spread = it.get("text", ""), int(it.get("page_spread", 1) or 1)
             else:
@@ -274,20 +276,24 @@ def build_centroid_component_texts(query: str, aio_text: str,
 
 
 def mean_vector(vectors: list) -> list:
-    """Mean-pool L2-normalised vectors into a centroid. Skips empty/zero vectors;
+    """Mean-pool L2-normalised vectors into a centroid. Skips empty/zero vectors
+    and any vector whose dimensionality doesn't match the first usable one (a
+    uniform embedder never trips this, but it removes a latent IndexError);
     returns [] when nothing usable is supplied."""
-    usable = []
-    dim = 0
+    usable: list = []
     for v in vectors or []:
         if not v:
             continue
         norm = sum(x * x for x in v) ** 0.5
         if norm == 0.0:
             continue
-        usable.append([x / norm for x in v])
-        dim = len(v)
+        unit = [x / norm for x in v]
+        if usable and len(unit) != len(usable[0]):
+            continue
+        usable.append(unit)
     if not usable:
         return []
+    dim = len(usable[0])
     return [sum(v[i] for v in usable) / len(usable) for i in range(dim)]
 
 

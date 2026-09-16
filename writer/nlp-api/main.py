@@ -11448,28 +11448,34 @@ async def _measure_topic_vector(
     dict; degrades to the untiered competitor_headings when a pre-upgrade cached
     serp_analysis carries no tiers.
     """
-    serp = serp_analysis_dict or {}
-    tiers = serp.get("competitor_heading_tiers") or {}
-    top10 = tiers.get("top10_headings")
-    tier2 = tiers.get("tier2_headings")
-    if top10 is None and tier2 is None:
-        # Pre-tiering cached serp_analysis: approximate the consensus set from
-        # the untiered headings; no 11-20 differentiation tier is recoverable.
-        top10 = [{"text": h.get("text", ""), "page_spread": h.get("page_count", 1)}
-                 for h in (serp.get("competitor_headings") or [])]
-        tier2 = []
-
-    page_title = ""
+    # Whole body is best-effort: reading a malformed/legacy serp_analysis (e.g. a
+    # non-dict competitor_headings entry) must degrade to a skip, never 500 the
+    # score endpoint. Honours the "never raises" contract literally.
+    embed_fn = _gemini_embed if GEMINI_API_KEY else None
+    if embed_fn is None:
+        return {"available": False, "reason": "gemini_key_absent"}
     try:
+        serp = serp_analysis_dict if isinstance(serp_analysis_dict, dict) else {}
+        tiers = serp.get("competitor_heading_tiers")
+        tiers = tiers if isinstance(tiers, dict) else {}
+        top10 = tiers.get("top10_headings")
+        tier2 = tiers.get("tier2_headings")
+        if top10 is None and tier2 is None:
+            # Pre-tiering cached serp_analysis: approximate the consensus set from
+            # the untiered headings; no 11-20 differentiation tier is recoverable.
+            top10 = [
+                {"text": h.get("text", ""), "page_spread": h.get("page_count", 1)}
+                for h in (serp.get("competitor_headings") or [])
+                if isinstance(h, dict)
+            ]
+            tier2 = []
+
+        page_title = ""
         from bs4 import BeautifulSoup as _BS
         _soup = _BS(page_html or "", "html.parser")
         _t = _soup.find("title") or _soup.find("h1")
         page_title = _t.get_text(" ", strip=True) if _t else ""
-    except Exception:
-        page_title = ""
 
-    embed_fn = _gemini_embed if GEMINI_API_KEY else None
-    try:
         return await topic_vector.measure(
             embed_fn=embed_fn,
             query=keyword,

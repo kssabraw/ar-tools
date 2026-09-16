@@ -130,6 +130,24 @@ def test_cluster_drops_chrome_headings():
     assert clusters == []
 
 
+def test_cluster_tolerates_malformed_entries():
+    # Mixed dicts / bare strings / None / dict-without-text must not raise and
+    # must not produce a "None" garbage subtopic.
+    top10 = [
+        {"text": "Receptor Agonism", "page_spread": 3},
+        "Metabolic Effects",   # bare string
+        None,                  # dropped
+        {"page_spread": 2},    # no text -> empty -> dropped
+        {"text": "  "},        # whitespace -> dropped
+    ]
+    clusters = tv.cluster_headings(top10, [])
+    labels = {c.label for c in clusters}
+    assert "None" not in labels
+    assert "Receptor Agonism" in labels
+    assert "Metabolic Effects" in labels
+    assert len(clusters) == 2
+
+
 # --- Centroid assembly (§4) -------------------------------------------------
 
 def test_centroid_excludes_implied_query_uses_query_aio_top10():
@@ -155,6 +173,13 @@ def test_mean_vector_normalizes_and_skips_zero():
     assert mv == [0.5, 0.5]
     assert tv.mean_vector([]) == []
     assert tv.mean_vector([[0.0, 0.0]]) == []
+
+
+def test_mean_vector_skips_mismatched_dim():
+    # A vector whose length differs from the first usable one is skipped (no
+    # IndexError in the final comprehension); the result keeps the first dim.
+    mv = tv.mean_vector([[1.0, 0.0], [0.0, 1.0, 0.0]])
+    assert mv == [1.0, 0.0]
 
 
 # --- Section extraction -----------------------------------------------------
