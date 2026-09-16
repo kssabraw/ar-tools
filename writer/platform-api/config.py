@@ -1275,6 +1275,28 @@ class Settings(BaseSettings):
     domain_intel_gap_filter_model: str = "claude-haiku-4-5-20251001"
     domain_intel_gap_filter_max_tokens: int = 600
 
+    # Content Gap Analyzer module — per-client: for selected money-pages × main
+    # keywords, check top-10 organic + AIO citation and diff the competitors
+    # ranking above the client (authority / traffic / entity / on-page). An
+    # assembly/diff layer over serp_snapshots + nlp /analyze + /score-page +
+    # dataforseo_labs + page_structure_eval — no new scoring engine.
+    # See docs/modules/content-gap-analyzer-prd-v1_0.md. Ships dark.
+    content_gap_enabled: bool = False
+    # Monthly auto-run over the client's most important URLs + main keywords.
+    content_gap_auto_enabled: bool = False
+    # Own daily paid-call ceiling (fail-closed meter: content_gap_usage +
+    # reserve_content_gap_calls). Owner-set 2026-09-15. 0 disables the guard.
+    content_gap_daily_call_budget: int = 500
+    # Reuse the client's latest serp_snapshots row when it is within this window;
+    # only capture fresh (~20-25 DFS calls/keyword) when stale/absent. Matches the
+    # monthly cadence so a monthly run rides the rank tracker's weekly capture.
+    content_gap_snapshot_max_age_days: int = 30
+    # Monthly scheduled scan cadence (enqueue_due_content_gap_scans due-check).
+    content_gap_interval_days: int = 30
+    # Cap on competitors scraped for the deep on-page/entity dimensions per
+    # gapped keyword (strongest-first by position), to bound scrape cost.
+    content_gap_max_competitors: int = 5
+
     # Keyword Research module (the seed-keyword explorer) — per-client keyword
     # ideas from the DataForSEO Labs keyword_ideas endpoint, enriched + clustered.
     # This backs the "Keyword Research" workspace card (replaced the Topic Fanout
