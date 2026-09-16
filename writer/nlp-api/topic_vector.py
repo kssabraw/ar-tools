@@ -1,6 +1,6 @@
-"""Topic-Vector Centering + Information Gain — P0 (report-only).
+"""Topic-Vector Centering + Information Gain — P0 + P1 (report-only).
 
-Implements the P0 subset of
+Implements the P0 subset + the P1 scored Information Gain of
 ``docs/modules/topic-vector-information-gain-plan-v1_0.md``:
 
   1. **Topic centering** — cosine(page, centroid) where the centroid is anchored
@@ -60,10 +60,12 @@ logger = logging.getLogger(__name__)
 # information-gain gap (§10 "centering gates gain").
 CENTERING_FLOOR = float(os.environ.get("TOPIC_VECTOR_CENTERING_FLOOR", "0.60"))
 # The page "covers" a subtopic when its best-matching section embeds at least
-# this close to the subtopic label. Below it → a coverage gap. Because the cosine
-# band is compressed with no clean gap, the inverse-gain output ALSO falls back to
-# the relatively weakest on-vector subtopics (see `measure`) so it stays actionable
-# even when nothing crosses this absolute floor.
+# this close to the subtopic label. Below it → a coverage gap. Calibrated to 0.70
+# to sit inside gemini-embedding-2's compressed cosine band, so a well-covered
+# page shows few/no gaps and a thin one surfaces its weak subtopics (the P0 0.55
+# floor marked everything "covered"). The inverse-gain gap is the on-vector
+# subtopics below this absolute floor — no relative fallback (it over-fired on
+# well-covered pages and was removed).
 COVERAGE_FLOOR = float(os.environ.get("TOPIC_VECTOR_COVERAGE_FLOOR", "0.70"))
 # The ≥2-page-spread guard for the 11-20 tier so page-2 junk can't leak in (§3).
 TIER2_MIN_PAGE_SPREAD = int(os.environ.get("TOPIC_VECTOR_TIER2_MIN_SPREAD", "2"))

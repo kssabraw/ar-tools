@@ -200,6 +200,13 @@ GEMINI_EMBED_DIM     = int(os.environ.get("GEMINI_EMBED_DIM", "1536"))
 GEMINI_EMBED_ENDPOINT = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:batchEmbedContents"
 )
+# batchEmbedContents caps the number of requests per call (Google's embedding
+# models: 100). MCS sends ~13 and the topic-vector P0 measure ~59, but P1's
+# measure batches page_text + centroid + subtopics + sections + page-claims +
+# site-claims — up to ~144 — which would 400 the whole call and silently skip
+# BOTH the P1 gain and the already-working P0 centering/coverage. Chunk so a
+# large batch is split transparently; a batch ≤ the cap is one call, unchanged.
+GEMINI_EMBED_MAX_BATCH = int(os.environ.get("GEMINI_EMBED_MAX_BATCH", "100"))
 
 # Entity analysis: TextRazor (replaced Google Cloud NLP — cheaper + Wikipedia/
 # Wikidata linking). Single endpoint; key passed via the X-TextRazor-Key header.
@@ -229,29 +236,39 @@ _MODEL_PRICING = {
 async def _gemini_embed(texts: List[str]) -> List[List[float]]:
     """Batch-embed `texts` with the Gemini REST embeddings API (httpx — no SDK).
     Raises on failure so callers can fall back; returns vectors in input order.
-    Only reached when GEMINI_API_KEY is set (the MCS caller gates on it)."""
+    Only reached when GEMINI_API_KEY is set (the MCS caller gates on it).
+
+    Chunked at GEMINI_EMBED_MAX_BATCH so a large batch (the P1 topic-vector
+    measure) doesn't exceed batchEmbedContents' per-call request cap; the chunks
+    are concatenated in input order and any chunk failure raises (contract
+    preserved). A batch within the cap is a single call, identical to before."""
     if not GEMINI_API_KEY or not texts:
         return []
-    payload = {
-        "requests": [
-            {
-                "model": f"models/{GEMINI_EMBED_MODEL}",
-                "content": {"parts": [{"text": t or ""}]},
-                "taskType": "SEMANTIC_SIMILARITY",
-                "outputDimensionality": GEMINI_EMBED_DIM,
-            }
-            for t in texts
-        ]
-    }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            GEMINI_EMBED_ENDPOINT,
-            headers={"x-goog-api-key": GEMINI_API_KEY},  # header, NOT ?key= (httpx logs the URL)
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return [e.get("values", []) for e in (data.get("embeddings") or [])]
+    out: List[List[float]] = []
+    cap = max(1, GEMINI_EMBED_MAX_BATCH)
+    for start in range(0, len(texts), cap):
+        chunk = texts[start:start + cap]
+        payload = {
+            "requests": [
+                {
+                    "model": f"models/{GEMINI_EMBED_MODEL}",
+                    "content": {"parts": [{"text": t or ""}]},
+                    "taskType": "SEMANTIC_SIMILARITY",
+                    "outputDimensionality": GEMINI_EMBED_DIM,
+                }
+                for t in chunk
+            ]
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                GEMINI_EMBED_ENDPOINT,
+                headers={"x-goog-api-key": GEMINI_API_KEY},  # header, NOT ?key= (httpx logs the URL)
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        out.extend(e.get("values", []) for e in (data.get("embeddings") or []))
+    return out
 
 
 # ── Generation constants — restored VERBATIM from the reference copy
