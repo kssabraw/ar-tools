@@ -19,6 +19,7 @@ const nav: NavItem[] = [
   { label: 'Silos', to: '/silos', icon: <Layers size={18} /> },
   { label: 'Content Calendar', to: '/content-calendar', icon: <CalendarDays size={18} /> },
   { label: 'Clients', to: '/clients', icon: <Users size={18} /> },
+  { label: 'Prospects', to: '/prospects', icon: <Radar size={18} /> },
   { label: 'LeadOff', to: '/leadoff', icon: <Radar size={18} /> },
   { label: 'Outreach', to: '/outreach', icon: <Crosshair size={18} /> },
   { label: 'Backlinks', to: '/backlinks', icon: <Link2 size={18} /> },
