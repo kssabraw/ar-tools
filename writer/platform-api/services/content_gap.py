@@ -863,6 +863,271 @@ def enqueue_content_gap_scan(client_id: str, trigger: str = "manual") -> Optiona
 
 
 # ===========================================================================
+# Budget read + free estimate preflight (§8 — the "estimate" API, no spend)
+# ===========================================================================
+def budget_remaining() -> int:
+    """Paid content-gap calls left in today's budget (a large number when the
+    cap is disabled). Mirrors domain_intel.budget_remaining."""
+    cap = settings.content_gap_daily_call_budget
+    if cap <= 0:
+        return 10**9
+    try:
+        rows = (
+            get_supabase()
+            .table("content_gap_usage")
+            .select("calls")
+            .eq("day", _today())
+            .limit(1)
+            .execute()
+        ).data
+    except Exception:  # noqa: BLE001 — a read failure shouldn't zero the estimate
+        return cap
+    used = rows[0]["calls"] if rows else 0
+    return max(0, cap - used)
+
+
+def estimate_max_calls(
+    keyword_count: int, max_competitors: int, page_traffic: bool = True
+) -> int:
+    """Upper-bound paid calls a full scan could make (§8). Pure.
+
+    Worst case is every keyword being a gap and hitting the competitor cap, so
+    each keyword makes `estimate_deep_calls(max_competitors, page_traffic)`.
+    Wins short-circuit and thin competitor sets under-spend this, so it is a
+    ceiling — the free preflight number, never a promise."""
+    kw = max(0, int(keyword_count))
+    comp = max(0, int(max_competitors))
+    return kw * estimate_deep_calls(comp, page_traffic)
+
+
+def estimate_scan(supabase, client_id: str) -> dict:
+    """Free preflight (§8): the client's keyword × money-page scope, the
+    worst-case call ceiling, and today's remaining budget. Reads only — no paid
+    call, no enqueue. Powers the run-now scope preview."""
+    scope = resolve_scope(supabase, client_id)
+    with_page = sum(1 for s in scope if (s.get("page_url") or "").strip())
+    max_calls = estimate_max_calls(
+        len(scope),
+        settings.content_gap_max_competitors,
+        settings.content_gap_page_traffic_enabled,
+    )
+    return {
+        "keyword_count": len(scope),
+        "money_page_count": with_page,
+        "scope": scope,
+        "estimated_max_calls": max_calls,
+        "budget_remaining": budget_remaining(),
+        "max_competitors": settings.content_gap_max_competitors,
+        "snapshot_max_age_days": settings.content_gap_snapshot_max_age_days,
+    }
+
+
+# ===========================================================================
+# Reads for the API (runs list + detail)
+# ===========================================================================
+def list_runs(client_id: str, limit: int = 50) -> list[dict]:
+    """The client's content-gap runs, newest first (summary rows)."""
+    return (
+        get_supabase()
+        .table("content_gap_runs")
+        .select(
+            "id, trigger, status, keywords_analyzed, wins, gaps, error, "
+            "created_at, completed_at"
+        )
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    ).data or []
+
+
+def get_run_detail(client_id: str, run_id: str) -> Optional[dict]:
+    """One run + its per-keyword rows (verdict + competitor set + per-dimension
+    gap + on-page diff). Returns None when the run isn't the client's. The nested
+    `gap`/`onpage_diff`/`competitors` jsonb is returned verbatim (never through a
+    strict response_model that would strip dimension fields — the Phase-1
+    ReoptAction lesson)."""
+    supabase = get_supabase()
+    runs = (
+        supabase.table("content_gap_runs")
+        .select("*")
+        .eq("id", run_id)
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    if not runs:
+        return None
+    keywords = (
+        supabase.table("content_gap_keywords")
+        .select("*")
+        .eq("run_id", run_id)
+        .order("created_at")
+        .execute()
+    ).data or []
+    # Verdict order: gaps first (full → organic → aio), wins last — the drill-in
+    # leads with what needs work.
+    order = {"full_gap": 0, "organic_gap": 1, "aio_gap": 2, "win": 3}
+    keywords.sort(key=lambda k: (order.get(k.get("verdict"), 9), k.get("keyword") or ""))
+    return {"run": runs[0], "keywords": keywords}
+
+
+# ===========================================================================
+# Pure: CSV export rows (§8, §9)
+# ===========================================================================
+CSV_HEADERS = [
+    "keyword",
+    "page_url",
+    "verdict",
+    "client_position",
+    "aio_present",
+    "in_aio",
+    "competitor_count",
+    "top_competitor",
+    "page_rd_gap",
+    "domain_rd_gap",
+    "dr_gap",
+    "word_count_delta",
+    "dimensions_unavailable",
+]
+
+
+def build_run_csv_rows(keywords: list[dict]) -> list[list]:
+    """Flatten a run's keyword rows into a CSV table (the verdict table + the
+    headline authority/on-page deltas). Pure — pulls defensively from the nested
+    `gap`/`onpage_diff` jsonb so a partially-measured row still exports."""
+    rows: list[list] = []
+    for k in keywords or []:
+        gap = k.get("gap") if isinstance(k.get("gap"), dict) else {}
+        auth = gap.get("authority") if isinstance(gap.get("authority"), dict) else {}
+        diff = k.get("onpage_diff") if isinstance(k.get("onpage_diff"), dict) else {}
+        comps = k.get("competitors") if isinstance(k.get("competitors"), list) else []
+        top = comps[0] if comps else {}
+        word = diff.get("word_count") if isinstance(diff.get("word_count"), dict) else {}
+        rows.append(
+            [
+                k.get("keyword") or "",
+                k.get("page_url") or "",
+                k.get("verdict") or "",
+                k.get("client_position"),
+                k.get("aio_present"),
+                k.get("in_aio"),
+                len(comps),
+                (top or {}).get("domain") or "",
+                auth.get("page_rd_gap"),
+                auth.get("domain_rd_gap"),
+                auth.get("dr_gap"),
+                word.get("delta"),
+                "; ".join(gap.get("dimensions_unavailable") or []),
+            ]
+        )
+    return rows
+
+
+# ===========================================================================
+# Monthly scheduler hook (§8 — enqueue_due_content_gap_scans)
+# ===========================================================================
+def enqueue_due_content_gap_scans() -> int:
+    """Enqueue a monthly scan for each eligible client whose last COMPLETED
+    content-gap scan is older than `content_gap_interval_days`. Daily due-check
+    on the shared scheduler; self-gated + budget-guarded + fully
+    exception-guarded (it runs in the scheduler's single daily try-block, so
+    raising here would starve every hook after it). Returns the enqueued count.
+
+    Eligibility mirrors the monthly auto-scope (owner ruling): a client with at
+    least one active tracked keyword carrying a `canonical_url` (a money page).
+    The last-run signal is the async_jobs history (latest completed
+    content_gap_scan per client), NOT the run rows — a run that legitimately
+    finds only wins still counts as "run", and a row read is subject to the
+    PostgREST cap.
+    """
+    try:
+        return _enqueue_due_content_gap_scans()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("content_gap.due_check_failed", extra={"error": str(exc)})
+        return 0
+
+
+def _enqueue_due_content_gap_scans() -> int:
+    if not (settings.content_gap_enabled and settings.content_gap_auto_enabled):
+        return 0
+    # Fresh captures + the deep pass draw on DataForSEO; without creds a scheduled
+    # scan can only degrade, so don't burn the daily due-check on it.
+    if not (settings.dataforseo_login and settings.dataforseo_password):
+        return 0
+    if budget_remaining() <= 0:
+        return 0
+    supabase = get_supabase()
+
+    # Money-page owners: clients with an active tracked keyword carrying a
+    # canonical_url, resolved property → client via gsc_properties.
+    kw_rows = (
+        supabase.table("tracked_keywords")
+        .select("property_id, canonical_url, active")
+        .eq("active", True)
+        .execute()
+    ).data or []
+    prop_ids = {r["property_id"] for r in kw_rows if r.get("canonical_url") and r.get("property_id")}
+    if not prop_ids:
+        return 0
+    prop_rows = (
+        supabase.table("gsc_properties")
+        .select("id, client_id")
+        .in_("id", sorted(prop_ids))
+        .execute()
+    ).data or []
+    eligible = {r["client_id"] for r in prop_rows if r.get("client_id")}
+    if not eligible:
+        return 0
+
+    cutoff_iso = (
+        datetime.now(timezone.utc) - timedelta(days=settings.content_gap_interval_days)
+    ).isoformat()
+    recent: set[str] = set()
+    try:
+        recent = {
+            r["entity_id"]
+            for r in (
+                supabase.table("async_jobs")
+                .select("entity_id")
+                .eq("job_type", "content_gap_scan")
+                .eq("status", "complete")
+                .gte("completed_at", cutoff_iso)
+                .execute()
+            ).data or []
+            if r.get("entity_id")
+        }
+    except Exception:  # noqa: BLE001
+        recent = set()
+    pending: set[str] = set()
+    try:
+        pending = {
+            r["entity_id"]
+            for r in (
+                supabase.table("async_jobs")
+                .select("entity_id")
+                .eq("job_type", "content_gap_scan")
+                .in_("status", ["pending", "running"])
+                .execute()
+            ).data or []
+            if r.get("entity_id")
+        }
+    except Exception:  # noqa: BLE001
+        pending = set()
+
+    count = 0
+    for cid in eligible - recent - pending:
+        try:
+            if enqueue_content_gap_scan(cid, trigger="scheduled"):
+                count += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("content_gap.enqueue_failed", extra={"client_id": cid, "error": str(exc)})
+    if count:
+        logger.info("content_gap.enqueued", extra={"count": count})
+    return count
+
+
+# ===========================================================================
 # Deep-dimension pass (Phase 1) — assumes the budget is already reserved
 # ===========================================================================
 async def _page_traffic_gap(

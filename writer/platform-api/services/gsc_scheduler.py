@@ -619,6 +619,7 @@ async def gsc_scheduler() -> None:
     from services.website_release import enqueue_due_website_releases
     from services.local_seo_matrix_release import enqueue_due_matrix_releases
     from services.domain_intel import enqueue_due_domain_intel
+    from services.content_gap import enqueue_due_content_gap_scans
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
     from services.scan_health import run_scan_health_sweep
@@ -763,6 +764,9 @@ async def gsc_scheduler() -> None:
                 # Weekly Domain Intelligence keyword-gap refresh (per-client
                 # interval-gated; notifies on newly-opened gaps).
                 _safe("domain_intel", enqueue_due_domain_intel)
+                # Monthly Content Gap scan (per-client interval-gated; self-gated
+                # on content_gap_enabled + _auto_enabled + budget). No-op while off.
+                _safe("content_gap", enqueue_due_content_gap_scans)
                 _safe("trend_sweep", run_trend_sweep)
                 _safe("page_backlinks", enqueue_due_page_backlinks)
                 # Auto-track each client's own domain (idempotent), then run the

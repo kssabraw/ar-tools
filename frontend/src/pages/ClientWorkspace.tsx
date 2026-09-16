@@ -7,7 +7,7 @@ import {
   PenLine, MapPin, Search, TrendingUp, Map, CalendarClock, CalendarPlus,
   ArrowLeft, ArrowRight, Globe, Building2, Sparkles, Users, FileSearch, FileText, Eye, ListChecks, FileBarChart, UploadCloud,
   ClipboardList, BookOpen, Share2, Send, Target, Swords, Link2, KanbanSquare, Radar, ShoppingBag, Globe2, Server,
-  LayoutGrid, HelpCircle, Palette,
+  LayoutGrid, HelpCircle, Palette, GitCompareArrows,
 } from 'lucide-react'
 import { ClientNotifications } from '../components/ClientNotifications'
 import { FreezeBanner } from '../components/FreezeBanner'
@@ -26,6 +26,13 @@ export function ClientWorkspace() {
   const { data: websiteStatus } = useQuery<{ enabled: boolean }>({
     queryKey: ['website-status'],
     queryFn: () => api.get<{ enabled: boolean }>('/websites/status'),
+    staleTime: 5 * 60_000,
+  })
+
+  const { data: contentGapStatus } = useQuery<{ enabled: boolean }>({
+    queryKey: ['content-gap-status', id],
+    queryFn: () => api.get<{ enabled: boolean }>(`/clients/${id}/content-gap`),
+    enabled: Boolean(id),
     staleTime: 5 * 60_000,
   })
 
@@ -487,6 +494,15 @@ export function ClientWorkspace() {
           to={id ? `/clients/${id}/google-trends` : undefined}
           cta="Discover"
         />
+        {contentGapStatus?.enabled && (
+          <ActionCard
+            icon={<GitCompareArrows size={22} />}
+            label="Content Gap Analyzer"
+            description="For each money-page keyword, are you winning the SERP — top-10 organic and cited in the AI Overview? Where not, exactly what the competitors above you have that you don't, across authority, traffic, entities & on-page content."
+            to={id ? `/clients/${id}/content-gap` : undefined}
+            cta="Analyze"
+          />
+        )}
       </Section>
 
       {/* ── Website Builder ─────────────────────────────────────────── */}
