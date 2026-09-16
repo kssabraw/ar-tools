@@ -49,7 +49,7 @@ from typing import Any, Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import brand_voice_service, icp_service
+from services import brand_guide_mockups, brand_voice_service, icp_service
 
 logger = logging.getLogger(__name__)
 
@@ -96,8 +96,12 @@ def gather_render_context(client: dict) -> dict:
     bv = client.get("brand_voice") if isinstance(client.get("brand_voice"), dict) else {}
     return {
         "name": (client.get("name") or "").strip(),
-        "website": (client.get("website_url") or "").strip(),
+        "website": (client.get("website_url") or gbp.get("website") or "").strip(),
         "logo_url": (client.get("logo_url") or gbp.get("logo") or "").strip() or None,
+        # Real NAP from the GBP capture for the Applications mockups (§9 business
+        # card / letterhead) — the client's own data, only rendered when present.
+        "phone": (gbp.get("phone") or "").strip(),
+        "address": (gbp.get("address") or gbp.get("full_address") or "").strip(),
         "brand_voice_text": brand_voice_service.resolve_brand_guide_text(client) or "",
         "icp_text": icp_service.resolve_icp_text(client) or "",
         "brand_voice": bv,
@@ -685,6 +689,10 @@ def build_guide_html(
         _section_typography(guide),
         _section_logo(guide, logo_src=logo_src),
         _section_imagery(guide),
+        # Section 9 — Applications / in-context mockups (PRD §3 §9, Phase 5). Pure
+        # assembly over the palette/type/voice tokens; omitted when there's no
+        # usable palette. Identical in both render profiles (§4.7).
+        brand_guide_mockups.build_applications_section(guide, ctx, logo_src=logo_src),
         _section_cheatsheet(guide, ctx),
         _section_methodology(guide),
     ])

@@ -133,6 +133,14 @@ class TestGatherContext:
         monkeypatch.setattr(R.icp_service, "resolve_icp_text", lambda c: "")
         ctx = R.gather_render_context({})
         assert ctx["logo_url"] is None
+
+    def test_pulls_gbp_nap_for_mockups(self, monkeypatch):
+        # Phase 5: the Applications mockups (§9) read real NAP from the GBP capture.
+        monkeypatch.setattr(R.brand_voice_service, "resolve_brand_guide_text", lambda c: "")
+        monkeypatch.setattr(R.icp_service, "resolve_icp_text", lambda c: "")
+        ctx = R.gather_render_context({"gbp": {"phone": "(555) 010-1234", "address": "12 Main St"}})
+        assert ctx["phone"] == "(555) 010-1234"
+        assert ctx["address"] == "12 Main St"
         assert ctx["voice_card"] == {}
         assert ctx["differentiators"] == []
 
@@ -157,6 +165,14 @@ class TestBuildHtml:
         assert "Inter" in html and "Google Fonts" in html
         # Worked voice example
         assert "Your roof, handled." in html
+        # Phase 5 — the Applications / mockups section (§9) rides in when there's a palette.
+        assert "<h2>Applications</h2>" in html
+        assert "Website hero" in html and "Business card" in html
+
+    def test_applications_section_omitted_without_palette(self):
+        bare = {"id": "g", "client_id": "c", "version": 1, "visual_census": {}, "synthesized": {}, "vibe_read": {}, "captured": {}}
+        html = R.build_guide_html(bare, {"name": "Nobody"}, profile="client")
+        assert "<h2>Applications</h2>" not in html
 
     def test_footer_carries_agency(self):
         html = R.build_guide_html(_guide(), _ctx(), profile="client", agency="Acme Agency")

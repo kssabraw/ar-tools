@@ -278,6 +278,7 @@ function GuideDetail({ clientId, guideId }: { clientId: string; guideId: string 
           <AestheticSection vibe={vibe} synth={synth} />
           <VoiceExamplesEditor clientId={clientId} guideId={guideId} synth={synth} />
           <LogoAdopt clientId={clientId} guideId={guideId} census={census} />
+          <ApplicationsPreview census={census} synth={synth} />
           <VoiceSuggestSurface clientId={clientId} guideId={guideId} />
         </>
       )}
@@ -513,6 +514,39 @@ function LogoAdopt({ clientId, guideId, census }: { clientId: string; guideId: s
           ) : (adopt.error as Error).message}
         </div>
       )}
+    </Section>
+  )
+}
+
+// ── Applications / mockups preview (§9, Phase 5) ──────────────────────────────
+// Read-only: the in-context mockups are assembled server-side into the PDF from the
+// brand system's tokens. This surface lists what's included + a hint of the palette,
+// pointing at the download buttons above — it deliberately does NOT re-render the
+// mockups in React (a second rendering engine would drift from the PDF).
+const APP_MOCKUPS = ['Website hero', 'Social post', 'Business card', 'Letterhead', 'Product label']
+
+function ApplicationsPreview({ census, synth }: { census: Census; synth: Synth }) {
+  const swatches = Array.isArray(synth.color?.swatches) ? synth.color!.swatches!.filter((s) => !s.not_brand) : []
+  const docColors = Array.isArray(census.colors) ? census.colors : []
+  // Mirror the backend gate: mockups render only when there's a usable palette.
+  const hexes = (swatches.length ? swatches.map((s) => s.hex) : docColors.map((c) => c.hex)).filter(Boolean).slice(0, 5)
+  if (!hexes.length) return null
+  return (
+    <Section title="Applications" subtitle="In-context mockups — in the PDF">
+      <p style={{ fontSize: 12.5, color: '#64748b', margin: '0 0 10px' }}>
+        The brand system shown in use — built from the palette, type &amp; voice above. Download the{' '}
+        <strong>Client PDF</strong> (or Internal audit) to see them.
+      </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
+        {APP_MOCKUPS.map((m) => (
+          <span key={m} style={{ fontSize: 11.5, color: '#334155', background: '#f1f5f9', borderRadius: 999, padding: '3px 10px' }}>{m}</span>
+        ))}
+      </div>
+      <div style={{ display: 'flex', gap: 6 }}>
+        {hexes.map((h, i) => (
+          <div key={i} title={str(h)} style={{ width: 26, height: 26, borderRadius: 6, border: '1px solid rgba(0,0,0,.08)', background: str(h) }} />
+        ))}
+      </div>
     </Section>
   )
 }
