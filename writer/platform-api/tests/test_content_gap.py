@@ -593,3 +593,94 @@ async def test_deep_dimensions_degrades_when_nlp_and_client_url_missing(monkeypa
     assert gap["authority"]["client"]["dr"] == 100
     # on-page diff still returns (client unavailable, no competitors)
     assert onpage_diff["client_available"] is False
+
+
+# ===========================================================================
+# Phase 2 — estimate_max_calls (pure preflight ceiling, §8)
+# ===========================================================================
+def test_estimate_max_calls_scales_per_keyword():
+    per_kw = cg.estimate_deep_calls(5, True)
+    assert cg.estimate_max_calls(4, 5, True) == 4 * per_kw
+
+
+def test_estimate_max_calls_zero_keywords_is_zero():
+    assert cg.estimate_max_calls(0, 5, True) == 0
+
+
+def test_estimate_max_calls_page_traffic_off_is_cheaper():
+    on = cg.estimate_max_calls(3, 5, True)
+    off = cg.estimate_max_calls(3, 5, False)
+    assert off < on
+
+
+def test_estimate_max_calls_clamps_negatives():
+    assert cg.estimate_max_calls(-2, -1, True) == 0
+
+
+# ===========================================================================
+# Phase 2 — build_run_csv_rows (pure export flattening, §8/§9)
+# ===========================================================================
+def test_build_run_csv_rows_full_row():
+    keywords = [
+        {
+            "keyword": "roof repair",
+            "page_url": "https://c.com/roof",
+            "verdict": "full_gap",
+            "client_position": None,
+            "aio_present": True,
+            "in_aio": False,
+            "competitors": [{"domain": "a.com", "position": 1}, {"domain": "b.com", "position": 2}],
+            "gap": {
+                "authority": {"page_rd_gap": 12.0, "domain_rd_gap": 40.0, "dr_gap": 5.0},
+                "dimensions_unavailable": ["site_traffic"],
+            },
+            "onpage_diff": {"word_count": {"client": 500, "competitor_median": 900, "delta": -400}},
+        }
+    ]
+    rows = cg.build_run_csv_rows(keywords)
+    assert len(rows) == 1
+    row = dict(zip(cg.CSV_HEADERS, rows[0]))
+    assert row["keyword"] == "roof repair"
+    assert row["verdict"] == "full_gap"
+    assert row["competitor_count"] == 2
+    assert row["top_competitor"] == "a.com"
+    assert row["page_rd_gap"] == 12.0
+    assert row["dr_gap"] == 5.0
+    assert row["word_count_delta"] == -400
+    assert row["dimensions_unavailable"] == "site_traffic"
+
+
+def test_build_run_csv_rows_win_with_no_gap_payload():
+    # A win short-circuits the deep pass, so gap/onpage_diff/competitors are null.
+    keywords = [
+        {
+            "keyword": "brand term",
+            "page_url": None,
+            "verdict": "win",
+            "client_position": 1,
+            "aio_present": False,
+            "in_aio": False,
+            "competitors": None,
+            "gap": None,
+            "onpage_diff": None,
+        }
+    ]
+    rows = cg.build_run_csv_rows(keywords)
+    row = dict(zip(cg.CSV_HEADERS, rows[0]))
+    assert row["verdict"] == "win"
+    assert row["competitor_count"] == 0
+    assert row["top_competitor"] == ""
+    assert row["page_rd_gap"] is None
+    assert row["word_count_delta"] is None
+    assert row["dimensions_unavailable"] == ""
+
+
+def test_build_run_csv_rows_empty():
+    assert cg.build_run_csv_rows([]) == []
+
+
+def test_csv_headers_stable():
+    # The export contract the frontend + downstream consumers read.
+    assert cg.CSV_HEADERS[0] == "keyword"
+    assert "verdict" in cg.CSV_HEADERS
+    assert len(cg.CSV_HEADERS) == 13

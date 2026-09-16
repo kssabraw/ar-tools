@@ -21,7 +21,7 @@ from models.clients import (
     PageStructureGuidelines,
     PageStructureUrls,
 )
-from services import brand_voice_service, github_infer, gsc_service, icp_service, rank_location
+from services import brand_voice_service, github_infer, gsc_service, icp_service, prospect_analyses, rank_location
 from services.file_parser import detect_format
 from services.gbp_service import get_business_details, resolve_business, search_businesses
 from services.page_structure_scraper import PAGE_TYPES
@@ -536,10 +536,15 @@ async def create_client(
         # A prospect stays lightweight: no website scrape, no auto brand-voice /
         # ICP scans, no own-domain backlink tracking, no deliverables sheet — the
         # whole point is to run one-off reports without building a full profile.
-        # Only derive the rank-tracking location from a linked GBP (cheap, and it
-        # gives Maps + Domain Intelligence a sensible default location).
+        # Derive the rank-tracking location from a linked GBP (cheap, and it gives
+        # Maps + Domain Intelligence a sensible default location).
         if body.gbp is not None:
             rank_location.enqueue_location_derive(client["id"])
+        # Save kicks off the analyses so a report is ready during the meeting
+        # (organic + AI Visibility always; Maps when a GBP supplies a location).
+        prospect_analyses.run_prospect_analyses(
+            client, auth["user_id"], is_create=True
+        )
         logger.info(
             "prospect_created",
             extra={"client_id": client["id"], "user_id": auth["user_id"]},
@@ -754,10 +759,23 @@ async def update_client(
         _enqueue_page_structure_scrape(str(client_id), page_type, url)
     for page_type, text, filename in ps_guides_to_enqueue:
         _enqueue_page_structure_parse(str(client_id), page_type, text, filename)
+    gbp_changed = body.gbp is not None and updates.get("gbp") != existing.get("gbp")
     # Re-derive the rank-tracking location only when the GBP actually changed
     # (the job still skips manually-set clients and only re-pulls on a change).
-    if body.gbp is not None and updates.get("gbp") != existing.get("gbp"):
+    if gbp_changed:
         rank_location.enqueue_location_derive(str(client_id))
+
+    # For a prospect, saving re-runs the analyses whose inputs changed so a fresh
+    # report is ready — organic when the website changed, Maps + AI when the GBP
+    # changed. Prospect-only, so this never auto-spends on a real client.
+    if existing.get("kind") == "prospect":
+        prospect_analyses.run_prospect_analyses(
+            result.data[0],
+            auth["user_id"],
+            is_create=False,
+            website_changed=website_changed,
+            gbp_changed=gbp_changed,
+        )
 
     logger.info("client_updated", extra={"client_id": str(client_id), "user_id": auth["user_id"]})
     return _to_client_detail(result.data[0])

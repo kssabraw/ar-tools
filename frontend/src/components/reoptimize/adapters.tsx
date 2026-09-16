@@ -92,6 +92,9 @@ export function localSeoAdapter(clientId: string, clientName: string | undefined
     keywordLabel: 'Service',
     keywordPlaceholder: 'e.g. emergency plumber',
     supportsLocation: true,
+    supportsNotes: true,
+    notesLabel: 'Notes for the writer',
+    notesPlaceholder: 'e.g. cover the subtopics competitors address that this page doesn\'t',
     onOpenSaved,
     savedLinkLabel: 'view in Saved Pages',
     destinations: [
@@ -111,6 +114,7 @@ export function localSeoAdapter(clientId: string, clientName: string | undefined
         score_threshold: SCORE_THRESHOLD,
         publish_to_doc: opts.destination === 'doc',
         entity_provider: opts.entityProvider ?? null,
+        notes: opts.notes ?? null,
       })
       return (res.jobs ?? []).map(j => ({
         kind: 'job' as const, id: j.job_id, jobId: j.job_id, label: j.page_url.replace(/^https?:\/\//, ''),

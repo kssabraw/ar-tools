@@ -38,6 +38,7 @@ import { Backlinks } from './pages/Backlinks'
 import { Activity } from './pages/Activity'
 import { Competitors } from './pages/Competitors'
 import { DomainIntel } from './pages/DomainIntel'
+import { ContentGap } from './pages/ContentGap'
 import { CoverageAudit } from './pages/CoverageAudit'
 import { KeywordResearch } from './pages/KeywordResearch'
 import { GoogleTrends } from './pages/GoogleTrends'
@@ -154,6 +155,7 @@ export default function App() {
                       <Route path="/clients/:id/coverage-audit" element={<CoverageAudit />} />
                       <Route path="/clients/:id/keyword-research" element={<KeywordResearch />} />
                       <Route path="/clients/:id/google-trends" element={<GoogleTrends />} />
+                      <Route path="/clients/:id/content-gap" element={<ContentGap />} />
                       <Route path="/clients/:id/forecast" element={<Forecast />} />
                       <Route path="/clients/:id/sops" element={<Sops />} />
                       <Route path="/clients/:id/asana-tasks" element={<AsanaTasks />} />

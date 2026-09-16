@@ -324,6 +324,76 @@ async def test_reoptimize_url_rewrites_page_below_threshold():
     assert reopt.await_args.kwargs["existing_page_url"] == "https://x.com/p"
 
 
+# ── writer_notes (Content Gap Analyzer §11.1 supplementary guidance) ─────────
+
+@pytest.mark.asyncio
+async def test_reoptimize_page_sends_writer_notes_to_nlp():
+    # Supplementary rewrite guidance rides in the /reoptimize-page payload as
+    # `writer_notes` — never folded into `deficiencies`.
+    inserted = {"id": "page-wn", "client_id": "client-1", "keyword": "plumber"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    reopt_result = {"content_html": "<article/>", "schema_json": "{}",
+                    "composite_score": 88.0, "composite_status": "good"}
+    notes = "Cover these subtopics competitors address: cost factors; permits."
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=reopt_result)) as stream:
+        await local_seo_service.reoptimize_page(
+            "client-1", "plumber", "Anaheim, CA", "<article/>", None, [], {"serp": 1}, "user-1",
+            writer_notes=notes,
+        )
+    payload = stream.await_args[0][1]
+    assert payload["writer_notes"] == notes
+    assert payload["deficiencies"] == []  # notes are NOT a deficiency
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_page_writer_notes_defaults_none():
+    inserted = {"id": "page-wn2", "client_id": "client-1", "keyword": "plumber"}
+    supabase = _supabase_for_client(_client_row(), insert_row=inserted)
+    reopt_result = {"content_html": "<article/>", "composite_score": 88.0, "composite_status": "good"}
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service, "_stream_nlp", new=AsyncMock(return_value=reopt_result)) as stream:
+        await local_seo_service.reoptimize_page(
+            "client-1", "plumber", "Anaheim, CA", "<article/>", None, [], {"serp": 1}, "user-1",
+        )
+    assert stream.await_args[0][1]["writer_notes"] is None
+
+
+@pytest.mark.asyncio
+async def test_reoptimize_url_forwards_writer_notes():
+    supabase = _supabase_for_client(_client_row())
+    score = {"composite_score": 54.0, "composite_status": "poor", "deficiencies": []}
+    page = {"id": "page-9", "page_title": "T", "composite_score": 81.0,
+            "composite_status": "good", "published_doc_url": None}
+    notes = "Add subtopics: warranty; response time."
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase), \
+         patch.object(local_seo_service.locations_service, "resolve_location",
+                      new=AsyncMock(return_value=("Anaheim,California,United States", 1013962))), \
+         patch.object(local_seo_service, "_get_or_compute_analysis", new=AsyncMock(return_value={"serp": 1})), \
+         patch.object(local_seo_service, "_post_nlp", new=AsyncMock(return_value=score)), \
+         patch.object(local_seo_service, "reoptimize_page", new=AsyncMock(return_value=page)) as reopt:
+        await local_seo_service.reoptimize_url(
+            "client-1", "https://x.com/p", "plumber", "Anaheim, CA", 1013962, "user-1",
+            writer_notes=notes,
+        )
+    assert reopt.await_args.kwargs["writer_notes"] == notes
+
+
+@pytest.mark.asyncio
+async def test_enqueue_reoptimize_bulk_carries_writer_notes_in_payload():
+    supabase = _supabase_for_client(_client_row(), insert_row={"id": "job-1"})
+    with patch.object(local_seo_service, "get_supabase", return_value=supabase):
+        jobs = await local_seo_service.enqueue_reoptimize_bulk(
+            "client-1",
+            [{"page_url": "https://x.com/p", "keyword": "plumber", "location": "Anaheim, CA"}],
+            "user-1",
+            writer_notes="cover the subtopic gaps",
+        )
+    assert jobs and jobs[0]["job_id"] == "job-1"
+    inserted_rows = supabase.table.return_value.insert.call_args[0][0]
+    assert inserted_rows[0]["payload"]["writer_notes"] == "cover the subtopic gaps"
+
+
 @pytest.mark.asyncio
 async def test_reoptimize_url_publishes_when_requested():
     supabase = _supabase_for_client(_client_row())
