@@ -11644,22 +11644,30 @@ async def _measure_emotional_arc(page_html: str, voice_card: Optional[dict], cli
             tool_choice={"type": "tool", "name": "emit_emotional_arc"},
             messages=[{"role": "user", "content": prompt}],
         )
+        # Log the (tiny) spend like the sibling Haiku audits do; kept inside the
+        # arc sub-object rather than folded into the handler's headline
+        # token_usage, so the score response's token contract is unchanged.
+        token_rec = _token_record(
+            "topic-vector-arc", TOPIC_VECTOR_ARC_MODEL,
+            msg.usage.input_tokens, msg.usage.output_tokens,
+        )
         raw = None
         for block in msg.content:
             if getattr(block, "type", None) == "tool_use" and getattr(block, "name", None) == "emit_emotional_arc":
                 raw = dict(block.input)
                 break
+        if raw is None:
+            # Forced tool_choice normally guarantees a tool_use block; a response
+            # with none (an API oddity) is a FAILURE, not a page that scored 0 —
+            # suppress ("not measured"), never fabricate an available 0 (§10a).
+            supp = topic_vector.suppressed_arc("arc_failed")
+            supp["token_usage"] = token_rec
+            return supp
         arc = topic_vector.sanitize_arc(
             raw, states,
             never_use_terms=(voice_card or {}).get("never_use_terms"),
         )
-        # Log the (tiny) spend like the sibling Haiku audits do; kept inside the
-        # arc sub-object rather than folded into the handler's headline
-        # token_usage, so the score response's token contract is unchanged.
-        arc["token_usage"] = _token_record(
-            "topic-vector-arc", TOPIC_VECTOR_ARC_MODEL,
-            msg.usage.input_tokens, msg.usage.output_tokens,
-        )
+        arc["token_usage"] = token_rec
         return arc
     except Exception as exc:  # pragma: no cover - defensive; arc is best-effort
         logger.warning("emotional-arc measure failed (%s); suppressing.", exc)

@@ -729,11 +729,13 @@ _ARC_AUDIENCE_FIELDS = ("audience_pain_points", "audience_objections",
 
 
 def _arc_list(card: Optional[dict], key: str, cap: int = 6) -> list:
-    """One audience field as a deduped, capped, bounded list of strings."""
+    """One audience field as a deduped, capped, bounded list of strings. A
+    non-list field (a stray string on a hand-crafted card) yields [] rather than
+    char-iterating — the parsed voice card always gives lists, this is defence."""
     vals = card.get(key) if isinstance(card, dict) else None
     out: list = []
     seen: set = set()
-    for v in vals or []:
+    for v in (vals if isinstance(vals, list) else []):
         s = str(v).strip()
         low = s.lower()
         if s and low not in seen:
@@ -889,10 +891,12 @@ def _arc_clean_str(text, forbidden_rx, cap: int = 300) -> str:
     capped, and BLANKED when it contains a forbidden (never_use) term — the
     report must never surface, and no coaching layer may echo, a term the guide
     forbids (§10b / non-negotiable)."""
-    s = _NORM_WS_RE.sub(" ", str(text or "")).strip()[:cap]
+    s = _NORM_WS_RE.sub(" ", str(text or "")).strip()
+    # Scrub BEFORE capping: a forbidden term straddling the cap boundary must not
+    # leave a surviving fragment — check the full string, then truncate.
     if s and forbidden_rx is not None and forbidden_rx.search(s):
         return ""
-    return s
+    return s[:cap]
 
 
 def sanitize_arc(raw, states: dict, *, never_use_terms: Optional[list] = None,

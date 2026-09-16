@@ -736,3 +736,23 @@ def test_sanitize_arc_never_surfaces_a_forbidden_term():
     # before_evidence carried the forbidden word → blanked → verdict dropped.
     assert arc["before_acknowledged"] is False
     assert arc["rationale"] == ""
+
+
+def test_arc_clean_str_scrubs_before_capping():
+    # A forbidden term straddling the cap boundary must not leave a surviving
+    # fragment — the scrub scans the FULL string, then truncates.
+    rx = tv._forbidden_regex(["retatrutide"])
+    straddle = "x" * 295 + " retatrutide tail"  # "retatrutide" spans the 300 cap
+    assert tv._arc_clean_str(straddle, rx, cap=300) == ""  # whole string dropped
+    # A clean over-length string is CAPPED, not blanked.
+    assert tv._arc_clean_str("y" * 500, rx, cap=300) == "y" * 300
+    # No forbidden terms configured → nothing is scrubbed (rx is None).
+    assert tv._arc_clean_str("buy retatrutide now", None, cap=300) == "buy retatrutide now"
+
+
+def test_arc_list_ignores_non_list_field():
+    # A hand-crafted card whose audience field is a bare string must yield [] —
+    # never char-iterate into single-character "items".
+    st = tv.build_arc_states({"audience_pain_points": "a leaky roof"})
+    assert st["pains"] == []
+    assert tv.has_arc_inputs({"audience_pain_points": "a leaky roof"}) is False
