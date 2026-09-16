@@ -163,19 +163,69 @@ def _window_sum(series_full: Sequence[dict], days: int, today: date, field: str)
     )
 
 
+def _latest_date_with(rows: Sequence[dict], field: str) -> Optional[date]:
+    """Most recent date carrying a non-null `field`, or None."""
+    latest: Optional[date] = None
+    for r in rows:
+        if r.get(field) is None:
+            continue
+        d = _to_date(r["date"])
+        if latest is None or d > latest:
+            latest = d
+    return latest
+
+
 def determine_primary_source(rows: Sequence[dict], today: date, coverage_days: int) -> str:
-    """Which source represents this keyword: GSC if the site ranks for it
-    recently, else DataForSEO if we have a live rank, else none (awaiting data)."""
+    """Which source represents this keyword: whichever has the FRESHER ranking.
+
+    GSC is preferred when it's within `coverage_days` AND at least as recent as
+    the DataForSEO rank (so a normally-daily GSC keyword stays on GSC and ties go
+    to GSC). But when GSC data goes stale and the DataForSEO fallback holds a more
+    recent live rank, DataForSEO becomes primary — otherwise a GSC outage would
+    keep the keyword pinned to a stale GSC series and misread the silence as a
+    deindex even though the fallback shows the site still ranking. Both stale →
+    the more recent source; neither present → none (awaiting data).
+    """
+    last_gsc = _latest_date_with(rows, "gsc_position")
+    last_df = _latest_date_with(rows, "tracked_rank")
     cutoff = today.toordinal() - coverage_days + 1
-    has_recent_gsc = any(
-        r.get("gsc_position") is not None and _to_date(r["date"]).toordinal() >= cutoff
-        for r in rows
-    )
-    if has_recent_gsc:
+    gsc_recent = last_gsc is not None and last_gsc.toordinal() >= cutoff
+
+    if gsc_recent and (last_df is None or last_gsc >= last_df):
         return "gsc"
-    if any(r.get("tracked_rank") is not None for r in rows):
+    if last_df is not None and (last_gsc is None or last_df > last_gsc):
+        return "dataforseo"
+    if last_gsc is not None:
+        return "gsc"
+    if last_df is not None:
         return "dataforseo"
     return "none"
+
+
+def _other_source_recent_rank(
+    rows: Sequence[dict], today: date, days: int, primary: str
+) -> bool:
+    """True if the NON-primary source holds a live rank within the last `days`.
+
+    A deindex_risk verdict is derived from one source's trailing silence, but the
+    site can rank in one channel while the other's feed is merely stale/lagging
+    (e.g. GSC data hasn't finalized for a low-traffic property, yet the weekly
+    DataForSEO pull found the site at #6). A positive ranking from the other
+    source directly contradicts a deindex, so it vetoes the flag. Keys on a
+    non-null value (a confirmed ranking); a DataForSEO "not found" (null) is
+    NOT a contradiction, so a genuine disappearance from both channels still
+    trips deindex_risk.
+    """
+    other_field = "tracked_rank" if primary == "gsc" else "gsc_position"
+    return is_gsc_covered_field(rows, today, days, other_field)
+
+
+def is_gsc_covered_field(rows: Sequence[dict], today: date, days: int, field: str) -> bool:
+    cutoff = today.toordinal() - days + 1
+    return any(
+        r.get(field) is not None and _to_date(r["date"]).toordinal() >= cutoff
+        for r in rows
+    )
 
 
 TREND_WINDOW_DAYS = 90  # window the arrow + status band both measure movement over
@@ -203,6 +253,11 @@ def compute_trend(
         return None, None, "no_data"
 
     special = _special_status(series)
+    # Cross-source veto: never report a deindex when the OTHER source shows a live
+    # rank within the coverage window — the site is ranking, the primary feed is
+    # just stale/lagging (the false-"deindexed" bug on a keyword ranking fine).
+    if special == "deindex_risk" and _other_source_recent_rank(rows, today, coverage_days, source):
+        special = None
     if special:
         return None, None, special
 

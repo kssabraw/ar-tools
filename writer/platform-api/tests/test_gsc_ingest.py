@@ -128,6 +128,37 @@ class _FakeTable:
         return True
 
 
+def test_upsert_chunked_splits_large_batches():
+    """A wide window's upsert is split so it can't exceed the DB statement timeout
+    (a single ~75k-row upsert hit 57014 live); each chunk is one upsert call."""
+    calls: list[int] = []
+
+    class _T:
+        def upsert(self, batch, **_k):
+            calls.append(len(batch))
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    class _S:
+        def table(self, _name):
+            return _T()
+
+    records = [{"i": i} for i in range(12000)]
+    gsc_ingest._upsert_chunked(_S(), "gsc_query_daily", records, "property_id,date,query", chunk=5000)
+    assert calls == [5000, 5000, 2000]
+    assert sum(calls) == 12000
+
+
+def test_upsert_chunked_empty_is_noop():
+    class _S:
+        def table(self, _name):  # pragma: no cover - must not be called
+            raise AssertionError("no upsert for empty records")
+
+    gsc_ingest._upsert_chunked(_S(), "gsc_query_daily", [], "x")
+
+
 def test_ingest_happy_path(monkeypatch):
     fake = _FakeSupabase(_property_row())
     monkeypatch.setattr(gsc_ingest, "get_supabase", lambda: fake)

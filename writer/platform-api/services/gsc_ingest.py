@@ -39,6 +39,21 @@ class IngestResult:
     error: Optional[str] = None
 
 
+# A single upsert of a whole window's rows is one INSERT ... ON CONFLICT
+# statement; on a wide window (query×date over `gsc_repull_days`, ~5k rows/day)
+# that can exceed Postgres' statement timeout (verified live: a ~75k-row upsert
+# hit 57014 "canceling statement due to statement timeout", while 15k committed
+# in seconds). Chunk every upsert so the window width can grow without the write
+# ever timing out. Idempotent on-conflict makes chunking safe.
+_UPSERT_CHUNK = 5000
+
+
+def _upsert_chunked(supabase, table_name: str, records: list[dict], on_conflict: str, chunk: int = _UPSERT_CHUNK) -> None:
+    # supabase-py query builders are one-shot, so take a fresh table() per chunk.
+    for i in range(0, len(records), chunk):
+        supabase.table(table_name).upsert(records[i : i + chunk], on_conflict=on_conflict).execute()
+
+
 # ----------------------------------------------------------------------------
 # Pure helpers (no I/O) — independently unit-tested.
 # ----------------------------------------------------------------------------
@@ -162,9 +177,7 @@ def ingest_property(
     records = parse_query_daily_rows(property_id, raw)
     try:
         if records:
-            supabase.table("gsc_query_daily").upsert(
-                records, on_conflict="property_id,date,query"
-            ).execute()
+            _upsert_chunked(supabase, "gsc_query_daily", records, "property_id,date,query")
     except Exception as exc:
         logger.error("gsc_ingest_upsert_failed", extra={"property_id": property_id, "error": str(exc)})
         _record_sync_run(property_id, "failed", 0, start_date, end_date, str(exc))
@@ -208,9 +221,7 @@ def ingest_property_pages(property_id: str) -> IngestResult:
 
     records = parse_query_page_rows(property_id, raw)
     if records:
-        supabase.table("gsc_query_page_daily").upsert(
-            records, on_conflict="property_id,date,query,page"
-        ).execute()
+        _upsert_chunked(supabase, "gsc_query_page_daily", records, "property_id,date,query,page")
     supabase.table("sync_runs").insert(
         {"property_id": property_id, "job_type": _PAGE_JOB_TYPE, "start_date": start_date,
          "end_date": end_date, "rows": len(records), "status": "ok", "error": None}

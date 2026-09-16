@@ -321,7 +321,11 @@ def enqueue_due_dataforseo() -> int:
     """
     from datetime import datetime, timezone
 
-    from services.dataforseo_rank import enqueue_dataforseo_rank, is_fetch_due
+    from services.dataforseo_rank import (
+        enqueue_dataforseo_rank,
+        is_fetch_due,
+        is_stale_refetch_due,
+    )
 
     supabase = get_supabase()
     rows = (
@@ -352,17 +356,64 @@ def enqueue_due_dataforseo() -> int:
     ).data or []
     config_by_client = {c["client_id"]: c for c in configs}
 
+    # Which fetchable clients have a GSC property that has gone stale? Those get an
+    # off-cadence pull (bounded to once per rank_gsc_stale_refetch_days via
+    # last_fetched_at) so a GSC outage doesn't leave keywords unmeasured until the
+    # weekly day — the "strengthen the net" behavior. Clients with no GSC property
+    # are covered by their normal cadence (DataForSEO is already their only source).
+    stale_days = settings.rank_gsc_stale_refetch_days
+    stalled_clients = _gsc_stalled_client_ids(supabase, client_ids & fetchable, stale_days)
+
     today = datetime.now(timezone.utc).date()
     default_weekday = settings.dataforseo_rank_weekday
     due = 0
     for client_id in client_ids & fetchable:
         cfg = config_by_client.get(client_id, {})
-        if is_fetch_due(cfg, today, default_weekday):
+        scheduled = is_fetch_due(cfg, today, default_weekday)
+        stall = (
+            client_id in stalled_clients
+            and is_stale_refetch_due(cfg.get("last_fetched_at"), today, stale_days)
+        )
+        if scheduled or stall:
             enqueue_dataforseo_rank(client_id)
             due += 1
     if due:
         logger.info("gsc_scheduler.dataforseo_enqueued", extra={"clients": due})
     return due
+
+
+def _gsc_stalled_client_ids(supabase, client_ids: set, stale_days: int) -> set:
+    """Client ids whose verified GSC property's freshest data is older than
+    `stale_days` (or that have GSC data gaps). One max-date read per property;
+    the daily scheduler runs it for the handful of connected clients."""
+    from datetime import datetime, timezone
+
+    from services.dataforseo_rank import is_gsc_stalled
+
+    if not client_ids:
+        return set()
+    props = (
+        supabase.table("gsc_properties")
+        .select("id, client_id")
+        .eq("access_status", "ok")
+        .in_("client_id", list(client_ids))
+        .execute()
+    ).data or []
+    today = datetime.now(timezone.utc).date()
+    stalled: set = set()
+    for prop in props:
+        latest = (
+            supabase.table("gsc_query_daily")
+            .select("date")
+            .eq("property_id", prop["id"])
+            .order("date", desc=True)
+            .limit(1)
+            .execute()
+        ).data
+        max_date = latest[0]["date"] if latest else None
+        if is_gsc_stalled(max_date, today, stale_days):
+            stalled.add(prop["client_id"])
+    return stalled
 
 
 def enqueue_due_syndication_scans() -> int:

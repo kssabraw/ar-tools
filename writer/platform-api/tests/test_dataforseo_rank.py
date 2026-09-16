@@ -65,6 +65,23 @@ def test_is_gsc_covered_false_when_old_or_null():
 
 
 # ---------------------------------------------------------------------------
+# stale-GSC off-cadence refetch (strengthen the DataForSEO net)
+# ---------------------------------------------------------------------------
+def test_is_gsc_stalled():
+    today = date(2026, 6, 22)
+    assert dataforseo_rank.is_gsc_stalled(None, today, 5) is True  # no GSC data
+    assert dataforseo_rank.is_gsc_stalled((today - timedelta(days=2)).isoformat(), today, 5) is False
+    assert dataforseo_rank.is_gsc_stalled((today - timedelta(days=6)).isoformat(), today, 5) is True
+
+
+def test_is_stale_refetch_due_bounds_to_once_per_window():
+    today = date(2026, 6, 22)
+    assert dataforseo_rank.is_stale_refetch_due(None, today, 5) is True           # never fetched
+    assert dataforseo_rank.is_stale_refetch_due(today.isoformat(), today, 5) is False  # fetched today
+    assert dataforseo_rank.is_stale_refetch_due((today - timedelta(days=5)).isoformat(), today, 5) is True
+
+
+# ---------------------------------------------------------------------------
 # source classification
 # ---------------------------------------------------------------------------
 def test_classify_source_variants():
