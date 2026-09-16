@@ -130,7 +130,9 @@ const GAP_NOTES_MAX_SUBTOPICS = 8
 // rewrite guidance, NOT a scored deficiency). Returns '' when there's nothing to add.
 function gapNotesFor(row: KeywordRow): string {
   const subs = (row.onpage_diff?.subtopic_gap ?? [])
-    .map(s => s.heading?.trim())
+    // Collapse any internal whitespace (a scraped H2/H3 can carry newlines/tabs)
+    // so each heading stays one clean segment in the single-line notes string.
+    .map(s => s.heading?.replace(/\s+/g, ' ').trim())
     .filter((h): h is string => Boolean(h))
     .slice(0, GAP_NOTES_MAX_SUBTOPICS)
   if (subs.length === 0) return ''

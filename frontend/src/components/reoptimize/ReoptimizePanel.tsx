@@ -302,7 +302,9 @@ export function ReoptimizePanel({ adapter, pageType: pageTypeProp, initialUrl, i
       handles = await adapter.start(validTargets, {
         destination,
         publishToDoc,
-        notes: notes.trim() || null,
+        // Only forward notes to adapters that expose the Notes field, so a seeded
+        // initialNotes / typed value can never leak to a tool that never showed it.
+        notes: adapter.supportsNotes ? (notes.trim() || null) : null,
         pageType,
         entityProvider: adapter.supportsEntityProvider ? entityProvider : undefined,
       })
