@@ -4,7 +4,58 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
-## Update (2026-09-16) — Format-dropdown fix MERGED + the **client-isolation A-unit** (CI green, draft PR #1165)
+## Update (2026-09-16) — **P1 Competitor research BUILT + MERGED + LIVE** (PR #1177)
+
+P1 (analyze-in-place competitor research, **Apify-only**; owner c1 — TwelveLabs dropped) is built,
+merged to `main` (squash `3f07eda`), and **enabled in production**. This is the repurpose engine's
+signal layer: scrape competitors' public posts → per-`(client, competitor, platform)` **Competitor
+Signals** that ground the Creator's angle proposals.
+
+**Provisioned + live on PLATFORM (2026-09-16):** `APIFY_API_TOKEN` **set** +
+`SOCIAL_COMPETITOR_RESEARCH_ENABLED=true` **set** (on top of the already-set `SOCIAL_ENABLED=true`), so
+`research_gate_open()` is satisfied. The merge deploy (`3f07eda`) booted clean — `job_worker.started` /
+`gsc_scheduler.started` / `event_loop_watchdog.started` / Uvicorn up.
+
+**What shipped (PR #1177):**
+- Migration `20260916200000_social_competitor_research_job.sql` — widens the `async_jobs` CHECK (rebuilt
+  from the **LIVE** constraint) to add `social_competitor_research`. **Applied live.** No new tables —
+  reuses the already-migrated `social_competitor_handles` (bare-handle child of `client_competitors`) +
+  `social_competitor_signals`.
+- `services/social/apify.py` — sync httpx `run-sync-get-dataset-items` wrapper (mirrors `postpeer_adapter`)
+  + per-platform input builders + **pure post parsers** for Instagram / Facebook / X / YouTube / Pinterest.
+  Config-driven, **env-overridable actor ids** (`social_apify_actor_*`; `/`→`~` API-path mapping); LinkedIn
+  deferred (blank slot). YouTube = titles/descriptions/tags/engagement/thumbnail-links only (no
+  video-content analysis).
+- `services/social/competitor_research.py` — the engine: deterministic `formats`/`cadence`/`top_performers`
+  (links + numbers only, no media/identity) + a **caption-only** LLM rollup (`themes`/`hook_patterns`/
+  `whats_working`; our own Anthropic key, **NOT** metered — only Apify is). One `social_competitor_research`
+  job per client; **fail-CLOSED** `budget.reserve` before each Apify run (copies `autonomy_budget.reserve`);
+  **NOT freeze-gated** (research runs under freeze, PRD §3); weekly interval-gated scheduler sweep
+  (`enqueue_due_social_competitor_research`, mirrors `competitor_intel`). `job_worker` dispatch + a
+  `gsc_scheduler` daily-block hook.
+- Angle grounding: `creator.propose_angles` folds the client's latest usable signals in via
+  `render_competitor_signals_block` (empty → prompt byte-identical to today).
+- Routes on `routers/social.py` (competitors + handles CRUD, research trigger + poll, signals read);
+  frontend **Competitors** tab in `SocialCompose.tsx` (add/remove handles per platform, "Research now",
+  view signals) + `errorGuidance.ts` codes.
+- Tests `tests/test_social_apify.py` + `tests/test_social_competitor_research.py` (85 social tests pass;
+  a real bug was caught + fixed — `top_performers` dropped url-less rows *after* slicing top-N).
+
+**Remaining confidence step (deployed-only — the sandbox is egress-blocked from Apify):** run a **live
+research** from the dashboard (a client → Social Media → Competitors → add a handle → "Research now"),
+verify the signals land + the parsers hold on real data, and **confirm/replace the default Pinterest
+actor** (`epctex/pinterest-scraper`, env-overridable — the one default not confidently current). Owner
+decision on billing/scope unchanged; nothing else pending.
+
+**Config added (`config.py`):** `apify_api_token` / `apify_base_url` / `social_competitor_research_enabled`
+(default False) / `_interval_days` (7) / `social_apify_actor_{instagram,facebook,twitter,youtube,pinterest}`
+/ `social_apify_max_posts` (30) / `social_apify_run_cost_usd` (0.05) / `social_apify_timeout_secs` (300) /
+`social_competitor_signal_model` (Haiku) / `_max_tokens` / `_caption_cap` / `social_competitor_top_performers`
+(5) / `social_competitor_angle_signal_cap` (6).
+
+---
+
+## Update (2026-09-16) — Format-dropdown fix MERGED + the **client-isolation A-unit** (MERGED PR #1165)
 
 Two things shipped this session on top of the 2026-09-08 state below.
 
@@ -55,7 +106,8 @@ correct trade-off vs the old cross-client leak. The connect panel is the path (S
 - **b5 — PostPeer billing: no monthly fee → PAYG** (pay-as-you-go non-expiring credit packs).
 - **c1 — P1 Competitor research: BUILD IT NEXT, Apify-ONLY. SKIP TwelveLabs** (we're not analyzing
   full videos, so no per-video analysis vendor). Leaves `TWELVELABS_API_KEY` unneeded for v1;
-  `APIFY_API_TOKEN` is still required and unset.
+  `APIFY_API_TOKEN` was required + unset at the time. _(Since done: P1 built + live, `APIFY_API_TOKEN` set —
+  see the P1 update at the top of this file.)_
 - **c2 — P4 autonomy: DISCUSS** (not started).
 - **c3 — Video Studio / P5: DISCUSS** (not started).
 
@@ -220,7 +272,9 @@ posts; feed image aspect ratio 4:5–1.91:1.
   `R2_PUBLIC_BASE_URL=https://smm-media.arrvmedia.com`) — ✅ all set; bucket + custom domain live in
   Cloudflare. Live write/read proof still pending (see above).
 - **`GEMINI_API_KEY`** — ✅ set (needed for the unbuilt nano-banana Pro image renderer / AI images).
-- **`APIFY_API_TOKEN`** — ❌ not set — needed for **P1 competitor research** (unbuilt, next major build).
+- **`APIFY_API_TOKEN`** — ✅ **set (2026-09-16)** — powers **P1 competitor research** (BUILT + LIVE, PR #1177).
+- **`SOCIAL_COMPETITOR_RESEARCH_ENABLED`** — ✅ **set `true` (2026-09-16)** — the P1 feature gate (with
+  `SOCIAL_ENABLED` + the token, `research_gate_open()` is satisfied).
 - **`TWELVELABS_API_KEY`** — ⛔ **NOT NEEDED (owner decision c1, 2026-09-16): SKIP TwelveLabs.** P1 is
   Apify-ONLY; we're not analyzing full videos, so there's no per-video-analysis vendor in v1. Don't
   provision it and don't build the TwelveLabs path.
@@ -231,7 +285,10 @@ posts; feed image aspect ratio 4:5–1.91:1.
   `nano_banana_pro_model` (`gemini-3-pro-image-preview`), `social_image_size` (`2K`),
   `social_image_cost_usd` (0.134), `social_angles_count` (4) / `social_angles_max_tokens` — all have
   working defaults (no new env needed; copy/angles reuse `ANTHROPIC_API_KEY`, images reuse the already-set
-  `GEMINI_API_KEY`). Still to add when P1 lands: `apify_api_token`, `twelvelabs_api_key`.
+  `GEMINI_API_KEY`). Added + live with P1 (#1177): `apify_api_token`, `social_competitor_research_enabled`,
+  `social_competitor_research_interval_days`, `social_apify_actor_*`, `social_apify_max_posts`,
+  `social_apify_run_cost_usd`, `social_apify_timeout_secs`, `social_competitor_signal_*`,
+  `social_competitor_top_performers`, `social_competitor_angle_signal_cap` (`twelvelabs_api_key` NOT needed — c1).
 
 ## Open decisions for the owner
 
@@ -257,20 +314,24 @@ posts; feed image aspect ratio 4:5–1.91:1.
    isolation is optional). Now that the P2 Creator is merged + deployed, this can also exercise **Draft with
    AI**, **Generate an image with AI**, and **fan-out → Drafts → publish**. The 4 connected accounts are REAL
    client LinkedIn/Facebook accounts — use a throwaway/agency account, not a client's audience.
-2. **Everything through P2 is done + merged + live** — P0 foundations, publish path, R2, frontend compose,
-   `POSTPEER_API_KEY`/`SOCIAL_ENABLED`, and the **full P2 Creator (PR #1036)** with its hardening pass.
+1b. **Live P1 research run** (PENDING — the P1 confidence step). On a client with competitors, add per-platform
+   handles in the **Competitors** tab → "Research now" → verify signals land + the parsers hold on real Apify
+   data, and confirm/replace the default Pinterest actor (`epctex/pinterest-scraper`, env-overridable). The
+   sandbox is egress-blocked from Apify, so this is deployed-only.
+2. **Everything through P2 + P1 is done + merged + live** — P0 foundations, publish path, R2, frontend compose,
+   `POSTPEER_API_KEY`/`SOCIAL_ENABLED`, the **full P2 Creator (PR #1036)** with its hardening pass, and **P1
+   Competitor research (PR #1177, `APIFY_API_TOKEN` + `SOCIAL_COMPETITOR_RESEARCH_ENABLED` live)**.
 3. **Owner scope decisions still open** (see "Open decisions" below) — IG Reels/Stories scope, IG carousel
    Draft type, default per-client monthly ceiling, autonomy rollout. (The **mixed image path** is DECIDED:
    Pro-only for now.)
 4. **Remaining build, roughly in order** (the repurpose-engine vision beyond P2):
-   - **P1 Competitor research — the NEXT major build (owner-greenlit c1). Apify-ONLY; TwelveLabs is
-     dropped from v1.** Analyze-in-place per ADR-0002 (public content, never re-hosted media). Extend
-     `client_competitors` via the child `social_competitor_handles` table (already migrated); output →
-     `social_competitor_signals`. **It also grounds Angle proposals in competitor signals** (the
-     `propose_angles` prompt already leaves room for this — the glossary says angles are grounded in
-     "relevant Competitor Signals"). **Needs `APIFY_API_TOKEN` provisioned on PLATFORM** (currently
-     unset). Since there's no TwelveLabs, "signals" are Apify post/engagement/text signals + captions,
-     not video-content analysis.
+   - **P1 Competitor research — ✅ BUILT + MERGED + LIVE (PR #1177, squash `3f07eda`; owner c1, Apify-ONLY,
+     TwelveLabs dropped).** Analyze-in-place per ADR-0002 (public content, never re-hosted media). Extends
+     `client_competitors` via the child `social_competitor_handles` table; output → `social_competitor_signals`
+     (deterministic formats/cadence/top-performers + a caption-only LLM rollup). Grounds Angle proposals via
+     `creator.render_competitor_signals_block`. `APIFY_API_TOKEN` + `SOCIAL_COMPETITOR_RESEARCH_ENABLED` are
+     **set on PLATFORM**. See the 2026-09-16 P1 update at the top of this file. Remaining: the live research run
+     (1b above) + Pinterest-actor confirmation.
    - **IG scope-out (b1) + IG carousel (b2)** — extend the composer format set + the seeded IG spec to
      Reels/Stories, and add a carousel Draft type (≤10 images, one aspect ratio). Small-to-medium build;
      do alongside or after P1.
