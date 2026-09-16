@@ -172,7 +172,10 @@ def resolve_competitors(
     best: dict[str, dict] = {}
     for row in organic_rows or []:
         d = _norm_domain(row.get("domain") or row.get("url"))
-        if not d or d == cd:
+        # Exclude the client's own row — by domain, and by the snapshot's
+        # `is_client` flag as a fallback (a client with no website_url yields an
+        # empty `client_domain`, so domain matching alone can't identify it).
+        if not d or d == cd or row.get("is_client"):
             continue
         pos = row.get("position")
         above = isinstance(pos, int) and pos < ceiling
@@ -581,97 +584,104 @@ async def run_content_gap_scan_job(job: dict) -> None:
 
     supabase.table("content_gap_runs").update({"status": "running"}).eq("id", run_id).execute()
 
-    client = (
-        supabase.table("clients").select("id, website_url").eq("id", client_id).limit(1).execute()
-    ).data or []
-    if not client:
-        _fail("client_not_found")
-        return
-    client_domain = _norm_domain(client[0].get("website_url"))
+    # The worker loop only LOGS an unhandled handler exception (job_worker.py) —
+    # it does not settle — so a transient DB error mid-scan would leave the run +
+    # job stuck 'running' until the reaper requeues and RE-RUNS the whole scan,
+    # double-inserting content_gap_keywords rows (no idempotency guard). Settle
+    # 'failed' on any error so a re-run never duplicates; on-demand re-run is the
+    # recovery path for a genuinely transient failure.
+    try:
+        client = (
+            supabase.table("clients").select("id, website_url").eq("id", client_id).limit(1).execute()
+        ).data or []
+        if not client:
+            _fail("client_not_found")
+            return
+        client_domain = _norm_domain(client[0].get("website_url"))
 
-    scope = resolve_scope(supabase, client_id)
-    registry = _registry_domains(supabase, client_id)
-    max_age = settings.content_gap_snapshot_max_age_days
-    max_comp = settings.content_gap_max_competitors
+        scope = resolve_scope(supabase, client_id)
+        registry = _registry_domains(supabase, client_id)
+        max_age = settings.content_gap_snapshot_max_age_days
+        max_comp = settings.content_gap_max_competitors
 
-    analyzed = wins = gaps = 0
-    rows: list[dict] = []
-    for item in scope:
-        keyword = item["keyword"]
-        snap = latest_reusable_snapshot(supabase, client_id, keyword, max_age)
-        if snap is None:
-            # Phase 0 reads existing snapshots only; a stale/absent snapshot is
-            # recorded so the run is honest about coverage (fresh capture: a
-            # later phase enqueues serp_snapshot and re-reads).
+        analyzed = wins = gaps = no_snapshot = 0
+        rows: list[dict] = []
+        for item in scope:
+            keyword = item["keyword"]
+            snap = latest_reusable_snapshot(supabase, client_id, keyword, max_age)
+            if snap is None:
+                # Phase 0 reads EXISTING snapshots only. A keyword with no fresh
+                # snapshot is UNKNOWN, not a gap — the verdict enum can't express
+                # that, and fabricating 'organic_gap' would inflate the gap count
+                # with unmeasured keywords. Skip it (counted separately); the
+                # later fresh-capture phase enqueues serp_snapshot and re-reads.
+                no_snapshot += 1
+                continue
+
+            aio_present = bool(snap.get("aio_present"))
+            aio_sources = snap.get("aio_sources") or []
+            client_position = snap.get("client_rank")
+            in_aio = client_cited_in_aio(aio_sources, client_domain) if aio_present else False
+            verdict = compute_verdict(client_position, aio_present, in_aio)
+
+            competitors = None
+            if is_gap(verdict):
+                organic = _snapshot_result_rows(supabase, snap["id"])
+                competitors = resolve_competitors(
+                    organic, client_position, registry, client_domain, max_comp
+                )
+
             rows.append(
                 {
                     "run_id": run_id,
                     "client_id": client_id,
                     "keyword": keyword,
-                    "page_url": item.get("page_url"),
-                    "verdict": "organic_gap",
-                    "client_position": None,
-                    "aio_present": None,
-                    "in_aio": None,
-                    "competitors": None,
+                    "page_url": item.get("page_url") or snap.get("client_url"),
+                    "client_position": client_position,
+                    "aio_present": aio_present,
+                    "in_aio": in_aio,
+                    "verdict": verdict,
+                    "competitors": competitors,
+                    "serp_snapshot_id": snap["id"],
                     "captured_fresh": False,
                 }
             )
             analyzed += 1
-            gaps += 1
-            continue
+            if verdict == "win":
+                wins += 1
+            else:
+                gaps += 1
 
-        aio_present = bool(snap.get("aio_present"))
-        aio_sources = snap.get("aio_sources") or []
-        client_position = snap.get("client_rank")
-        in_aio = client_cited_in_aio(aio_sources, client_domain) if aio_present else False
-        verdict = compute_verdict(client_position, aio_present, in_aio)
+        if rows:
+            supabase.table("content_gap_keywords").insert(rows).execute()
 
-        competitors = None
-        if is_gap(verdict):
-            organic = _snapshot_result_rows(supabase, snap["id"])
-            competitors = resolve_competitors(
-                organic, client_position, registry, client_domain, max_comp
-            )
-
-        rows.append(
+        supabase.table("content_gap_runs").update(
             {
-                "run_id": run_id,
-                "client_id": client_id,
-                "keyword": keyword,
-                "page_url": item.get("page_url") or snap.get("client_url"),
-                "client_position": client_position,
-                "aio_present": aio_present,
-                "in_aio": in_aio,
-                "verdict": verdict,
-                "competitors": competitors,
-                "serp_snapshot_id": snap["id"],
-                "captured_fresh": False,
+                "status": "complete",
+                "keywords_analyzed": analyzed,
+                "wins": wins,
+                "gaps": gaps,
+                "completed_at": "now()",
             }
+        ).eq("id", run_id).execute()
+        supabase.table("async_jobs").update(
+            {
+                "status": "complete",
+                "result": {"analyzed": analyzed, "wins": wins, "gaps": gaps, "no_snapshot": no_snapshot},
+                "completed_at": "now()",
+            }
+        ).eq("id", job_id).execute()
+        logger.info(
+            "content_gap_scan_complete",
+            extra={
+                "client_id": client_id,
+                "run_id": run_id,
+                "analyzed": analyzed,
+                "wins": wins,
+                "gaps": gaps,
+                "no_snapshot": no_snapshot,
+            },
         )
-        analyzed += 1
-        if verdict == "win":
-            wins += 1
-        else:
-            gaps += 1
-
-    if rows:
-        supabase.table("content_gap_keywords").insert(rows).execute()
-
-    supabase.table("content_gap_runs").update(
-        {
-            "status": "complete",
-            "keywords_analyzed": analyzed,
-            "wins": wins,
-            "gaps": gaps,
-            "location_code": None,
-            "completed_at": "now()",
-        }
-    ).eq("id", run_id).execute()
-    supabase.table("async_jobs").update(
-        {"status": "complete", "result": {"analyzed": analyzed, "wins": wins, "gaps": gaps}, "completed_at": "now()"}
-    ).eq("id", job_id).execute()
-    logger.info(
-        "content_gap_scan_complete",
-        extra={"client_id": client_id, "run_id": run_id, "analyzed": analyzed, "wins": wins, "gaps": gaps},
-    )
+    except Exception as exc:  # noqa: BLE001 — settle failed so the reaper can't re-run + duplicate
+        logger.exception("content_gap_scan_failed", extra={"client_id": client_id, "run_id": run_id})
+        _fail(f"content_gap_error: {str(exc)[:400]}")

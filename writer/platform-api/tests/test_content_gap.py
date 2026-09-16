@@ -116,6 +116,17 @@ def test_resolve_competitors_includes_registered_below_client():
     assert domains[0] == "a.com"
 
 
+def test_resolve_competitors_excludes_is_client_row_when_domain_blank():
+    # Client with no website_url → client_domain="" can't identify the client by
+    # domain; the snapshot's is_client flag must still exclude its own row.
+    organic = [
+        {"position": 1, "domain": "a.com", "url": "https://a.com/x"},
+        {"position": 2, "domain": "client.com", "url": "https://client.com/p", "is_client": True},
+    ]
+    got = cg.resolve_competitors(organic, client_position=2, registry_domains=set(), client_domain="")
+    assert [c["domain"] for c in got] == ["a.com"]
+
+
 def test_resolve_competitors_dedupes_and_caps():
     organic = _organic((1, "a.com"), (2, "a.com"), (3, "b.com"), (4, "c.com"), (5, "d.com"))
     got = cg.resolve_competitors(
