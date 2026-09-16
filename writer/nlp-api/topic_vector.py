@@ -1,6 +1,6 @@
-"""Topic-Vector Centering + Information Gain — P0 (report-only).
+"""Topic-Vector Centering + Information Gain — P0 + P1 (report-only).
 
-Implements the P0 subset of
+Implements the P0 subset + the P1 scored Information Gain of
 ``docs/modules/topic-vector-information-gain-plan-v1_0.md``:
 
   1. **Topic centering** — cosine(page, centroid) where the centroid is anchored
@@ -47,14 +47,26 @@ from ecommerce_mcs import EmbedFn, cosine  # reuse — do NOT re-implement
 
 logger = logging.getLogger(__name__)
 
-# --- Tunable thresholds (calibrate from real runs, like every floor here) ----
+# --- Tunable thresholds (CALIBRATED from a live gemini-embedding-2 run) -------
+# Calibration basis (Nova "buy retatrutide" run, 2026-09-16): gemini-embedding-2
+# whole-doc + section↔subtopic cosines run HIGH and COMPRESSED — the Nova drift
+# page centred 0.747, a strong on-vector competitor PDP 0.845 (separation held,
+# ~0.10), and per-subtopic best-section cosines clustered 0.67–0.81 with no clean
+# covered/missing gap. So the P0 floors (0.45 / 0.55) marked everything "on-vector"
+# and "covered". Raised here to sit inside the observed band; still env-overridable.
+#
 # A subtopic is "on-vector" when its label embeds within this cosine of the
 # centroid — off-vector subtopics (vendor-trust boilerplate) never count as an
 # information-gain gap (§10 "centering gates gain").
-CENTERING_FLOOR = float(os.environ.get("TOPIC_VECTOR_CENTERING_FLOOR", "0.45"))
+CENTERING_FLOOR = float(os.environ.get("TOPIC_VECTOR_CENTERING_FLOOR", "0.60"))
 # The page "covers" a subtopic when its best-matching section embeds at least
-# this close to the subtopic label. Below it → a coverage gap.
-COVERAGE_FLOOR = float(os.environ.get("TOPIC_VECTOR_COVERAGE_FLOOR", "0.55"))
+# this close to the subtopic label. Below it → a coverage gap. Calibrated to 0.70
+# to sit inside gemini-embedding-2's compressed cosine band, so a well-covered
+# page shows few/no gaps and a thin one surfaces its weak subtopics (the P0 0.55
+# floor marked everything "covered"). The inverse-gain gap is the on-vector
+# subtopics below this absolute floor — no relative fallback (it over-fired on
+# well-covered pages and was removed).
+COVERAGE_FLOOR = float(os.environ.get("TOPIC_VECTOR_COVERAGE_FLOOR", "0.70"))
 # The ≥2-page-spread guard for the 11-20 tier so page-2 junk can't leak in (§3).
 TIER2_MIN_PAGE_SPREAD = int(os.environ.get("TOPIC_VECTOR_TIER2_MIN_SPREAD", "2"))
 # Greedy single-link clustering merges two headings whose content-token sets are
@@ -67,6 +79,27 @@ MAX_SECTIONS = int(os.environ.get("TOPIC_VECTOR_MAX_SECTIONS", "40"))
 _SECTION_CHARS = 1500
 _PAGE_CHARS = 6000
 TOP10_RANK = 10  # rank ≤ this = consensus tier; (10, 20] = differentiation tier
+
+# --- Information Gain (P1) thresholds (calibrate on real runs) ---------------
+# A page claim counts as gain only if ALL three hold (§6): on-vector (clears
+# CENTERING_FLOOR vs the centroid), RARE in the top-10 (its max cosine to any
+# competitor subtopic is BELOW this ceiling — i.e. far from the consensus), and
+# SITE-GROUNDED (embeds within GAIN_GROUNDING_FLOOR of a site-claim phrase, OR a
+# numeric/price value it states appears in a site fact). Ungrounded novelty
+# scores ZERO and is flagged — the anti-fabrication guard.
+GAIN_RARITY_CEILING = float(os.environ.get("TOPIC_VECTOR_GAIN_RARITY_CEILING", "0.72"))
+GAIN_GROUNDING_FLOOR = float(os.environ.get("TOPIC_VECTOR_GAIN_GROUNDING_FLOOR", "0.78"))
+# ≈ this many on-vector + rare + grounded claims = full marks on realized gain.
+GAIN_TARGET = int(os.environ.get("TOPIC_VECTOR_GAIN_TARGET", "3"))
+# Below this many site-claim phrases (and no typed facts) the index is "thin" →
+# gain is SUPPRESSED ("not measured"), never scored 0 (§6).
+GAIN_MIN_SITE_CLAIMS = int(os.environ.get("TOPIC_VECTOR_GAIN_MIN_SITE_CLAIMS", "3"))
+MAX_PAGE_CLAIMS = int(os.environ.get("TOPIC_VECTOR_MAX_PAGE_CLAIMS", "25"))
+MAX_SITE_CLAIMS = int(os.environ.get("TOPIC_VECTOR_MAX_SITE_CLAIMS", "60"))
+# Composite weight of the gain score — kept ZERO (§6 "low/zero composite weight",
+# so the reopt loop never builds a fabrication incentive as a gain quota). Gain
+# is report-only + coached into reopt as guidance; it never enters the composite.
+GAIN_COMPOSITE_WEIGHT = 0.0
 
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9\-']*")
 
@@ -351,6 +384,102 @@ def build_page_text(page_title: str, sections: list) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Page-claim extraction — the unit of Information Gain (§6)
+# ---------------------------------------------------------------------------
+
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
+# A claim is substantive when it carries a factual signal — a number, unit, %,
+# degree, or a currency amount. Bleached marketing prose carries none.
+_FACT_SIGNAL_RE = re.compile(r"\d|%|°|\$")
+_NUM_TOKEN_RE = re.compile(r"\d+(?:\.\d+)?")
+
+
+def extract_page_claims(sections: list, *, limit: int = MAX_PAGE_CLAIMS,
+                        min_words: int = 6, max_words: int = 45) -> list:
+    """Split the page's sections into candidate CLAIM sentences (the gain unit).
+    Keeps only fact-bearing sentences (a number/%/°/$), deduped, capped. Mirrors
+    the platform-api site-claim extractor so a page claim and a site claim are
+    the same kind of object (name-agnostic, no LLM)."""
+    out: list = []
+    seen: set = set()
+    for sec in sections or []:
+        for raw in _SENT_SPLIT_RE.split(sec or ""):
+            sent = _NORM_WS_RE.sub(" ", (raw or "")).strip()
+            words = sent.split()
+            if not (min_words <= len(words) <= max_words):
+                continue
+            if not _FACT_SIGNAL_RE.search(sent):
+                continue
+            key = re.sub(r"[^a-z0-9]+", " ", sent.lower()).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(sent)
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def _site_claim_texts(site_claim_index: Optional[dict], *, limit: int = MAX_SITE_CLAIMS) -> list:
+    """The site-claim phrases to embed for the fuzzy grounding path."""
+    if not isinstance(site_claim_index, dict):
+        return []
+    out: list = []
+    for c in (site_claim_index.get("claims") or [])[:limit]:
+        if isinstance(c, dict):
+            t = (c.get("text") or "").strip()
+        else:
+            t = str(c).strip()
+        if t:
+            out.append(t[:_SECTION_CHARS])
+    return out
+
+
+def _site_fact_values(site_claim_index: Optional[dict]) -> set:
+    """Normalised numeric/price values the site's typed facts assert — the exact-
+    match grounding fast path (a claim stating '$90' or '99%' or a CAS number the
+    site also lists is site-grounded even if its prose embeds far from any site
+    claim phrase)."""
+    vals: set = set()
+    if not isinstance(site_claim_index, dict):
+        return vals
+    for f in site_claim_index.get("facts") or []:
+        if not isinstance(f, dict):
+            continue
+        v = str(f.get("value") or "").strip().lower()
+        if v:
+            vals.add(v)
+            for n in _NUM_TOKEN_RE.findall(v):
+                vals.add(n)
+    return vals
+
+
+def _index_is_thin(site_claim_index: Optional[dict], min_claims: int) -> bool:
+    """Thin/absent → SUPPRESS the gain score ('not measured'), never 0 (§6).
+    Thin = fewer than ``min_claims`` claim phrases AND no typed facts."""
+    if not isinstance(site_claim_index, dict):
+        return True
+    claims = site_claim_index.get("claims") or []
+    facts = site_claim_index.get("facts") or []
+    return len(claims) < max(1, min_claims) and not facts
+
+
+def _claim_value_grounded(claim: str, site_values: set) -> bool:
+    """True when a distinctive value the claim states (a CAS number, a price, a
+    percentage, a molecular weight) is one the site also asserts. Bare small
+    integers (sizes like '10') are ignored — too common to be grounding."""
+    if not site_values:
+        return False
+    low = (claim or "").lower()
+    for n in _NUM_TOKEN_RE.findall(low):
+        # Only distinctive numbers ground: ≥3 digits, or a decimal, or a value
+        # the site lists verbatim with its unit context.
+        if (len(n) >= 3 or "." in n) and n in site_values:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # Coverage + on-vector verdicts from embeddings (pure)
 # ---------------------------------------------------------------------------
 
@@ -383,6 +512,141 @@ def coverage_verdicts(
 
 
 # ---------------------------------------------------------------------------
+# Measure 3 — Information Gain (the scored one, §6). Pure.
+# ---------------------------------------------------------------------------
+
+def information_gain_verdicts(
+    page_claims: list,
+    page_claim_vecs: list,
+    subtopic_vecs: list,
+    centroid_vec: list,
+    site_claim_vecs: list,
+    site_values: set,
+    *,
+    centering_floor: float = CENTERING_FLOOR,
+    rarity_ceiling: float = GAIN_RARITY_CEILING,
+    grounding_floor: float = GAIN_GROUNDING_FLOOR,
+) -> list:
+    """Per page-claim gain verdict (§6). A claim is `realized` gain iff it is
+    on-vector AND rare in the top-10 AND site-grounded. On-vector + rare but
+    NOT grounded is `ungrounded_novelty` — scored zero and FLAGGED (the anti-
+    fabrication guard). Pure — every vector is supplied by the caller.
+
+    Rarity is judged on the claim's cosine to the competitor SUBTOPIC vectors
+    (name-agnostic predicate matching, reusing embeddings already computed for
+    coverage) — a v1 approximation of §6's claim-level page-spread that needs no
+    per-competitor claim inventory."""
+    out = []
+    for text, cv in zip(page_claims, page_claim_vecs):
+        on_vec = (cosine(cv, centroid_vec) >= centering_floor) if centroid_vec else False
+        max_comp = max((cosine(cv, sv) for sv in subtopic_vecs), default=0.0)
+        rare = max_comp < rarity_ceiling
+        max_site = max((cosine(cv, gv) for gv in site_claim_vecs), default=0.0)
+        grounded = (max_site >= grounding_floor) or _claim_value_grounded(text, site_values)
+        realized = bool(on_vec and rare and grounded)
+        ungrounded = bool(on_vec and rare and not grounded)
+        out.append({
+            "claim": text[:240],
+            "on_vector": on_vec,
+            "rare": rare,
+            "grounded": grounded,
+            "realized_gain": realized,
+            "ungrounded_novelty": ungrounded,
+            "competitor_cosine": round(max_comp, 4),
+            "site_cosine": round(max_site, 4),
+        })
+    return out
+
+
+def score_information_gain(claim_verdicts: list, coverage_verdicts: list,
+                           *, target: int = GAIN_TARGET) -> dict:
+    """Assemble the 0–100 gain score from the per-claim verdicts + the tier-2
+    (differentiation-within-reach) coverage (§6). Report-only.
+
+    - realized_gain — count of on-vector + rare + site-grounded page claims,
+      normalised to `target` (≈3 grounded differentiating facts = full marks).
+    - captured_differentiation — of the tier-2 subtopics, how many the page
+      covers (from the already-computed coverage verdicts).
+    Combined 60/40 into `score`. Ungrounded-novelty claims are counted + listed
+    as a fabrication-risk flag (scored zero, never credited)."""
+    realized = [c for c in claim_verdicts if c.get("realized_gain")]
+    ungrounded = [c for c in claim_verdicts if c.get("ungrounded_novelty")]
+    tier2 = [v for v in coverage_verdicts if v.get("tier") == "tier2"]
+    tier2_covered = [v for v in tier2 if v.get("covered")]
+
+    realized_component = min(1.0, len(realized) / max(1, target))
+    captured_ratio = (len(tier2_covered) / len(tier2)) if tier2 else 0.0
+    # No tier-2 differentiation opportunities on the SERP → the captured-diff
+    # dimension is N/A; lean the score entirely on realized gain rather than
+    # penalising a page for a differentiation lane that doesn't exist.
+    if tier2:
+        score = round((0.60 * realized_component + 0.40 * captured_ratio) * 100, 1)
+    else:
+        score = round(realized_component * 100, 1)
+
+    return {
+        "score": score,
+        "realized_gain_count": len(realized),
+        "realized_gain_target": target,
+        "captured_differentiation": len(tier2_covered),
+        "differentiation_available": len(tier2),
+        "ungrounded_novelty_count": len(ungrounded),
+        "realized_claims": [c["claim"] for c in realized][:8],
+        # The fabrication-risk surface: novel on-vector claims NOT found on the
+        # client's own site. Never credited; flagged for a human.
+        "ungrounded_claims": [c["claim"] for c in ungrounded][:8],
+        "composite_weight": GAIN_COMPOSITE_WEIGHT,
+    }
+
+
+def render_gain_guidance(measure_result: dict, site_claim_index: Optional[dict] = None,
+                         page_text: str = "") -> str:
+    """A compact rewrite-prompt block coaching the reopt loop (§6/§9): cover the
+    under-served on-vector subtopics, and STATE the specific site-grounded facts
+    the page is missing. Returns '' when there's nothing actionable — so the
+    reopt prompt is byte-identical when the measure is unavailable/thin.
+
+    Only ever coaches facts the client's OWN site asserts (from the passed index)
+    that aren't already on the page — never an invented addition (§10)."""
+    if not isinstance(measure_result, dict) or not measure_result.get("available"):
+        return ""
+    lines: list = []
+
+    gaps = measure_result.get("inverse_gain_gap") or []
+    if gaps:
+        lines.append("UNDER-SERVED ON-VECTOR SUBTOPICS — cover these more directly "
+                     "(competitors rank on them and your page is thin here):")
+        for g in gaps[:6]:
+            lines.append(f"  - {g.get('label','')}")
+
+    # Missing site-grounded facts: real facts on the client's own site the page
+    # doesn't currently state (deterministic string check — anti-fabrication).
+    low_page = (page_text or "").lower()
+    missing: list = []
+    for f in ((site_claim_index or {}).get("facts") or []):
+        if not isinstance(f, dict):
+            continue
+        val = str(f.get("value") or "").strip()
+        if not val:
+            continue
+        if val.lower() not in low_page:
+            unit = str(f.get("unit") or "").strip()
+            missing.append(f"{f.get('type','fact')}: {val}{(' ' + unit) if unit else ''}".strip())
+        if len(missing) >= 8:
+            break
+    if missing:
+        lines.append("VERIFIABLE FACTS FROM YOUR OWN SITE the page omits — state these "
+                     "(number-entity facts; do NOT invent any not listed here):")
+        lines += [f"  - {m}" for m in missing]
+
+    if not lines:
+        return ""
+    return ("TOPIC & INFORMATION-GAIN GUIDANCE (report-only signal — improve where it "
+            "does not conflict with the SEO deficiencies or brand voice above):\n"
+            + "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator — the one place embeddings are fetched (async, best-effort)
 # ---------------------------------------------------------------------------
 
@@ -396,11 +660,24 @@ async def measure(
     aio_text: str,
     top10_headings: list,
     tier2_headings: list,
+    site_claim_index: Optional[dict] = None,
+    include_gain: bool = True,
     centering_floor: float = CENTERING_FLOOR,
     coverage_floor: float = COVERAGE_FLOOR,
 ) -> dict:
-    """Run the P0 topic-vector measure. Report-only — the caller attaches the
-    result beside the composite; it is never folded into the score.
+    """Run the topic-vector measure (centering / per-subtopic coverage / inverse
+    gain gap + the P1 scored Information Gain). Report-only — the caller attaches
+    the result beside the composite; it is NEVER folded into the score.
+
+    ``site_claim_index`` (P1) is the client's grounding corpus built in platform-
+    api and passed in the request body (§7). When absent/thin the scored gain
+    dimension is SUPPRESSED ('not measured', §6), never scored 0.
+
+    ``include_gain=False`` skips the scored Information Gain and, with it, the
+    page-claim + site-claim embeddings — so the batch drops back to the P0 size.
+    The reopt COACHING pass uses this: it needs only centering + coverage + the
+    inverse-gain gap, so embedding/scoring gain on a page about to be rewritten
+    away is wasted work.
 
     Degrades explicitly (never a misleading number):
       - no ``embed_fn`` (GEMINI_API_KEY absent) → ``{available: False, reason:
@@ -433,9 +710,17 @@ async def measure(
         return {"available": False, "reason": "empty_centroid"}
 
     labels = [st.label for st in subtopics]
+    # P1: the page's own claim sentences (the gain unit) + the client's site-claim
+    # phrases (the grounding corpus). Both ride in the SAME batched embedding call
+    # as the P0 vectors — sliced back out in order below. Skipped entirely (no
+    # extraction, no embeddings) when the caller doesn't want the scored gain.
+    page_claims = extract_page_claims(sections) if include_gain else []
+    site_claims = _site_claim_texts(site_claim_index) if include_gain else []
+    site_values = _site_fact_values(site_claim_index) if include_gain else set()
     # One batched embedding call: page, centroid components, subtopic labels,
-    # page sections — sliced back out in that order.
-    batch = [page_text] + centroid_texts + labels + sections
+    # page sections, page claims, site claims — sliced back out in that order.
+    batch = ([page_text] + centroid_texts + labels + sections
+             + page_claims + site_claims)
     try:
         vecs = await embed_fn(batch)
     except Exception as exc:  # pragma: no cover - network guard
@@ -448,7 +733,9 @@ async def measure(
     page_vec = vecs[idx]; idx += 1
     centroid_vecs = vecs[idx:idx + len(centroid_texts)]; idx += len(centroid_texts)
     subtopic_vecs = vecs[idx:idx + len(labels)]; idx += len(labels)
-    section_vecs = vecs[idx:idx + len(sections)]
+    section_vecs = vecs[idx:idx + len(sections)]; idx += len(sections)
+    page_claim_vecs = vecs[idx:idx + len(page_claims)]; idx += len(page_claims)
+    site_claim_vecs = vecs[idx:idx + len(site_claims)]
 
     centroid_vec = mean_vector(centroid_vecs)
     if not centroid_vec:
@@ -462,13 +749,40 @@ async def measure(
 
     covered = [v for v in verdicts if v["covered"]]
     missing = [v for v in verdicts if not v["covered"]]
-    # Inverse gain gap (§6): on-vector subtopics the corpus states that the page
-    # lacks. Grounded in what competitors demonstrably said — no fabrication risk.
-    # Consensus (top-10) gaps are table-stakes; tier-2 gaps are differentiation.
+    # Inverse gain gap (§6): the on-vector subtopics the corpus states that the
+    # page lacks (best-section cosine below the coverage floor). Grounded in what
+    # competitors demonstrably said — no fabrication risk. Consensus (top-10) gaps
+    # are table-stakes; tier-2 gaps are differentiation. The COVERAGE_FLOOR is
+    # calibrated (0.70) to sit inside gemini-embedding-2's compressed cosine band,
+    # so a well-covered page correctly shows few/no gaps and a thin one surfaces
+    # its weak subtopics (the P0 0.55 floor marked everything "covered").
     inverse = sorted(
         (v for v in missing if v["on_vector"]),
         key=lambda v: (0 if v["tier"] == "top10" else 1, v["best_cosine"]),
     )
+
+    # P1 scored Information Gain — suppressed (not zeroed) when the site index is
+    # thin/absent or the page yields no claims (§6). Skipped when the caller opted
+    # out (include_gain=False — the reopt coaching pass).
+    if not include_gain:
+        information_gain = {"available": False, "reason": "not_requested"}
+    elif _index_is_thin(site_claim_index, GAIN_MIN_SITE_CLAIMS):
+        information_gain = {
+            "available": False,
+            "reason": "no_site_index" if not site_claim_index else "site_index_thin",
+            "note": "Information Gain suppressed — the client's site claim index is "
+                    "absent or too thin to ground page claims (never scored 0, §6).",
+        }
+    elif not page_claims:
+        information_gain = {"available": False, "reason": "no_page_claims"}
+    else:
+        claim_verdicts = information_gain_verdicts(
+            page_claims, page_claim_vecs, subtopic_vecs, centroid_vec,
+            site_claim_vecs, site_values,
+            centering_floor=centering_floor,
+        )
+        information_gain = {"available": True, **score_information_gain(claim_verdicts, verdicts)}
+        information_gain["claim_verdicts"] = claim_verdicts
 
     return {
         "available": True,
@@ -497,13 +811,17 @@ async def measure(
             "total": len(verdicts),
         },
         "inverse_gain_gap": inverse,
+        "information_gain": information_gain,
         "thresholds": {
             "centering_floor": centering_floor,
             "coverage_floor": coverage_floor,
+            "gain_rarity_ceiling": GAIN_RARITY_CEILING,
+            "gain_grounding_floor": GAIN_GROUNDING_FLOOR,
         },
         "note": (
-            "P0 report-only — NOT folded into the composite and NOT fed to the "
-            "reopt loop. Centering is a coarse drift gauge; the actionable detail "
-            "is per-subtopic coverage + the inverse gain gap."
+            "Report-only — NOT folded into the composite. Centering is a coarse "
+            "drift gauge; the actionable detail is per-subtopic coverage + the "
+            "inverse gain gap + the site-grounded Information Gain score (P1, "
+            "composite weight 0)."
         ),
     }

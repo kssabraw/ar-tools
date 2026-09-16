@@ -200,6 +200,13 @@ GEMINI_EMBED_DIM     = int(os.environ.get("GEMINI_EMBED_DIM", "1536"))
 GEMINI_EMBED_ENDPOINT = (
     f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_EMBED_MODEL}:batchEmbedContents"
 )
+# batchEmbedContents caps the number of requests per call (Google's embedding
+# models: 100). MCS sends ~13 and the topic-vector P0 measure ~59, but P1's
+# measure batches page_text + centroid + subtopics + sections + page-claims +
+# site-claims — up to ~144 — which would 400 the whole call and silently skip
+# BOTH the P1 gain and the already-working P0 centering/coverage. Chunk so a
+# large batch is split transparently; a batch ≤ the cap is one call, unchanged.
+GEMINI_EMBED_MAX_BATCH = int(os.environ.get("GEMINI_EMBED_MAX_BATCH", "100"))
 
 # Entity analysis: TextRazor (replaced Google Cloud NLP — cheaper + Wikipedia/
 # Wikidata linking). Single endpoint; key passed via the X-TextRazor-Key header.
@@ -229,29 +236,39 @@ _MODEL_PRICING = {
 async def _gemini_embed(texts: List[str]) -> List[List[float]]:
     """Batch-embed `texts` with the Gemini REST embeddings API (httpx — no SDK).
     Raises on failure so callers can fall back; returns vectors in input order.
-    Only reached when GEMINI_API_KEY is set (the MCS caller gates on it)."""
+    Only reached when GEMINI_API_KEY is set (the MCS caller gates on it).
+
+    Chunked at GEMINI_EMBED_MAX_BATCH so a large batch (the P1 topic-vector
+    measure) doesn't exceed batchEmbedContents' per-call request cap; the chunks
+    are concatenated in input order and any chunk failure raises (contract
+    preserved). A batch within the cap is a single call, identical to before."""
     if not GEMINI_API_KEY or not texts:
         return []
-    payload = {
-        "requests": [
-            {
-                "model": f"models/{GEMINI_EMBED_MODEL}",
-                "content": {"parts": [{"text": t or ""}]},
-                "taskType": "SEMANTIC_SIMILARITY",
-                "outputDimensionality": GEMINI_EMBED_DIM,
-            }
-            for t in texts
-        ]
-    }
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            GEMINI_EMBED_ENDPOINT,
-            headers={"x-goog-api-key": GEMINI_API_KEY},  # header, NOT ?key= (httpx logs the URL)
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    return [e.get("values", []) for e in (data.get("embeddings") or [])]
+    out: List[List[float]] = []
+    cap = max(1, GEMINI_EMBED_MAX_BATCH)
+    for start in range(0, len(texts), cap):
+        chunk = texts[start:start + cap]
+        payload = {
+            "requests": [
+                {
+                    "model": f"models/{GEMINI_EMBED_MODEL}",
+                    "content": {"parts": [{"text": t or ""}]},
+                    "taskType": "SEMANTIC_SIMILARITY",
+                    "outputDimensionality": GEMINI_EMBED_DIM,
+                }
+                for t in chunk
+            ]
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(
+                GEMINI_EMBED_ENDPOINT,
+                headers={"x-goog-api-key": GEMINI_API_KEY},  # header, NOT ?key= (httpx logs the URL)
+                json=payload,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        out.extend(e.get("values", []) for e in (data.get("embeddings") or []))
+    return out
 
 
 # ── Generation constants — restored VERBATIM from the reference copy
@@ -11470,9 +11487,19 @@ async def _measure_topic_vector(
     page_html: str,
     keyword: str,
     serp_analysis_dict: Optional[dict],
+    site_claim_index: Optional[dict] = None,
+    *,
+    include_gain: bool = True,
 ) -> dict:
-    """Run the P0 topic-vector measure (centering / per-subtopic coverage /
-    inverse gain gap) BESIDE the composite — report-only, never folded into it.
+    """Run the topic-vector measure (centering / per-subtopic coverage / inverse
+    gain gap / the P1 scored Information Gain) BESIDE the composite — report-only,
+    never folded into it. ``site_claim_index`` (P1) is the client's grounding
+    corpus from platform-api; absent/thin → gain is suppressed (§6).
+
+    ``include_gain=False`` skips the scored Information Gain (and its page-claim +
+    site-claim embeddings) — used by the reopt COACHING pass, which needs only
+    centering + coverage + the inverse-gain gap and would otherwise embed ~85
+    extra strings and score gain on a page it is about to rewrite away.
 
     Best-effort + gated on GEMINI_API_KEY: an absent key or any failure returns a
     structured skip (``{available: False, reason: …}``), never a numeric default
@@ -11517,6 +11544,8 @@ async def _measure_topic_vector(
             aio_text=serp.get("aio_text") or "",
             top10_headings=top10 or [],
             tier2_headings=tier2 or [],
+            site_claim_index=site_claim_index if isinstance(site_claim_index, dict) else None,
+            include_gain=include_gain,
         )
     except Exception as exc:  # pragma: no cover - defensive; measure is best-effort
         logger.warning("topic-vector measure failed (%s); skipping.", exc)
@@ -11712,6 +11741,10 @@ class EcommerceScoreRequest(BaseModel):
     brand_voice: Optional[dict] = None
     detected_icp: Optional[dict] = None
     voice_card: Optional[dict] = None
+    # P1 grounding corpus for the report-only Information Gain measure (§7): the
+    # client's site-claim index, built + cached in platform-api and passed here
+    # (nlp has no DB). {facts:[...], claims:[...]}; absent/thin → gain suppressed.
+    site_claim_index: Optional[dict] = None
 
 
 class EcommerceScoreResponse(BaseModel):
@@ -11809,7 +11842,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     # P0 topic-vector measure — a SEPARATE async pass beside the deterministic
     # engine (which is left untouched above). Report-only: kept out of `scores`,
     # so the composite is unchanged whether or not this runs.
-    topic_vector_report = await _measure_topic_vector(page_html, body.keyword, serp_analysis_dict)
+    topic_vector_report = await _measure_topic_vector(page_html, body.keyword, serp_analysis_dict, body.site_claim_index)
 
     return EcommerceScoreResponse(
         composite_score=composite,
@@ -12592,6 +12625,10 @@ class ReoptimizeEcommerceRequest(BaseModel):
     # supplied → the web_search research pass is skipped. See the twin field on
     # GenerateEcommerceRequest.
     researched_facts: Optional[List[dict]] = None
+    # P1 grounding corpus for the Information Gain measure (§7) — the client's
+    # site-claim index, passed from platform-api. Coaches the gain guidance the
+    # rewrite acts on; absent/thin → gain suppressed + no guidance block.
+    site_claim_index: Optional[dict] = None
 
 
 def _ecommerce_deficiency_text(defs: Optional[List[dict]]) -> str:
@@ -12677,6 +12714,29 @@ async def reoptimize_ecommerce_page(request: Request, body: ReoptimizeEcommerceR
         if (body.product_input or "").strip():
             extra_facts = "ADDITIONAL PRODUCT DETAILS (authoritative — use these facts):\n" + body.product_input.strip()
 
+        # P1 — coach the reopt loop with the topic-vector / Information-Gain
+        # signal (§6/§9): the under-served on-vector subtopics to cover + the
+        # verifiable facts the client's OWN site asserts that this page omits.
+        # Best-effort + report-only: it never gates the composite (weight 0), and
+        # a missing GEMINI key / thin site index yields an empty block, so the
+        # prompt is byte-identical to before when the measure is unavailable.
+        # include_gain=False: the guidance uses only the inverse-gain gap +
+        # deterministic missing-facts, so we skip the scored-gain embeddings (~85
+        # extra strings) on the page we are about to rewrite; the FINAL report
+        # measure below runs the full gain on the rewritten page.
+        gain_guidance = ""
+        try:
+            _gain_measure = await _measure_topic_vector(
+                existing_html, body.keyword, body.serp_analysis, body.site_claim_index,
+                include_gain=False,
+            )
+            gain_guidance = topic_vector.render_gain_guidance(
+                _gain_measure, body.site_claim_index, existing_page_text
+            )
+        except Exception:  # pragma: no cover - guidance is best-effort
+            logger.warning("reoptimize-ecommerce: gain guidance failed; skipping.")
+        gain_block = ("\n" + gain_guidance + "\n") if gain_guidance else ""
+
         def _build_reopt_prompt(page_text: str, deficiency_text: str) -> str:
             return f"""STORE / BUSINESS DATA
 Store name: {body.business_name}
@@ -12692,7 +12752,7 @@ Primary keyword: {body.keyword}
 
 {researched_section}SEO DEFICIENCIES TO FIX — address ALL of these in the rewritten page:
 {deficiency_text}
-
+{gain_block}
 {extra_facts}
 {voice_block}
 
@@ -12839,7 +12899,7 @@ EXISTING PAGE CONTENT (extract accurate product facts from this — do NOT inven
         # beside the composite (does NOT influence keep-best above, which already
         # picked the page). Skipped structurally without GEMINI_API_KEY.
         topic_vector_report = await _measure_topic_vector(
-            content_html, body.keyword, body.serp_analysis
+            content_html, body.keyword, body.serp_analysis, body.site_claim_index
         )
 
         await q.put({"step": "progress", "progress": 95, "message": "Finishing up…"})

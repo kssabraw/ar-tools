@@ -1716,6 +1716,19 @@ class Settings(BaseSettings):
     # never cached. Lives in platform-api because nlp-api has no database.
     ecommerce_fact_cache_enabled: bool = True
     ecommerce_fact_cache_days: int = 180
+    # Topic-Vector Information Gain (P1) — the scored gain dimension is grounded
+    # in a per-client SITE CLAIM INDEX (structured facts + claim phrases crawled
+    # from the client's own site, cached in `site_claim_index` and passed to nlp
+    # in the score/reopt body — nlp has no DB). Report-only + low/zero composite
+    # weight, so this flag is a clean kill switch. The index is built inline on a
+    # cache miss (first ecommerce score for a client) then cached for the TTL.
+    topic_vector_gain_enabled: bool = True
+    site_claim_index_days: int = 30           # re-crawl cadence, not an expiry
+    site_claim_index_max_pages: int = 8       # pages scraped into the index
+    site_claim_index_max_facts: int = 40
+    site_claim_index_max_claims: int = 60
+    site_claim_index_scrape_timeout: int = 25
+    site_claim_index_scrape_concurrency: int = 5  # parallel site scrapes per build
     # Structural-fidelity gate on SERVICE / LOCATION pages (the runs pipeline). The
     # reference (page_structures['service'|'location']) is already injected into the
     # brief; this scores the writer's output against it and, when it drifts, folds

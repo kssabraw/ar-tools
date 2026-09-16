@@ -332,3 +332,160 @@ def test_acceptance_coverage_names_covered_and_missing():
     missing = {s["label"].lower() for s in cov["subtopics"] if not s["covered"]}
     assert any("buy" in c for c in covered)
     assert any(("receptor" in m or "metabolic" in m or "triple" in m) for m in missing)
+
+
+# --- P1: Information Gain (scored) ------------------------------------------
+
+def test_extract_page_claims_keeps_fact_bearing_only():
+    secs = [
+        "GLP-3RT ships in 10mg vials at $90. We care deeply about quality and service here.",
+        "The compound has 99% purity confirmed by HPLC on every batch.",
+    ]
+    claims = tv.extract_page_claims(secs)
+    assert any("10mg" in c or "$90" in c for c in claims)
+    assert any("99%" in c for c in claims)
+    # A sentence with no number / % / ° / $ is not a claim.
+    assert not any("care deeply" in c for c in claims)
+
+
+def test_site_fact_values_and_value_grounding():
+    idx = {"facts": [
+        {"type": "cas", "value": "2381089-83-2", "unit": ""},
+        {"type": "purity", "value": "98.5", "unit": "%"},
+    ]}
+    vals = tv._site_fact_values(idx)
+    assert tv._claim_value_grounded("Its CAS number 2381089-83-2 is documented", vals)
+    assert tv._claim_value_grounded("Purity is 98.5% by HPLC", vals)
+    # Bare small integers (a pack size) are too common to ground.
+    assert not tv._claim_value_grounded("Available in 10 mg vials", vals)
+
+
+def test_information_gain_verdicts_classifies_realized_rare_grounded():
+    # Explicit orthonormal-ish vectors so on-vector / rare / grounded are
+    # controlled independently of any embedder.
+    centroid = [1, 0, 0, 0]
+    subtopic_vecs = [[1, 1, 0, 0]]           # a consensus subtopic (on-vector)
+    claims = ["realized fact 5mg", "consensus claim 3x", "novel claim 9x"]
+    page_vecs = [[1, 0, 0, 1], [1, 1, 0, 0], [1, 0, 1, 0]]
+    site_vecs = [[1, 0, 0, 1]]               # grounds only the realized claim
+    v = tv.information_gain_verdicts(
+        claims, page_vecs, subtopic_vecs, centroid, site_vecs, set(),
+        centering_floor=0.6, rarity_ceiling=0.72, grounding_floor=0.78,
+    )
+    # realized: on-vector + rare + grounded
+    assert v[0]["realized_gain"] and not v[0]["ungrounded_novelty"]
+    # consensus: on-vector but NOT rare (== a competitor subtopic) → not gain
+    assert not v[1]["rare"] and not v[1]["realized_gain"]
+    # ungrounded novelty (fabrication): on-vector + rare but NOT site-grounded
+    assert v[2]["ungrounded_novelty"] and not v[2]["realized_gain"]
+
+
+def test_score_information_gain_normalizes_and_flags():
+    claim_verdicts = [
+        {"realized_gain": True, "ungrounded_novelty": False, "claim": "real"},
+        {"realized_gain": False, "ungrounded_novelty": True, "claim": "made-up"},
+    ]
+    cov = [
+        {"tier": "tier2", "covered": True},
+        {"tier": "tier2", "covered": False},
+        {"tier": "top10", "covered": True},
+    ]
+    g = tv.score_information_gain(claim_verdicts, cov, target=3)
+    assert g["realized_gain_count"] == 1
+    assert g["ungrounded_novelty_count"] == 1 and "made-up" in g["ungrounded_claims"]
+    assert g["differentiation_available"] == 2 and g["captured_differentiation"] == 1
+    assert g["composite_weight"] == 0.0            # never enters the composite
+    # 0.60 * (1/3) + 0.40 * (1/2) = 0.4 → 40.0
+    assert g["score"] == 40.0
+
+
+def _measure_gain(page_html, title, site_index):
+    return run(tv.measure(
+        embed_fn=fake_embed, query=_QUERY, page_title=title, page_html=page_html,
+        aio_present=True, aio_text=_AIO, top10_headings=_TOP10, tier2_headings=_TIER2,
+        site_claim_index=site_index,
+    ))
+
+
+def test_gain_suppressed_without_site_index():
+    r = _measure_gain(_NOVA_HTML, "Buy GLP-3RT", None)
+    assert r["information_gain"]["available"] is False
+    assert r["information_gain"]["reason"] == "no_site_index"
+
+
+def test_gain_suppressed_when_index_thin():
+    # Fewer than GAIN_MIN_SITE_CLAIMS claim phrases AND no typed facts → suppress,
+    # never a misleading 0 (§6).
+    r = _measure_gain(_NOVA_HTML, "Buy GLP-3RT", {"claims": ["only one 5mg claim here"], "facts": []})
+    assert r["information_gain"]["available"] is False
+    assert r["information_gain"]["reason"] == "site_index_thin"
+
+
+def test_gain_available_with_site_index():
+    html = ("<h1>Buy GLP-3RT</h1>"
+            "<p>GLP-3RT ships in 10mg vials at $90 with a verified COA per batch.</p>"
+            "<h2>Purity</h2><p>GLP-3RT has 99% HPLC purity confirmed on every batch.</p>")
+    idx = {
+        "claims": [
+            "GLP-3RT ships in 10mg vials at $90 with a verified COA",
+            "GLP-3RT has 99% HPLC purity per batch documentation",
+            "Every batch includes a verified certificate of analysis",
+        ],
+        "facts": [{"type": "price", "value": "90", "unit": "USD"},
+                  {"type": "size", "value": "10", "unit": "mg"}],
+    }
+    r = _measure_gain(html, "Buy GLP-3RT", idx)
+    assert r["information_gain"]["available"] is True
+    assert "score" in r["information_gain"]
+    assert r["information_gain"]["composite_weight"] == 0.0
+
+
+def test_render_gain_guidance_empty_when_unavailable():
+    assert tv.render_gain_guidance({"available": False}) == ""
+    assert tv.render_gain_guidance(None) == ""
+
+
+def test_render_gain_guidance_lists_gaps_and_missing_site_facts():
+    measure_result = {"available": True,
+                      "inverse_gain_gap": [{"label": "Receptor Agonism"}]}
+    idx = {"facts": [
+        {"type": "cas", "value": "2381089-83-2", "unit": ""},
+        {"type": "price", "value": "90", "unit": "USD"},
+    ]}
+    page_text = "this page already mentions the $90 price but not the cas number"
+    block = tv.render_gain_guidance(measure_result, idx, page_text)
+    assert "Receptor Agonism" in block            # under-served subtopic coached
+    assert "2381089-83-2" in block                # missing site fact coached
+    # A fact already on the page is NOT re-coached (anti-noise; value "90" present).
+    assert "cas: 2381089-83-2" in block.lower()
+
+
+def test_measure_does_not_add_gain_to_composite_inputs():
+    # information_gain is a SEPARATE key — it never appears in the coverage/
+    # centering blocks that a composite could read.
+    r = _measure_gain(_NOVA_HTML, "Buy GLP-3RT", None)
+    assert "information_gain" in r
+    assert "information_gain" not in r["coverage"]
+    assert "information_gain" not in r["centering"]
+
+
+def test_include_gain_false_skips_scored_gain_but_keeps_coverage():
+    # The reopt coaching pass opts out of the scored gain (and its extra
+    # embeddings) — the measure still runs centering + coverage + inverse gap,
+    # but Information Gain is 'not_requested', NOT scored, even with a rich index.
+    idx = {
+        "claims": ["GLP-3RT ships in 10mg vials at $90 with a verified COA",
+                   "GLP-3RT has 99% HPLC purity per batch",
+                   "Every batch includes a certificate of analysis"],
+        "facts": [{"type": "price", "value": "90", "unit": "USD"}],
+    }
+    r = run(tv.measure(
+        embed_fn=fake_embed, query=_QUERY, page_title="Buy GLP-3RT",
+        page_html=_NOVA_HTML, aio_present=True, aio_text=_AIO,
+        top10_headings=_TOP10, tier2_headings=_TIER2, site_claim_index=idx,
+        include_gain=False,
+    ))
+    assert r["available"] is True                        # P0 still runs
+    assert "centering" in r and "coverage" in r and "inverse_gain_gap" in r
+    assert r["information_gain"]["available"] is False
+    assert r["information_gain"]["reason"] == "not_requested"
