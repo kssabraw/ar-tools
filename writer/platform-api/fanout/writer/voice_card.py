@@ -418,6 +418,24 @@ def build_term_regex(terms: list[str]) -> Optional[re.Pattern]:
     return re.compile("(?:" + "|".join(parts) + ")", re.IGNORECASE)
 
 
+def strip_forbidden(items: list, never_use_terms, text_of=None) -> list:
+    """Drop any item whose surface text matches a guide `never_use` term.
+
+    Used to exclude the client's forbidden terms from the SERP-signal coverage
+    targets (related keywords / entities / quadgrams / bold terms): a forbidden
+    term can never appear on the page (voice enforcement strips it), so leaving
+    it in the targets makes the coverage engine perpetually recommend "add
+    <forbidden word>" — fighting voice enforcement every pass. Pure + word-
+    boundary (reuses `build_term_regex`, the canonical matcher). No forbidden
+    terms → the list is returned unchanged. ``text_of`` maps an item to the
+    string to test (default: the item itself, for plain strings)."""
+    rx = build_term_regex([str(t) for t in (never_use_terms or []) if str(t).strip()])
+    if rx is None:
+        return list(items or [])
+    pick = text_of or (lambda it: it)
+    return [it for it in (items or []) if not rx.search(str(pick(it) or ""))]
+
+
 def _significant_tokens(phrase: str) -> list[str]:
     return [
         t.lower()
