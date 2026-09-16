@@ -696,3 +696,36 @@ def test_insert_leaves_multiword_phrases_to_the_phrase_pass():
     out, swapped = vc.insert_required_terms(html, card)
     assert swapped == []
     assert out == html
+
+
+# ── strip_forbidden — §13: exclude never_use terms from SERP-signal targets ──
+
+def test_strip_forbidden_drops_matching_plain_strings():
+    out = vc.strip_forbidden(["retatrutide", "peptide research", "buy retatrutide online"],
+                             ["retatrutide"])
+    assert out == ["peptide research"]  # both forms containing the forbidden word dropped
+
+
+def test_strip_forbidden_no_terms_returns_unchanged_copy():
+    items = ["a", "b"]
+    out = vc.strip_forbidden(items, [])
+    assert out == ["a", "b"] and out is not items  # copy, not the same list
+    assert vc.strip_forbidden(items, None) == ["a", "b"]
+
+
+def test_strip_forbidden_uses_text_of_for_dict_items():
+    rk = [{"term": "retatrutide dosage"}, {"term": "peptide storage"}]
+    out = vc.strip_forbidden(rk, ["retatrutide"], lambda t: (t or {}).get("term"))
+    assert out == [{"term": "peptide storage"}]
+
+
+def test_strip_forbidden_word_boundary_not_substring():
+    # "cat" must not nuke "category" (word-boundary match, via build_term_regex).
+    out = vc.strip_forbidden(["category page", "cat food"], ["cat"])
+    assert out == ["category page"]
+
+
+def test_strip_forbidden_tolerates_none_and_missing_keys():
+    items = [{"term": "safe"}, {}, None, {"term": "retatrutide vial"}]
+    out = vc.strip_forbidden(items, ["retatrutide"], lambda t: (t or {}).get("term"))
+    assert {"term": "safe"} in out and {"term": "retatrutide vial"} not in out

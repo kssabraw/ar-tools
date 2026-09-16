@@ -854,6 +854,14 @@ async def gsc_scheduler() -> None:
                 # pace_daily_brief_push (off until the im:write scope lands).
                 from services.pace_briefs import run_morning_briefs
                 await _safe_async("pace_morning_briefs", run_morning_briefs, now.date())
+                # Topic-Vector site-claim-index refresh (§13 follow-up): re-crawl
+                # the stalest existing grounding indexes ahead of the next score, so
+                # a lapsed 30-day TTL doesn't silently suppress Information Gain (and
+                # doesn't make the next score pay the crawl inline). Bounded per tick,
+                # oldest-first; self-gated on topic_vector_gain_enabled +
+                # site_claim_index_refresh_enabled. Best-effort.
+                from services import site_claim_index
+                await _safe_async("site_claim_index_refresh", site_claim_index.refresh_stale_indexes)
                 # Weekly Pulse — the copy-paste client update block on each
                 # workspace (staff-delivered; self-gated on pulse_weekday +
                 # pulse_enabled; idempotent upsert + 2-week retention purge).

@@ -2498,12 +2498,39 @@ async def get_google_entities(
                     d["wiki_link"] = wiki_link
                 seen_this_page.add(key)
 
-    results = []
+    # Entities that clear the page-spread filter, BEFORE the salience cut —
+    # collected so the salience distribution is logged (§13 empty-entity
+    # diagnosis + calibration parity with the TextRazor path). This is how an
+    # empty result gets attributed on a live run: candidates > 0 but 0 kept ⇒
+    # GOOGLE_NLP_MIN_SALIENCE is too high; candidates == 0 ⇒ extraction / page-
+    # spread produced nothing (raise the salience floor won't help). Output is
+    # unchanged — only the logging is richer.
+    candidates = []
     for key, data in entity_data.items():
         page_count = len(data["pages"])
         if page_count < min_pages_required:
             continue
-        mean_salience = float(np.mean(data["saliences"]))
+        candidates.append((key, data, page_count, float(np.mean(data["saliences"]))))
+    candidates.sort(key=lambda c: c[3], reverse=True)
+    if candidates:
+        dist = ", ".join(f"{c[3]:.2f}" for c in candidates[:30])
+        logger.info(
+            f"Google NLP calibration: {len(candidates)} page-spread-qualifying entities; "
+            f"mean salience (desc): [{dist}]"
+        )
+    else:
+        # Zero candidates on a real SERP means extraction/page-spread, not the
+        # salience floor — surface the raw counts so it's diagnosable without a
+        # code change or a guess about which gate fired.
+        raw_total = sum(len(p) for p in per_page_entities)
+        logger.info(
+            f"Google NLP calibration: 0 page-spread-qualifying entities "
+            f"({len(entity_data)} distinct across {total_pages} pages, "
+            f"{raw_total} raw mentions; page_spread>={min_pages_required})"
+        )
+
+    results = []
+    for key, data, page_count, mean_salience in candidates:
         if mean_salience < min_salience:
             continue
         recommended_mentions, max_mentions, avg_mentions = _capped_max_target(data["mention_counts"])
@@ -2523,7 +2550,7 @@ async def get_google_entities(
 
     results.sort(key=lambda x: x["mean_salience"], reverse=True)
     logger.info(
-        f"Google NLP entities: {len(results)} kept "
+        f"Google NLP entities: {len(results)}/{len(candidates)} kept "
         f"(salience>={min_salience}, page_spread>={min_pages_required}/{total_pages})"
     )
     return results
@@ -4876,12 +4903,22 @@ def _build_keyword_coverage_detail(related: dict, page_text_lower: str,
     return keyword_detail, keywords_under_target, total_shortfall
 
 
-def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict]) -> dict:
+def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict],
+                                  never_use_terms: Optional[list] = None) -> dict:
     """
     Deterministically score how well the page covers the SERP signals identified
     from competitor analysis: related keywords (per zone), Google NLP entities,
     and quadgrams.  Runs in Python — not scored by Claude — so results are
     precise, reproducible, and cost no extra tokens.
+
+    ``never_use_terms`` (the client's brand-guide forbidden terms, §13): any SERP
+    target that matches one is dropped BEFORE scoring, so the engine never
+    recommends "add <forbidden word>" — a page can't contain a term voice
+    enforcement strips, so a forbidden target was a permanent, unwinnable gap
+    that fought voice enforcement every pass. Absent/empty → byte-identical to
+    before (no filtering). The composite is unchanged either way: a forbidden
+    target is never found on the page, so removing it leaves `found`/`target`
+    (hence coverage) the same and only clears the bogus missing/recommendation.
     """
     if not serp_analysis:
         return {
@@ -4908,6 +4945,22 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     zt       = serp_analysis.get("zone_targets", {})
     entities = serp_analysis.get("google_entities", [])
     quadgrams = serp_analysis.get("top_quadgrams", [])
+    bold_keywords = serp_analysis.get("serp_bold_keywords", [])
+
+    # §13: drop the client's brand-guide forbidden terms from every SERP target
+    # BEFORE scoring, so the engine never recommends "add <never-use word>" (a
+    # page can't contain a term voice enforcement strips). Word-boundary match
+    # via the canonical `voice_card` matcher; a no-op when there are none, and
+    # composite-neutral (a forbidden target is never found, so found/target are
+    # unchanged — only the bogus missing/recommendation is removed).
+    if never_use_terms:
+        rk = {
+            zone: vcard.strip_forbidden(terms, never_use_terms, lambda t: (t or {}).get("term"))
+            for zone, terms in rk.items()
+        }
+        entities = vcard.strip_forbidden(entities, never_use_terms, lambda e: (e or {}).get("name"))
+        quadgrams = vcard.strip_forbidden(quadgrams, never_use_terms, lambda q: (q or {}).get("phrase"))
+        bold_keywords = vcard.strip_forbidden(bold_keywords, never_use_terms, lambda b: (b or {}).get("term"))
 
     issues: list[str] = []
     recommendations: list[str] = []
@@ -4986,7 +5039,7 @@ def _compute_serp_signal_coverage(page_html: str, serp_analysis: Optional[dict])
     )
     # And SERP-bolded terms (raw-max competitor benchmark — a direct Google signal).
     bold_detail, bold_under_target, total_bold_shortfall = (
-        _build_bold_coverage_detail(serp_analysis.get("serp_bold_keywords", []), page_text_lower, zones)
+        _build_bold_coverage_detail(bold_keywords, page_text_lower, zones)
     )
     ent_zone_scores: list[float] = []
     if top_entities:
@@ -5381,7 +5434,7 @@ async def _score_html_inline(
     serp_ctx = _serp_context(serp_analysis_dict)
     user_prompt = _build_score_prompt(
         business_name, gbp_category, keyword, city, address, serp_ctx, page_text,
-        html_structure, voice_card=voice_card,
+        html_structure, voice_card=voice_card, page_title=_extract_title_tag(page_html),
     )
 
     msg = await client.messages.create(
@@ -5400,7 +5453,8 @@ async def _score_html_inline(
     scores = _parse_claude_json(msg.content[0].text)
     if not scores:
         raise Exception("Inline scoring returned invalid JSON")
-    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(
+        page_html, serp_analysis_dict, never_use_terms=(voice_card or {}).get("never_use_terms"))
     _lf = _compute_length_fit(page_html, serp_analysis_dict, length_target)
     if _lf is not None:
         scores["length_fit"] = _lf
@@ -6758,6 +6812,29 @@ def _detect_html_structure(page_html: str) -> str:
     return "\n".join(lines)
 
 
+_TITLE_TAG_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+
+def _extract_title_tag(page_html: str) -> str:
+    """The page's <title> text, collapsed to one line. §13 extraction parity:
+    the qualitative LLM scorers judge title optimization but got only the flat
+    get_text() blob (title text buried, unlabelled) and reported they "could not
+    confirm keyword presence in the title" — while the deterministic engine
+    measured it precisely. Surfacing it as a labelled field closes that gap.
+    Empty when there is no <title>."""
+    m = _TITLE_TAG_RE.search(page_html or "")
+    if not m:
+        return ""
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()[:300]
+
+
+def _title_block(page_title: str) -> str:
+    """The labelled title line prepended to a scorer's PAGE CONTENT block, or ""
+    when no title (so the prompt is byte-identical for a title-less fragment)."""
+    t = (page_title or "").strip()
+    return f"PAGE TITLE (<title> tag): {t}\n\n" if t else ""
+
+
 def _build_score_prompt(
     business_name: str,
     gbp_category: str,
@@ -6769,6 +6846,7 @@ def _build_score_prompt(
     html_structure: str = "",
     geo_mode: str = "local",
     voice_card: Optional[dict] = None,
+    page_title: str = "",
 ) -> str:
     """Returns the dynamic user-message portion of the scoring prompt.
     The static system instructions are in _SCORE_SYSTEM_PROMPT (cached separately).
@@ -6791,7 +6869,7 @@ Category: {gbp_category}
 Keyword: {keyword}
 {geo_lines}{serp_ctx}{structure_block}{voice_block}
 PAGE CONTENT (first 8,000 chars):
-{page_text}"""
+{_title_block(page_title)}{page_text}"""
 
 
 async def _derive_related_keywords(keyword: str, location: str, haiku_client) -> tuple:
@@ -8054,7 +8132,7 @@ async def score_page(request: Request, body: ScorePageRequest):
     city = body.location.split(",")[0].strip() if body.location else ""
     serp_ctx = _serp_context(serp_analysis_dict)
 
-    user_prompt = _build_score_prompt(body.business_name, body.gbp_category, body.keyword, city, body.address, serp_ctx, page_text, html_structure, geo_mode=geo_mode, voice_card=voice_card)
+    user_prompt = _build_score_prompt(body.business_name, body.gbp_category, body.keyword, city, body.address, serp_ctx, page_text, html_structure, geo_mode=geo_mode, voice_card=voice_card, page_title=_extract_title_tag(page_html))
 
     scores = None
     token_rec = None
@@ -8083,7 +8161,8 @@ async def score_page(request: Request, body: ScorePageRequest):
         raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
 
     # Inject deterministic SERP signal coverage + length fit (Python, not Claude)
-    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(
+        page_html, serp_analysis_dict, never_use_terms=(voice_card or {}).get("never_use_terms"))
     _lf = _compute_length_fit(page_html, serp_analysis_dict)
     if _lf is not None:
         scores["length_fit"] = _lf
@@ -11477,6 +11556,7 @@ def _build_ecommerce_score_prompt(
     page_text: str,
     html_structure: str = "",
     voice_card: Optional[dict] = None,
+    page_title: str = "",
 ) -> str:
     """Dynamic user-message portion of the ecommerce scoring prompt. The static
     rubric lives in _ECOMMERCE_SCORE_SYSTEM_PROMPT (cached separately)."""
@@ -11494,7 +11574,7 @@ Page type: {ptype}
 Target keyword: {keyword}
 {ctx_line}{serp_ctx}{structure_block}{voice_block}
 PAGE CONTENT (first 8,000 chars):
-{page_text[:8000]}"""
+{_title_block(page_title)}{page_text[:8000]}"""
 
 
 async def _ecommerce_score_html_inline(
@@ -11515,7 +11595,7 @@ async def _ecommerce_score_html_inline(
     serp_ctx = _serp_context(serp_analysis_dict)
     user_prompt = _build_ecommerce_score_prompt(
         business_name, brand_context, keyword, page_type, serp_ctx, page_text,
-        html_structure, voice_card=voice_card,
+        html_structure, voice_card=voice_card, page_title=_extract_title_tag(page_html),
     )
     msg = await client.messages.create(
         model=SCORE_MODEL,
@@ -11532,7 +11612,8 @@ async def _ecommerce_score_html_inline(
     scores = _parse_claude_json(msg.content[0].text)
     if not scores:
         raise Exception("Inline ecommerce scoring returned invalid JSON")
-    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(
+        page_html, serp_analysis_dict, never_use_terms=(voice_card or {}).get("never_use_terms"))
     voice = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, _ = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
     deficiencies = _ecommerce_build_deficiencies(scores)
@@ -11962,7 +12043,7 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     voice_card = await _resolve_voice_card(client, body)
     user_prompt = _build_ecommerce_score_prompt(
         body.business_name, brand_context, body.keyword, page_type, serp_ctx, page_text,
-        html_structure, voice_card=voice_card,
+        html_structure, voice_card=voice_card, page_title=_extract_title_tag(page_html),
     )
 
     scores = None
@@ -11993,7 +12074,8 @@ async def score_ecommerce_page(request: Request, body: EcommerceScoreRequest):
     if not scores:
         raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
 
-    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(
+        page_html, serp_analysis_dict, never_use_terms=(voice_card or {}).get("never_use_terms"))
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, status = _composite_from_scores(scores, _ECOMMERCE_ENGINE_WEIGHTS)
 
@@ -12122,6 +12204,7 @@ def _build_blog_score_prompt(
     page_text: str,
     html_structure: str = "",
     voice_card: Optional[dict] = None,
+    page_title: str = "",
 ) -> str:
     """Dynamic user-message portion of the blog scoring prompt. The static rubric
     lives in _BLOG_SCORE_SYSTEM_PROMPT (cached separately)."""
@@ -12138,7 +12221,7 @@ Content type: Blog article (informational)
 Target keyword / topic: {keyword}
 {ctx_line}{serp_ctx}{structure_block}{voice_block}
 ARTICLE CONTENT (first 8,000 chars):
-{page_text[:8000]}"""
+{_title_block(page_title)}{page_text[:8000]}"""
 
 
 class BlogScoreRequest(BaseModel):
@@ -12214,7 +12297,7 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
     voice_card = await _resolve_voice_card(client, body)
     user_prompt = _build_blog_score_prompt(
         body.business_name, brand_context, body.keyword, serp_ctx, page_text,
-        html_structure, voice_card=voice_card,
+        html_structure, voice_card=voice_card, page_title=_extract_title_tag(page_html),
     )
 
     scores = None
@@ -12245,7 +12328,8 @@ async def score_blog_page(request: Request, body: BlogScoreRequest):
     if not scores:
         raise HTTPException(status_code=502, detail="Scoring service returned an invalid response. Please try again.")
 
-    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(page_html, serp_analysis_dict)
+    scores["serp_signal_coverage"] = _compute_serp_signal_coverage(
+        page_html, serp_analysis_dict, never_use_terms=(voice_card or {}).get("never_use_terms"))
     scores["structural_aeo"] = _compute_blog_structural_aeo(page_html)
     voice_compliance = _voice_scorecard_from(scores, page_html, "", voice_card)
     composite, status = _composite_from_scores(scores, _BLOG_ENGINE_WEIGHTS)
