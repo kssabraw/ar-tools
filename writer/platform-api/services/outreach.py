@@ -23,11 +23,24 @@ seen everything. Never add an unbounded read to this file.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Optional
 
 from services.outreach_db import get_outreach_client
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_uuid(value: Any) -> bool:
+    """True when `value` parses as a UUID. A guard for id path/body params before they reach a
+    `.eq("id", …)` on a uuid column: without it a malformed id (an empty string, a typo) makes
+    Postgres raise on the cast and PostgREST surface a raw 500, instead of the caller getting a
+    clean, named not-found."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 # --- Vocabularies -----------------------------------------------------------------------------
 #
@@ -533,15 +546,20 @@ _LEAD_SORTS: dict[str, tuple[str, bool, bool]] = {
 
 # v_lead_cadence projection (T2.1). lead_id + the three rollup fields the card shows.
 _CADENCE_COLUMNS = "lead_id,attempt_count,last_touched_at,last_disposition"
+# Chunk size for the cadence `.in_()`. A full board page is MAX_PAGE_SIZE (200) lead ids; 200 uuids
+# in one PostgREST `in.(…)` query string is ~7.5 KB and can brush a gateway URL limit, so the lookup
+# is batched (≤2 chunks at the page ceiling) rather than sent as one oversized filter.
+_CADENCE_BATCH = 100
 
 
 def _attach_cadence(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Attach a per-lead touch-cadence rollup (T2.1) to a page of lead rows, one batched read.
+    """Attach a per-lead touch-cadence rollup (T2.1) to a page of lead rows.
 
     The board reads the `lead` table (which has no touch aggregate), so cadence is looked up from
-    `v_lead_cadence` for exactly the page's lead ids and merged as `row["cadence"]`. One `.in_()`
-    query, not one per lead. A lead with no touches gets `None` — the card renders nothing rather
-    than a fake "attempt 0". Best-effort: a failed lookup leaves the page uncadenced, never errors.
+    `v_lead_cadence` for exactly the page's lead ids (batched at `_CADENCE_BATCH`, so a maxed board
+    stays under the URL limit) and merged as `row["cadence"]` — never one query per lead. A lead with
+    no touches gets `None` — the card renders nothing rather than a fake "attempt 0". Best-effort: a
+    failed lookup leaves the page uncadenced, never errors.
     """
     # Set the key on every row first so the shape is stable (`cadence: null`) even if the lookup
     # fails or a lead has no touches — the frontend types it as always-present.
@@ -550,20 +568,24 @@ def _attach_cadence(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ids = [r["id"] for r in rows if r.get("id")]
     if not ids:
         return rows
+    by_lead: dict[str, Any] = {}
     try:
-        cad = (
-            get_outreach_client()
-            .table("v_lead_cadence")
-            .select(_CADENCE_COLUMNS)
-            .in_("lead_id", ids)
-            .execute()
-            .data
-            or []
-        )
+        client = get_outreach_client()
+        for start in range(0, len(ids), _CADENCE_BATCH):
+            chunk = ids[start:start + _CADENCE_BATCH]
+            cad = (
+                client.table("v_lead_cadence")
+                .select(_CADENCE_COLUMNS)
+                .in_("lead_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for c in cad:
+                by_lead[c["lead_id"]] = c
     except Exception as exc:  # noqa: BLE001
         logger.warning("outreach_cadence_attach_failed", extra={"error": str(exc)})
         return rows
-    by_lead = {c["lead_id"]: c for c in cad}
     for row in rows:
         row["cadence"] = by_lead.get(row.get("id"))
     return rows
@@ -725,8 +747,11 @@ def _scoreboard_since(days: int, tz_name: str) -> str:
         tz = ZoneInfo(tz_name)
     except Exception:  # noqa: BLE001
         tz = timezone.utc
-    midnight_today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-    start_local = midnight_today - timedelta(days=n - 1)
+    # Subtract on the calendar DATE, then build local midnight on it — so the window start is exact
+    # local midnight even across a DST transition. (Subtracting a timedelta from an aware datetime is
+    # naive 24h arithmetic and would drift an hour on the fall-back / spring-forward day.)
+    start_date = datetime.now(tz).date() - timedelta(days=n - 1)
+    start_local = datetime(start_date.year, start_date.month, start_date.day, tzinfo=tz)
     return start_local.astimezone(timezone.utc).isoformat()
 
 
@@ -3123,6 +3148,13 @@ def link_lead_prospect(lead_id: str, prospect_id: str, actor_id: str) -> dict[st
     The lead's `source` is left as-is: a linked `manual` lead gains the prospect's audit surface but stays
     `manual`, so it never enters the outbound-only `outcome` substrate — consistent with the model rules.
     """
+    # Both ids hit a `.eq("id", …)` on a uuid column below; a malformed one would make Postgres raise
+    # on the cast and surface a raw 500. Guard up front so a bad id is a clean, named not-found.
+    if not _looks_like_uuid(lead_id):
+        raise OutreachError("lead_not_found", "no such lead")
+    if not _looks_like_uuid(prospect_id):
+        raise OutreachError("prospect_not_found", "no such prospect")
+
     client = get_outreach_client()
     leads = (
         client.table("lead")

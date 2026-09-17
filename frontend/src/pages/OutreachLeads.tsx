@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -474,9 +474,13 @@ export function OutreachLeads() {
   const { data: leadsData, isLoading } = useQuery<{ leads: Lead[]; total: number }>({
     queryKey: ['outreach-leads', leadsUrl],
     queryFn: () => api.get(leadsUrl),
-    enabled: view !== 'scoreboard',
+    // Only the board renders `leads`; the queue + scoreboard views have their own fetches, so don't
+    // spend a request building `byStage` they never show.
+    enabled: view === 'board',
   })
-  const leads = leadsData?.leads ?? []
+  // Memoized so its reference is stable per fetch — otherwise the `?? []` fallback is a fresh array
+  // every render and re-runs the byStage grouping (and its dependents) needlessly.
+  const leads = useMemo(() => leadsData?.leads ?? [], [leadsData])
   const byStage = useMemo(() => {
     const map: Record<string, Lead[]> = {}
     for (const lead of leads) (map[lead.stage] ??= []).push(lead)
@@ -1189,7 +1193,12 @@ function LinkProspect({ leadId, defaultQuery, onLinked }: {
 }) {
   const [q, setQ] = useState(defaultQuery ?? '')
   const [active, setActive] = useState(false)
-  const term = q.trim()
+  // Debounce the typed query so search fires once the caller pauses, not once per keystroke.
+  const [term, setTerm] = useState((defaultQuery ?? '').trim())
+  useEffect(() => {
+    const t = setTimeout(() => setTerm(q.trim()), 300)
+    return () => clearTimeout(t)
+  }, [q])
   const { data, isFetching } = useQuery<{ prospects: ProspectLite[] }>({
     queryKey: ['outreach-prospect-search', term],
     queryFn: () => api.get(`/outreach/prospects?search=${encodeURIComponent(term)}&limit=8`),

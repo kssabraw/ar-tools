@@ -556,73 +556,96 @@ class _SeqClient:
             return SimpleNamespace(data=self._p._next())
 
 
+# Real UUIDs — link_lead_prospect now guards both ids against a uuid cast, so the fakes must look
+# real. Lead L, prospects P and PX.
+_LID = "11111111-1111-4111-8111-111111111111"
+_PID = "22222222-2222-4222-8222-222222222222"
+_PID2 = "33333333-3333-4333-8333-333333333333"
+
+
 def test_link_lead_prospect_sets_prospect_id(monkeypatch):
     responses = [
-        [{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": None, "company_name": "Acme"}],
-        [{"id": "p1", "name": "Acme Plumbing"}],  # prospect exists
+        [{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": None, "company_name": "Acme"}],
+        [{"id": _PID, "name": "Acme Plumbing"}],  # prospect exists
         [],                                        # no other live lead owns it
-        [{"id": "l1"}],                            # update wrote a row
+        [{"id": _LID}],                            # update wrote a row
         [{}],                                      # activity note insert
     ]
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
-    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": "p1"})
-    out = svc.link_lead_prospect("l1", "p1", "actor")
+    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": _PID})
+    out = svc.link_lead_prospect(_LID, _PID, "actor")
     assert out["already_linked"] is False
-    assert out["lead"]["prospect_id"] == "p1"
+    assert out["lead"]["prospect_id"] == _PID
 
 
 def test_link_lead_prospect_same_id_is_idempotent(monkeypatch):
-    responses = [[{"id": "l1", "source": "manual", "prospect_id": "p1", "deleted_at": None}]]
+    responses = [[{"id": _LID, "source": "manual", "prospect_id": _PID, "deleted_at": None}]]
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
-    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": "p1"})
-    out = svc.link_lead_prospect("l1", "p1", "actor")
+    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": _PID})
+    out = svc.link_lead_prospect(_LID, _PID, "actor")
     assert out["already_linked"] is True
 
 
 def test_link_lead_prospect_refuses_relinking_a_different_prospect(monkeypatch):
-    responses = [[{"id": "l1", "source": "manual", "prospect_id": "pX", "deleted_at": None}]]
+    responses = [[{"id": _LID, "source": "manual", "prospect_id": _PID2, "deleted_at": None}]]
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
     with pytest.raises(OutreachError) as e:
-        svc.link_lead_prospect("l1", "p1", "actor")
+        svc.link_lead_prospect(_LID, _PID, "actor")
     assert e.value.code == "lead_already_linked"
 
 
 def test_link_lead_prospect_refuses_when_prospect_owned_by_another_lead(monkeypatch):
     responses = [
-        [{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": None}],
-        [{"id": "p1", "name": "Acme"}],  # prospect exists
-        [{"id": "l2"}],                  # another live lead already owns p1
+        [{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": None}],
+        [{"id": _PID, "name": "Acme"}],  # prospect exists
+        [{"id": _PID2}],                 # another live lead already owns it
     ]
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
     with pytest.raises(OutreachError) as e:
-        svc.link_lead_prospect("l1", "p1", "actor")
+        svc.link_lead_prospect(_LID, _PID, "actor")
     assert e.value.code == "prospect_already_linked"
 
 
 def test_link_lead_prospect_missing_lead(monkeypatch):
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient([[]]))
     with pytest.raises(OutreachError) as e:
-        svc.link_lead_prospect("l1", "p1", "actor")
+        svc.link_lead_prospect(_LID, _PID, "actor")
     assert e.value.code == "lead_not_found"
 
 
 def test_link_lead_prospect_rejects_soft_deleted_lead(monkeypatch):
-    responses = [[{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": "2026-01-01"}]]
+    responses = [[{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": "2026-01-01"}]]
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
     with pytest.raises(OutreachError) as e:
-        svc.link_lead_prospect("l1", "p1", "actor")
+        svc.link_lead_prospect(_LID, _PID, "actor")
     assert e.value.code == "lead_not_found"
 
 
 def test_link_lead_prospect_missing_prospect(monkeypatch):
     responses = [
-        [{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": None}],
+        [{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": None}],
         [],  # prospect not found
     ]
     monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
     with pytest.raises(OutreachError) as e:
-        svc.link_lead_prospect("l1", "p1", "actor")
+        svc.link_lead_prospect(_LID, _PID, "actor")
     assert e.value.code == "prospect_not_found"
+
+
+def test_link_lead_prospect_rejects_malformed_ids_before_any_query(monkeypatch):
+    """A malformed lead_id or prospect_id is a named not-found, never a raw 500 from a uuid cast.
+    The guard fires before any client call, so a boom-on-use client is never reached."""
+    class _Boom:
+        def table(self, *_a, **_k):
+            raise AssertionError("must not query on a malformed id")
+
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _Boom())
+    with pytest.raises(OutreachError) as e1:
+        svc.link_lead_prospect("not-a-uuid", _PID, "actor")
+    assert e1.value.code == "lead_not_found"
+    with pytest.raises(OutreachError) as e2:
+        svc.link_lead_prospect(_LID, "", "actor")
+    assert e2.value.code == "prospect_not_found"
 
 
 def test_link_prospect_route_is_staff_gated():
