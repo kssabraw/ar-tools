@@ -3,10 +3,11 @@ import type { CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Crosshair, Loader2, Plus, X, AlertTriangle, Ban, Search, Phone, Clock,
+  Crosshair, Loader2, Plus, X, AlertTriangle, Ban, Search, Phone, Clock, ClipboardList,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { Justification } from '../components/outreach/Justification'
+import { Script } from '../components/outreach/Script'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 import { LeadContacts } from '../components/outreach/Enrichment'
 import { useAuth } from '../context/AuthContext'
@@ -736,6 +737,7 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
   const [lostReason, setLostReason] = useState('')
   const [pendingStage, setPendingStage] = useState<string | null>(null)
   const [showHook, setShowHook] = useState(false)
+  const [showScript, setShowScript] = useState(false)
   const [touchChannel, setTouchChannel] = useState('phone')
   const [touchDisposition, setTouchDisposition] = useState('')
   const [touchNote, setTouchNote] = useState('')
@@ -906,11 +908,22 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
                     fontSize: 12, fontWeight: 600, color: '#0369a1', cursor: 'pointer' }}>
                   <Phone size={13} /> {showHook ? 'Hide call hook' : 'Why call?'}
                 </button>
+                <button onClick={() => setShowScript(s => !s)}
+                  style={{ display: 'inline-flex', gap: 6, alignItems: 'center', border: '1px solid #e2e8f0',
+                    background: showScript ? '#eff6ff' : '#fff', borderRadius: 8, padding: '6px 10px',
+                    fontSize: 12, fontWeight: 600, color: '#0369a1', cursor: 'pointer' }}>
+                  <ClipboardList size={13} /> {showScript ? 'Hide script' : 'Script & rebuttals'}
+                </button>
                 <ProspectReportButtons prospectId={lead.prospect_id} />
               </div>
               {showHook && (
                 <div style={{ marginTop: 8 }}>
                   <Justification prospectId={lead.prospect_id} />
+                </div>
+              )}
+              {showScript && (
+                <div style={{ marginTop: 8 }}>
+                  <Script prospectId={lead.prospect_id} />
                 </div>
               )}
               <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} isStaff={isStaff} />

@@ -2610,3 +2610,46 @@ no invariant bent to add a UI convenience.
 
 **Staff-gated, no migration.** The link is a write (staff bar, like `create_lead`/`promote_prospect`);
 the reads it depends on already exist. Nothing schema-level changed.
+
+---
+
+## 2026-09-17 — Tier 3 / T3.2: the call script + rebuttal library is PURE assembly over the report, not a new LLM
+
+The "Why call?" hook is one line — the opener. A caller has no talk track past it and no answer to
+what an owner says back. T3.2 adds a per-call script (open → discovery → evidence → value → close)
+and a rebuttal library, both surfaced beside "Why call?" in the lead drawer. Built as
+`writer/platform-api/services/outreach_script.py` (pure) + `services/outreach.prospect_script` (I/O)
++ `GET /outreach/prospects/{id}/script` + `frontend/src/components/outreach/Script.tsx`. Reads
+existing scan data only; spends nothing; writes nothing; no migration.
+
+**The design fork was already decided — this applies the 2026-08-08 ruling verbatim, it does not
+re-open it.** The rebuttals are PURE deterministic assembly, not an LLM. The reasoning is the same,
+in the same order: cheapest to reverse (a grounded phrasing pass can be layered on later, the opener
+already is one — never the reverse); the "never invent a fact, competitor, or number" invariant gets
+to be structural rather than guarded (there is no model to talk out of a verdict); and every grounded
+rebuttal carries the raw `facts` it was built from, so a claim made on a call is replayable from
+stored inputs (the `score_factors` / `talking_point.facts` discipline).
+
+**It re-grounds NOTHING — one source of truth.** `prospect_script` reuses `prospect_report`
+wholesale, so the script's opener is the report's hook verbatim (and the loss-framed phrasing pass,
+cached per (prospect, snapshot), runs there — the script never triggers a second LLM call), the
+evidence section is the report's `talking_points` verbatim, the value line is the deterministic
+`valuation.line`, and the organic rank that enriches one rebuttal is the report's already-assembled
+organic signal. The script module only adds call-flow scaffolding around them and the rebuttals keyed
+to the objection. Because it reuses facts the justification/report already resolved (named
+competitors, the `paying_evidence` tag), it does NO new name-matching and cannot re-introduce the
+one-directional match bug (I-099) those layers guard — and the paid `conversion_tag` claim stays
+evidence-gated (a site tag never asserts a keyword bid).
+
+**A rebuttal degrades to a generic-but-honest line, it is never omitted.** The fixed 9-objection set
+always renders (a caller always has an answer). When the grounding fact is present the rebuttal names
+the real number/competitor; when it is absent (unscanned area, missing signal) it falls back to a
+line that still invents nothing and promises nothing ("diagnose, not promise"). An unmeasured
+prospect gets the whole generic script + an explicit caveat, never a silent empty panel — the same
+posture as the justification's `not_measured` and the report's `not_scanned` blocks.
+
+**Templates are code constants, no migration.** The heatmap-legend / justification precedent: the
+sentences are filled from persisted scan data and never improvised at send time, which is what PRD
+§716's "template MUST be config" protects against. Persisting per-market/category script templates is
+a later cheap-to-reverse step if an A/B need arises. v1 renders entirely from the existing
+report/justification, so nothing schema-level changed.

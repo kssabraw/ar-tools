@@ -5,8 +5,11 @@ to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring p
 sound; see `START-HERE.md`).
 
 **Status:** **Tiers 1 + 2 BUILT and MERGED to `main` (2026-09-17)** — the caller cockpit is done bar
-one deliberately-deferred item (T2.3). **Tier 3 is the current work order** (this doc drives it;
-§3/§5-Q4/§6/§7 below are the live parts — everything above §3 is background).
+one deliberately-deferred item (T2.3). **Tier 3: T3.2 (script + rebuttal library) BUILT (this
+session, draft PR to `main`); T3.1 (click-to-call) DEFERRED — owner ruled §5 Q4 "none for now" on
+2026-09-17, so no vendor / no code / no spend.** With T3.2 shipped and T3.1 deferred, Tier 3 is
+complete for now (T2.3 + T3.1 are the two standing deferrals). This doc drives Tier 3 (§3/§5/§6/§7
+below are the live parts — everything above §3 is background).
 
 - **Tier 1** (merged #1185 + #1188 → promotion #1190): T1.2/T1.3/T1.4 (structured disposition,
   one-step next action, callback time + timezone) and T1.1/T1.5 (`v_call_queue` / `v_overdue_actions`
@@ -194,7 +197,10 @@ Two independent tracks. **T3.2 has no external dependency and is the recommended
 **T3.1 is blocked on the §5 Q4 vendor decision** (and carries provider lead time), so it should not
 start until the owner picks Twilio vs Aircall vs none-for-now.
 
-- **T3.1 — Click-to-call / softphone.** Dial from the queue/drawer through a telephony provider
+- **T3.1 — Click-to-call / softphone.** ⏸ **DEFERRED (owner ruling 2026-09-17, §5 Q4: none for
+  now).** Not built — no vendor, no code, no spend; revisit when call volume justifies the per-minute
+  cost + provider setup. The scope below is the record for that future build. Dial from the
+  queue/drawer through a telephony provider
   (Twilio Voice / Aircall), with **call recording → an automatic `touch`** (so a dialed call logs
   itself instead of relying on the caller to hit "Log call"). **Blocked on §5 Q4** (vendor). Real
   scope beyond a button: number provisioning + caller-ID / local-presence, a webhook that maps a
@@ -205,15 +211,32 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
   (the only activity kind allowed to). Migration: likely a `call`/recording table + a `touch`
   provenance column. **Confirm the outreach `tick`/signed-order + per-user-budget model** if the
   provider bills per minute — a paid dial should be as auditable as a scan.
-- **T3.2 — Script + objection/rebuttal library.** The call hook is the opener only (one line); there
-  is no talk track past it. Build a per-call script + rebuttals, ideally **fed by the report data the
-  pipeline already produces** (competitor names, the MAPS/ORGANIC/paid-placement gaps, review
-  deltas) so a rebuttal can name the prospect's real situation rather than a generic line. Same
-  discipline as the hook: **deterministic + fact-grounded, never a fabricated competitor/number**
-  (outreach DECISIONS 2026-08-08 design-fork ruling); reuse `outreach_justification.py` /
-  `outreach_report.py` assembly rather than a fresh LLM guess. No vendor dependency. Migration:
-  probably none for a v1 (render from the existing report/justification), unless script templates
-  are persisted per market/category.
+- **T3.2 — Script + objection/rebuttal library.** ✅ **BUILT (this session, draft PR).** The call
+  hook is the opener only (one line); there is now a talk track past it plus rebuttals to what a
+  local-business owner says back, **fed by the report data the pipeline already produces**
+  (competitor names, the MAPS/ORGANIC/paid-placement gaps, review deltas) so a rebuttal names the
+  prospect's real situation. Same discipline as the hook: **deterministic + fact-grounded, never a
+  fabricated competitor/number** (outreach DECISIONS 2026-08-08 design-fork ruling). **No vendor
+  dependency. No migration** (renders from the existing report/justification).
+  - **As built:** pure assembler `writer/platform-api/services/outreach_script.py` —
+    `build_script(justification, signals)` produces a 5-part talk track (open → discovery →
+    evidence → value → close) + a fixed, ordered 9-objection rebuttal library
+    (`already_ranking`/`has_agency`/`already_ads`/`not_interested`/`too_busy`/`price`/`email_me`/
+    `tried_before`/`referral_only`). It **re-grounds nothing**: the opener is `justification.hook`
+    verbatim (shares the "Why call?" opener + its cached loss-framed phrasing pass), the evidence
+    section is its `talking_points` verbatim, the value line is the deterministic `valuation.line`.
+    Each grounded rebuttal uses ONLY numbers/names in the facts it was handed and carries those
+    `facts` (replayability); an absent fact degrades to a generic-but-honest line (never omitted,
+    never fabricated, never a promise). The paid `conversion_tag` claim is evidence-gated (I-099 —
+    a site tag never asserts a keyword bid).
+  - **I/O + route:** `services/outreach.prospect_script` reuses `prospect_report` as the single
+    source (so it can't disagree with the report/hook); `GET /outreach/prospects/{id}/script`.
+  - **UI:** `frontend/src/components/outreach/Script.tsx` + a "Script & rebuttals" toggle beside
+    "Why call?" in the lead drawer (`OutreachLeads.tsx`). Rebuttals are a click-to-expand accordion
+    with a "grounded" badge.
+  - **Tests:** `tests/test_outreach_script.py` (17, pure) — opener/evidence/value passthrough, the
+    fixed rebuttal set + ordering, deficit/competitor/review/organic grounding, the conversion-tag
+    evidence gate, and the unmeasured generic-fallback path. ruff + tsc + eslint + build all clean.
 
 ---
 
@@ -262,10 +285,14 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
 3. ~~**Multi-user / RLS**~~ (T2.3) — **ANSWERED (owner, 2026-09-17): solo caller.** T2.3 deferred;
    `owner_id` stays backend-only, no owner-assignment UI, no RLS. Revisit at multi-user (design the
    isolation model before a second caller — `crm-layer-spec.md` §8a).
-4. **Click-to-call vendor** (T3.1) — **STILL OPEN, blocks T3.1.** Twilio Voice vs Aircall vs
-   none-for-now. Has provider lead time (number provisioning, caller-ID / local-presence) and a
-   per-minute billing model to fit into the signed-order/budget discipline. **Ask this before
-   starting T3.1** (T3.2 needs no answer and can go first).
+4. ~~**Click-to-call vendor**~~ (T3.1) — **ANSWERED (owner, 2026-09-17): none for now.** No
+   telephony provider yet — callers keep dialing via the `tel:` link and hitting "Log contact".
+   **T3.1 is not built** (no code, no provider account, no per-minute billing, no webhook receiver).
+   Revisit when call volume justifies the setup + per-minute cost; when picked (Twilio Voice vs
+   Aircall), the build is: dial from the queue/drawer, a completed-call webhook → an automatic
+   `touch` (channel `phone`, actor = the caller) mapping the call back to its lead, recording as a
+   `call_note` carrying the `touch_id`, and the paid dial fit into the signed-order/per-user-budget
+   model. The invariants in §3's T3.1 bullet still govern that future build.
 5. ~~**Scoreboard scope**~~ (T2.2) — **ANSWERED (owner, 2026-09-17): both** — a per-caller "your
    numbers" card AND a team leaderboard. Built in #1191.
 
@@ -279,11 +306,13 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
 4. ~~**T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.~~ ✅ this session.
 5. ~~**T2.5** (link a manual lead to a scanned prospect, light path).~~ ✅ #1191. **T2.3 deferred**
    — solo caller (§5 Q3). **Tiers 1 + 2 complete** except deferred T2.3.
-6. **← NEXT — Tier 3, as separately-scoped projects:**
-   a. **T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
-      existing report/justification assembly; deterministic + fact-grounded.
-   b. **T3.1** (click-to-call + auto-`touch`) only after the owner answers §5 Q4 (vendor). Fit the
-      paid dial into the signed-order/per-user-budget model if it bills per minute.
+6. **Tier 3, as separately-scoped projects:**
+   a. ~~**T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
+      existing report/justification assembly; deterministic + fact-grounded.~~ ✅ BUILT (this
+      session, draft PR).
+   b. ~~**T3.1** (click-to-call + auto-`touch`)~~ **DEFERRED — owner ruled §5 Q4 "none for now"
+      (2026-09-17).** Not built. Revisit when call volume justifies a telephony vendor; the build
+      scope + invariants are preserved in §3's T3.1 bullet.
 
 Ship each tier behind the existing `/outreach/leads` surface; don't gate one on the next.
 
