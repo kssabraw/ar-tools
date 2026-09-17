@@ -4,19 +4,24 @@
 to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring pipeline (that is
 sound; see `START-HERE.md`).
 
-**Status:** **Tier 1 BUILT (2026-09-17)**, merged to `main` (#1185 + #1188 → promotion #1190).
-**Tier 2 BUILT (2026-09-17)** except the deliberately-deferred T2.3. T2.1 (cadence) + T2.2 (caller
-scoreboard) + T2.4 (board filters + sort) + T2.5 (link a manual lead to a scanned prospect, the
-light no-spend path) all landed this session; migration `20260917140000_cadence_and_scoreboard.sql`
-applied live (`v_lead_cadence` + cadence columns on `v_call_queue`/`v_overdue_actions` + the
-`outreach_caller_scoreboard(since)` function). **T2.3 deferred** (owner ruling 2026-09-17: solo
-caller — `owner_id` stays backend-only, no owner-assignment UI, no RLS). §5 Q3 + Q5 answered (owner,
-2026-09-17). Tier 3 remains.
+**Status:** **Tiers 1 + 2 BUILT and MERGED to `main` (2026-09-17)** — the caller cockpit is done bar
+one deliberately-deferred item (T2.3). **Tier 3 is the current work order** (this doc drives it;
+§3/§5-Q4/§6/§7 below are the live parts — everything above §3 is background).
 
-Tier-1 detail: T1.2/T1.3/T1.4 (#1185 — structured disposition, one-step next action, callback time
-+ timezone); T1.1/T1.5 (#1188 — v_call_queue / v_overdue_actions routes, score-ordered "Work the
-queue" list with auto-advance, score/decile/vendor-failing + tel: + phone_type + business-hours on
-the card). §5 Q1 + Q2 answered (owner, 2026-09-17).
+- **Tier 1** (merged #1185 + #1188 → promotion #1190): T1.2/T1.3/T1.4 (structured disposition,
+  one-step next action, callback time + timezone) and T1.1/T1.5 (`v_call_queue` / `v_overdue_actions`
+  routes, score-ordered "Work the queue" with auto-advance, score/decile/vendor-failing + `tel:` +
+  `phone_type` + business-hours on the card). §5 Q1 + Q2 answered.
+- **Tier 2** (merged #1191 → squash `1b1cd37`): T2.1 (cadence "attempt N of 5 · last: …" on
+  queue/board cards + drawer), T2.2 (caller scoreboard — per-caller card **and** team leaderboard,
+  Today/7d/30d, `GET /outreach/scoreboard`), T2.4 (board source/overdue filters + sort control),
+  T2.5 (link a manual/inbound lead to an already-scanned prospect, the light no-spend path,
+  `POST /outreach/leads/{id}/link-prospect`). Migration `20260917140000_cadence_and_scoreboard.sql`
+  applied live (`v_lead_cadence` + cadence columns on the two queue views + the
+  `outreach_caller_scoreboard(since)` function). §5 Q3 + Q5 answered.
+- **T2.3 DEFERRED** (owner ruling 2026-09-17: solo caller) — `owner_id` stays backend-only, no
+  owner-assignment UI, no per-owner RLS until the CRM goes multi-user. Design the isolation model
+  *before* a second caller, not after (`crm-layer-spec.md` §8a).
 
 **Sibling docs:** `crm-layer-spec.md` (the data model — authoritative), `START-HERE.md` (phases),
 `../CLAUDE.md` (invariants). This doc does not restate them; it points at the gap between the CRM
@@ -183,12 +188,32 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
   Staff-gated. Migration: none. **The heavier lead→prospect ingest (single-business lookup + scan)
   was NOT built** — deferred as a separate paid feature if ever wanted.
 
-### TIER 3 — bigger bets (defer unless prioritized)
+### TIER 3 — bigger bets (← THE CURRENT WORK ORDER)
 
-- **T3.1 — Click-to-call / softphone** (Twilio/Aircall) with call recording → auto-`touch`. Vendor
-  decision required (§5). Calendar lead time.
-- **T3.2 — Script + objection/rebuttal library**, ideally fed by report data (competitor names,
-  gaps) for dynamic rebuttals. The hook is the opener only; there is no talk track past line one.
+Two independent tracks. **T3.2 has no external dependency and is the recommended first build;**
+**T3.1 is blocked on the §5 Q4 vendor decision** (and carries provider lead time), so it should not
+start until the owner picks Twilio vs Aircall vs none-for-now.
+
+- **T3.1 — Click-to-call / softphone.** Dial from the queue/drawer through a telephony provider
+  (Twilio Voice / Aircall), with **call recording → an automatic `touch`** (so a dialed call logs
+  itself instead of relying on the caller to hit "Log call"). **Blocked on §5 Q4** (vendor). Real
+  scope beyond a button: number provisioning + caller-ID / local-presence, a webhook that maps a
+  completed call back to its lead and writes the `touch` (channel `phone`, `actor_id` = the caller),
+  recording storage + a link on the timeline, and cost/consent handling. Keep the invariants: the
+  auto-`touch` is still authoritative for "a contact happened" (don't also write a `call` activity —
+  that kind doesn't exist, by design); a recording note is a `call_note` carrying the `touch_id`
+  (the only activity kind allowed to). Migration: likely a `call`/recording table + a `touch`
+  provenance column. **Confirm the outreach `tick`/signed-order + per-user-budget model** if the
+  provider bills per minute — a paid dial should be as auditable as a scan.
+- **T3.2 — Script + objection/rebuttal library.** The call hook is the opener only (one line); there
+  is no talk track past it. Build a per-call script + rebuttals, ideally **fed by the report data the
+  pipeline already produces** (competitor names, the MAPS/ORGANIC/paid-placement gaps, review
+  deltas) so a rebuttal can name the prospect's real situation rather than a generic line. Same
+  discipline as the hook: **deterministic + fact-grounded, never a fabricated competitor/number**
+  (outreach DECISIONS 2026-08-08 design-fork ruling); reuse `outreach_justification.py` /
+  `outreach_report.py` assembly rather than a fresh LLM guess. No vendor dependency. Migration:
+  probably none for a v1 (render from the existing report/justification), unless script templates
+  are persisted per market/category.
 
 ---
 
@@ -200,7 +225,10 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
   overdue/stage/source/owner filters, and the `v_call_queue`/`v_overdue_actions` **spec** (§6).
   Most of Tier 1 is UI + a value-set, not migrations.
 - **The call hook / report / contacts all require `prospect_id`.** A `manual`/`inbound_call` lead
-  has none until promoted, so it's a bare card — this is why T2.5 (wire `/promote`) matters.
+  has none unless it's linked (T2.5 `POST /outreach/leads/{id}/link-prospect`, built) or promoted
+  from a scan — an unlinked lead is a bare card with no report behind it. **This matters for T3.2:**
+  the script/rebuttal library is fed by the report, so an unlinked lead has nothing to feed it (fall
+  back to a generic script, or prompt the caller to link a scanned prospect first).
 - **Two databases.** Outreach lives in the **Outreacher** Supabase project
   (`fkwhgvcggvsricuinuqy`); migrations go in `outreach/migrations/`, **never**
   `writer/supabase/migrations/`. The API/UI live in `writer/platform-api` + `frontend/` (suite
@@ -218,7 +246,7 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 
 ---
 
-## 5. Open decisions for the owner (get these before/while building Tier 1)
+## 5. Open decisions for the owner (Q1–Q3, Q5 answered; **Q4 is the live Tier-3 blocker**)
 
 1. ~~**Disposition value set**~~ — **ANSWERED (owner, 2026-09-17): the full set** — phone:
    `no_answer, voicemail, busy, wrong_number, gatekeeper, connected, decision_maker,
@@ -231,12 +259,15 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
    change "overdue" semantics + break the `< current_date` readers). Timezone is **stored** per
    lead (`next_action_tz`), defaulted from a longitude guess then a config default, caller-editable
    — not derived at display (no lat/lng→tz lib exists in platform-api). Built in PR #1185.
-3. **Multi-user / RLS** (T2.3) — is this a solo caller or a team? If a team, the owner-assignment UI
-   and per-owner RLS need designing now (adding RLS to a live table later is where disclosure bugs
-   come from — `crm-layer-spec.md` §8a already flags this).
-4. **Click-to-call vendor** (T3.1) — Twilio vs Aircall vs none-for-now. Has calendar lead time
-   (number provisioning, caller-ID/local-presence).
-5. **Scoreboard scope** (T2.2) — per-caller only, or team leaderboard?
+3. ~~**Multi-user / RLS**~~ (T2.3) — **ANSWERED (owner, 2026-09-17): solo caller.** T2.3 deferred;
+   `owner_id` stays backend-only, no owner-assignment UI, no RLS. Revisit at multi-user (design the
+   isolation model before a second caller — `crm-layer-spec.md` §8a).
+4. **Click-to-call vendor** (T3.1) — **STILL OPEN, blocks T3.1.** Twilio Voice vs Aircall vs
+   none-for-now. Has provider lead time (number provisioning, caller-ID / local-presence) and a
+   per-minute billing model to fit into the signed-order/budget discipline. **Ask this before
+   starting T3.1** (T3.2 needs no answer and can go first).
+5. ~~**Scoreboard scope**~~ (T2.2) — **ANSWERED (owner, 2026-09-17): both** — a per-caller "your
+   numbers" card AND a team leaderboard. Built in #1191.
 
 ---
 
@@ -246,41 +277,53 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 2. ~~**T1.2 + T1.3 + T1.4** together (one coherent "log a call properly" change).~~ ✅ PR #1185.
 3. ~~**T1.1** (queue view) + **T1.5** (score/tel on card) — the triage layer.~~ ✅ PR #1188.
 4. ~~**T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.~~ ✅ this session.
-5. ~~**T2.5** (link a manual lead to a scanned prospect, light path).~~ ✅ this session. **T2.3
-   deferred** — solo caller (§5 Q3). **Tier 2 is now complete** except the deferred T2.3.
-6. Tier 3 as separately-scoped projects.
+5. ~~**T2.5** (link a manual lead to a scanned prospect, light path).~~ ✅ #1191. **T2.3 deferred**
+   — solo caller (§5 Q3). **Tiers 1 + 2 complete** except deferred T2.3.
+6. **← NEXT — Tier 3, as separately-scoped projects:**
+   a. **T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
+      existing report/justification assembly; deterministic + fact-grounded.
+   b. **T3.1** (click-to-call + auto-`touch`) only after the owner answers §5 Q4 (vendor). Fit the
+      paid dial into the signed-order/per-user-budget model if it bills per minute.
 
-Ship T1 behind the existing `/outreach/leads` surface; don't gate it on Tier 2/3.
+Ship each tier behind the existing `/outreach/leads` surface; don't gate one on the next.
 
 ---
 
-## 7. Kickoff prompt for the next session
+## 7. Kickoff prompt for the next session (Tier 3)
 
-> See the fenced block below — paste it verbatim to start the build session.
+> Tiers 1 + 2 are merged. Paste the fenced block below verbatim to start the Tier-3 build session.
 
 ```
-Read outreach/docs/cold-caller-crm-handoff.md first — it's the work order. Also read
-outreach/docs/crm-layer-spec.md §6 (v_call_queue / v_overdue_actions) and ../CLAUDE.md invariants.
+Read outreach/docs/cold-caller-crm-handoff.md first — it's the work order (Tiers 1 + 2 are BUILT and
+merged; Tier 3 §3 is the live scope). Also read ../CLAUDE.md invariants, outreach/DECISIONS.md (esp.
+the 2026-08-08 design-fork ruling: prospect-facing text is deterministic + fact-grounded, never a
+fabricated competitor/number), and skim services/outreach_justification.py + outreach_report.py (the
+call-hook / report assembly Tier 3 builds on).
 
-We're improving the cold-caller CRM surface of the Outreach module (NOT the scanning/scoring
-pipeline). The data model is solid; the caller UI is thin. Work Tier 1 from the handoff.
+We're building Tier 3 of the cold-caller CRM surface of the Outreach module (NOT the scanning/scoring
+pipeline). Two independent tracks:
 
-Before writing code, ask me the §5 open decisions that block Tier 1 — specifically:
-  (1) confirm the disposition enum values, and
-  (2) how to represent a callback time + timezone (migrate next_action_due to timestamptz, or add
-      next_action_at? derive timezone from address/submarket or store it?).
+  T3.2 — Script + objection/rebuttal library. FIRST (no vendor dependency). The call hook is only the
+  opener; there's no talk track past line one. Build a per-call script + rebuttals FED BY the report
+  data we already produce (competitor names, the MAPS/ORGANIC/paid-placement gaps, review deltas) so
+  a rebuttal names the prospect's real situation. Reuse outreach_justification.py / outreach_report.py
+  — deterministic + fact-grounded, never an LLM guess, never a fabricated fact/competitor/number
+  (same discipline as the hook + heatmap). Surface it in the lead drawer beside "Why call?". v1
+  likely needs NO migration (render from the existing report); persist templates only if we decide to.
 
-Then implement, in this order, each as its own PR against branch claude/cool-tesla-tlgbrk:
-  1. T1.2 + T1.3 + T1.4 — structured disposition enum, disposition→next-action in one step,
-     callback time + timezone with a business-hours indicator.
-  2. T1.1 + T1.5 — expose v_call_queue / v_overdue_actions as routes; build a score-ordered
-     "Work the queue" list view with auto-advance; surface score/decile/vendor-failing + a tel:
-     link + phone_type on the card.
+  T3.1 — Click-to-call / softphone + auto-touch. DO NOT START until I answer §5 Q4 (Twilio vs Aircall
+  vs none-for-now) — ask me first. When unblocked: dial from the queue/drawer through the chosen
+  provider, and on call completion write an AUTOMATIC `touch` (channel phone, actor = the caller) via
+  a provider webhook that maps the call back to its lead. Keep the invariants: the touch is
+  authoritative (do NOT also write a `call` activity — that kind doesn't exist); a recording note is a
+  `call_note` carrying the touch_id. If it bills per minute, fit the paid dial into the outreach
+  signed-order + per-user-budget model so a dial is as auditable as a scan.
 
-Remember: Outreach uses the Outreacher Supabase project — migrations go in outreach/migrations/,
-never writer/supabase/migrations/. The API/UI live in writer/platform-api + frontend/. Most of
-Tier 1 needs NO migration (touch.disposition, phone_type, owner_id, and the list_leads filters
-already exist; the queue views are spec'd but unbuilt as routes) — the likely exception is the
-callback-time column (§5 Q2). Keep the outcome/touch/lead_activity invariants intact. Update the
-handoff's status and check off items as you land them.
+Remember: Outreach uses the Outreacher Supabase project (fkwhgvcggvsricuinuqy) — migrations go in
+outreach/migrations/, NEVER writer/supabase/migrations/, and are applied live via the Supabase MCP.
+The API/UI live in writer/platform-api + frontend/. Keep the outcome/touch/lead_activity invariants
+intact (outcome is outbound-only; touch is authoritative; lead_activity is append-only, DB-trigger
+owns stage/owner rows). Ship each track as its own PR (draft) to main; run ruff + the outreach pytest
+suite + tsc/eslint/build before pushing; update this handoff's status and check off items as you land
+them. T2.3 (owner-assignment UI + per-owner RLS) stays deferred — solo caller.
 ```
