@@ -87,8 +87,20 @@ lag means the last 2–3 days will still be empty — that's expected, not a sta
   via the weekly pull and an off-cadence scheduler trigger.
 - **The freshness watch** (`rank_freshness_status` + the daily sweep) alerts the
   team within ~24h whenever *any* client's data stops advancing — whatever the
-  cause — and scheduled client reports are **held** (team warned) rather than
-  shipped on stale numbers (`client_report_schedule._rank_data_stale`).
+  cause — and the scheduled **combined** client report is **held** (team warned)
+  rather than shipped on stale numbers (`client_report_schedule._rank_data_stale`).
+  The standalone AI-Visibility / Maps reports draw on their own data sources and
+  are not held by a rank-data stall.
+- **Pipeline stall vs. total ranking loss.** A "stale" verdict means the tracker
+  hasn't collected new data AND DataForSEO hasn't *actively* queried the SERP
+  recently (`rank_fetch_config.last_active_fetch_at`, stamped only when it truly
+  fetched ≥1 keyword — not a run that skipped everything as GSC-covered). A client
+  that IS being checked but ranks for nothing (site dropped out) is `reason:
+  current_not_ranking` → NOT flagged as a pipeline stall (its data is current);
+  that ranking loss surfaces through the rank-drop / `unranked` / deindex alerts
+  instead. This keeps the freshness alert from crying "pipeline down" when the
+  real problem is rankings — without ever masking a genuine stall (only a recent
+  *active* fetch rescues the verdict).
 
 Config: `rank_freshness_enabled`, `rank_freshness_gsc_stale_days`,
 `rank_freshness_df_stale_days`, `rank_freshness_portfolio_min`,

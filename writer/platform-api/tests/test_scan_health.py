@@ -420,3 +420,36 @@ def test_sweep_opens_and_recovers_set_stale_since(monkeypatch):
     assert rec_fake.upserts[0]["status"] == "ok"
     assert rec_fake.upserts[0]["stale_since"] is None
     assert any(e["kind"] == "rank_data_recovered" for e in recovered)
+
+
+# ---------------------------------------------------------------------------
+# Freshness: pipeline-stall vs site-ranks-for-nothing (#3 fix)
+# ---------------------------------------------------------------------------
+def test_evaluate_freshness_recent_active_fetch_is_not_a_stall():
+    # No recent data (11 days) BUT DataForSEO actively queried the SERP 2 days ago
+    # → the site is checked and simply not ranking (data current), not a pipeline
+    # stall. Must NOT be flagged stale (so the report guard doesn't hold it).
+    v = sh.evaluate_freshness(
+        date(2026, 9, 5), True, _TODAY, 5, 10, last_active_fetch_at=date(2026, 9, 15)
+    )
+    assert v["stale"] is False and v["reason"] == "current_not_ranking"
+
+
+def test_evaluate_freshness_stale_data_and_no_active_fetch_is_a_stall():
+    # No recent data AND DataForSEO hasn't actively checked (last active fetch 20d
+    # ago, outside the 10-day cadence) → genuine pipeline stall.
+    v = sh.evaluate_freshness(
+        date(2026, 9, 5), True, _TODAY, 5, 10, last_active_fetch_at=date(2026, 8, 28)
+    )
+    assert v["stale"] is True and v["reason"] == "stale_pipeline"
+
+
+def test_evaluate_freshness_stale_data_no_fetch_signal_is_a_stall():
+    # No active-fetch signal at all (None) → never masks a stall.
+    v = sh.evaluate_freshness(date(2026, 9, 5), True, _TODAY, 5, 10)
+    assert v["stale"] is True and v["reason"] == "stale_pipeline"
+
+
+def test_evaluate_freshness_fresh_data_reason_fresh():
+    v = sh.evaluate_freshness(date(2026, 9, 14), True, _TODAY, 5, 10)
+    assert v["stale"] is False and v["reason"] == "fresh"

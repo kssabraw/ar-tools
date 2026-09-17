@@ -1,0 +1,14 @@
+-- Distinguish "DataForSEO actively queried the SERP" from "the fetch job ran but
+-- skipped everything (all keywords GSC-covered)".
+--
+-- `last_fetched_at` is stamped even when a run had nothing to do (fetched == 0,
+-- failed == 0 → all GSC-covered), so it can't prove the SERP was actually
+-- checked. The rank-data freshness watch needs that proof: a keyword with no
+-- recent GSC data is a genuine PIPELINE STALL only if DataForSEO also hasn't
+-- actively checked — if DataForSEO *did* query the SERP recently and found the
+-- site absent, that's a RANKING loss (data is current), not a data stall, and
+-- must not be alerted as a pipeline failure nor hold the client's report.
+--
+-- `last_active_fetch_at` is stamped ONLY when refresh_client_ranks actually
+-- queried the SERP for >=1 keyword (fetched > 0).
+alter table rank_fetch_config add column if not exists last_active_fetch_at timestamptz;

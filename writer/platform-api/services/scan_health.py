@@ -198,21 +198,41 @@ def freshness_threshold(has_gsc_property: bool, gsc_days: int, df_days: int) -> 
 
 def evaluate_freshness(
     last_data_at: Optional[date], has_gsc_property: bool, today: date,
-    gsc_days: int, df_days: int,
+    gsc_days: int, df_days: int, last_active_fetch_at: Optional[date] = None,
 ) -> dict:
     """Classify one client's rank-data recency. Pure.
 
     `last_data_at` is the ALL-TIME freshest date the tracker has any rank data
     (GSC position or DataForSEO rank) for the client. None means it has never had
     any data — a setup/first-pull matter, not a regression — so it is never
-    flagged stale here (scan_health / the empty-state UI cover that). An
-    established client whose freshest data is older than its threshold IS stale.
-    Returns {stale, days_stale, threshold, no_data_ever}."""
+    flagged stale here (scan_health / the empty-state UI cover that).
+
+    A client with no recent data is a genuine PIPELINE STALL only if DataForSEO
+    also hasn't ACTIVELY queried the SERP recently. `last_active_fetch_at` is the
+    date DataForSEO last truly queried (fetched ≥1 keyword, ranking or not — NOT a
+    run that skipped everything as GSC-covered). If that is within the DataForSEO
+    cadence window, the pipeline is provably alive and the site simply isn't
+    ranking (data is current) → NOT stale, so we don't blame the pipeline nor hold
+    the report; the ranking loss is surfaced by the rank-drop / unranked alerts.
+    Only "no recent data AND no recent active check" is a data stall.
+    `reason` ∈ fresh | current_not_ranking | stale_pipeline | no_data_ever.
+    Returns {stale, days_stale, threshold, no_data_ever, reason}."""
     threshold = freshness_threshold(has_gsc_property, gsc_days, df_days)
     if last_data_at is None:
-        return {"stale": False, "days_stale": None, "threshold": threshold, "no_data_ever": True}
+        return {"stale": False, "days_stale": None, "threshold": threshold,
+                "no_data_ever": True, "reason": "no_data_ever"}
     days = (today - last_data_at).days
-    return {"stale": days > threshold, "days_stale": days, "threshold": threshold, "no_data_ever": False}
+    if days <= threshold:
+        return {"stale": False, "days_stale": days, "threshold": threshold,
+                "no_data_ever": False, "reason": "fresh"}
+    # Stale by data. Is the collection pipeline provably still active (DataForSEO
+    # queried the SERP within its cadence)? If so this is a ranking loss, not a
+    # data stall — never mask a real stall: only a recent ACTIVE fetch rescues it.
+    if last_active_fetch_at is not None and (today - last_active_fetch_at).days <= df_days:
+        return {"stale": False, "days_stale": days, "threshold": threshold,
+                "no_data_ever": False, "reason": "current_not_ranking"}
+    return {"stale": True, "days_stale": days, "threshold": threshold,
+            "no_data_ever": False, "reason": "stale_pipeline"}
 
 
 def freshness_episode_key(client_id: str, last_data_at: Optional[date], now: datetime) -> str:
@@ -355,6 +375,25 @@ def run_rank_freshness_sweep() -> dict:
         prior_rows = []
     prior_status = {r["client_id"]: r.get("status") for r in prior_rows}
 
+    # When did DataForSEO last ACTIVELY query the SERP per client (fetched ≥1
+    # keyword)? A recent active fetch means a "no recent data" client was checked
+    # and simply isn't ranking (data current) — not a pipeline stall.
+    try:
+        cfg_rows = (
+            supabase.table("rank_fetch_config")
+            .select("client_id, last_active_fetch_at")
+            .in_("client_id", list(by_client))
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("rank_freshness.fetch_config_read_failed", extra={"error": str(exc)})
+        cfg_rows = []
+    active_fetch: dict[str, Optional[date]] = {}
+    for r in cfg_rows:
+        raw = r.get("last_active_fetch_at")
+        ts = _parse_ts(raw)
+        active_fetch[r["client_id"]] = ts.date() if ts else None
+
     gsc_days = settings.rank_freshness_gsc_stale_days
     df_days = settings.rank_freshness_df_stale_days
     names = _client_names(supabase, list(by_client))
@@ -371,7 +410,10 @@ def run_rank_freshness_sweep() -> dict:
         # transient read hiccup, and never alert a brand-new client.
         if last_data_at is None:
             continue
-        verdict = evaluate_freshness(last_data_at, has_gsc, today, gsc_days, df_days)
+        verdict = evaluate_freshness(
+            last_data_at, has_gsc, today, gsc_days, df_days,
+            last_active_fetch_at=active_fetch.get(client_id),
+        )
         was_stale = prior_status.get(client_id) == "stale"
 
         # Persist current state (powers the portfolio read + UI freshness).

@@ -560,10 +560,15 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
     # are GSC-covered, both stamp.)
     if terminal_error is None and not (fetched == 0 and failed > 0):
         now_iso = datetime.now(timezone.utc).isoformat()
-        supabase.table("rank_fetch_config").upsert(
-            {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso},
-            on_conflict="client_id",
-        ).execute()
+        cfg_row = {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso}
+        # last_active_fetch_at advances ONLY when we actually queried the SERP for
+        # >=1 keyword (fetched > 0) — a run that skipped every keyword because GSC
+        # covers them leaves it untouched. The freshness watch relies on this to
+        # tell a genuine pipeline stall (never actively checked) from a site that
+        # was checked and simply isn't ranking (fetched, found nothing).
+        if fetched > 0:
+            cfg_row["last_active_fetch_at"] = now_iso
+        supabase.table("rank_fetch_config").upsert(cfg_row, on_conflict="client_id").execute()
 
     result: dict = {
         "status": "failed" if terminal_error else "ok",
