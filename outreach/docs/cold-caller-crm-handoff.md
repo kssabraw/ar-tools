@@ -4,12 +4,18 @@
 to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring pipeline (that is
 sound; see `START-HERE.md`).
 
-**Status:** **Tier 1 BUILT (2026-09-17).** T1.2 + T1.3 + T1.4 landed in PR #1185 (structured
-disposition, one-step next action, callback time + timezone); T1.1 + T1.5 landed in PR #1188
-(v_call_queue / v_overdue_actions routes, score-ordered "Work the queue" list with auto-advance,
-score/decile/vendor-failing + tel: + phone_type + business-hours on the card). Both migrations
-applied live to the Outreacher project. §5 Q1 + Q2 answered (owner, 2026-09-17). **Tier 2 and
-Tier 3 remain** — this doc stays the work order for them. Analysis for those is unchanged below.
+**Status:** **Tier 1 BUILT (2026-09-17)**, merged to `main` (#1185 + #1188 → promotion #1190).
+**Tier 2 in progress (2026-09-17):** T2.1 (cadence) + T2.2 (caller scoreboard) + T2.4 (board
+filters + sort) BUILT this session; migration `20260917140000_cadence_and_scoreboard.sql` applied
+live (`v_lead_cadence` + cadence columns on `v_call_queue`/`v_overdue_actions` + the
+`outreach_caller_scoreboard(since)` function). **T2.3 deferred** (owner ruling 2026-09-17: solo
+caller — `owner_id` stays backend-only, no owner-assignment UI, no RLS). **T2.5 next** (wire
+`/promote` + enrich into the drawer). §5 Q3 + Q5 answered (owner, 2026-09-17). Tier 3 remains.
+
+Tier-1 detail: T1.2/T1.3/T1.4 (#1185 — structured disposition, one-step next action, callback time
++ timezone); T1.1/T1.5 (#1188 — v_call_queue / v_overdue_actions routes, score-ordered "Work the
+queue" list with auto-advance, score/decile/vendor-failing + tel: + phone_type + business-hours on
+the card). §5 Q1 + Q2 answered (owner, 2026-09-17).
 
 **Sibling docs:** `crm-layer-spec.md` (the data model — authoritative), `START-HERE.md` (phases),
 `../CLAUDE.md` (invariants). This doc does not restate them; it points at the gap between the CRM
@@ -128,19 +134,38 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 
 ### TIER 2 — medium (management + throughput)
 
-- **T2.1 — Cadence on the card.** Show "attempt N/5 · last: voicemail Tue" from `touch_count` /
-  `touch_number` / last disposition (`touches_per_sequence` = 5 is configured;
-  `touch.touch_number`/`sequence_version` columns exist). Migration: none.
-- **T2.2 — Caller scoreboard.** Dials today / conversations / connect rate / callbacks / meetings
-  booked, aggregated from touches+dispositions. Needs T1.2 to be meaningful. Migration: none.
-- **T2.3 — Owner assignment + "my leads".** `owner_id` is fully backend-wired (create, `list_leads`
-  filter, patch) but has **no UI** and the DB is service-role-only with no RLS (`../CLAUDE.md`
-  I-040). Blocked on the multi-user decision (§5).
-- **T2.4 — Board/queue filters.** Expose the `list_leads` filters already there (stage/source/
-  owner/overdue) + a sort control. Migration: none.
-- **T2.5 — Wire `/promote` + enrich into the drawer.** Let a caller turn an inbound/manual lead
-  into a scanned prospect (→ gains the hook + report + heatmap) from where they work. Route exists;
-  UI doesn't. Migration: none.
+- **T2.1 — Cadence on the card.** ✅ **BUILT (this session).** Shows "attempt N of 5 · last:
+  voicemail" on the queue card, the board card, and the drawer's Log-contact section. A per-lead
+  rollup view `v_lead_cadence` (attempt_count / last_touched_at / last_disposition) is joined onto
+  the queue/overdue views and read per-page for the board (one batched `.in_()`, never per-lead).
+  The "/5" is `outreach_touches_per_sequence` (config, mirrored as a frontend constant). Distinct
+  from the outbound-only `outcome` rollup, so an inbound lead shows cadence too. Migration:
+  `20260917140000` (view only). **As decided, `touch_count`/`touch_number` were NOT the source —
+  a direct `count(*)` over `touch` per lead is authoritative for all sources, where the `outcome`
+  rollup is outbound-only.**
+- **T2.2 — Caller scoreboard.** ✅ **BUILT (this session).** A third view ("Scoreboard") beside
+  Work-the-queue / Board: a per-caller "your numbers" card (dials / conversations / connect rate /
+  callbacks / DMs reached / voicemails / not-interested / DNC) AND a team leaderboard (owner ruling
+  §5 Q5: **both**), over a Today / 7-day / 30-day window. Aggregated server-side by
+  `outreach_caller_scoreboard(since)` (one row per `actor_id`, so the read never truncates on touch
+  volume); connect_rate computed app-side; caller names resolved best-effort from AR-Internal-Tools
+  `profiles` (a different project). **No "meetings booked" metric** — there is no such disposition
+  in the set, and inferring one from stage would mix the outbound-only touch substrate with
+  workflow state. `GET /outreach/scoreboard?days=N`. Migration: `20260917140000` (function only).
+- **T2.3 — Owner assignment + "my leads".** ⏸ **DEFERRED (owner ruling 2026-09-17: solo caller).**
+  `owner_id` stays backend-only (create / `list_leads` filter / patch all still work); no
+  owner-assignment UI, no RLS this tier. Revisit when the CRM goes multi-user — adding RLS to the
+  live table then is where disclosure bugs come from (`crm-layer-spec.md` §8a), so design it before
+  a second caller, not after.
+- **T2.4 — Board/queue filters.** ✅ **BUILT (this session).** The board gained a filter bar:
+  **source** dropdown, **overdue-only** toggle, and a **sort** control (Newest / Oldest / Recently
+  updated / Due soonest / Company A–Z) — the sort maps to a backend whitelist (`_LEAD_SORTS`;
+  `due`/`name` are nulls-last). Stage isn't a board filter (the columns already are stages) and
+  owner isn't (solo caller, T2.3); both params stay exposed on `GET /outreach/leads` for later.
+  Migration: none.
+- **T2.5 — Wire `/promote` + enrich into the drawer.** ← **NEXT.** Let a caller turn an
+  inbound/manual lead into a scanned prospect (→ gains the hook + report + heatmap) from where they
+  work. Route exists; UI doesn't. Migration: none.
 
 ### TIER 3 — bigger bets (defer unless prioritized)
 
@@ -204,8 +229,8 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 1. ~~Owner answers §5 Q1 (disposition set) and Q2 (callback shape).~~ ✅ done (2026-09-17).
 2. ~~**T1.2 + T1.3 + T1.4** together (one coherent "log a call properly" change).~~ ✅ PR #1185.
 3. ~~**T1.1** (queue view) + **T1.5** (score/tel on card) — the triage layer.~~ ✅ PR #1188.
-4. **← NEXT: T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.
-5. **T2.5** then **T2.3** (needs the RLS decision).
+4. ~~**T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.~~ ✅ this session.
+5. **← NEXT: T2.5** (wire `/promote` + enrich). **T2.3 deferred** — solo caller (§5 Q3).
 6. Tier 3 as separately-scoped projects.
 
 Ship T1 behind the existing `/outreach/leads` surface; don't gate it on Tier 2/3.

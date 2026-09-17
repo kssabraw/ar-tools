@@ -2529,3 +2529,50 @@ authoritative, the DB `lead_log_changes` trigger stays the sole writer of stage/
 rows (the one-step next-action patch in `record_touch` never changes stage or owner). Both
 migrations are additive/reversible and applied live to the Outreacher project. Landed in PR #1185
 (T1.2/T1.3/T1.4) + PR #1188 (T1.1/T1.5).
+
+## 2026-09-17 — Cold-caller CRM Tier 2 (cadence + scoreboard + board filters)
+
+**Solo caller for now → T2.3 (owner-assignment UI + per-owner RLS) deferred (owner, §5 Q3).**
+`owner_id` stays fully backend-wired (create / `list_leads` filter / patch) but gains no UI and the
+Outreacher DB stays service-role-only with no RLS. Deferred rather than half-built because adding
+RLS to a live table after a second caller exists is where disclosure bugs come from
+(`crm-layer-spec.md` §8a) — the isolation model should be designed before multi-user, not retrofitted.
+
+**Caller scoreboard = BOTH a per-caller card and a team leaderboard (owner, §5 Q5).** Solo today, so
+the leaderboard is a one-row table, but it's built to fill out the moment more callers log touches —
+no rework needed when the team grows.
+
+**Cadence source = a direct `count(*)` over `touch` per lead, NOT `outcome.touch_count`.** The `outcome`
+rollup is outbound-only (rows exist only for `source='outbound_scan'`, an invariant), so reading it
+would leave every inbound/referral/manual lead showing no cadence. `v_lead_cadence` counts touch rows
+directly (all sources) and also carries `last_touched_at` + the newest structured `last_disposition`.
+The "/5" denominator is `outreach_touches_per_sequence` (config), mirrored as a frontend constant like
+the other vocabularies. Joined onto `v_call_queue`/`v_overdue_actions` and read per-page (one batched
+`.in_()`) for the board — never one query per lead.
+
+**Scoreboard is a Postgres function, not a view or an app-side loop.** It is always over a time window,
+which a view can't parameterise; aggregating app-side would mean an unbounded read of every touch in the
+window (PostgREST silently caps at 1,000 — ISSUES I-036, the trap this codebase forbids). `outreach_caller_scoreboard(since timestamptz)` returns ONE row per `actor_id`, so the read can never truncate on touch
+volume. `since` is computed app-side as local-midnight boundaries in `outreach_default_timezone` (so
+"today" is the agency's business day, not UTC's, which would roll mid-afternoon in the US). `connect_rate`
+is derived app-side (a ratio, not a count).
+
+**No "meetings booked" scoreboard metric.** The handoff's original T2.2 sketch named it, but the
+owner-confirmed disposition set has no `meeting_booked` value, and inferring meetings from lead STAGE
+would mix the outbound-only touch/disposition substrate with workflow state. The scoreboard reports only
+what a touch + its disposition actually record: dials (phone touches), conversations (connected /
+decision_maker), DMs reached, callbacks requested, voicemails, not-interested, do-not-call.
+
+**Caller names cross projects, best-effort.** `touch.actor_id` is a suite `profiles.id`, but `profiles`
+lives in AR-Internal-Tools, not the Outreacher project this module reads. `caller_scoreboard` resolves
+names via the default (AR-Internal-Tools) client and degrades to a short actor id if that lookup fails —
+a name-resolution failure must never sink the scoreboard.
+
+**Board filters/sort (T2.4).** Exposed source + overdue + a sort control (whitelist `_LEAD_SORTS`:
+recent/oldest/updated/due/name; due & name nulls-last) on the board. Stage isn't a board filter (the
+kanban columns already are stages) and owner isn't (solo caller); both stay available on
+`GET /outreach/leads` for later. `list_leads` now attaches the per-lead cadence rollup to each row.
+
+**Invariants untouched.** No new writes; `outcome`/`touch`/`lead_activity` unchanged. All Tier-2 objects
+are read-only (one view, two view updates, one `stable` function) in migration
+`20260917140000_cadence_and_scoreboard.sql`, applied live to the Outreacher project.

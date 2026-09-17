@@ -520,6 +520,55 @@ def list_dispositions() -> dict[str, Any]:
     return oc.disposition_catalog()
 
 
+# Board sort options (T2.4). A whitelist mapping a stable token → (column, descending, nulls-last).
+# `due` is nulls-last so a lead with no due date sinks below the dated ones rather than jumping to
+# the top of a "soonest first" sort. An unknown token falls back to `recent` (never a raw column).
+_LEAD_SORTS: dict[str, tuple[str, bool, bool]] = {
+    "recent": ("created_at", True, False),
+    "oldest": ("created_at", False, False),
+    "updated": ("updated_at", True, False),
+    "due": ("next_action_due", False, True),
+    "name": ("company_name", False, True),
+}
+
+# v_lead_cadence projection (T2.1). lead_id + the three rollup fields the card shows.
+_CADENCE_COLUMNS = "lead_id,attempt_count,last_touched_at,last_disposition"
+
+
+def _attach_cadence(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a per-lead touch-cadence rollup (T2.1) to a page of lead rows, one batched read.
+
+    The board reads the `lead` table (which has no touch aggregate), so cadence is looked up from
+    `v_lead_cadence` for exactly the page's lead ids and merged as `row["cadence"]`. One `.in_()`
+    query, not one per lead. A lead with no touches gets `None` — the card renders nothing rather
+    than a fake "attempt 0". Best-effort: a failed lookup leaves the page uncadenced, never errors.
+    """
+    # Set the key on every row first so the shape is stable (`cadence: null`) even if the lookup
+    # fails or a lead has no touches — the frontend types it as always-present.
+    for row in rows:
+        row["cadence"] = None
+    ids = [r["id"] for r in rows if r.get("id")]
+    if not ids:
+        return rows
+    try:
+        cad = (
+            get_outreach_client()
+            .table("v_lead_cadence")
+            .select(_CADENCE_COLUMNS)
+            .in_("lead_id", ids)
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_cadence_attach_failed", extra={"error": str(exc)})
+        return rows
+    by_lead = {c["lead_id"]: c for c in cad}
+    for row in rows:
+        row["cadence"] = by_lead.get(row.get("id"))
+    return rows
+
+
 def list_leads(
     *,
     stage: str | None = None,
@@ -527,14 +576,16 @@ def list_leads(
     owner_id: str | None = None,
     overdue: bool = False,
     search: str | None = None,
+    sort: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> dict[str, Any]:
-    """A page of live leads, newest first, with the exact total.
+    """A page of live leads with the exact total, filtered and sorted (T2.4).
 
     `overdue` implements crm-layer-spec §10's forcing function — a due date in the past on a lead
     that is neither won nor lost. That view is what makes manual reply capture work at all; a
-    pipeline nobody is prompted to touch silently stops being updated.
+    pipeline nobody is prompted to touch silently stops being updated. `sort` picks the order from a
+    whitelist (default newest-first); each row carries a touch-cadence rollup (T2.1).
     """
     size, start = clamp_page(limit, offset)
     query = (
@@ -562,9 +613,14 @@ def list_leads(
             f"company_name.ilike.%{term}%,contact_name.ilike.%{term}%,email.ilike.%{term}%"
         )
 
-    response = query.order("created_at", desc=True).range(start, start + size - 1).execute()
+    sort_col, sort_desc, sort_nulls_last = _LEAD_SORTS.get(sort or "recent", _LEAD_SORTS["recent"])
+    response = (
+        query.order(sort_col, desc=sort_desc, nullsfirst=not sort_nulls_last)
+        .range(start, start + size - 1)
+        .execute()
+    )
     return {
-        "leads": response.data or [],
+        "leads": _attach_cadence(response.data or []),
         "total": response.count or 0,
         "limit": size,
         "offset": start,
@@ -645,6 +701,117 @@ def list_overdue_actions(
     }
 
 
+# --- Caller scoreboard (T2.2) -----------------------------------------------------------------
+#
+# Per-caller dials / conversations / connect-rate / callbacks, aggregated server-side from touches
+# and their structured dispositions (the vocabulary T1.2 made countable). Owner ruling: BOTH a
+# per-caller card and a team leaderboard (a one-row table today, ready for a team). Names are
+# resolved app-side against the AR-Internal-Tools `profiles` table — a DIFFERENT Supabase project
+# from the Outreacher one this module otherwise reads, so the resolution is best-effort and a lookup
+# failure degrades to a short actor id rather than breaking the scoreboard.
+
+SCOREBOARD_MAX_DAYS = 90
+
+
+def _scoreboard_since(days: int, tz_name: str) -> str:
+    """The window start as a UTC ISO instant: local midnight `days-1` days ago, so `days=1` is
+    "today" in the caller's business timezone (not a rolling 24h, and not UTC midnight, which would
+    reset the day mid-afternoon in the US)."""
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    n = max(1, min(int(days), SCOREBOARD_MAX_DAYS))
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        tz = timezone.utc
+    midnight_today = datetime.now(tz).replace(hour=0, minute=0, second=0, microsecond=0)
+    start_local = midnight_today - timedelta(days=n - 1)
+    return start_local.astimezone(timezone.utc).isoformat()
+
+
+def _resolve_actor_names(actor_ids: set[str]) -> dict[str, str]:
+    """Map suite user ids → display names from AR-Internal-Tools `profiles` (a different project).
+
+    Best-effort and isolated: the Outreacher `touch.actor_id` is a suite `profiles.id`, but the
+    profiles table lives in the OTHER project, so this crosses clients. A failure here must not sink
+    the scoreboard — it returns {} and callers fall back to a short id.
+    """
+    ids = [i for i in actor_ids if i]
+    if not ids:
+        return {}
+    try:
+        from db.supabase_client import get_supabase
+
+        rows = (
+            get_supabase().table("profiles").select("id, full_name").in_("id", ids).execute().data
+            or []
+        )
+        return {r["id"]: r["full_name"] for r in rows if r.get("full_name")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_scoreboard_names_failed", extra={"error": str(exc)})
+        return {}
+
+
+def _short_actor(actor_id: str | None) -> str:
+    """A fallback label for a caller whose profile name didn't resolve — the id's first segment."""
+    return (actor_id or "").split("-")[0] or "unknown"
+
+
+def caller_scoreboard(*, days: int = 7, actor_id: str | None = None) -> dict[str, Any]:
+    """The caller scoreboard (T2.2): a per-caller row for the window, plus the requester's own row.
+
+    Metrics come from `outreach_caller_scoreboard(since)` — one row per caller, aggregated in
+    Postgres so the read never truncates on touch volume. `connect_rate` is computed here (a ratio,
+    not a stored count). `me` is the requesting caller's row, synthesised as an all-zero row when
+    they logged nothing in the window (so the UI always has a card to show), never omitted.
+    """
+    from config import settings
+
+    n = max(1, min(int(days or 7), SCOREBOARD_MAX_DAYS))
+    since = _scoreboard_since(n, settings.outreach_default_timezone)
+    rows = (
+        get_outreach_client()
+        .rpc("outreach_caller_scoreboard", {"since": since})
+        .execute()
+        .data
+        or []
+    )
+
+    ids = {r["actor_id"] for r in rows if r.get("actor_id")}
+    if actor_id:
+        ids.add(actor_id)
+    names = _resolve_actor_names(ids)
+
+    def _row(r: dict[str, Any]) -> dict[str, Any]:
+        dials = r.get("dials") or 0
+        convos = r.get("conversations") or 0
+        aid = r.get("actor_id")
+        return {
+            **r,
+            "name": names.get(aid) or _short_actor(aid),
+            "connect_rate": round(convos / dials, 3) if dials else None,
+        }
+
+    callers = sorted(
+        (_row(r) for r in rows),
+        key=lambda c: (c.get("dials") or 0, c.get("conversations") or 0),
+        reverse=True,
+    )
+
+    me = next((c for c in callers if c.get("actor_id") == actor_id), None)
+    if me is None and actor_id:
+        me = {
+            "actor_id": actor_id,
+            "name": names.get(actor_id) or _short_actor(actor_id),
+            "dials": 0, "conversations": 0, "dm_reached": 0, "callbacks": 0,
+            "voicemails": 0, "not_interested": 0, "dnc": 0, "touches": 0,
+            "last_touch_at": None, "connect_rate": None,
+        }
+
+    return {"window_days": n, "since": since, "callers": callers, "me": me}
+
+
 def get_lead(lead_id: str) -> dict[str, Any]:
     """One lead with its full activity timeline.
 
@@ -669,6 +836,24 @@ def get_lead(lead_id: str) -> dict[str, Any]:
     )
     lead["activity"] = activity.data or []
     lead["activity_total"] = activity.count or 0
+
+    # Touch cadence (T2.1) — attempt count / last touch / last disposition for ANY lead, from
+    # v_lead_cadence. Distinct from the `outcome` rollup, which exists only for outbound leads; this
+    # lets the drawer show "attempt N of 5" on an inbound/referral lead too. Best-effort.
+    lead["cadence"] = None
+    try:
+        cad = (
+            client.table("v_lead_cadence")
+            .select(_CADENCE_COLUMNS)
+            .eq("lead_id", lead_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        lead["cadence"] = cad[0] if cad else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_lead_cadence_failed", extra={"error": str(exc)})
 
     lead["ranked"] = None
     if lead.get("prospect_id"):

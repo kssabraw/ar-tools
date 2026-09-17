@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -12,6 +13,12 @@ import { useAuth } from '../context/AuthContext'
 
 // ── Types (mirror the CRM half of routers/outreach.py) ───────────────────────
 interface LeadStage { key: string; label: string; sort_order: number; is_terminal: boolean }
+// Per-lead touch-cadence rollup (T2.1), from v_lead_cadence — attached to every lead + queue row.
+interface Cadence {
+  attempt_count: number
+  last_touched_at: string | null
+  last_disposition: string | null
+}
 interface Lead {
   id: string
   source: string
@@ -33,6 +40,7 @@ interface Lead {
   next_action_tz: string | null
   stage_changed_at: string | null
   created_at: string
+  cadence: Cadence | null
 }
 // The structured disposition picker (T1.2) + its next-action hints (T1.3), served by
 // GET /outreach/dispositions so the vocabulary + behaviour live in one place (the backend).
@@ -68,7 +76,25 @@ interface QueueRow {
   vendor_failing: boolean
   last_disposition: string | null
   business_hours: BusinessHours | null
+  attempt_count: number
+  last_touched_at: string | null
 }
+// The caller scoreboard (T2.2) — GET /outreach/scoreboard.
+interface ScoreboardCaller {
+  actor_id: string
+  name: string
+  dials: number
+  conversations: number
+  dm_reached: number
+  callbacks: number
+  voicemails: number
+  not_interested: number
+  dnc: number
+  touches: number
+  connect_rate: number | null
+  last_touch_at: string | null
+}
+interface Scoreboard { window_days: number; since: string; callers: ScoreboardCaller[]; me: ScoreboardCaller | null }
 interface Activity {
   id: number
   occurred_at: string
@@ -104,6 +130,34 @@ const LOST_REASONS = [
   'went_elsewhere', 'disqualified', 'unreachable', 'opted_out',
 ]
 const CREATE_SOURCES = ['manual', 'inbound_call', 'inbound_form', 'referral', 'partner']
+// Every source a lead can carry, for the board's source filter (T2.4). outbound_scan is the scanner
+// path (not creatable by hand), so it's here but not in CREATE_SOURCES.
+const FILTER_SOURCES = ['outbound_scan', ...CREATE_SOURCES]
+// Board sort control (T2.4) — labels for the backend's sort whitelist (services/outreach._LEAD_SORTS).
+const LEAD_SORTS: { value: string; label: string }[] = [
+  { value: 'recent', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'updated', label: 'Recently updated' },
+  { value: 'due', label: 'Due soonest' },
+  { value: 'name', label: 'Company A–Z' },
+]
+// The planned contact-sequence length (config `outreach_touches_per_sequence`), shown as "N of 5".
+// Mirrored here like LOST_REASONS / US_TIMEZONES; the backend owns the real value.
+const TOUCHES_PER_SEQUENCE = 5
+
+// Cadence line (T2.1): "attempt 3 of 5 · last: voicemail". Renders nothing when there are no
+// attempts yet, so a fresh lead's card stays clean rather than showing "attempt 0".
+function CadenceLine({ cadence }: { cadence: Cadence | null | undefined }) {
+  if (!cadence || !cadence.attempt_count) return null
+  const capped = Math.min(cadence.attempt_count, TOUCHES_PER_SEQUENCE)
+  const over = cadence.attempt_count > TOUCHES_PER_SEQUENCE
+  return (
+    <span style={{ fontSize: 11, color: '#94a3b8' }}>
+      attempt {over ? cadence.attempt_count : capped} of {TOUCHES_PER_SEQUENCE}
+      {cadence.last_disposition ? ` · last: ${cadence.last_disposition.replace(/_/g, ' ')}` : ''}
+    </span>
+  )
+}
 
 function overdue(lead: Lead, terminal: Set<string>): boolean {
   return !!lead.next_action_due
@@ -249,7 +303,7 @@ function QueueCard({ row, onOpen }: { row: QueueRow; onOpen: (id: string) => voi
         </div>
       )}
       <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        {row.last_disposition && <span style={{ color: '#94a3b8' }}>last: {row.last_disposition.replace('_', ' ')}</span>}
+        <CadenceLine cadence={{ attempt_count: row.attempt_count, last_touched_at: row.last_touched_at, last_disposition: row.last_disposition }} />
         {bh?.in_business_hours != null && (
           <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center',
             color: bh.in_business_hours ? '#166534' : '#b45309' }}>
@@ -262,6 +316,114 @@ function QueueCard({ row, onOpen }: { row: QueueRow; onOpen: (id: string) => voi
   )
 }
 
+// ── Caller scoreboard (T2.2) ───────────────────────────────────────────────────
+// Owner ruling: BOTH a per-caller "your numbers" card and a team leaderboard. Solo today, so the
+// leaderboard is a one-row table — but it's ready for a team the moment more callers log touches.
+// Every number is a count of touches + their structured dispositions (T1.2), aggregated server-side.
+
+function Stat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <div style={{ padding: 10, borderRadius: 10, border: '1px solid #e2e8f0', background: '#fff' }}>
+      <div style={{ fontSize: 20, fontWeight: 700, color: '#0f172a' }}>{value}</div>
+      <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>{label}</div>
+    </div>
+  )
+}
+
+function ScoreboardView() {
+  const { profile } = useAuth()
+  const [days, setDays] = useState(7)
+  const { data, isLoading } = useQuery<Scoreboard>({
+    queryKey: ['outreach-scoreboard', days],
+    queryFn: () => api.get(`/outreach/scoreboard?days=${days}`),
+  })
+  const windows = [{ d: 1, label: 'Today' }, { d: 7, label: '7 days' }, { d: 30, label: '30 days' }]
+  const pct = (r: number | null) => (r == null ? '—' : `${Math.round(r * 100)}%`)
+  const me = data?.me ?? null
+  const callers = data?.callers ?? []
+  const th: CSSProperties = { padding: '4px 8px', fontWeight: 600 }
+  const thr: CSSProperties = { ...th, textAlign: 'right' }
+  const td: CSSProperties = { padding: '6px 8px', color: '#334155' }
+  const tdr: CSSProperties = { ...td, textAlign: 'right' }
+
+  return (
+    <div style={{ marginTop: 16, maxWidth: 720 }}>
+      <div style={{ display: 'flex', gap: 4 }}>
+        {windows.map(w => (
+          <button key={w.d} onClick={() => setDays(w.d)}
+            style={{ padding: '4px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12,
+              fontWeight: 600, cursor: 'pointer',
+              background: days === w.d ? '#0369a1' : '#fff', color: days === w.d ? '#fff' : '#475569' }}>
+            {w.label}
+          </button>
+        ))}
+      </div>
+
+      {isLoading ? (
+        <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>Loading scoreboard…</p>
+      ) : (
+        <>
+          {me && (
+            <div style={{ marginTop: 14 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+                Your numbers{profile?.full_name ? ` · ${profile.full_name}` : ''}
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(110px, 1fr))',
+                gap: 8, marginTop: 8 }}>
+                <Stat label="Dials" value={me.dials} />
+                <Stat label="Conversations" value={me.conversations} />
+                <Stat label="Connect rate" value={pct(me.connect_rate)} />
+                <Stat label="Callbacks" value={me.callbacks} />
+                <Stat label="DMs reached" value={me.dm_reached} />
+                <Stat label="Voicemails" value={me.voicemails} />
+                <Stat label="Not interested" value={me.not_interested} />
+                <Stat label="Do-not-call" value={me.dnc} />
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+              Team leaderboard
+            </div>
+            {callers.length === 0 ? (
+              <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
+                No calls logged in this window yet. Dispositions logged while working the queue feed
+                this scoreboard.
+              </p>
+            ) : (
+              <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: 8, fontSize: 13 }}>
+                <thead>
+                  <tr style={{ color: '#94a3b8', fontSize: 11, textAlign: 'left' }}>
+                    <th style={th}>#</th><th style={th}>Caller</th><th style={thr}>Dials</th>
+                    <th style={thr}>Convos</th><th style={thr}>Connect</th><th style={thr}>Callbacks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {callers.map((c, i) => {
+                    const isMe = !!me && c.actor_id === me.actor_id
+                    return (
+                      <tr key={c.actor_id} style={{ borderTop: '1px solid #f1f5f9',
+                        background: isMe ? '#f8fafc' : undefined }}>
+                        <td style={td}>{i + 1}</td>
+                        <td style={{ ...td, fontWeight: 600 }}>{c.name}{isMe ? ' (you)' : ''}</td>
+                        <td style={tdr}>{c.dials}</td>
+                        <td style={tdr}>{c.conversations}</td>
+                        <td style={tdr}>{pct(c.connect_rate)}</td>
+                        <td style={tdr}>{c.callbacks}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
 // ── The page ─────────────────────────────────────────────────────────────────
 
 export function OutreachLeads() {
@@ -269,7 +431,12 @@ export function OutreachLeads() {
   const [openLead, setOpenLead] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
-  const [view, setView] = useState<'board' | 'queue'>('queue')
+  const [view, setView] = useState<'board' | 'queue' | 'scoreboard'>('queue')
+  // Board filters + sort (T2.4). Owner is deliberately not a filter here — solo caller, so every
+  // lead is the one caller's (T2.3 owner UI is a later tier). Stage is the board's columns already.
+  const [sourceFilter, setSourceFilter] = useState('')
+  const [overdueOnly, setOverdueOnly] = useState(false)
+  const [sortBy, setSortBy] = useState('recent')
 
   const { data: stagesData } = useQuery<{ stages: LeadStage[] }>({
     queryKey: ['outreach-lead-stages'],
@@ -284,10 +451,21 @@ export function OutreachLeads() {
     [stages],
   )
 
+  // The board fetch carries the T2.4 filters + sort. Built once so the query key and the URL can't
+  // drift. The queue + scoreboard views have their own fetches, so this is skipped there.
+  const leadsUrl = useMemo(() => {
+    const p = new URLSearchParams({ limit: '200' })
+    if (search) p.set('search', search)
+    if (sourceFilter) p.set('source', sourceFilter)
+    if (overdueOnly) p.set('overdue', 'true')
+    if (sortBy && sortBy !== 'recent') p.set('sort', sortBy)
+    return `/outreach/leads?${p.toString()}`
+  }, [search, sourceFilter, overdueOnly, sortBy])
+
   const { data: leadsData, isLoading } = useQuery<{ leads: Lead[]; total: number }>({
-    queryKey: ['outreach-leads', search],
-    queryFn: () =>
-      api.get(`/outreach/leads?limit=200${search ? `&search=${encodeURIComponent(search)}` : ''}`),
+    queryKey: ['outreach-leads', leadsUrl],
+    queryFn: () => api.get(leadsUrl),
+    enabled: view !== 'scoreboard',
   })
   const leads = leadsData?.leads ?? []
   const byStage = useMemo(() => {
@@ -340,21 +518,48 @@ export function OutreachLeads() {
       {/* Work the queue (score-ordered, T1.1) vs the pipeline board. Queue is the default — it's
           the surface a caller works; the board is the manager's pipeline view. */}
       <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-        {(['queue', 'board'] as const).map(v => (
+        {(['queue', 'board', 'scoreboard'] as const).map(v => (
           <button key={v} onClick={() => setView(v)}
             style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12,
               fontWeight: 600, cursor: 'pointer',
               background: view === v ? '#0f172a' : '#fff', color: view === v ? '#fff' : '#475569' }}>
-            {v === 'queue' ? 'Work the queue' : 'Board'}
+            {v === 'queue' ? 'Work the queue' : v === 'board' ? 'Board' : 'Scoreboard'}
           </button>
         ))}
       </div>
 
-      {view === 'queue' ? (
+      {/* Board filters + sort (T2.4): slice the board by source / overdue and order the cards.
+          Only shown on the board — the queue has its own fixed best-first order, the scoreboard
+          its own window control. */}
+      {view === 'board' && (
+        <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select value={sourceFilter} onChange={e => setSourceFilter(e.target.value)}
+            style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}>
+            <option value="">All sources</option>
+            {FILTER_SOURCES.map(s => <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>)}
+          </select>
+          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+            style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12 }}>
+            {LEAD_SORTS.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+          </select>
+          <label style={{ fontSize: 12, display: 'inline-flex', gap: 5, alignItems: 'center', color: '#475569', cursor: 'pointer' }}>
+            <input type="checkbox" checked={overdueOnly} onChange={e => setOverdueOnly(e.target.checked)} /> Overdue only
+          </label>
+          {(sourceFilter || overdueOnly || sortBy !== 'recent') && (
+            <button onClick={() => { setSourceFilter(''); setOverdueOnly(false); setSortBy('recent') }}
+              style={{ padding: '5px 10px', borderRadius: 8, border: '1px solid #e2e8f0', background: '#fff',
+                fontSize: 12, color: '#64748b', cursor: 'pointer' }}>Clear</button>
+          )}
+        </div>
+      )}
+
+      {view === 'scoreboard' ? (
+        <ScoreboardView />
+      ) : view === 'queue' ? (
         <QueueView queue={queue} loading={queueLoading} onOpen={setOpenLead} />
       ) : isLoading ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>Loading…</p>
-      ) : leads.length === 0 && !search ? (
+      ) : leads.length === 0 && !search && !sourceFilter && !overdueOnly ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>
           No leads yet. Send prospects here from a scan's coverage results, or add an inbound /
           referral lead by hand — both land on this board.
@@ -394,6 +599,9 @@ export function OutreachLeads() {
                     )}
                     {lead.next_action_tz && (
                       <div style={{ marginTop: 3 }}><BusinessHours tz={lead.next_action_tz} /></div>
+                    )}
+                    {lead.cadence && lead.cadence.attempt_count > 0 && (
+                      <div style={{ marginTop: 3 }}><CadenceLine cadence={lead.cadence} /></div>
                     )}
                   </button>
                 ))}
@@ -740,6 +948,10 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
               Log contact
             </div>
+            {/* Cadence (T2.1) for ANY lead — the outcome rollup below exists only for outbound. */}
+            {lead.cadence && lead.cadence.attempt_count > 0 && (
+              <div style={{ marginTop: 6 }}><CadenceLine cadence={lead.cadence} /></div>
+            )}
             {isOutbound && (
               <div style={{ fontSize: 12, color: '#475569', marginTop: 6, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                 <span><strong>{outcome?.touch_count ?? 0}</strong> contact{(outcome?.touch_count ?? 0) === 1 ? '' : 's'}</span>

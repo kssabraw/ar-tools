@@ -305,12 +305,14 @@ async def list_leads(
     owner_id: Optional[str] = None,
     overdue: bool = False,
     search: Optional[str] = None,
+    sort: Optional[str] = None,
     limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
     offset: int = Query(default=0, ge=0),
     auth: dict = Depends(require_outreach),
 ) -> dict:
-    """A page of live leads. `overdue=true` is crm-layer-spec §10's forcing function — a due date
-    in the past on a lead that is neither won nor lost."""
+    """A page of live leads (T2.4 filters + sort). `overdue=true` is crm-layer-spec §10's forcing
+    function — a due date in the past on a lead that is neither won nor lost. `sort` picks the order
+    from a whitelist (recent|oldest|updated|due|name); each row carries a touch-cadence rollup."""
     return _handle(
         outreach_service.list_leads,
         stage=stage,
@@ -318,9 +320,21 @@ async def list_leads(
         owner_id=owner_id,
         overdue=overdue,
         search=search,
+        sort=sort,
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/outreach/scoreboard")
+async def caller_scoreboard(
+    days: int = Query(default=7, ge=1, le=outreach_service.SCOREBOARD_MAX_DAYS),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """The caller scoreboard (T2.2): per-caller dials / conversations / connect-rate / callbacks over
+    the window, plus the requester's own row. Owner ruling: BOTH a per-caller card (`me`) and a team
+    leaderboard (`callers`). Read-only; derived from touches + their structured dispositions."""
+    return _handle(outreach_service.caller_scoreboard, days=days, actor_id=auth["user_id"])
 
 
 @router.get("/outreach/call-queue")
