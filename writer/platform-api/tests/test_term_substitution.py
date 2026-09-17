@@ -91,6 +91,52 @@ def test_longest_first_no_preemption():
     assert ts.substitute_text("retatrutide", subs) == "glp3-rt"
 
 
+# ── substitute_text: non-string inputs never crash ─────────────────────────
+# Regression: the Fanout writer passed its structured `intro` beats DICT to
+# substitute_text, and the regex pass raised
+# TypeError("expected string or bytes-like object, got 'dict'"), which failed
+# every Nova scheduled article. A non-string is now returned unchanged.
+
+
+def test_substitute_text_returns_non_string_unchanged():
+    intro = {"agree": "x", "promise": "y", "preview": "z"}
+    assert ts.substitute_text(intro, NOVA) is intro       # dict — no crash, unchanged
+    assert ts.substitute_text(["retatrutide"], NOVA) == ["retatrutide"]  # list unchanged
+    assert ts.substitute_text(42, NOVA) == 42             # number unchanged
+
+
+# ── substitute_value: codes strings and structured fields ──────────────────
+
+
+def test_substitute_value_codes_plain_string():
+    assert ts.substitute_value("Buy retatrutide", NOVA) == "Buy glp3-rt"
+
+
+def test_substitute_value_codes_intro_beats_dict():
+    intro = {
+        "agree": "You research retatrutide protocols.",
+        "promise": "This covers semaglutide sourcing.",
+        "preview": "No compound mentioned here.",
+    }
+    out = ts.substitute_value(intro, NOVA)
+    assert out == {
+        "agree": "You research glp3-rt protocols.",
+        "promise": "This covers glp1-sg sourcing.",
+        "preview": "No compound mentioned here.",
+    }
+
+
+def test_substitute_value_recurses_lists_and_leaves_non_str():
+    val = {"terms": ["retatrutide", "clean"], "count": 3, "flag": None}
+    out = ts.substitute_value(val, NOVA)
+    assert out == {"terms": ["glp3-rt", "clean"], "count": 3, "flag": None}
+
+
+def test_substitute_value_empty_map_is_noop():
+    intro = {"agree": "retatrutide"}
+    assert ts.substitute_value(intro, {}) is intro
+
+
 # ── substitute_html: visible text only ─────────────────────────────────────
 
 

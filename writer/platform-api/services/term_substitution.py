@@ -99,10 +99,37 @@ def substitute_text(text: Optional[str], subs: dict[str, str]) -> Optional[str]:
 
     Idempotent: the coded replacement never matches any source term, so applying
     twice is safe (a requeue/retry can re-run it without harm).
+
+    Defensive: a NON-string ``text`` (a dict/list/number a caller passed by
+    mistake — e.g. the fanout writer's structured ``intro`` beats dict) is
+    returned unchanged rather than handed to the regex engine, which would raise
+    ``TypeError: expected string or bytes-like object``. Structured values that
+    must be coded should go through :func:`substitute_value`.
     """
-    if not text or not subs:
+    if not subs or not isinstance(text, str) or not text:
         return text
     return _apply(text, _compiled(subs))
+
+
+def substitute_value(value: Any, subs: dict[str, str]) -> Any:
+    """Apply the substitution map to a string, or recursively to the string values
+    of a dict/list, leaving every other type (numbers, ``None``, nested objects'
+    non-string leaves) unchanged.
+
+    Lets a caller code a STRUCTURED field without knowing its exact shape — e.g.
+    the Fanout writer's ``intro`` beats ``{"agree", "promise", "preview"}`` — so a
+    coded compound name is swapped inside it just as it is in plain title/body
+    text. A no-op for an empty map. Idempotent (delegates to
+    :func:`substitute_text`)."""
+    if not subs:
+        return value
+    if isinstance(value, str):
+        return substitute_text(value, subs)
+    if isinstance(value, dict):
+        return {k: substitute_value(v, subs) for k, v in value.items()}
+    if isinstance(value, list):
+        return [substitute_value(v, subs) for v in value]
+    return value
 
 
 def substitute_html(html: Optional[str], subs: dict[str, str]) -> Optional[str]:

@@ -1456,8 +1456,10 @@ def _recode_article_output(article, subs: dict) -> None:
         from fanout.writer.serialize import to_html, to_markdown
         from services import term_substitution as _ts
 
-        def _s(text):
-            return _ts.substitute_text(text, subs)
+        def _s(value):
+            # substitute_value codes plain strings AND structured fields (the
+            # `intro` beats dict) without a regex-on-dict TypeError.
+            return _ts.substitute_value(value, subs)
 
         article.article = [
             it.model_copy(update={
