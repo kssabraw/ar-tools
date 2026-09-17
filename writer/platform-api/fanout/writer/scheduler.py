@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -305,12 +306,17 @@ def _process_run(row: dict) -> None:
         if publish_failures:
             _record_publish_failure(run_id, row, client_id, publish_failures)
     except Exception as exc:  # noqa: BLE001 — one bad run must not stop the worker
+        tb = traceback.format_exc()
         logger.error("scheduled_run_failed",
                      extra={"event": "scheduled_run_failed", "run_id": run_id,
-                            "cluster_id": cluster_id, "reason": repr(exc)})
+                            "cluster_id": cluster_id, "reason": repr(exc),
+                            "traceback": tb[-3000:]})
         # An unexpected error (DB read, external-API blip) is transient by default:
-        # requeue with backoff up to the attempt cap, then dead-letter.
-        _retry_or_fail(row, repr(exc)[:500], client_id=client_id)
+        # requeue with backoff up to the attempt cap, then dead-letter. Persist the
+        # TRACEBACK (not just the exception repr) on the run row so the next
+        # diagnosis reads the crash site from the row itself, rather than hunting
+        # logs on a deployment that may have rolled off (the Nova incident's pain).
+        _retry_or_fail(row, repr(exc)[:500], client_id=client_id, detail=tb)
     finally:
         if schedule_id:
             _maybe_complete_schedule(schedule_id)
@@ -577,6 +583,7 @@ def _finish_run(run_id: str, status: str, *, error: str | None) -> None:
 
 def _retry_or_fail(
     row: dict, reason: str, *, client_id: str | None = None, immediate: bool = False,
+    detail: str | None = None,
 ) -> None:
     """Record a transient failure: requeue the run with backoff up to
     `scheduler_max_attempts`, else dead-letter it (status=failed + a
@@ -595,6 +602,10 @@ def _retry_or_fail(
     run_id = row["id"]
     attempts = retry_policy.next_attempt_number(row.get("attempts"))
     reason = (reason or "")[:500]
+    # `reason` is the short human string (notification summary + retry log). The
+    # `error` COLUMN stores the fuller `detail` (a traceback) when the caller has
+    # one, so a failed row is self-diagnosing; falls back to `reason` otherwise.
+    error_detail = ((detail or reason) or "")[:6000]
     if retry_policy.should_retry(attempts, s.scheduler_max_attempts):
         if immediate:
             next_at = datetime.now(timezone.utc)
@@ -604,7 +615,7 @@ def _retry_or_fail(
             next_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         res = (get_service_client().table("scheduled_article_runs").update({
             "status": "queued", "attempts": attempts, "started_at": None,
-            "completed_at": None, "scheduled_at": next_at.isoformat(), "error": reason,
+            "completed_at": None, "scheduled_at": next_at.isoformat(), "error": error_detail,
         }).eq("id", run_id).eq("status", "running").execute())
         if res.data:
             logger.info("scheduled_run_retry",
@@ -620,7 +631,7 @@ def _retry_or_fail(
     # if the row was still running (i.e. we actually dead-lettered it).
     res = (get_service_client().table("scheduled_article_runs").update({
         "status": "failed", "attempts": attempts,
-        "completed_at": datetime.now(timezone.utc).isoformat(), "error": reason,
+        "completed_at": datetime.now(timezone.utc).isoformat(), "error": error_detail,
     }).eq("id", run_id).eq("status", "running").execute())
     if not res.data:
         logger.info("scheduled_run_dead_letter_skipped",
@@ -654,10 +665,68 @@ def _notify_dead_letter(row: dict, client_id: str | None, attempts: int, reason:
                      "schedule_id": row.get("content_schedule_id"),
                      "session_id": row.get("session_id")},
         )
+        _maybe_escalate_persistent_failures(client_id, row, reason)
     except Exception as exc:  # noqa: BLE001 — notification is best-effort
         logger.warning("dead_letter_notify_failed",
                        extra={"event": "dead_letter_notify_failed",
                               "run_id": row.get("id"), "reason": repr(exc)})
+
+
+def _maybe_escalate_persistent_failures(
+    client_id: str | None, row: dict, reason: str,
+) -> None:
+    """A single dead-letter is a warning; a client whose scheduled content
+    dead-letters REPEATEDLY inside the window is systemically broken (a code bug,
+    a bad config) — not a transient blip — and must be surfaced LOUDLY so it's
+    caught in hours, not after days of identical silent daily failures (the Nova
+    intro-dict incident ran red every day for ~2 days before a human noticed).
+
+    Counts the client's dead-lettered runs in the window and, at/over the
+    threshold, emits ONE critical escalation deduped per client per day. Purely
+    additive to the per-run warning above; best-effort — never raises."""
+    s = get_settings()
+    threshold = s.scheduler_failure_escalation_threshold
+    if not client_id or threshold <= 0:
+        return
+    try:
+        client = get_service_client()
+        # scheduled_article_runs carries no client_id — resolve via the client's sessions.
+        sess = (client.table("sessions").select("id").eq("client_id", client_id)
+                .execute().data or [])
+        session_ids = [r["id"] for r in sess if r.get("id")]
+        if not session_ids:
+            return
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=s.scheduler_failure_escalation_window_days)).isoformat()
+        res = (client.table("scheduled_article_runs").select("id", count="exact")
+               .in_("session_id", session_ids).eq("status", "failed")
+               .gte("completed_at", cutoff).execute())
+        failed_count = res.count or 0
+        if failed_count < threshold:
+            return
+        from services import notifications
+
+        day = datetime.now(timezone.utc).date().isoformat()
+        notifications.emit(
+            client_id,
+            kind="content_generation_failing",
+            title="Scheduled content is failing repeatedly",
+            summary=(f"{failed_count} scheduled articles have failed to generate in the last "
+                     f"{s.scheduler_failure_escalation_window_days} day(s) for this client — "
+                     f"likely a systemic issue, not a transient blip. Latest reason: {reason}"),
+            severity="critical",
+            dedupe_key=f"content_failing:{client_id}:{day}",
+            payload={"failed_count": failed_count,
+                     "window_days": s.scheduler_failure_escalation_window_days,
+                     "run_id": row.get("id"), "session_id": row.get("session_id")},
+        )
+        logger.error("scheduled_content_failing_escalated",
+                     extra={"event": "scheduled_content_failing_escalated",
+                            "client_id": client_id, "failed_count": failed_count})
+    except Exception as exc:  # noqa: BLE001 — escalation is best-effort
+        logger.warning("failure_escalation_check_failed",
+                       extra={"event": "failure_escalation_check_failed",
+                              "client_id": client_id, "reason": repr(exc)})
 
 
 def _record_publish_failure(

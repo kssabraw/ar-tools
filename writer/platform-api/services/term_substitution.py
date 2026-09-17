@@ -246,7 +246,9 @@ def substitute_page_result(result: Any, subs: dict[str, str]) -> Any:
         import json
 
         try:
-            result["schema_json"] = json.loads(substitute_text(json.dumps(sj), subs))
+            coded = substitute_text(json.dumps(sj), subs)
+            if coded:
+                result["schema_json"] = json.loads(coded)
         except Exception:  # noqa: BLE001 — leave schema untouched on any parse issue
             pass
     if result.get("voice_compliance"):

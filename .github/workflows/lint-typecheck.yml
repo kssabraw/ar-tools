@@ -47,4 +47,9 @@ jobs:
       # no project dependencies are needed and one module's types can't be broken
       # by an untyped neighbour. Add modules here as they gain annotations.
       - name: Mypy (typed-module allowlist)
-        run: mypy services/rank_materialize.py --ignore-missing-imports --follow-imports=skip
+        run: >-
+          mypy
+          services/rank_materialize.py
+          services/term_substitution.py
+          fanout/writer/pipeline.py
+          --ignore-missing-imports --follow-imports=skip

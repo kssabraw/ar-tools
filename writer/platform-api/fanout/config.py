@@ -391,6 +391,15 @@ class Settings(BaseSettings):
     scheduler_max_attempts: int = 4
     scheduler_retry_base_seconds: int = 300     # first-retry delay (5 min)
     scheduler_retry_cap_seconds: int = 3600     # max single-retry delay (1 hr)
+    # Persistent-failure escalation. A single dead-lettered run is a warning; a
+    # client whose scheduled content dead-letters REPEATEDLY inside the window is
+    # systemically broken (a code bug, a bad config) and must be noticed in hours,
+    # not after days of identical silent failures (the Nova intro-dict incident ran
+    # red daily for ~2 days). When a client reaches this many dead-lettered runs in
+    # the window, emit ONE critical escalation (deduped per client per day),
+    # distinct from the per-run warning.
+    scheduler_failure_escalation_threshold: int = 3
+    scheduler_failure_escalation_window_days: int = 3
     # Re-run the stuck-row sweep every N ticks (not just at startup), so a run
     # orphaned mid-write by a deploy/restart is recovered within ~stuck_minutes
     # instead of waiting for the *next* restart. At the 60s tick default this is
