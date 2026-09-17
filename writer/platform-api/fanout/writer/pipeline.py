@@ -601,8 +601,11 @@ def generate_article(
 
         _subs = _ts.parse_substitutions(substitutions)
         if _subs:
-            def _s(text: str | None) -> str | None:
-                return _ts.substitute_text(text, _subs)
+            def _s(value):
+                # substitute_value handles both plain strings AND structured
+                # fields (the `intro` beats dict) — the latter would crash a
+                # plain substitute_text regex pass ("expected string ... got 'dict'").
+                return _ts.substitute_value(value, _subs)
 
             title = _s(title) or title
             seo_title = _s(seo_title) or seo_title
