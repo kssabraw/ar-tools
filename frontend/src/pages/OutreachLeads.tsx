@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Crosshair, Loader2, Plus, X, AlertTriangle, Ban, Search, Phone,
+  Crosshair, Loader2, Plus, X, AlertTriangle, Ban, Search, Phone, Clock,
 } from 'lucide-react'
 import { api } from '../lib/api'
 import { Justification } from '../components/outreach/Justification'
@@ -29,8 +29,45 @@ interface Lead {
   lost_reason: string | null
   next_action: string | null
   next_action_due: string | null
+  next_action_at: string | null
+  next_action_tz: string | null
   stage_changed_at: string | null
   created_at: string
+}
+// The structured disposition picker (T1.2) + its next-action hints (T1.3), served by
+// GET /outreach/dispositions so the vocabulary + behaviour live in one place (the backend).
+interface Disposition {
+  value: string
+  label: string
+  reveal_callback?: boolean
+  default_next_action?: string
+  offset_days?: number
+  suggest_lost_reason?: string
+  suggest_suppress?: boolean
+  suppress_scope?: string
+}
+interface DispositionCatalog { phone: Disposition[]; email: Disposition[] }
+// A row of the score-ordered call queue (T1.1) — GET /outreach/call-queue.
+interface BusinessHours { tz: string | null; local_time: string | null; in_business_hours: boolean | null }
+interface QueueRow {
+  lead_id: string
+  prospect_id: string | null
+  name: string
+  phone: string | null
+  phone_type: string | null
+  submarket: string | null
+  source: string
+  stage: string
+  next_action: string | null
+  next_action_due: string | null
+  next_action_at: string | null
+  next_action_tz: string | null
+  score: number | string | null
+  decile: number | null
+  primary_pitch: string | null
+  vendor_failing: boolean
+  last_disposition: string | null
+  business_hours: BusinessHours | null
 }
 interface Activity {
   id: number
@@ -43,7 +80,12 @@ interface Activity {
 interface LeadDetail extends Lead {
   activity: Activity[]
   activity_total: number
-  prospect: { name: string; address: string | null; rating: number | null; review_count: number | null; submarket_name: string | null } | null
+  prospect: {
+    name: string; address: string | null; rating: number | null; review_count: number | null
+    submarket_name: string | null; place_id: string | null; phone: string | null
+    lat: number | null; lng: number | null
+  } | null
+  ranked: { score: number | string | null; decile: number | null; primary_pitch: string | null } | null
 }
 // The Phase 3 modelling substrate (outbound-only). Written by emit / rolled up by touches.
 interface Outcome {
@@ -69,6 +111,157 @@ function overdue(lead: Lead, terminal: Set<string>): boolean {
     && new Date(lead.next_action_due) < new Date(new Date().toDateString())
 }
 
+// ── Calling helpers (T1.3 / T1.4) ─────────────────────────────────────────────
+// The zones a US cold-caller actually dials into, plus the stored/derived one. This is a picker
+// convenience only — the backend validates any IANA zone, so an unlisted one still works.
+const US_TIMEZONES: { value: string; label: string }[] = [
+  { value: 'America/New_York', label: 'Eastern' },
+  { value: 'America/Chicago', label: 'Central' },
+  { value: 'America/Denver', label: 'Mountain' },
+  { value: 'America/Phoenix', label: 'Arizona (no DST)' },
+  { value: 'America/Los_Angeles', label: 'Pacific' },
+  { value: 'America/Anchorage', label: 'Alaska' },
+  { value: 'Pacific/Honolulu', label: 'Hawaii' },
+]
+
+// A default zone for the picker only — a rough longitude band, drift-tolerant because the caller
+// confirms it. The backend owns the authoritative derivation; this just seeds the dropdown.
+function guessTz(lng: number | null | undefined): string {
+  // Out of the US longitude range (or unknown) → the config default; the bands only mean anything
+  // for a US coordinate, and a positive/European lng would otherwise seed the picker with Eastern.
+  if (lng == null || lng > -60) return 'America/Los_Angeles'
+  if (lng >= -87.5) return 'America/New_York'
+  if (lng >= -102) return 'America/Chicago'
+  if (lng >= -115) return 'America/Denver'
+  if (lng >= -140) return 'America/Los_Angeles'
+  if (lng >= -150) return 'America/Anchorage'
+  return 'Pacific/Honolulu'
+}
+
+// The prospect's local clock right now + whether it's inside 8–18 on a weekday. Display-only, so
+// it's computed client-side via Intl (no backend round trip); PR2's queue computes it server-side.
+function localClock(tz: string | null | undefined): { time: string; inHours: boolean } | null {
+  if (!tz) return null
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, weekday: 'short', hour: 'numeric', minute: '2-digit', hour12: true,
+    }).formatToParts(new Date())
+    const get = (t: string) => parts.find(p => p.type === t)?.value ?? ''
+    const hour24 = Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: 'numeric', hour12: false })
+      .formatToParts(new Date()).find(p => p.type === 'hour')?.value ?? '0')
+    const weekday = get('weekday')
+    const isWeekend = weekday === 'Sat' || weekday === 'Sun'
+    return {
+      time: `${weekday} ${get('hour')}:${get('minute')} ${get('dayPeriod')}`.trim(),
+      inHours: !isWeekend && hour24 >= 8 && hour24 < 18,
+    }
+  } catch {
+    return null
+  }
+}
+
+function todayPlusDays(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() + days)
+  return d.toISOString().slice(0, 10)
+}
+
+function fmtScore(s: number | string | null): string | null {
+  if (s == null) return null
+  const n = typeof s === 'string' ? Number(s) : s
+  return Number.isFinite(n) ? Math.round(n).toLocaleString() : null
+}
+
+// Score + decile pill (T1.5). A top-decile lead reads green; the number is the value model's.
+function ScorePill({ score, decile }: { score: number | string | null; decile: number | null }) {
+  const s = fmtScore(score)
+  if (s == null) return null
+  const strong = (decile ?? 0) >= 8
+  return (
+    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
+      background: strong ? '#dcfce7' : '#f1f5f9', color: strong ? '#166534' : '#475569' }}>
+      {s}{decile != null ? ` · D${decile}` : ''}
+    </span>
+  )
+}
+
+// ── Work-the-queue list (T1.1 / T1.5) ─────────────────────────────────────────
+
+function QueueView({ queue, loading, onOpen }: {
+  queue: QueueRow[]; loading: boolean; onOpen: (id: string) => void
+}) {
+  if (loading) return <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>Loading queue…</p>
+  if (queue.length === 0) {
+    return (
+      <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>
+        Nothing to call. Promote scored prospects from a scan's coverage results — every workable,
+        non-suppressed lead lands here, best-first.
+      </p>
+    )
+  }
+  return (
+    <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 640 }}>
+      <div style={{ fontSize: 11, color: '#94a3b8' }}>
+        {queue.length} to work · best-first (due date, then value score)
+      </div>
+      {queue.map(row => <QueueCard key={row.lead_id} row={row} onOpen={onOpen} />)}
+    </div>
+  )
+}
+
+function QueueCard({ row, onOpen }: { row: QueueRow; onOpen: (id: string) => void }) {
+  const bh = row.business_hours
+  const isOverdue = !!row.next_action_due && new Date(row.next_action_due) < new Date(new Date().toDateString())
+  return (
+    // A div (not a button) so the tel: anchor can nest without invalid button-in-button; the
+    // role/tabIndex/onKeyDown give it the keyboard access a button would have had.
+    <div role="button" tabIndex={0} onClick={() => onOpen(row.lead_id)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(row.lead_id) } }}
+      style={{ textAlign: 'left', padding: 12, borderRadius: 10, cursor: 'pointer',
+        border: '1px solid #e2e8f0', background: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{row.name}</div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <ScorePill score={row.score} decile={row.decile} />
+          {row.vendor_failing && (
+            <span title="Paying a vendor while losing ground — the strongest pitch"
+              style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fef3c7',
+                color: '#92400e', fontWeight: 700 }}>vendor-failing</span>
+          )}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {row.phone ? (
+          <a href={`tel:${row.phone}`} onClick={e => e.stopPropagation()}
+            style={{ color: '#0369a1', textDecoration: 'none', fontWeight: 600,
+              display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <Phone size={11} /> {row.phone}
+          </a>
+        ) : <span style={{ color: '#b45309' }}>no phone</span>}
+        {row.phone_type && row.phone_type !== 'unknown' && <span>· {row.phone_type}</span>}
+        {row.submarket && <span>· {row.submarket}</span>}
+        {row.primary_pitch && <span>· {row.primary_pitch}</span>}
+      </div>
+      {row.next_action && (
+        <div style={{ fontSize: 11, marginTop: 4, color: isOverdue ? '#b91c1c' : '#475569' }}>
+          {isOverdue ? '⚠ ' : ''}{row.next_action}
+          {row.next_action_due ? ` — ${row.next_action_due.slice(0, 10)}` : ''}
+        </div>
+      )}
+      <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {row.last_disposition && <span style={{ color: '#94a3b8' }}>last: {row.last_disposition.replace('_', ' ')}</span>}
+        {bh?.in_business_hours != null && (
+          <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center',
+            color: bh.in_business_hours ? '#166534' : '#b45309' }}>
+            <Clock size={11} /> {bh.in_business_hours ? 'in business hours' : 'outside hours'}
+            {bh.tz ? ` (${bh.tz.split('/').pop()!.replace('_', ' ')})` : ''}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── The page ─────────────────────────────────────────────────────────────────
 
 export function OutreachLeads() {
@@ -76,6 +269,7 @@ export function OutreachLeads() {
   const [openLead, setOpenLead] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
+  const [view, setView] = useState<'board' | 'queue'>('queue')
 
   const { data: stagesData } = useQuery<{ stages: LeadStage[] }>({
     queryKey: ['outreach-lead-stages'],
@@ -102,6 +296,24 @@ export function OutreachLeads() {
     return map
   }, [leads])
 
+  // The score-ordered call queue (T1.1). Fetched only in queue view; the backend already filters
+  // to workable, non-suppressed leads and orders by due-date then value score.
+  const { data: queueData, isLoading: queueLoading } = useQuery<{ queue: QueueRow[] }>({
+    queryKey: ['outreach-call-queue'],
+    queryFn: () => api.get('/outreach/call-queue?limit=200'),
+    enabled: view === 'queue',
+  })
+  const queue = queueData?.queue ?? []
+
+  // Auto-advance: after a disposition is logged in the drawer, land on the next queue lead (or
+  // close on the last one) so the caller works top-down without returning to the list.
+  const advanceQueue = (currentId: string) => {
+    const ids = queue.map(r => r.lead_id)
+    const i = ids.indexOf(currentId)
+    queryClient.invalidateQueries({ queryKey: ['outreach-call-queue'] })
+    setOpenLead(i >= 0 && i + 1 < ids.length ? ids[i + 1] : null)
+  }
+
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
@@ -125,7 +337,22 @@ export function OutreachLeads() {
 
       <Tabs active="leads" />
 
-      {isLoading ? (
+      {/* Work the queue (score-ordered, T1.1) vs the pipeline board. Queue is the default — it's
+          the surface a caller works; the board is the manager's pipeline view. */}
+      <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+        {(['queue', 'board'] as const).map(v => (
+          <button key={v} onClick={() => setView(v)}
+            style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12,
+              fontWeight: 600, cursor: 'pointer',
+              background: view === v ? '#0f172a' : '#fff', color: view === v ? '#fff' : '#475569' }}>
+            {v === 'queue' ? 'Work the queue' : 'Board'}
+          </button>
+        ))}
+      </div>
+
+      {view === 'queue' ? (
+        <QueueView queue={queue} loading={queueLoading} onOpen={setOpenLead} />
+      ) : isLoading ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>Loading…</p>
       ) : leads.length === 0 && !search ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>
@@ -165,6 +392,9 @@ export function OutreachLeads() {
                         {lead.next_action_due ? ` — ${lead.next_action_due.slice(0, 10)}` : ''}
                       </div>
                     )}
+                    {lead.next_action_tz && (
+                      <div style={{ marginTop: 3 }}><BusinessHours tz={lead.next_action_tz} /></div>
+                    )}
                   </button>
                 ))}
               </div>
@@ -175,10 +405,17 @@ export function OutreachLeads() {
 
       {adding && <AddLeadModal onClose={() => setAdding(false)} />}
       {openLead && (
-        <LeadDrawer id={openLead} stages={stages} onClose={() => {
-          setOpenLead(null)
-          queryClient.invalidateQueries({ queryKey: ['outreach-leads'] })
-        }} />
+        // key on the lead id so switching leads — especially the queue's auto-advance — REMOUNTS
+        // the drawer, resetting its form state (disposition, note) and NextAction's lead-seeded
+        // editor. Without it React reuses the instance and the previous lead's next-action/notes
+        // bleed into the next one (and a Save would write them onto the wrong lead).
+        <LeadDrawer key={openLead} id={openLead} stages={stages}
+          onAdvance={view === 'queue' ? () => advanceQueue(openLead) : undefined}
+          onClose={() => {
+            setOpenLead(null)
+            queryClient.invalidateQueries({ queryKey: ['outreach-leads'] })
+            if (view === 'queue') queryClient.invalidateQueries({ queryKey: ['outreach-call-queue'] })
+          }} />
       )}
     </div>
   )
@@ -269,7 +506,9 @@ function AddLeadModal({ onClose }: { onClose: () => void }) {
 
 // ── Lead drawer ──────────────────────────────────────────────────────────────
 
-function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; onClose: () => void }) {
+function LeadDrawer({ id, stages, onClose, onAdvance }: {
+  id: string; stages: LeadStage[]; onClose: () => void; onAdvance?: () => void
+}) {
   const queryClient = useQueryClient()
   const { isAdmin, isStaff } = useAuth()
   const [note, setNote] = useState('')
@@ -279,11 +518,24 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
   const [touchChannel, setTouchChannel] = useState('phone')
   const [touchDisposition, setTouchDisposition] = useState('')
   const [touchNote, setTouchNote] = useState('')
+  // Next-action fields prefilled by the chosen disposition's hint (T1.3), editable before saving.
+  const [naText, setNaText] = useState('')
+  const [naDue, setNaDue] = useState('')            // day-only follow-up (YYYY-MM-DD)
+  const [naLocal, setNaLocal] = useState('')        // precise callback wall-time (datetime-local)
+  const [naTz, setNaTz] = useState('')
 
   const { data: lead } = useQuery<LeadDetail>({
     queryKey: ['outreach-lead', id],
     queryFn: () => api.get(`/outreach/leads/${id}`),
   })
+  // App-level disposition vocabulary + hints (cached; it never changes within a session).
+  const { data: dispCatalog } = useQuery<DispositionCatalog>({
+    queryKey: ['outreach-dispositions'],
+    queryFn: () => api.get('/outreach/dispositions'),
+    staleTime: Infinity,
+  })
+  const dispositions = (touchChannel === 'email' ? dispCatalog?.email : dispCatalog?.phone) ?? []
+  const dispHint = dispositions.find(d => d.value === touchDisposition)
 
   // The outcome exists only for outbound leads, and only once emitted or first contacted.
   const isOutbound = lead?.source === 'outbound_scan' && !!lead?.prospect_id
@@ -308,15 +560,69 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
     mutationFn: () => api.post(`/outreach/leads/${id}/activities`, { kind: 'note', body: note }),
     onSuccess: () => { setNote(''); refresh() },
   })
+  const defaultTz = lead?.next_action_tz || guessTz(lead?.prospect?.lng)
+  // What a do-not-contact would suppress on: the phone digits (what "don't call this number" means),
+  // else the prospect's stable place_id, else the email. Empty ⇒ nothing to suppress on, so the
+  // one-click button is hidden rather than 422-ing with `empty_value`.
+  const suppressValue =
+    (lead?.phone ?? lead?.prospect?.phone ?? '').replace(/\D/g, '')
+    || lead?.prospect?.place_id || lead?.email || ''
+
+  // Picking a disposition prefills the next-action fields from its hint (T1.3) — editable before
+  // saving. A callback disposition reveals the wall-time + zone; a follow-up one prefills a due date.
+  const pickDisposition = (value: string) => {
+    setTouchDisposition(value)
+    const h = dispositions.find(d => d.value === value)
+    setNaText(h?.default_next_action ?? '')
+    setNaLocal('')
+    if (h?.reveal_callback) { setNaDue(''); setNaTz(prev => prev || defaultTz) }
+    else if (h?.offset_days != null) setNaDue(todayPlusDays(h.offset_days))
+    else setNaDue('')
+  }
+
+  const resetTouchForm = () => {
+    setTouchDisposition(''); setTouchNote(''); setNaText(''); setNaDue(''); setNaLocal('')
+  }
+
   // A touch is authoritative for "a contact attempt happened" — distinct from a free-text note.
-  // For an outbound lead it also creates/rolls up the outcome (the modelling substrate).
+  // For an outbound lead it also creates/rolls up the outcome (the modelling substrate). T1.3: the
+  // next action / callback booked here rides in the SAME request, so logging a call and scheduling
+  // the follow-up is one save.
   const logTouch = useMutation({
-    mutationFn: () => api.post(`/outreach/leads/${id}/touches`, {
-      channel: touchChannel,
-      disposition: touchDisposition.trim() || undefined,
-      note: touchNote.trim() || undefined,
-    }),
-    onSuccess: () => { setTouchDisposition(''); setTouchNote(''); refresh() },
+    mutationFn: () => {
+      const revealCallback = !!dispHint?.reveal_callback
+      return api.post(`/outreach/leads/${id}/touches`, {
+        channel: touchChannel,
+        disposition: touchDisposition.trim() || undefined,
+        note: touchNote.trim() || undefined,
+        next_action: naText.trim() || undefined,
+        next_action_local: revealCallback && naLocal ? naLocal : undefined,
+        next_action_tz: revealCallback && naLocal ? naTz : undefined,
+        next_action_due: !revealCallback && naDue ? naDue : undefined,
+      })
+    },
+    onSuccess: () => {
+      // Auto-advance the queue only when the caller actually dispositioned the lead (T1.1) — a
+      // note-only touch keeps them on the current lead.
+      const advance = !!(onAdvance && touchDisposition)
+      resetTouchForm()
+      refresh()
+      if (advance) onAdvance!()
+    },
+  })
+
+  // do_not_call / unsubscribe → a one-click do-not-contact write (crm-layer-spec §4). Suppress by
+  // phone digits (what the caller means by "don't call this number") for a phone lead, else by the
+  // prospect's place_id; scope from the disposition hint ('all' covers phone AND email).
+  const suppress = useMutation({
+    mutationFn: () => {
+      return api.post('/outreach/suppressions', {
+        scope: dispHint?.suppress_scope ?? 'all',
+        value: suppressValue,
+        reason: `${touchDisposition || 'do_not_contact'} (logged by caller)`,
+      })
+    },
+    onSuccess: () => refresh(),
   })
 
   const onStagePick = (stage: string) => {
@@ -344,10 +650,22 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
             </div>
           )}
 
+          {/* Priority signals (T1.5): the phone-track value score + decile + primary pitch. */}
+          {lead.ranked && lead.ranked.score != null && (
+            <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <ScorePill score={lead.ranked.score} decile={lead.ranked.decile} />
+              {lead.ranked.primary_pitch && (
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#eff6ff',
+                  color: '#0369a1', fontWeight: 600 }}>{lead.ranked.primary_pitch}</span>
+              )}
+            </div>
+          )}
+
           <div style={{ marginTop: 12, fontSize: 12, color: '#475569', display: 'grid',
             gridTemplateColumns: 'auto 1fr', gap: '4px 10px' }}>
             <span style={{ color: '#94a3b8' }}>Source</span><span>{lead.source.replace('_', ' ')}</span>
-            {lead.phone && <><span style={{ color: '#94a3b8' }}>Phone</span><span>{lead.phone}</span></>}
+            {lead.phone && <><span style={{ color: '#94a3b8' }}>Phone</span>
+              <span><a href={`tel:${lead.phone}`} style={{ color: '#0369a1', textDecoration: 'none' }}>{lead.phone}</a></span></>}
             {lead.email && <><span style={{ color: '#94a3b8' }}>Email</span><span>{lead.email}</span></>}
             {lead.website && <><span style={{ color: '#94a3b8' }}>Website</span>
               <a href={lead.website} target="_blank" rel="noreferrer">{lead.website}</a></>}
@@ -415,8 +733,7 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
 
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>Next action</div>
-            <NextAction lead={lead} onSave={(next_action, next_action_due) =>
-              patch.mutate({ next_action, next_action_due })} />
+            <NextAction lead={lead} defaultTz={defaultTz} onSave={body => patch.mutate(body)} />
           </div>
 
           <div style={{ marginTop: 14 }}>
@@ -435,15 +752,46 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
               </div>
             )}
             <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
-              <select value={touchChannel} onChange={e => setTouchChannel(e.target.value)}
+              <select value={touchChannel}
+                onChange={e => { setTouchChannel(e.target.value); resetTouchForm() }}
                 style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
                 <option value="phone">Phone</option>
                 <option value="email">Email</option>
               </select>
-              <input value={touchDisposition} onChange={e => setTouchDisposition(e.target.value)}
-                placeholder="Disposition (e.g. voicemail)"
-                style={{ flex: 1, minWidth: 120, padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+              {/* Structured disposition (T1.2): a fixed vocabulary, so the field 50 callers touch a
+                  day can be counted. The prose note stays below. */}
+              <select value={touchDisposition} onChange={e => pickDisposition(e.target.value)}
+                style={{ flex: 1, minWidth: 140, padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+                <option value="">Disposition…</option>
+                {dispositions.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}
+              </select>
             </div>
+
+            {/* T1.3: the disposition prefills the next action / callback; edit then save it with
+                the call in one step. */}
+            {dispHint && (dispHint.default_next_action != null || dispHint.reveal_callback || dispHint.offset_days != null) && (
+              <div style={{ marginTop: 6, padding: 8, borderRadius: 8, background: '#f8fafc',
+                border: '1px solid #eef2f7', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <input value={naText} onChange={e => setNaText(e.target.value)} placeholder="Next action"
+                  style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+                {dispHint.reveal_callback ? (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <input type="datetime-local" value={naLocal} onChange={e => setNaLocal(e.target.value)}
+                      style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+                    <select value={naTz} onChange={e => setNaTz(e.target.value)}
+                      style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+                      {US_TIMEZONES.some(z => z.value === naTz) ? null : <option value={naTz}>{naTz || 'zone'}</option>}
+                      {US_TIMEZONES.map(z => <option key={z.value} value={z.value}>{z.label}</option>)}
+                    </select>
+                    <BusinessHours tz={naTz} />
+                  </div>
+                ) : dispHint.offset_days != null ? (
+                  <input type="date" value={naDue} onChange={e => setNaDue(e.target.value)}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13, width: 170 }} />
+                ) : null}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
               <input value={touchNote} onChange={e => setTouchNote(e.target.value)}
                 placeholder={touchChannel === 'phone' ? 'Call note (optional)' : 'Note (optional)'}
@@ -455,8 +803,32 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
                 <Phone size={13} /> Log {touchChannel === 'phone' ? 'call' : 'contact'}
               </button>
             </div>
+
+            {/* One-click follow-through the disposition implies — never automatic. */}
+            {(dispHint?.suggest_lost_reason || dispHint?.suggest_suppress) && (
+              <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+                {dispHint?.suggest_lost_reason && lead.stage !== 'lost' && (
+                  <button onClick={() => patch.mutate({ stage: 'lost', lost_reason: dispHint.suggest_lost_reason })}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #fecaca',
+                      background: '#fef2f2', color: '#b91c1c', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                    Mark lost ({dispHint.suggest_lost_reason!.replace('_', ' ')})
+                  </button>
+                )}
+                {dispHint?.suggest_suppress && !lead.suppressed_at && suppressValue && (
+                  <button disabled={suppress.isPending} onClick={() => suppress.mutate()}
+                    style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #fecaca',
+                      background: '#fef2f2', color: '#b91c1c', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                      display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+                    <Ban size={12} /> Suppress — do not contact
+                  </button>
+                )}
+              </div>
+            )}
             {logTouch.error instanceof Error && (
               <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>{logTouch.error.message}</p>
+            )}
+            {suppress.error instanceof Error && (
+              <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>{suppress.error.message}</p>
             )}
           </div>
 
@@ -499,24 +871,87 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
   )
 }
 
-function NextAction({ lead, onSave }: {
-  lead: LeadDetail
-  onSave: (action: string | null, due: string | null) => void
-}) {
-  const [action, setAction] = useState(lead.next_action ?? '')
-  const [due, setDue] = useState(lead.next_action_due?.slice(0, 10) ?? '')
-  const dirty = action !== (lead.next_action ?? '') || due !== (lead.next_action_due?.slice(0, 10) ?? '')
+// The prospect's local clock + whether it's inside calling hours (T1.4). Display-only.
+function BusinessHours({ tz }: { tz: string | null | undefined }) {
+  const c = localClock(tz)
+  if (!c) return null
   return (
-    <div style={{ display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' }}>
+    <span style={{ fontSize: 11, display: 'inline-flex', gap: 4, alignItems: 'center',
+      color: c.inHours ? '#166534' : '#b45309' }}>
+      <Clock size={11} /> {c.time} · {c.inHours ? 'in business hours' : 'outside hours'}
+    </span>
+  )
+}
+
+// An ISO instant rendered as a datetime-local value ("YYYY-MM-DDTHH:MM") in a given zone, so the
+// picker shows the callback as THEIR wall time regardless of the caller's own browser zone.
+function toLocalInput(iso: string, tz: string): string {
+  try {
+    const p = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(new Date(iso))
+    const g = (t: string) => p.find(x => x.type === t)?.value ?? ''
+    const hour = g('hour') === '24' ? '00' : g('hour')  // en-US hour12:false emits '24' at midnight
+    return `${g('year')}-${g('month')}-${g('day')}T${hour}:${g('minute')}`
+  } catch {
+    return ''
+  }
+}
+
+// Next action (T1.4): a day-only follow-up, or a precise callback with the prospect's zone. A
+// callback carries a business-hours hint so the caller knows if it's a sane time to dial there.
+function NextAction({ lead, defaultTz, onSave }: {
+  lead: LeadDetail
+  defaultTz: string
+  onSave: (body: Record<string, unknown>) => void
+}) {
+  const hasTime = !!lead.next_action_at
+  const tz0 = lead.next_action_tz || defaultTz
+  const [action, setAction] = useState(lead.next_action ?? '')
+  const [mode, setMode] = useState<'day' | 'time'>(hasTime ? 'time' : 'day')
+  const [due, setDue] = useState(lead.next_action_due?.slice(0, 10) ?? '')
+  const [local, setLocal] = useState(hasTime ? toLocalInput(lead.next_action_at!, tz0) : '')
+  const [tz, setTz] = useState(tz0)
+
+  const save = () => {
+    if (mode === 'time') {
+      onSave({ next_action: action.trim() || null, next_action_local: local || null, next_action_tz: tz })
+    } else {
+      // Switching to a day-only follow-up clears any precise callback time.
+      onSave({ next_action: action.trim() || null, next_action_due: due || null, next_action_local: null })
+    }
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
       <input value={action} onChange={e => setAction(e.target.value)} placeholder="e.g. Call back about audit"
-        style={{ flex: 1, minWidth: 140, padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
-      <input type="date" value={due} onChange={e => setDue(e.target.value)}
         style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
-      {dirty && (
-        <button onClick={() => onSave(action.trim() || null, due || null)}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select value={mode} onChange={e => setMode(e.target.value as 'day' | 'time')}
+          style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+          <option value="day">Due date</option>
+          <option value="time">Callback time</option>
+        </select>
+        {mode === 'day' ? (
+          <input type="date" value={due} onChange={e => setDue(e.target.value)}
+            style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+        ) : (
+          <>
+            <input type="datetime-local" value={local} onChange={e => setLocal(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+            <select value={tz} onChange={e => setTz(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
+              {US_TIMEZONES.some(z => z.value === tz) ? null : <option value={tz}>{tz}</option>}
+              {US_TIMEZONES.map(z => <option key={z.value} value={z.value}>{z.label}</option>)}
+            </select>
+          </>
+        )}
+        <button onClick={save}
           style={{ padding: '6px 12px', borderRadius: 8, border: 'none', fontSize: 13, fontWeight: 600,
             background: '#0f172a', color: '#fff', cursor: 'pointer' }}>Save</button>
-      )}
+      </div>
+      {mode === 'time' && <BusinessHours tz={tz} />}
     </div>
   )
 }

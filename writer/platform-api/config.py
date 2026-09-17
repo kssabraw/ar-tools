@@ -2971,6 +2971,16 @@ class Settings(BaseSettings):
     # labelling it 'random_control' would poison the baseline that bucket exists to measure.
     outreach_default_selection_reason: str = "manual"
 
+    # --- Cold-caller CRM (the calling surface) --------------------------------------------------
+    # The zone used for a lead's local-time / business-hours indicator when the lead has no stored
+    # `next_action_tz` AND its prospect has no longitude to guess from. The first live market is Los
+    # Angeles, so Pacific is the sensible fallback; a stored zone or a longitude guess always wins.
+    outreach_default_timezone: str = "America/Los_Angeles"
+    # Calling hours (local, 24h) for the business-hours indicator. A callback lands "in hours" only
+    # on a weekday between these; a HINT for the caller, not a hard gate on dialing.
+    outreach_business_open_hour: int = 8
+    outreach_business_close_hour: int = 18
+
     # --- Lead enrichment (contact names / phones / emails) --------------------------------------
     # The PLACEMENT side of the spend gate: platform-api writes a signed `enrichment_request` order
     # (it never spends — the outreach `tick` drains it) and enforces the per-user daily budget here,

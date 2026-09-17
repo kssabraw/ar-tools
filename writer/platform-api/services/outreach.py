@@ -115,6 +115,10 @@ LEAD_MUTABLE_FIELDS: frozenset[str] = frozenset(
         "lost_to",
         "next_action",
         "next_action_due",
+        # A precise callback: the resolved instant + the prospect's zone. Written directly, OR
+        # derived from a `next_action_local` wall-time (see `_resolve_callback_fields`).
+        "next_action_at",
+        "next_action_tz",
     }
 )
 
@@ -137,6 +141,7 @@ _LEAD_LIST_COLUMNS = (
     "id,source,stage,owner_id,prospect_id,company_name,contact_name,email,phone,website,"
     "city,state,postal_code,country,category,intake_channel,notes_intake,"
     "suppressed_at,suppression_reason,lost_reason,lost_to,next_action,next_action_due,"
+    "next_action_at,next_action_tz,"
     "stage_changed_at,created_by,updated_by,created_at,updated_at"
 )
 
@@ -234,7 +239,52 @@ def validate_lead_write(payload: dict[str, Any], *, creating: bool) -> dict[str,
             "lost_requires_reason", "a lead cannot be marked lost without a lost_reason"
         )
 
+    # The callback zone is a plain text column (no DB CHECK); validate it here so a typo names the
+    # problem instead of writing a value the business-hours indicator will silently treat as unknown.
+    tz = fields.get("next_action_tz")
+    if tz:
+        from services import outreach_calling as _oc  # noqa: PLC0415
+
+        if not _oc._valid_zone(tz):
+            raise OutreachError("invalid_timezone", f"not a known IANA timezone: {tz}")
+
     return fields
+
+
+def resolve_callback_fields(payload: dict[str, Any], *, default_tz: str) -> dict[str, Any]:
+    """Fold a `next_action_local` wall-time (+ `next_action_tz`) into the stored callback columns.
+
+    The caller UI sends "2026-09-22T14:00" plus the prospect's zone; this turns it into
+    `next_action_at` (the absolute instant), `next_action_due` (its LOCAL date, so day-level
+    overdue/queue logic keeps working) and `next_action_tz`. Passing `next_action_local: null`
+    clears the precise time (`next_action_at = None`) without disturbing the day-level due date.
+
+    Returns a NEW dict; `next_action_local` never reaches the database (it is not a lead column).
+    Pure but for the injected default zone, so the transform is testable on its own.
+    """
+    if "next_action_local" not in payload:
+        return payload
+    from services import outreach_calling as _oc  # noqa: PLC0415
+
+    out = dict(payload)
+    local = out.pop("next_action_local")
+    provided_tz = out.pop("next_action_tz", None)
+    if not local:
+        # Clearing the precise time. Keep a zone the caller sent alongside the clear (so "drop the
+        # time but set/keep the zone" works), but never inject the DEFAULT zone here — that would
+        # silently overwrite the lead's stored zone on a bare clear.
+        out["next_action_at"] = None
+        if provided_tz:
+            out["next_action_tz"] = provided_tz
+        return out
+    try:
+        resolved = _oc.resolve_callback(str(local), provided_tz or default_tz)
+    except ValueError as exc:
+        raise OutreachError("invalid_callback", str(exc)) from exc
+    out["next_action_at"] = resolved["next_action_at"]
+    out["next_action_due"] = resolved["next_action_due"]
+    out["next_action_tz"] = resolved["next_action_tz"]
+    return out
 
 
 def validate_activity(kind: str, body: str | None, touch_id: int | None) -> None:
@@ -457,6 +507,19 @@ def list_lead_stages() -> list[dict[str, Any]]:
     )
 
 
+def list_dispositions() -> dict[str, Any]:
+    """The disposition picker vocabulary (T1.2), per channel, with next-action hints (T1.3).
+
+    A read of the app-level vocabulary — no database — so the caller UI renders the select and its
+    disposition→next-action behaviour from one source of truth, the way the board reads
+    `list_lead_stages`. Kept app-level (not a DB CHECK) by decision: the column stays free text so
+    the vocabulary can grow with a deploy, not a migration.
+    """
+    from services import outreach_calling as oc
+
+    return oc.disposition_catalog()
+
+
 def list_leads(
     *,
     stage: str | None = None,
@@ -508,6 +571,80 @@ def list_leads(
     }
 
 
+def _attach_business_hours(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a local-time / business-hours indicator to each queue row (T1.4).
+
+    Computed server-side, once, against a single `now` so a page is internally consistent. The zone
+    is the lead's stored `next_action_tz`, else guessed from the prospect's longitude, else the
+    configured default — resolved here so the caller UI does not re-derive it.
+    """
+    from datetime import datetime, timezone
+
+    from config import settings
+    from services import outreach_calling as oc
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        tz = oc.resolve_timezone(
+            row.get("next_action_tz"), row.get("lng"), settings.outreach_default_timezone
+        )
+        row["business_hours"] = oc.business_hours_status(
+            tz, now,
+            open_hour=settings.outreach_business_open_hour,
+            close_hour=settings.outreach_business_close_hour,
+        )
+    return rows
+
+
+def list_call_queue(
+    *, owner_id: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """The score-ordered phone call list (T1.1) — `v_call_queue`, already filtered to workable,
+    non-suppressed leads and ordered by due-date then value score.
+
+    Ordered explicitly by (due_rank, score) so the ranking survives PostgREST, which does not
+    preserve a view's own ORDER BY. Each row gets a business-hours indicator (T1.4). `owner_id`
+    scopes it to one caller's leads when the team decision lands; unset, it is the whole board.
+    """
+    size, start = clamp_page(limit, offset)
+    query = get_outreach_client().table("v_call_queue").select("*", count="exact")
+    if owner_id:
+        query = query.eq("owner_id", owner_id)
+    response = (
+        query.order("due_rank")
+        .order("score", desc=True, nullsfirst=False)
+        .range(start, start + size - 1)
+        .execute()
+    )
+    return {
+        "queue": _attach_business_hours(response.data or []),
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def list_overdue_actions(
+    *, owner_id: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """Leads past their next_action_due, soonest-overdue first (`v_overdue_actions`) — crm-layer-spec
+    §10's forcing function, now a first-class route. Business-hours attached so the overdue list is
+    dial-ready."""
+    size, start = clamp_page(limit, offset)
+    query = get_outreach_client().table("v_overdue_actions").select("*", count="exact")
+    if owner_id:
+        query = query.eq("owner_id", owner_id)
+    response = (
+        query.order("next_action_due").range(start, start + size - 1).execute()
+    )
+    return {
+        "overdue": _attach_business_hours(response.data or []),
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
 def get_lead(lead_id: str) -> dict[str, Any]:
     """One lead with its full activity timeline.
 
@@ -533,6 +670,7 @@ def get_lead(lead_id: str) -> dict[str, Any]:
     lead["activity"] = activity.data or []
     lead["activity_total"] = activity.count or 0
 
+    lead["ranked"] = None
     if lead.get("prospect_id"):
         prospect = (
             client.table("v_prospect_status")
@@ -544,6 +682,25 @@ def get_lead(lead_id: str) -> dict[str, Any]:
             or []
         )
         lead["prospect"] = prospect[0] if prospect else None
+        # The phone-track value score for the drawer (T1.5) — from v_prospect_ranked, the same
+        # source the queue reads, so the number beside the lead matches the queue's. None when the
+        # prospect has not been scored yet (honest, not zero).
+        ranked = (
+            client.table("v_prospect_ranked")
+            .select("value_score,value_decile,primary_pitch")
+            .eq("prospect_id", lead["prospect_id"])
+            .eq("channel", "phone")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ranked:
+            lead["ranked"] = {
+                "score": ranked[0].get("value_score"),
+                "decile": ranked[0].get("value_decile"),
+                "primary_pitch": ranked[0].get("primary_pitch"),
+            }
     else:
         lead["prospect"] = None
     return lead
@@ -577,7 +734,13 @@ def update_lead(lead_id: str, payload: dict[str, Any], actor_id: str) -> dict[st
     The stage-change and reassignment activity rows come from that trigger, so this function
     deliberately does not write them — two writers would mean two rows for one event, in an
     append-only table.
+
+    A `next_action_local` wall-time is resolved into `next_action_at`/`next_action_due`/
+    `next_action_tz` first (T1.4), so booking "Tuesday 2pm their time" is one PATCH.
     """
+    from config import settings
+
+    payload = resolve_callback_fields(payload, default_tz=settings.outreach_default_timezone)
     fields = validate_lead_write(payload, creating=False)
     if not fields:
         raise OutreachError("empty_update", "nothing to update")
@@ -3007,6 +3170,10 @@ def record_touch(
     touch_number: int | None = None,
     disposition: str | None = None,
     note: str | None = None,
+    next_action: str | None = None,
+    next_action_due: str | None = None,
+    next_action_local: str | None = None,
+    next_action_tz: str | None = None,
 ) -> dict[str, Any]:
     """Record one contact attempt against a lead and roll it up into the outcome.
 
@@ -3015,14 +3182,46 @@ def record_touch(
     modellable — at first contact, not at promotion) and recomputes `touch_count` /
     `first_contacted_at` from all its touches. A touch on an inbound/referral lead is recorded but
     never rolls up (the outbound-only rule).
+
+    T1.3 — logging the call AND booking the next action are one step. Any `next_action` /
+    `next_action_due` / `next_action_local`(+`next_action_tz`) provided is applied to the lead in
+    the same call, so a `callback_requested` disposition and its callback time save together. The
+    lead patch is validated BEFORE the touch is written, so a bad callback fails without leaving a
+    touch behind; the returned `lead` is the updated row (or None when nothing was booked).
     """
     from config import settings
     from services import outreach_emit as oe
+    from services import outreach_calling as oc
 
     try:
         chan = oe.validate_channel(channel)
     except ValueError as e:
         raise OutreachError("invalid_channel", str(e)) from e
+
+    # Structured disposition (T1.2): validated against the channel's vocabulary, not free text.
+    try:
+        disposition = oc.validate_disposition(chan, disposition)
+    except ValueError as e:
+        raise OutreachError("invalid_disposition", str(e)) from e
+
+    # Build the optional next-action patch and validate it up front (fail before writing a touch).
+    # Resolve the callback ONCE here and reuse it for the write below — the resolved patch carries
+    # next_action_at/_due/_tz and no next_action_local, so update_lead's own resolve step is a no-op.
+    lead_patch: dict[str, Any] = {}
+    if next_action is not None:
+        lead_patch["next_action"] = next_action.strip() or None
+    if next_action_due is not None:
+        lead_patch["next_action_due"] = next_action_due or None
+    if next_action_local is not None:
+        lead_patch["next_action_local"] = next_action_local
+        if next_action_tz:
+            lead_patch["next_action_tz"] = next_action_tz
+    resolved_patch: dict[str, Any] | None = None
+    if lead_patch:
+        resolved_patch = resolve_callback_fields(
+            lead_patch, default_tz=settings.outreach_default_timezone
+        )
+        validate_lead_write(resolved_patch, creating=False)
 
     client = get_outreach_client()
     leads = (
@@ -3034,7 +3233,10 @@ def record_touch(
         .data
         or []
     )
-    if not leads:
+    if not leads or leads[0].get("deleted_at"):
+        # A soft-deleted (trashed) lead accepts no touch: the queue/board never surface one, and
+        # the trailing next-action update filters `deleted_at is null` anyway — rejecting here means
+        # we never write a touch we then can't attach a next action to (no partial write).
         raise OutreachError("lead_not_found", "no such lead")
     lead = leads[0]
 
@@ -3092,7 +3294,11 @@ def record_touch(
             agg=agg,
         )
 
-    return {"touch": touch, "outcome": outcome}
+    # T1.3: apply the next action / callback in the same call, reusing the already-resolved+validated
+    # patch. update_lead re-validates (cheap) and the trigger stays the sole writer of stage/owner rows.
+    updated_lead = update_lead(lead_id, resolved_patch, actor_id) if resolved_patch is not None else None
+
+    return {"touch": touch, "outcome": outcome, "lead": updated_lead}
 
 
 def get_outcome(prospect_id: str) -> dict[str, Any]:

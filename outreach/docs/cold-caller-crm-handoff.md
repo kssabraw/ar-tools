@@ -4,7 +4,12 @@
 to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring pipeline (that is
 sound; see `START-HERE.md`).
 
-**Status:** analysis done, nothing built yet. This doc is the work order for the next session.
+**Status:** **Tier 1 BUILT (2026-09-17).** T1.2 + T1.3 + T1.4 landed in PR #1185 (structured
+disposition, one-step next action, callback time + timezone); T1.1 + T1.5 landed in PR #1188
+(v_call_queue / v_overdue_actions routes, score-ordered "Work the queue" list with auto-advance,
+score/decile/vendor-failing + tel: + phone_type + business-hours on the card). Both migrations
+applied live to the Outreacher project. §5 Q1 + Q2 answered (owner, 2026-09-17). **Tier 2 and
+Tier 3 remain** — this doc stays the work order for them. Analysis for those is unchanged below.
 
 **Sibling docs:** `crm-layer-spec.md` (the data model — authoritative), `START-HERE.md` (phases),
 `../CLAUDE.md` (invariants). This doc does not restate them; it points at the gap between the CRM
@@ -68,7 +73,7 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 
 ### TIER 1 — cheap, high-impact (the daily experience)
 
-**T1.1 — Score-ordered "Work the queue" view.** *The single biggest miss.*
+**T1.1 — Score-ordered "Work the queue" view.** ✅ **BUILT (PR #1188).** *The single biggest miss.*
 - Problem: caller works newest-first; the scoring model is invisible to them.
 - Build: expose `v_call_queue` (+ `v_overdue_actions`) as read routes; add a list view
   (alternative to the board) sorted by due-date-then-score, showing name · phone · score/decile ·
@@ -77,8 +82,15 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 - Migration: **none** — views are spec'd (`crm-layer-spec.md` §6), just unbuilt as routes.
 - Acceptance: a caller can open one screen, see the top-priority uncalled/overdue lead, dial,
   disposition, and land on the next without hunting the board.
+- **As built (PR #1188):** `v_call_queue` + `v_overdue_actions` are real views exposed at
+  `GET /outreach/call-queue` and `GET /outreach/overdue-actions`; "Work the queue" is the default
+  view on `/outreach/leads` (Board toggle beside it) and auto-advances after a disposition. Two
+  deliberate corrections to the spec §6 SQL, forced by the live schema (see the migration header
+  + DECISIONS 2026-09-17): score/decile/pitch come from `v_prospect_ranked` (not the spec's
+  `pass=2/model=value` join, which returns null because Stage 1 scores phone at pass 1), and the
+  suppression gate is `lead.suppressed_at` (the live `suppression` table has no `prospect_id`).
 
-**T1.2 — Structured disposition enum.** *Mirror the `lost_reason` treatment.*
+**T1.2 — Structured disposition enum.** ✅ **BUILT (PR #1185).** *Mirror the `lost_reason` treatment.*
 - Problem: free text → no connect-rate reporting, no automation, inconsistent data on the field
   generated 50×/day.
 - Build: a fixed value set — `no_answer, voicemail_left, gatekeeper, wrong_number, bad_number,
@@ -88,7 +100,7 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
   constraint. Mostly a UI + value-set change.
 - Acceptance: dispositions are pickable; a scoreboard can count them (T2.2).
 
-**T1.3 — Disposition → next action, in one step.**
+**T1.3 — Disposition → next action, in one step.** ✅ **BUILT (PR #1185).**
 - Problem: logging a call and setting the callback are separate manual edits.
 - Build: `callback_requested` (and `dm_reached`) reveals a date(+time) field inline; one save
   writes the touch *and* sets `next_action` / `next_action_due`. `dnc` offers a one-click
@@ -96,7 +108,7 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 - Migration: none (unless T1.4 time component is included).
 - Acceptance: booking a callback is one action from the disposition.
 
-**T1.4 — Callback time + timezone.**
+**T1.4 — Callback time + timezone.** ✅ **BUILT (PR #1185).**
 - Problem: `next_action_due` is date-only; callers dial across timezones (LA/KC/…) with no
   business-hours signal.
 - Build: add a time component; derive the prospect's timezone from its address/submarket (or the
@@ -106,7 +118,7 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
   column (or a companion `next_action_at`). Owner decision on shape (§5).
 - Acceptance: "Tuesday 2pm their time" is representable and the queue respects it.
 
-**T1.5 — Surface score + signals + `tel:` on the card.**
+**T1.5 — Surface score + signals + `tel:` on the card.** ✅ **BUILT (PR #1188).**
 - Problem: no triage signal; phone isn't even a link.
 - Build: show score/decile and the vendor-failing/pain flag on the card and drawer (read from
   `v_prospect_ranked` / `v_prospect_placeholder_score`); make phone a `tel:` link; show `phone_type`
@@ -167,10 +179,17 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 
 ## 5. Open decisions for the owner (get these before/while building Tier 1)
 
-1. **Disposition value set** — confirm the enum (proposed in T1.2). This is the one field that
-   shapes every downstream metric; worth 5 minutes now.
-2. **Callback time shape** (T1.4) — add time to `next_action_due` (migrate to `timestamptz`) vs a
-   separate `next_action_at`? And timezone source: derive from address/submarket, or store per lead?
+1. ~~**Disposition value set**~~ — **ANSWERED (owner, 2026-09-17): the full set** — phone:
+   `no_answer, voicemail, busy, wrong_number, gatekeeper, connected, decision_maker,
+   callback_requested, not_interested, do_not_call`; email: `sent, bounced, replied, auto_reply,
+   unsubscribe`. Kept app-level (a select + `GET /outreach/dispositions`), NOT a DB CHECK, so the
+   vocabulary grows with a deploy not a migration (the column stays free text). Built in PR #1185.
+2. ~~**Callback time shape**~~ — **ANSWERED (owner, 2026-09-17): a separate `next_action_at`**
+   (timestamptz) + `next_action_tz`, additive, leaving `next_action_due` (date) as the unchanged
+   day-level overdue/queue driver — NOT a `timestamptz` migration of `next_action_due` (that would
+   change "overdue" semantics + break the `< current_date` readers). Timezone is **stored** per
+   lead (`next_action_tz`), defaulted from a longitude guess then a config default, caller-editable
+   — not derived at display (no lat/lng→tz lib exists in platform-api). Built in PR #1185.
 3. **Multi-user / RLS** (T2.3) — is this a solo caller or a team? If a team, the owner-assignment UI
    and per-owner RLS need designing now (adding RLS to a live table later is where disclosure bugs
    come from — `crm-layer-spec.md` §8a already flags this).
@@ -182,10 +201,10 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 
 ## 6. Suggested build order
 
-1. Owner answers §5 Q1 (disposition set) and Q2 (callback shape).
-2. **T1.2 + T1.3 + T1.4** together (one coherent "log a call properly" change).
-3. **T1.1** (queue view) + **T1.5** (score/tel on card) — the triage layer.
-4. **T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.
+1. ~~Owner answers §5 Q1 (disposition set) and Q2 (callback shape).~~ ✅ done (2026-09-17).
+2. ~~**T1.2 + T1.3 + T1.4** together (one coherent "log a call properly" change).~~ ✅ PR #1185.
+3. ~~**T1.1** (queue view) + **T1.5** (score/tel on card) — the triage layer.~~ ✅ PR #1188.
+4. **← NEXT: T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.
 5. **T2.5** then **T2.3** (needs the RLS decision).
 6. Tier 3 as separately-scoped projects.
 
