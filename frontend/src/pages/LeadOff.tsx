@@ -200,13 +200,14 @@ type View = 'board' | 'neighborhoods' | 'tryouts'
 // Board columns + click-to-sort model. `key: null` = a non-sortable column
 // (the luck/permit icon strip). `num` picks the default first-click direction
 // (descending for numbers, ascending for text) and the compare fn.
-type ColKey = 'grade' | 'market' | 'category' | 'opportunity' | 'beatability'
+type ColKey = 'grade' | 'market' | 'category' | 'population' | 'opportunity' | 'beatability'
   | 'exp_val' | 'profit' | 'payback' | 'demand' | 'rev_win' | 'rating' | 'exact_open'
 const BOARD_COLUMNS: { label: string; key: ColKey | null; num: boolean }[] = [
   { label: 'Grade', key: 'grade', num: true },
   { label: '', key: null, num: false },
   { label: 'Market', key: 'market', num: false },
   { label: 'Category', key: 'category', num: false },
+  { label: 'Population', key: 'population', num: true },
   { label: 'Opportunity', key: 'opportunity', num: true },
   { label: 'Beatability', key: 'beatability', num: true },
   { label: 'Exp $/mo', key: 'exp_val', num: true },
@@ -223,6 +224,7 @@ function colValue(r: MarketRow, key: ColKey): number | string {
     case 'grade': return r.build ?? -1            // numeric grade score
     case 'market': return `${r.city_name}, ${r.state_code}`
     case 'category': return r.category ?? ''
+    case 'population': return r.population ?? -1
     case 'opportunity': return r.opportunity_v3 ?? r.v3 ?? -1
     case 'beatability': return r.beatability ?? -1
     case 'exp_val': return r.exp_val ?? -1
@@ -252,7 +254,7 @@ function sortMarkets(rows: MarketRow[], cs: { key: ColKey; dir: 'asc' | 'desc' }
 
 export function LeadOff() {
   const [view, setView] = useState<View>('board')
-  const [filters, setFilters] = useState({ city: '', state: '', category: '', county: '', minDemand: '' })
+  const [filters, setFilters] = useState({ city: '', state: '', category: '', county: '', minDemand: '', minPop: '', maxPop: '' })
   const [applied, setApplied] = useState(filters)
   const [sort, setSort] = useState<Sort>('v3')
   const [capture, setCapture] = useState(0.10)
@@ -291,6 +293,8 @@ export function LeadOff() {
   if (applied.category) params.set('category', applied.category)
   if (applied.county) params.set('county', applied.county)
   if (applied.minDemand) params.set('min_demand', applied.minDemand)
+  if (applied.minPop) params.set('min_pop', applied.minPop)
+  if (applied.maxPop) params.set('max_pop', applied.maxPop)
   params.set('sort', sort)
   params.set('capture', String(capture))
   params.set('lead_tier', tier)
@@ -373,11 +377,12 @@ export function LeadOff() {
   const exportCsv = () => {
     const rows = displayRows
     if (!rows.length) return
-    const headers = ['grade', 'city_name', 'state_code', 'category', 'opportunity',
-      'beatability', 'beatability_band', 'exp_val', 'profit_mo', 'payback_months',
-      'cost_to_win', 'roi_confidence', 'demand', 'rev_win', 'rating', 'exact_open']
+    const headers = ['grade', 'city_name', 'state_code', 'category', 'population',
+      'opportunity', 'beatability', 'beatability_band', 'exp_val', 'profit_mo',
+      'payback_months', 'cost_to_win', 'roi_confidence', 'demand', 'rev_win',
+      'rating', 'exact_open']
     downloadCsv('leadoff_shortlist.csv', toCsv(headers,
-      rows.map(r => [r.grade, r.city_name, r.state_code, r.category,
+      rows.map(r => [r.grade, r.city_name, r.state_code, r.category, r.population,
         r.opportunity_v3 ?? r.v3, r.beatability ?? '', r.beatability_band ?? '',
         r.exp_val, r.monthly_profit ?? '', r.payback_months ?? '',
         r.cost_to_win ?? '', r.roi_confidence ?? '',
@@ -492,6 +497,22 @@ export function LeadOff() {
             <input style={{ ...inputStyle, width: 80 }} type="number" value={filters.minDemand}
               onChange={e => setFilters({ ...filters, minDemand: e.target.value })} />
           </Field>
+          <Field label="Population">
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <input style={{ ...inputStyle, width: 72 }} type="number" placeholder="min"
+                title="Minimum city population" value={filters.minPop}
+                onChange={e => setFilters({ ...filters, minPop: e.target.value })} />
+              <span style={{ color: '#94a3b8' }}>–</span>
+              <input style={{ ...inputStyle, width: 72 }} type="number" placeholder="max"
+                title="Maximum city population" value={filters.maxPop}
+                onChange={e => setFilters({ ...filters, maxPop: e.target.value })} />
+              <button type="button" style={{ ...secondaryBtn, padding: '2px 6px', fontSize: 11 }}
+                title="Isolate the small-market tier (15k–30k population)"
+                onClick={() => { const f = { ...filters, minPop: '15000', maxPop: '30000' }; setFilters(f); setApplied(f) }}>
+                15–30k
+              </button>
+            </div>
+          </Field>
           <Field label="Sort">
             <select style={inputStyle} value={sort} onChange={e => setSort(e.target.value as Sort)}>
               <option value="v3">Opportunity — hidden gems (default)</option>
@@ -583,6 +604,7 @@ export function LeadOff() {
                       </td>
                       <td style={{ ...tdStyle, fontWeight: 600, whiteSpace: 'nowrap' }}>{r.city_name}, {r.state_code}</td>
                       <td style={tdStyle}>{r.category}</td>
+                      <td style={tdStyle}>{r.population?.toLocaleString() ?? '—'}</td>
                       <td style={{ ...tdStyle, fontWeight: 700, color: '#0f766e' }}
                         title={r.opportunity_v3 != null && r.base_v3 != null && r.score_factors
                           ? `Hidden-gem score. Raw v3 ${r.base_v3.toFixed(1)} × winnability ${r.score_factors.winnability.toFixed(2)} × demand ${r.score_factors.demand.toFixed(2)}`
@@ -1016,7 +1038,7 @@ function TryoutsView() {
           ))}
           {!tryouts.length && (
             <div style={{ padding: 20, fontSize: 12, color: '#94a3b8', textAlign: 'center' }}>
-              No tryouts yet. Score any US city ≥10k population — the board only covers ≥30k.
+              No tryouts yet. Score any US city ≥10k population — including markets not yet on the board.
             </div>
           )}
         </div>
