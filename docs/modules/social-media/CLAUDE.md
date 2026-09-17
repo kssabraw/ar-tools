@@ -4,6 +4,23 @@
 > This does NOT replace the root `/CLAUDE.md` (the suite authority) — read that first for
 > suite architecture, then this for the module. **Read this before building the social module.**
 >
+> **Provider swap (2026-09-17): PostForMe replaces PostPeer** (ADR-0006; facts in
+> `docs/modules/social-media-vendor-confirm-postforme-v1_0.md`). The adapter seam (ADR-0001)
+> made this contained: a new `services/social/postforme_adapter.py` + a provider-aware
+> `services.social.get_adapter(client_id)` factory + config. **Isolation is now
+> provider-enforced** — one PostForMe **Project (→ one API key) per client**, stored per
+> client in `social_client_credentials` (secret, RLS/service-role only; never on `clients`,
+> never returned to the UI). Setting a client's key (Social setup → "Save API key",
+> validated live) stamps a `clients.social_profile_id='postforme'` connected-marker so the
+> publish path's existing gate is unchanged. **Provisioning is manual** (PostForMe has no
+> project/key API): create the client's Project + key in the PostForMe dashboard, paste it
+> in. Posts are **async** (create → bounded-poll `/social-post-results` for the URL, Decision
+> 2=A); pricing is **flat** (X credit surcharge gated to PostPeer only); quota **pools at the
+> Team level** (per-client isolation ≠ per-client quota; our `social_usage` meter does spend).
+> Project type = **Quickstart** (owner). Activate on PLATFORM: `SOCIAL_POSTING_PROVIDER=postforme`
+> (code default stays `postpeer`, inert without a key). PostPeer stays behind the adapter as a
+> dormant fallback. Live post-path verification is deployed-only (sandbox egress-blocked from PostForMe).
+>
 > **Build status (2026-09-16):** **The module is fully wired and live, and P1 competitor research is now BUILT + LIVE.**
 > P0 foundations + the backend publish path + the R2 media store (PR #1027) and the frontend compose screen
 > with image/video upload (PR #1032) are BUILT and MERGED to `main`; on PLATFORM `SOCIAL_ENABLED=true`, all

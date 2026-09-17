@@ -765,10 +765,16 @@ function ConnectAccountsPanel({ clientId, hasProfile, onProfileCreated }: {
 }) {
   const [err, setErr] = useState<string | null>(null)
   const [connecting, setConnecting] = useState<string | null>(null)
-  const profileMut = useMutation({
-    mutationFn: async () => api.post<{ profile_id: string }>(`/clients/${clientId}/social/profile`, {}),
-    onSuccess: () => { setErr(null); onProfileCreated() },
-    onError: (e) => setErr(e instanceof Error ? e.message : 'social_profile_failed'),
+  const [apiKey, setApiKey] = useState('')
+  const keyMut = useMutation({
+    mutationFn: async () => {
+      setErr(null)
+      if (!apiKey.trim()) throw new Error('social_key_required')
+      return api.put<{ configured: boolean; provider: string }>(
+        `/clients/${clientId}/social/credentials`, { api_key: apiKey.trim() })
+    },
+    onSuccess: () => { setApiKey(''); onProfileCreated() },
+    onError: (e) => setErr(e instanceof Error ? e.message : 'social_key_invalid'),
   })
   const connect = async (platform: string) => {
     setErr(null); setConnecting(platform)
@@ -787,19 +793,27 @@ function ConnectAccountsPanel({ clientId, hasProfile, onProfileCreated }: {
       {!hasProfile ? (
         <>
           <p style={{ margin: '0 0 10px', fontSize: 13, color: '#64748b' }}>
-            This client isn’t set up for social yet. Create its <strong>Social group</strong> — an
-            isolated PostPeer profile that every account and post for this client is scoped to — then
-            connect accounts into it.
+            This client isn’t connected to <strong>PostForMe</strong> yet. In the PostForMe dashboard,
+            create a <strong>Project</strong> for this client, generate its <strong>API key</strong>,
+            and paste it below. The key is stored securely (never shown again) and scopes every account
+            and post to <em>this client’s</em> Project.
           </p>
-          <button onClick={() => profileMut.mutate()} disabled={profileMut.isPending} style={btn('#7c3aed')}>
-            {profileMut.isPending ? <Loader2 size={14} className="spin" /> : <Share2 size={14} />} Set up Social group
-          </button>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <input type="password" autoComplete="off" spellCheck={false}
+              style={{ ...input, width: 320, padding: '8px 10px' }}
+              placeholder="PostForMe project API key" value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)} />
+            <button onClick={() => keyMut.mutate()} disabled={keyMut.isPending || !apiKey.trim()}
+              style={btn(keyMut.isPending || !apiKey.trim() ? '#cbd5e1' : '#7c3aed')}>
+              {keyMut.isPending ? <Loader2 size={14} className="spin" /> : <Share2 size={14} />} Save API key
+            </button>
+          </div>
         </>
       ) : (
         <>
           <p style={{ margin: '0 0 10px', fontSize: 13, color: '#64748b' }}>
-            Social group ready. Connect an account — authorization opens in a new tab and the account
-            lands in <em>this client’s</em> group. Refresh once it’s done.
+            Connected to PostForMe. Connect an account — authorization opens in a new tab and the account
+            lands in <em>this client’s</em> Project. Refresh once it’s done.
           </p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
             {CONNECT_PLATFORMS.map((p) => (

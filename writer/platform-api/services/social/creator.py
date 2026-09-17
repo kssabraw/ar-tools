@@ -359,7 +359,8 @@ async def draft_platform_copy(
 
     voice_warnings = [f"forbidden_term:{h}" for h in hits]
     spec_warnings: list[str] = []
-    if platform in ("twitter", "x"):
+    # The X-link 50-credit surcharge is a PostPeer-only pricing quirk; PostForMe is flat-priced.
+    if platform in ("twitter", "x") and (settings.social_posting_provider or "").lower() == "postpeer":
         from services.social.postpeer_adapter import x_credit_cost
 
         if x_credit_cost(platform, text) >= 50:

@@ -4,6 +4,43 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
+## Update (2026-09-17) — **Posting provider swapped: PostForMe replaces PostPeer** (ADR-0006)
+
+The agency moved off PostPeer to **PostForMe** (api.postforme.dev). Built behind the existing
+adapter seam (ADR-0001), so it's a contained change. Authoritative facts:
+`docs/modules/social-media-vendor-confirm-postforme-v1_0.md`; decision: `docs/adr/0006-...md`.
+
+**What shipped:**
+- `services/social/postforme_adapter.py` — the 5 adapter methods vs PostForMe's `/v1` API
+  (`Authorization: Bearer`, `x` not `twitter`); async posts handled by a bounded poll of
+  `/social-post-results` (Decision 2=A). Pure helpers + the poll flow unit-tested
+  (`tests/test_social_postforme.py`, mocked httpx).
+- `services/social/credentials.py` + `social_client_credentials` table (migration
+  `20260917120000`, **applied live**) — per-client PostForMe **project key** (secret,
+  service-role only). `services.social.get_adapter(client_id)` is now provider-aware and
+  loads that key. Isolation is **provider-enforced** (one Project per client; the key is the
+  boundary — verified empirically: key A → 12 accounts, key B → 0).
+- Routes: `GET/PUT/DELETE /clients/{id}/social/credentials` (PUT validates the key live before
+  storing; never returns it). Frontend: the connect panel's setup step is now a **"Save API
+  key"** form; setting it stamps `clients.social_profile_id='postforme'` so the publish gate
+  is unchanged. errorGuidance for the new codes.
+- Provider-aware cost (flat `social_postforme_cost_per_post_usd`; PostPeer X-credit surcharge
+  gated to PostPeer). Config: `postforme_base_url` + the poll knobs. PostPeer kept dormant.
+
+**Provisioning is MANUAL** (no PostForMe project/key API): per client, create the Project +
+API key in the PostForMe dashboard, paste it into the client's Social setup. Quota pools at
+the **Team** level (per-client isolation ≠ per-client quota). Project type = **Quickstart**.
+
+**To activate on PLATFORM:** set `SOCIAL_POSTING_PROVIDER=postforme` (code default stays
+`postpeer`, inert without a key). No global key. Then per client: paste its project key.
+
+**Still to verify (deployed-only — sandbox is egress-blocked from PostForMe):** a live test
+post end-to-end (create → result poll → published URL) and a live account-connect via the
+auth-url flow. **Cleanup:** the owner should delete the dashboard test project + 3 test keys
+created during the isolation investigation.
+
+---
+
 ## Update (2026-09-16) — **P1 Competitor research BUILT + MERGED + LIVE** (PR #1177)
 
 P1 (analyze-in-place competitor research, **Apify-only**; owner c1 — TwelveLabs dropped) is built,
