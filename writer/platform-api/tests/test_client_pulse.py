@@ -261,7 +261,9 @@ def test_save_pulse_updates_only_the_edited_view(monkeypatch):
 
     monkeypatch.setattr(P, "get_supabase", lambda: _SB())
     row = P.save_pulse("c1", body="new email", today=date(2026, 7, 15))
-    assert state["updated"] == {"body": "new email"}  # only the edited view
+    # Only the edited view changes, and the pulse is marked edited (protected).
+    assert state["updated"] == {"edited": True, "body": "new email"}
+    assert "body_list" not in state["updated"]
     assert row and row["body"] == "old email"          # latest_pulse read echoed
 
 
@@ -288,6 +290,47 @@ def test_save_pulse_no_fields_is_noop(monkeypatch):
     row = P.save_pulse("c1")
     assert row == {"body": "b", "body_list": "l"}
     assert touched["updated"] is False
+
+
+def test_build_pulse_preserves_edited_unless_forced(monkeypatch):
+    # An edited pulse is kept verbatim on an unforced build (weekly job /
+    # unforced regenerate); a forced build rewrites it and clears the flag.
+    monkeypatch.setattr(P, "narrate_pulse", lambda facts: "FRESH")
+    state = {"upserts": 0, "last": None}
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def is_(self, *a, **k): return self
+        def gte(self, *a, **k): return self
+        def lt(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def order(self, *a, **k): return self
+
+        def upsert(self, payload, **k):
+            state["upserts"] += 1
+            state["last"] = payload
+            return self
+
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name):
+            if name == "clients":
+                return _Q([{"id": "c1", "name": "Acme"}])
+            if name == "client_pulses":
+                return _Q([{"body": "MY EDIT", "edited": True}])
+            return _Q([])  # everything else (tasks/runs/…) is empty here
+
+    monkeypatch.setattr(P, "get_supabase", lambda: _SB())
+    # Unforced: return the saved edit verbatim, never rewrite/upsert.
+    assert P.build_pulse("c1", date(2026, 7, 15)) == "MY EDIT"
+    assert state["upserts"] == 0
+    # Forced: rewrite from live data and store with edited cleared.
+    assert P.build_pulse("c1", date(2026, 7, 15), force=True) == "FRESH"
+    assert state["upserts"] == 1
+    assert state["last"]["edited"] is False
 
 
 def test_build_pulse_prefers_narrative_and_stores_both_views(monkeypatch):

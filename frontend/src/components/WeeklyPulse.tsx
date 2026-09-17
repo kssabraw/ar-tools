@@ -15,6 +15,9 @@ interface Pulse {
   body_list?: string | null
   week_start?: string
   created_at?: string
+  // True once a staff member has saved a manual edit — protects the pulse from
+  // being overwritten by the weekly auto-generation or an unforced regenerate.
+  edited?: boolean
 }
 
 export function WeeklyPulse({ clientId }: { clientId: string }) {
@@ -29,9 +32,20 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
     staleTime: 5 * 60 * 1000,
   })
   const regen = useMutation({
-    mutationFn: () => api.post<Pulse>(`/clients/${clientId}/pulse/regenerate`, {}),
+    mutationFn: (force: boolean) =>
+      api.post<Pulse>(`/clients/${clientId}/pulse/regenerate`, { force }),
     onSuccess: (fresh) => qc.setQueryData(['client-pulse', clientId], fresh),
   })
+
+  // Regenerate replaces the pulse with a fresh rewrite. If the pulse was
+  // manually edited, confirm first (and force past the server-side guard).
+  const doRegenerate = () => {
+    if (data?.edited &&
+        !window.confirm('This replaces your saved edits with a fresh version. Continue?')) {
+      return
+    }
+    regen.mutate(Boolean(data?.edited))
+  }
   const save = useMutation({
     mutationFn: () =>
       api.put<Pulse>(`/clients/${clientId}/pulse`, view === 'list' ? { body_list: draft } : { body: draft }),
@@ -111,10 +125,15 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
                   {save.isSuccess && !dirty ? <Check size={14} /> : <Save size={14} />}{' '}
                   {save.isPending ? 'Saving…' : save.isSuccess && !dirty ? 'Saved' : 'Save'}
                 </button>
-                <button style={ghostBtn} disabled={regen.isPending} onClick={() => regen.mutate()}>
+                <button style={ghostBtn} disabled={regen.isPending} onClick={doRegenerate}>
                   <RefreshCw size={13} style={regen.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
                   {regen.isPending ? 'Regenerating…' : 'Regenerate'}
                 </button>
+                {data.edited && (
+                  <span style={editedBadge} title="Your saved edits won't be overwritten by the weekly refresh.">
+                    edited — protected
+                  </span>
+                )}
                 {data.week_start && (
                   <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
                     week of {data.week_start} · edit &amp; Save, or Copy into your email and personalize the greeting
@@ -162,6 +181,10 @@ const ghostBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px',
   fontSize: 12.5, fontWeight: 600, color: '#4f46e5', background: '#eef2ff',
   border: 'none', borderRadius: 8, cursor: 'pointer',
+}
+const editedBadge: React.CSSProperties = {
+  fontSize: 11, fontWeight: 600, color: '#166534', background: '#dcfce7',
+  border: '1px solid #bbf7d0', borderRadius: 999, padding: '2px 8px',
 }
 const viewChip: React.CSSProperties = {
   padding: '4px 12px', fontSize: 12, fontWeight: 600, color: '#64748b',

@@ -30,6 +30,12 @@ class PulseSaveRequest(BaseModel):
     body_list: str | None = None
 
 
+class PulseRegenerateRequest(BaseModel):
+    # force=True replaces a staff-edited pulse (the UI confirms first); the
+    # default leaves an edited pulse untouched.
+    force: bool = False
+
+
 @router.get("/clients/{client_id}/pulse")
 async def get_pulse(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
     try:
@@ -48,9 +54,11 @@ async def get_pulse(client_id: UUID, auth: dict = Depends(require_auth)) -> dict
 
 
 @router.post("/clients/{client_id}/pulse/regenerate")
-async def regenerate_pulse(client_id: UUID, auth: dict = Depends(require_auth)) -> dict:
+async def regenerate_pulse(client_id: UUID, req: PulseRegenerateRequest | None = None,
+                           auth: dict = Depends(require_auth)) -> dict:
+    force = bool(req and req.force)
     try:
-        body = await run_in_threadpool(client_pulse.build_pulse, str(client_id))
+        body = await run_in_threadpool(client_pulse.build_pulse, str(client_id), None, force)
     except Exception as exc:
         logger.error("pulse_regen_failed", extra={"client_id": str(client_id), "error": str(exc)})
         raise HTTPException(status_code=500, detail="internal_error") from exc
