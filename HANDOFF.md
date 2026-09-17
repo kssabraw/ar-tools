@@ -1,6 +1,30 @@
 # AR Tools — Handoff
 
-## ⏩ Update — 2026-09-16 · **Topic-Vector — §13 SCORER FIXES + SCHEDULED SITE-CLAIM-INDEX REFRESH — BUILT (report-only-safe)** — PR [#1176](https://github.com/kssabraw/ar-tools/pull/1176) (draft) (latest)
+## ⏩ Update — 2026-09-17 · **LeadOff — 15k–30k population tier: board filter (MERGED) + repeatable leadoff_board export (built) + re-scan runbook** — PRs [#1187](https://github.com/kssabraw/ar-tools/pull/1187) (merged) / [#1193](https://github.com/kssabraw/ar-tools/pull/1193) (draft) (latest)
+
+Goal: let LeadOff cover **small-market (15k–30k population) cities** — the sweet spot for thin-competition rank-and-rent / pay-per-lead plays — instead of only the ≥30k board.
+
+**Shipped in the app (PR #1187, MERGED):** a **Population** column (sortable, in CSV) + a **population min/max filter** with a one-click **15–30k** preset on `/leadoff`; `GET /leadoff/board` gained `min_pop`/`max_pop`. The board reads whatever rows `market_scanner.leadoff_board` holds, so a lower tier appears automatically once the data is loaded. Copy that hard-asserted "≥30k only" removed (the floor is a scanner setting, not a code fact).
+
+**The gap this closed (PR #1193, draft):** the app reads the **computed** `leadoff_board` table, which is an export of `market_opportunity_master` — and **nothing in the scanner pipeline rebuilt it** (it was a one-off during the 2026-07 integration; `report.py` is read-only, no on-disk script references `leadoff_board`). So a re-scan would land in `master` and never reach the app. New **repeatable, machine-independent** rebuild: `services/leadoff_export.py` (pure port of report.py's math — xdemand/luck/rankability/economics/build+grade/roi/conf + the 101-pt `exp_val_percentiles`) + `scripts/export_leadoff_board.py`. Validated against all 34,352 live rows via SQL (xdemand, rankability, field-quality join, v3, passthrough = **zero mismatches**) + 9 unit tests.
+
+**Re-scan runbook (do this on the scanner machine — `C:\Users\kssab\OneDrive\Desktop\Projects\GBP Demographics Script\`):**
+1. **Read first:** that folder's `CLAUDE.md` + the auto-memory at `C:\Users\kssab\.claude\projects\C--Users-kssab-OneDrive-Desktop-Projects-GBP-Demographics-Script\memory\market-opportunity-scanner.md` (the authority). Data dir is `C:\Users\kssab\market-scanner-data\` (outside OneDrive).
+2. **Floor:** `MIN_POPULATION` is an **env var** (`config.py` default 0; `run_full.ps1` sets it to `30000`) — set it to **`15000`** and re-run. `cities.csv` already covers ≥10k; checkpoints mean ≥30k is not re-pulled. `run_full.ps1` strips `DRY_RUN`/`MAX_CITIES`, so dry-run a stage separately (`$env:DRY_RUN="true"`), not through it.
+3. **Cost:** `run_full.ps1` is the **ungated** path (SERP for every combo, ~$390 for this tier). The **demand-gated** path (`run_repull.ps1` logic: stage 04 CPC → `04b_make_keeplist` `vol≥20` → stage 02 honours `SERP_KEEPLIST`) is **~$150** — prefer it. Threshold curve: 30k+ = 1,728 cities, 20k+ = 2,620, 10k+ = 4,682 (so 15k–30k ≈ ~1,600). Pre-flight the **DataForSEO ~$500/day limit (resets midnight UTC ≈ 19:00 local)** + account balance before launching.
+4. **Load:** stage 07 loads a new `run_id` to `market_opportunity_master`. Verify the new run holds both tiers (`select population range for the new run_id`).
+5. **PUBLISH TO THE APP (the make-or-break step):** run the export. It reads master + inputs from Supabase and replaces `leadoff_board` + `exp_val_percentiles` (delete+insert, **grant-preserving — no DDL**, so the `service_role` grants survive):
+   ```
+   cd writer/platform-api
+   python scripts/export_leadoff_board.py --dry-run   # summarize (row count, grades, pop range); no writes
+   python scripts/export_leadoff_board.py             # rebuild from the latest run
+   ```
+   Needs `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (the supabase-py creds — NOT the scanner's `SUPABASE_DB_URL`) + platform-api deps. Run it from the ar-tools clone (`%USERPROFILE%\repos\ar-tools`) if those are set, **or** from an ar-tools web/Railway context. `--min-rows` (default 1000) refuses to wipe the board on a too-small compute; `--run N` targets a specific run.
+6. **Verify in the app:** `GET /leadoff/board?min_pop=15000&max_pop=30000` returns the small-market rows (the 15–30k preset).
+
+Reference detail lives in `docs/modules/leadoff-prd-v1_0.md` §3a + §4.
+
+## ⏩ Update — 2026-09-16 · **Topic-Vector — §13 SCORER FIXES + SCHEDULED SITE-CLAIM-INDEX REFRESH — BUILT (report-only-safe)** — PR [#1176](https://github.com/kssabraw/ar-tools/pull/1176) (draft)
 
 The four "beyond v1" follow-ups the topic-vector plan named as "not built" (`docs/modules/topic-vector-information-gain-plan-v1_0.md` §12 item D + §13 findings 1–3). All small, all report-only-safe — nothing changes the composite or the byte-identical deterministic engine.
 
