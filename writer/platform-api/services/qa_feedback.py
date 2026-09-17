@@ -59,7 +59,9 @@ REWORK_STATUSES: frozenset[str] = frozenset({"for_revision"})
 # Verdict classes (from qa_signals): a "shippable" verdict claims the deliverable
 # is ready; a "flagged" verdict claims it needs work.
 _SHIPPABLE = frozenset({"pass", "advisory"})
-_FLAGGED = frozenset({"fail", "revisions"})
+# 'revisions' kept for pre-2026-09-17 rows (migrated to 'major_revisions', but
+# harmless to retain); minor + major are the current fixable-failure verdicts.
+_FLAGGED = frozenset({"fail", "major_revisions", "minor_revisions", "revisions"})
 
 
 def _d(disposition: str, direction: Optional[str] = None, signal: str = "") -> dict[str, Any]:
@@ -140,7 +142,7 @@ def classify_disposition(
     - shippable verdict (pass/advisory): OVERTURNED/too_lenient if bounced to
       rework or the closing re-review flagged it; UPHELD if it advanced shipped-
       ward or the re-review agreed; else PENDING.
-    - flagged verdict (fail/revisions): OVERTURNED/too_strict if it shipped
+    - flagged verdict (fail/minor_revisions/major_revisions): OVERTURNED/too_strict if it shipped
       before any re-review vouched for it; UPHELD if a re-review ran (reworked →
       passed, or still flagged = consistent); else PENDING.
     - needs_human: RESOLVED_ACCEPT/REJECT from the first decisive human move or

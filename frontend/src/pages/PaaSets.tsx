@@ -396,7 +396,7 @@ const AUTHORITY_STATUSES = ['planned', 'handed_off', 'done']
 
 function verdictStyle(v: string | null | undefined): React.CSSProperties {
   const red = v === 'fail' || v === 'needs_human'
-  const amber = v === 'revisions' || v === 'advisory'
+  const amber = v === 'revisions' || v === 'minor_revisions' || v === 'major_revisions' || v === 'advisory'
   const green = v === 'pass'
   return {
     fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 5,

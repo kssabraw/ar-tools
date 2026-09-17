@@ -93,6 +93,16 @@ def test_flagged_sitting_is_pending():
     assert fb.classify_disposition("revisions", [_status("in_progress", 1)])["disposition"] == fb.PENDING
 
 
+def test_flagged_covers_minor_and_major_revisions():
+    # The 2026-09-17 split verdicts classify as flagged just like the legacy
+    # 'revisions' (and 'fail') — both are "QA said it needs work".
+    ship = [_status("sent_to_client", 1)]
+    assert fb.classify_disposition("major_revisions", ship)["disposition"] == fb.OVERTURNED
+    assert fb.classify_disposition("minor_revisions", ship)["disposition"] == fb.OVERTURNED
+    ok = [_review("pass", 1), _status("complete", 2)]
+    assert fb.classify_disposition("minor_revisions", ok)["disposition"] == fb.UPHELD
+
+
 # ---------------------------------------------------------------------------
 # classify_disposition — needs_human + skipped
 # ---------------------------------------------------------------------------

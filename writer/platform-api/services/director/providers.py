@@ -31,10 +31,13 @@ KNOWN_PRODUCER_SOURCES = frozenset({
     "content_run", "scan_health", "task_plan", "strategy_proposal", "director_seam",
 })
 
-# Graduated verdicts (2026-09-08) added 'advisory' + 'revisions' — kept in sync
-# with qa_signals so a normal verdict never trips the unwatched-source warning.
+# Graduated verdicts (2026-09-08 added 'advisory' + 'revisions'; 2026-09-17 split
+# 'revisions' → 'minor_'/'major_revisions') — kept in sync with qa_signals so a
+# normal verdict never trips the unwatched-source warning. 'revisions' retained
+# for pre-split rows.
 _KNOWN_QA_VERDICTS = frozenset({
-    "pass", "advisory", "revisions", "fail", "needs_human", "skipped",
+    "pass", "advisory", "minor_revisions", "major_revisions", "revisions",
+    "fail", "needs_human", "skipped",
 })
 
 

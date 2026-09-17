@@ -66,7 +66,8 @@ def first_url(text: Optional[str]) -> Optional[str]:
 
 _VERDICT_LABEL = {
     sig.PASS: "✅ Pass", sig.ADVISORY: "✅ Pass (advisory)",
-    sig.REVISIONS: "🛠️ Minor revisions", sig.FAIL: "❌ Fail (escalated)",
+    sig.MINOR_REVISIONS: "🛠️ Minor revision", sig.MAJOR_REVISIONS: "🛠️ Revisions",
+    sig.FAIL: "❌ Fail (escalated)",
     sig.NEEDS_HUMAN: "⚠️ Needs a human", sig.SKIPPED: "⏭️ Skipped",
 }
 
@@ -119,9 +120,9 @@ def build_qa_context(client_id: str) -> dict:
 
 
 def build_qa_portfolio(today: Optional[date] = None) -> dict:
-    """Whole-agency QA digest: reviews needing attention (fail / revisions /
-    needs_human) in the last 30 days, newest first, with task + client names.
-    No paid calls."""
+    """Whole-agency QA digest: reviews needing attention (fail / major or minor
+    revisions / needs_human) in the last 30 days, newest first, with task +
+    client names. No paid calls."""
     today = today or date.today()
     since = (today - timedelta(days=30)).isoformat()
     supabase = get_supabase()
@@ -138,7 +139,10 @@ def build_qa_portfolio(today: Optional[date] = None) -> dict:
     by_verdict: dict[str, int] = {}
     for r in reviews:
         by_verdict[r.get("verdict") or "unknown"] = by_verdict.get(r.get("verdict") or "unknown", 0) + 1
-    attention = [r for r in reviews if r.get("verdict") in (sig.FAIL, sig.REVISIONS, sig.NEEDS_HUMAN)][:12]
+    attention = [
+        r for r in reviews
+        if r.get("verdict") in (sig.FAIL, sig.MAJOR_REVISIONS, sig.MINOR_REVISIONS, sig.NEEDS_HUMAN)
+    ][:12]
     names = _task_names([r["task_id"] for r in attention])
     cnames = _client_names([r.get("client_id") for r in attention])
     return {
@@ -193,7 +197,8 @@ def brief_text() -> str:
     for r in attention[:8]:
         v = {
             sig.FAIL: "failed (escalated)",
-            sig.REVISIONS: "needs minor revisions",
+            sig.MAJOR_REVISIONS: "needs revisions",
+            sig.MINOR_REVISIONS: "needs a minor revision",
             sig.NEEDS_HUMAN: "needs a human",
         }.get(r["verdict"], r["verdict"])
         issue = f" — {r['issues'][0]}" if r.get("issues") else ""
@@ -513,7 +518,7 @@ async def maybe_handle_web(message: str, history: list[dict], sticky_client_id: 
                 errored = False
             if review is not None:
                 reply = format_review(review, tname)
-                if review.get("verdict") == sig.REVISIONS:
+                if review.get("verdict") in (sig.MINOR_REVISIONS, sig.MAJOR_REVISIONS):
                     reply += ("\n\n_The task's been moved to For Revision and a rework item opened "
                               "for each issue above — fix those, then move it to In QA to re-check._")
                 elif review.get("verdict") == sig.FAIL:

@@ -189,13 +189,15 @@ def _gather_rework_counts(days: int) -> tuple[dict, dict]:
     reopen: dict = {}
     since = _window_iso(days)
     try:
-        # Both 'fail' (critical/escalated) and 'revisions' (fixable) bounce a
-        # deliverable to For Revision + create rework — both are rework churn.
-        # (Graduated verdicts 2026-09-08 split the old 'fail' into these two;
-        # counting only 'fail' would miss the bulk of QA-driven rework.)
+        # 'fail' (critical/escalated) and the fixable revisions band ('minor_'/
+        # 'major_revisions') all bounce a deliverable to For Revision + create
+        # rework — all are rework churn. (Graduated verdicts 2026-09-08 split the
+        # old 'fail'; the 2026-09-17 split renamed 'revisions' → minor/major, so
+        # 'revisions' is kept here for pre-split rows.)
         rows = (get_supabase().table("qa_reviews")
                 .select("client_id, rubric, verdict, created_at")
-                .in_("verdict", ["fail", "revisions"]).gte("created_at", since).limit(2000).execute()).data or []
+                .in_("verdict", ["fail", "major_revisions", "minor_revisions", "revisions"])
+                .gte("created_at", since).limit(2000).execute()).data or []
         for r in rows:
             qa[(r.get("client_id"), r.get("rubric"))] = qa.get((r.get("client_id"), r.get("rubric")), 0) + 1
     except Exception as exc:

@@ -677,8 +677,8 @@ def update_task(task_id: str, changes: dict, *, actor_id: Optional[str] = None,
     transition into the revision status normally makes — used by the QA agent's
     critical-``fail`` escalation, which lands in For Revision but is a
     QA-internal escalation, not a client-facing "keeps missing expectations"
-    revision (owner ruling 2026-09-08). A routine ``revisions`` bounce still
-    bumps (default True)."""
+    revision (owner ruling 2026-09-08). A routine minor/major revisions bounce
+    still bumps (default True)."""
     supabase = get_supabase()
     before_rows = supabase.table("tasks").select("*").eq("id", task_id).limit(1).execute().data
     if not before_rows:
