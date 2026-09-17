@@ -327,11 +327,16 @@ def parent_advance_target(status_key: Optional[str], completed: bool,
     if works:
         if all(s.get("completed") for s in works):
             return "in_qa" if status_key != "in_qa" else None
-    elif any(is_qa_marker(s.get("name")) and s.get("completed") for s in live):
+    elif status_key in ("not_started", "in_progress") and any(
+        is_qa_marker(s.get("name")) and s.get("completed") for s in live
+    ):
         # Marker-only checklist (no work items to gauge "done"): the human
-        # ticking the QA step is the ready-for-QA signal. Gated on `not works`,
-        # so a stale QA marker can't short-circuit a For-Revision task (whose
-        # Rework: subtasks are work items → the `works` branch governs).
+        # ticking the QA step is the ready-for-QA signal. Restricted to the
+        # forward path (not_started/in_progress) — NEVER for_revision: a critical
+        # QA fail parks a marker-only task there with NO rework subtasks but its
+        # QA marker still ticked, and re-firing here would bounce it back into
+        # the auto-QA loop the escalation deliberately left (a human decides).
+        # For-Revision re-enters In QA only via Rule B (its Rework: work items).
         return "in_qa"
     if status_key == "not_started" and any(s.get("completed") for s in live):
         return "in_progress"
