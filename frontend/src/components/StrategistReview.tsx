@@ -319,6 +319,7 @@ function ReviewBody({
     .filter(([p]) => p.status === 'proposed')
   const dismissed = proposals.filter((p) => p.status === 'dismissed').length
   const superseded = proposals.filter((p) => p.status === 'superseded').length
+  const expired = proposals.filter((p) => p.status === 'expired').length
   const budget = review.budget
 
   return (
@@ -404,6 +405,9 @@ function ReviewBody({
       )}
       {superseded > 0 && (
         <div style={smallMuted}>{superseded} proposal{superseded !== 1 ? 's' : ''} superseded by a newer recovery plan.</div>
+      )}
+      {expired > 0 && (
+        <div style={smallMuted}>{expired} proposal{expired !== 1 ? 's' : ''} expired un-reviewed.</div>
       )}
     </div>
   )

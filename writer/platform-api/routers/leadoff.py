@@ -29,6 +29,8 @@ async def get_board(
     category: str | None = None,
     county: str | None = None,
     min_demand: int | None = Query(default=None, ge=0),
+    min_pop: int | None = Query(default=None, ge=0),
+    max_pop: int | None = Query(default=None, ge=0),
     sort: str = "v3",
     capture: float = Query(default=DEFAULT_CAPTURE, ge=0.01, le=0.5),
     lead_tier: str = DEFAULT_TIER,
@@ -41,7 +43,7 @@ async def get_board(
         raise HTTPException(status_code=422, detail="invalid_lead_tier")
     return leadoff_service.list_board(
         city=city, state=state, category=category, county=county,
-        min_demand=min_demand,
+        min_demand=min_demand, min_pop=min_pop, max_pop=max_pop,
         sort=sort, capture=capture, lead_tier=lead_tier, limit=limit,
         prefetch=settings.leadoff_prefetch_rows,
     )

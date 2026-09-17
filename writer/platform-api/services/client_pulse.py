@@ -313,9 +313,17 @@ def narrate_pulse(facts: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Impure gather + store
 # ---------------------------------------------------------------------------
-def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
+def build_pulse(client_id: str, today: Optional[date] = None,
+                force: bool = False) -> Optional[str]:
     """Build + upsert this week's pulse for one client; returns the body.
-    None when the client is missing. Best-effort per source."""
+    None when the client is missing. Best-effort per source.
+
+    A staff-edited pulse (``edited`` set by ``save_pulse``) is NEVER overwritten
+    automatically: unless ``force`` is True, this returns the saved body verbatim
+    without rewriting. The weekly auto-generation runs unforced (so it can't wipe
+    an edit); the Regenerate button forces only after an explicit staff confirm.
+    A forced (re)build clears ``edited`` back to false — the copy is fresh again.
+    """
     today = today or date.today()
     ws = week_start_of(today)
     sb = get_supabase()
@@ -326,6 +334,19 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     ).data
     if not crow:
         return None
+    if not force:
+        try:
+            existing = (
+                sb.table("client_pulses").select("body, edited")
+                .eq("client_id", client_id).eq("week_start", ws.isoformat())
+                .limit(1).execute()
+            ).data
+            if existing and existing[0].get("edited"):
+                # A staff member edited + saved this week's pulse — keep it as-is.
+                return existing[0].get("body")
+        except Exception as exc:
+            logger.debug("pulse_edited_check_failed",
+                         extra={"client_id": client_id, "error": str(exc)})
     client_name = crow[0].get("name") or "your campaign"
     business = business_context(crow[0])
 
@@ -428,7 +449,7 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     try:
         sb.table("client_pulses").upsert(
             {"client_id": client_id, "week_start": ws.isoformat(), "body": body,
-             "body_list": body_list, "created_at": "now()"},
+             "body_list": body_list, "edited": False, "created_at": "now()"},
             on_conflict="client_id,week_start",
         ).execute()
     except Exception as exc:
@@ -436,10 +457,49 @@ def build_pulse(client_id: str, today: Optional[date] = None) -> Optional[str]:
     return body
 
 
+def save_pulse(client_id: str, *, body: Optional[str] = None,
+               body_list: Optional[str] = None, today: Optional[date] = None) -> Optional[dict]:
+    """Persist a staff edit to this week's pulse (owner request: an editable
+    pulse with a Save button beside Regenerate). Updates only the provided
+    view(s) on the current-week row, preserving the other. Builds this week's
+    pulse first if none exists yet, so a save always has a row to land on (and
+    a body_list-only save can't violate the NOT NULL `body` constraint).
+    Returns the stored row, or None when the client is missing."""
+    if body is None and body_list is None:
+        return latest_pulse(client_id)
+    today = today or date.today()
+    ws = week_start_of(today)
+    sb = get_supabase()
+    existing = (
+        sb.table("client_pulses").select("id")
+        .eq("client_id", client_id).eq("week_start", ws.isoformat())
+        .limit(1).execute()
+    ).data
+    if not existing:
+        # No pulse for this week yet — build one so the edit has a row to update.
+        if build_pulse(client_id, today) is None:
+            return None  # client not found
+    # A manual save marks the pulse edited, so the weekly auto-generation and an
+    # unforced Regenerate leave it alone (build_pulse preserves edited rows).
+    updates: dict = {"edited": True}
+    if body is not None:
+        updates["body"] = body
+    if body_list is not None:
+        updates["body_list"] = body_list
+    try:
+        (
+            sb.table("client_pulses").update(updates)
+            .eq("client_id", client_id).eq("week_start", ws.isoformat()).execute()
+        )
+    except Exception as exc:
+        logger.warning("pulse_save_failed", extra={"client_id": client_id, "error": str(exc)})
+    return latest_pulse(client_id)
+
+
 def latest_pulse(client_id: str) -> Optional[dict]:
     rows = (
         get_supabase().table("client_pulses")
-        .select("body, body_list, week_start, created_at")
+        .select("body, body_list, week_start, created_at, edited")
         .eq("client_id", client_id).order("week_start", desc=True).limit(1).execute()
     ).data
     return rows[0] if rows else None

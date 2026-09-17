@@ -300,7 +300,8 @@ def list_categories() -> list[str]:
 def list_board(*, city: str | None, state: str | None, category: str | None,
                min_demand: int | None, sort: str, capture: float, lead_tier: str,
                limit: int, prefetch: int,
-               county: str | None = None) -> dict[str, Any]:
+               county: str | None = None,
+               min_pop: int | None = None, max_pop: int | None = None) -> dict[str, Any]:
     q = _client().table("leadoff_board").select("*")
     if city:
         q = q.ilike("city_name", f"%{city}%")
@@ -310,6 +311,10 @@ def list_board(*, city: str | None, state: str | None, category: str | None,
         q = q.ilike("category", f"%{category}%")
     if min_demand:
         q = q.gte("xdem", min_demand)
+    if min_pop:
+        q = q.gte("population", min_pop)
+    if max_pop:
+        q = q.lte("population", max_pop)
     if county:
         # county lives in the app-owned city_counties map (the scanner board has
         # none) — resolve to the county's city_ids and filter the board on them.

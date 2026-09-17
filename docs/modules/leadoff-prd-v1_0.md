@@ -10,10 +10,19 @@ served from Supabase).
 
 LeadOff answers the question every other module assumes is already answered:
 **"which market (city × service category) should we enter?"** It is the suite's
-pre-client, top-of-funnel tool — a sabermetric market scanner covering
-**34,352 measured US markets** (1,491 cities ≥30k pop × 100 home-service GBP
-categories, incl. NYC boroughs) plus 955 nameable-neighborhood combos, each
-graded A+…F for lead-gen buildability.
+pre-client, top-of-funnel tool — a sabermetric market scanner covering, as of
+the current scan (`run_id=3`), **34,352 measured US markets** (1,491 cities ≥30k
+pop × 100 home-service GBP categories, incl. NYC boroughs) plus 955
+nameable-neighborhood combos, each graded A+…F for lead-gen buildability.
+
+> The **30k population floor is a scanner setting** (`MIN_POPULATION` in the
+> external pipeline's `config.py`), not a fixed property of the board. The input
+> `cities.csv` already covers all US places ≥10k, so lowering the floor and
+> re-running picks up the lower tier via checkpoints (no re-pull of existing
+> cities); the 15k–30k tier is ~$70–110, the whole 10k–30k tier ~$150. The app
+> reads whatever rows the board holds — the board's population filter (§4) is the
+> way to isolate a tier once it's loaded. Row/city counts above track the loaded
+> vintage; re-run to change them.
 
 Per market it knows: regressed search demand (xdemand — outlier-corrected),
 lead economics (per-category lead values × capture assumptions), rankability
@@ -30,7 +39,7 @@ All tables live in the suite's own Supabase project, schema `market_scanner`
 
 | Table | Rows | Serves |
 |---|---|---|
-| `leadoff_board` | 34,352 | the precomputed board (grades, economics, forensics) |
+| `leadoff_board` | 34,352 (run_id=3) | the precomputed board (grades, economics, forensics) |
 | `serp_top5` | ~170k | top-5 competitors per market (brief) |
 | `domain_backlinks` / `business_reviews` / `demand_trend` | caches | Pass-2 enrichment (90-day freshness) |
 | `lead_values`, `exp_val_percentiles`, `categories`, `cities`, `field_quality`, `aio_presence`, `nameable_*`, `neighborhood_opportunities`, `market_opportunity_master` | — | assumptions, references, raw scan |
@@ -71,8 +80,10 @@ PostgREST **Exposed schemas** (dashboard → API settings) — see HANDOFF.md.
 
 `pages/LeadOff.tsx`, suite-level route `/leadoff`, sidebar entry
 (`Radar` icon, between Clients and Backlinks). Board table (grade chips,
-HOT?/COLD? luck badges, low-confidence markers), filter/assumption bar
-(capture slider, lead-tier, sorts incl. **ROI — win cheapest**), CSV export,
+HOT?/COLD? luck badges, low-confidence markers, a **Population** column),
+filter/assumption bar (city/state/county/category, min-demand, a **population
+min/max filter** with a one-click **15–30k** small-market preset, capture
+slider, lead-tier, sorts incl. **ROI — win cheapest**), CSV export,
 and a drill-in brief panel (economics · field forensics with the top-5
 competitor list · scouting report, with RD displayed **×10 as true RD** per
 `_ORCHESTRATOR.md` §2, and a **Create client from this market** card — name
