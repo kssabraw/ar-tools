@@ -571,6 +571,80 @@ def list_leads(
     }
 
 
+def _attach_business_hours(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a local-time / business-hours indicator to each queue row (T1.4).
+
+    Computed server-side, once, against a single `now` so a page is internally consistent. The zone
+    is the lead's stored `next_action_tz`, else guessed from the prospect's longitude, else the
+    configured default — resolved here so the caller UI does not re-derive it.
+    """
+    from datetime import datetime, timezone
+
+    from config import settings
+    from services import outreach_calling as oc
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        tz = oc.resolve_timezone(
+            row.get("next_action_tz"), row.get("lng"), settings.outreach_default_timezone
+        )
+        row["business_hours"] = oc.business_hours_status(
+            tz, now,
+            open_hour=settings.outreach_business_open_hour,
+            close_hour=settings.outreach_business_close_hour,
+        )
+    return rows
+
+
+def list_call_queue(
+    *, owner_id: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """The score-ordered phone call list (T1.1) — `v_call_queue`, already filtered to workable,
+    non-suppressed leads and ordered by due-date then value score.
+
+    Ordered explicitly by (due_rank, score) so the ranking survives PostgREST, which does not
+    preserve a view's own ORDER BY. Each row gets a business-hours indicator (T1.4). `owner_id`
+    scopes it to one caller's leads when the team decision lands; unset, it is the whole board.
+    """
+    size, start = clamp_page(limit, offset)
+    query = get_outreach_client().table("v_call_queue").select("*", count="exact")
+    if owner_id:
+        query = query.eq("owner_id", owner_id)
+    response = (
+        query.order("due_rank")
+        .order("score", desc=True, nullsfirst=False)
+        .range(start, start + size - 1)
+        .execute()
+    )
+    return {
+        "queue": _attach_business_hours(response.data or []),
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
+def list_overdue_actions(
+    *, owner_id: str | None = None, limit: int | None = None, offset: int | None = None
+) -> dict[str, Any]:
+    """Leads past their next_action_due, soonest-overdue first (`v_overdue_actions`) — crm-layer-spec
+    §10's forcing function, now a first-class route. Business-hours attached so the overdue list is
+    dial-ready."""
+    size, start = clamp_page(limit, offset)
+    query = get_outreach_client().table("v_overdue_actions").select("*", count="exact")
+    if owner_id:
+        query = query.eq("owner_id", owner_id)
+    response = (
+        query.order("next_action_due").range(start, start + size - 1).execute()
+    )
+    return {
+        "overdue": _attach_business_hours(response.data or []),
+        "total": response.count or 0,
+        "limit": size,
+        "offset": start,
+    }
+
+
 def get_lead(lead_id: str) -> dict[str, Any]:
     """One lead with its full activity timeline.
 
@@ -596,6 +670,7 @@ def get_lead(lead_id: str) -> dict[str, Any]:
     lead["activity"] = activity.data or []
     lead["activity_total"] = activity.count or 0
 
+    lead["ranked"] = None
     if lead.get("prospect_id"):
         prospect = (
             client.table("v_prospect_status")
@@ -607,6 +682,25 @@ def get_lead(lead_id: str) -> dict[str, Any]:
             or []
         )
         lead["prospect"] = prospect[0] if prospect else None
+        # The phone-track value score for the drawer (T1.5) — from v_prospect_ranked, the same
+        # source the queue reads, so the number beside the lead matches the queue's. None when the
+        # prospect has not been scored yet (honest, not zero).
+        ranked = (
+            client.table("v_prospect_ranked")
+            .select("value_score,value_decile,primary_pitch")
+            .eq("prospect_id", lead["prospect_id"])
+            .eq("channel", "phone")
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if ranked:
+            lead["ranked"] = {
+                "score": ranked[0].get("value_score"),
+                "decile": ranked[0].get("value_decile"),
+                "primary_pitch": ranked[0].get("primary_pitch"),
+            }
     else:
         lead["prospect"] = None
     return lead

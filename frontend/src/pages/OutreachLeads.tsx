@@ -47,6 +47,28 @@ interface Disposition {
   suppress_scope?: string
 }
 interface DispositionCatalog { phone: Disposition[]; email: Disposition[] }
+// A row of the score-ordered call queue (T1.1) — GET /outreach/call-queue.
+interface BusinessHours { tz: string | null; local_time: string | null; in_business_hours: boolean | null }
+interface QueueRow {
+  lead_id: string
+  prospect_id: string | null
+  name: string
+  phone: string | null
+  phone_type: string | null
+  submarket: string | null
+  source: string
+  stage: string
+  next_action: string | null
+  next_action_due: string | null
+  next_action_at: string | null
+  next_action_tz: string | null
+  score: number | string | null
+  decile: number | null
+  primary_pitch: string | null
+  vendor_failing: boolean
+  last_disposition: string | null
+  business_hours: BusinessHours | null
+}
 interface Activity {
   id: number
   occurred_at: string
@@ -63,6 +85,7 @@ interface LeadDetail extends Lead {
     submarket_name: string | null; place_id: string | null; phone: string | null
     lat: number | null; lng: number | null
   } | null
+  ranked: { score: number | string | null; decile: number | null; primary_pitch: string | null } | null
 }
 // The Phase 3 modelling substrate (outbound-only). Written by emit / rolled up by touches.
 interface Outcome {
@@ -143,6 +166,102 @@ function todayPlusDays(days: number): string {
   return d.toISOString().slice(0, 10)
 }
 
+function fmtScore(s: number | string | null): string | null {
+  if (s == null) return null
+  const n = typeof s === 'string' ? Number(s) : s
+  return Number.isFinite(n) ? Math.round(n).toLocaleString() : null
+}
+
+// Score + decile pill (T1.5). A top-decile lead reads green; the number is the value model's.
+function ScorePill({ score, decile }: { score: number | string | null; decile: number | null }) {
+  const s = fmtScore(score)
+  if (s == null) return null
+  const strong = (decile ?? 0) >= 8
+  return (
+    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
+      background: strong ? '#dcfce7' : '#f1f5f9', color: strong ? '#166534' : '#475569' }}>
+      {s}{decile != null ? ` · D${decile}` : ''}
+    </span>
+  )
+}
+
+// ── Work-the-queue list (T1.1 / T1.5) ─────────────────────────────────────────
+
+function QueueView({ queue, loading, onOpen }: {
+  queue: QueueRow[]; loading: boolean; onOpen: (id: string) => void
+}) {
+  if (loading) return <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>Loading queue…</p>
+  if (queue.length === 0) {
+    return (
+      <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>
+        Nothing to call. Promote scored prospects from a scan's coverage results — every workable,
+        non-suppressed lead lands here, best-first.
+      </p>
+    )
+  }
+  return (
+    <div style={{ marginTop: 16, display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 640 }}>
+      <div style={{ fontSize: 11, color: '#94a3b8' }}>
+        {queue.length} to work · best-first (due date, then value score)
+      </div>
+      {queue.map(row => <QueueCard key={row.lead_id} row={row} onOpen={onOpen} />)}
+    </div>
+  )
+}
+
+function QueueCard({ row, onOpen }: { row: QueueRow; onOpen: (id: string) => void }) {
+  const bh = row.business_hours
+  const isOverdue = !!row.next_action_due && new Date(row.next_action_due) < new Date(new Date().toDateString())
+  return (
+    // A div (not a button) so the tel: anchor can nest without invalid button-in-button; the
+    // role/tabIndex/onKeyDown give it the keyboard access a button would have had.
+    <div role="button" tabIndex={0} onClick={() => onOpen(row.lead_id)}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(row.lead_id) } }}
+      style={{ textAlign: 'left', padding: 12, borderRadius: 10, cursor: 'pointer',
+        border: '1px solid #e2e8f0', background: '#fff' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{row.name}</div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <ScorePill score={row.score} decile={row.decile} />
+          {row.vendor_failing && (
+            <span title="Paying a vendor while losing ground — the strongest pitch"
+              style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#fef3c7',
+                color: '#92400e', fontWeight: 700 }}>vendor-failing</span>
+          )}
+        </div>
+      </div>
+      <div style={{ fontSize: 11, color: '#64748b', marginTop: 3, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {row.phone ? (
+          <a href={`tel:${row.phone}`} onClick={e => e.stopPropagation()}
+            style={{ color: '#0369a1', textDecoration: 'none', fontWeight: 600,
+              display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <Phone size={11} /> {row.phone}
+          </a>
+        ) : <span style={{ color: '#b45309' }}>no phone</span>}
+        {row.phone_type && row.phone_type !== 'unknown' && <span>· {row.phone_type}</span>}
+        {row.submarket && <span>· {row.submarket}</span>}
+        {row.primary_pitch && <span>· {row.primary_pitch}</span>}
+      </div>
+      {row.next_action && (
+        <div style={{ fontSize: 11, marginTop: 4, color: isOverdue ? '#b91c1c' : '#475569' }}>
+          {isOverdue ? '⚠ ' : ''}{row.next_action}
+          {row.next_action_due ? ` — ${row.next_action_due.slice(0, 10)}` : ''}
+        </div>
+      )}
+      <div style={{ fontSize: 11, marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        {row.last_disposition && <span style={{ color: '#94a3b8' }}>last: {row.last_disposition.replace('_', ' ')}</span>}
+        {bh?.in_business_hours != null && (
+          <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center',
+            color: bh.in_business_hours ? '#166534' : '#b45309' }}>
+            <Clock size={11} /> {bh.in_business_hours ? 'in business hours' : 'outside hours'}
+            {bh.tz ? ` (${bh.tz.split('/').pop()!.replace('_', ' ')})` : ''}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── The page ─────────────────────────────────────────────────────────────────
 
 export function OutreachLeads() {
@@ -150,6 +269,7 @@ export function OutreachLeads() {
   const [openLead, setOpenLead] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
   const [search, setSearch] = useState('')
+  const [view, setView] = useState<'board' | 'queue'>('queue')
 
   const { data: stagesData } = useQuery<{ stages: LeadStage[] }>({
     queryKey: ['outreach-lead-stages'],
@@ -176,6 +296,24 @@ export function OutreachLeads() {
     return map
   }, [leads])
 
+  // The score-ordered call queue (T1.1). Fetched only in queue view; the backend already filters
+  // to workable, non-suppressed leads and orders by due-date then value score.
+  const { data: queueData, isLoading: queueLoading } = useQuery<{ queue: QueueRow[] }>({
+    queryKey: ['outreach-call-queue'],
+    queryFn: () => api.get('/outreach/call-queue?limit=200'),
+    enabled: view === 'queue',
+  })
+  const queue = queueData?.queue ?? []
+
+  // Auto-advance: after a disposition is logged in the drawer, land on the next queue lead (or
+  // close on the last one) so the caller works top-down without returning to the list.
+  const advanceQueue = (currentId: string) => {
+    const ids = queue.map(r => r.lead_id)
+    const i = ids.indexOf(currentId)
+    queryClient.invalidateQueries({ queryKey: ['outreach-call-queue'] })
+    setOpenLead(i >= 0 && i + 1 < ids.length ? ids[i + 1] : null)
+  }
+
   return (
     <div style={{ padding: 24 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
@@ -199,7 +337,22 @@ export function OutreachLeads() {
 
       <Tabs active="leads" />
 
-      {isLoading ? (
+      {/* Work the queue (score-ordered, T1.1) vs the pipeline board. Queue is the default — it's
+          the surface a caller works; the board is the manager's pipeline view. */}
+      <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
+        {(['queue', 'board'] as const).map(v => (
+          <button key={v} onClick={() => setView(v)}
+            style={{ padding: '5px 12px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12,
+              fontWeight: 600, cursor: 'pointer',
+              background: view === v ? '#0f172a' : '#fff', color: view === v ? '#fff' : '#475569' }}>
+            {v === 'queue' ? 'Work the queue' : 'Board'}
+          </button>
+        ))}
+      </div>
+
+      {view === 'queue' ? (
+        <QueueView queue={queue} loading={queueLoading} onOpen={setOpenLead} />
+      ) : isLoading ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>Loading…</p>
       ) : leads.length === 0 && !search ? (
         <p style={{ fontSize: 13, color: '#64748b', marginTop: 16 }}>
@@ -252,10 +405,17 @@ export function OutreachLeads() {
 
       {adding && <AddLeadModal onClose={() => setAdding(false)} />}
       {openLead && (
-        <LeadDrawer key={openLead} id={openLead} stages={stages} onClose={() => {
-          setOpenLead(null)
-          queryClient.invalidateQueries({ queryKey: ['outreach-leads'] })
-        }} />
+        // key on the lead id so switching leads — especially the queue's auto-advance — REMOUNTS
+        // the drawer, resetting its form state (disposition, note) and NextAction's lead-seeded
+        // editor. Without it React reuses the instance and the previous lead's next-action/notes
+        // bleed into the next one (and a Save would write them onto the wrong lead).
+        <LeadDrawer key={openLead} id={openLead} stages={stages}
+          onAdvance={view === 'queue' ? () => advanceQueue(openLead) : undefined}
+          onClose={() => {
+            setOpenLead(null)
+            queryClient.invalidateQueries({ queryKey: ['outreach-leads'] })
+            if (view === 'queue') queryClient.invalidateQueries({ queryKey: ['outreach-call-queue'] })
+          }} />
       )}
     </div>
   )
@@ -346,7 +506,9 @@ function AddLeadModal({ onClose }: { onClose: () => void }) {
 
 // ── Lead drawer ──────────────────────────────────────────────────────────────
 
-function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; onClose: () => void }) {
+function LeadDrawer({ id, stages, onClose, onAdvance }: {
+  id: string; stages: LeadStage[]; onClose: () => void; onAdvance?: () => void
+}) {
   const queryClient = useQueryClient()
   const { isAdmin, isStaff } = useAuth()
   const [note, setNote] = useState('')
@@ -439,7 +601,14 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
         next_action_due: !revealCallback && naDue ? naDue : undefined,
       })
     },
-    onSuccess: () => { resetTouchForm(); refresh() },
+    onSuccess: () => {
+      // Auto-advance the queue only when the caller actually dispositioned the lead (T1.1) — a
+      // note-only touch keeps them on the current lead.
+      const advance = !!(onAdvance && touchDisposition)
+      resetTouchForm()
+      refresh()
+      if (advance) onAdvance!()
+    },
   })
 
   // do_not_call / unsubscribe → a one-click do-not-contact write (crm-layer-spec §4). Suppress by
@@ -481,10 +650,22 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
             </div>
           )}
 
+          {/* Priority signals (T1.5): the phone-track value score + decile + primary pitch. */}
+          {lead.ranked && lead.ranked.score != null && (
+            <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              <ScorePill score={lead.ranked.score} decile={lead.ranked.decile} />
+              {lead.ranked.primary_pitch && (
+                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#eff6ff',
+                  color: '#0369a1', fontWeight: 600 }}>{lead.ranked.primary_pitch}</span>
+              )}
+            </div>
+          )}
+
           <div style={{ marginTop: 12, fontSize: 12, color: '#475569', display: 'grid',
             gridTemplateColumns: 'auto 1fr', gap: '4px 10px' }}>
             <span style={{ color: '#94a3b8' }}>Source</span><span>{lead.source.replace('_', ' ')}</span>
-            {lead.phone && <><span style={{ color: '#94a3b8' }}>Phone</span><span>{lead.phone}</span></>}
+            {lead.phone && <><span style={{ color: '#94a3b8' }}>Phone</span>
+              <span><a href={`tel:${lead.phone}`} style={{ color: '#0369a1', textDecoration: 'none' }}>{lead.phone}</a></span></>}
             {lead.email && <><span style={{ color: '#94a3b8' }}>Email</span><span>{lead.email}</span></>}
             {lead.website && <><span style={{ color: '#94a3b8' }}>Website</span>
               <a href={lead.website} target="_blank" rel="noreferrer">{lead.website}</a></>}

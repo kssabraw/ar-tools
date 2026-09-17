@@ -2471,3 +2471,61 @@ reader ↔ writer stay consistent.
 + the fetch flow are covered). Live confirmation = merge → the outreach worker redeploys → re-run the
 one manual `demand_fetch_request` (~$0.05, the self-heal re-resolves the stale token) and confirm a
 `keyword_demand` row lands with a sane `search_volume`/`cpc`.
+
+---
+
+## 2026-09-17 — Cold-caller CRM Tier 1 (the caller cockpit): disposition enum, callback time, queue
+
+Tier 1 of `docs/cold-caller-crm-handoff.md` — improving the caller-facing CRM SURFACE only (the
+data model was already a good CRM; the UI was a lead tracker). Two owner decisions and three
+deliberate spec divergences, all recorded here because each was a genuine choice.
+
+**§5 Q1 — Disposition vocabulary is a fixed set, kept APP-LEVEL (no DB CHECK).** Owner confirmed
+the full set (phone: `no_answer, voicemail, busy, wrong_number, gatekeeper, connected,
+decision_maker, callback_requested, not_interested, do_not_call`; email: `sent, bounced, replied,
+auto_reply, unsubscribe`). Structure lives in `services/outreach_calling.py` + a select fed by
+`GET /outreach/dispositions`, validated in the application — NOT a Postgres CHECK on
+`touch.disposition`. Reason: the column's own migration comment (20260809170000) deliberately kept
+it free text because "the vocabulary is still forming and a CHECK would need a migration to grow";
+honouring that, a new disposition is a one-line + deploy, not a migration. Each value carries
+next-action HINTS (prefill / reveal-callback / suggest-lost / suggest-suppress) the UI drives off;
+nothing is applied automatically (suppression + mark-lost stay explicit clicks).
+
+**§5 Q2 — Callback time is an ADDITIVE `next_action_at` + `next_action_tz`, not a type change.**
+Owner chose adding `lead.next_action_at` (timestamptz) + `lead.next_action_tz` (text, IANA) over
+migrating `next_action_due` (date) to timestamptz. Reason: `next_action_due` drives the day-level
+overdue/queue logic that compares against `current_date` (the reporting-spec `v_overdue_actions`
+view + `list_leads(overdue=)`); turning it into an instant would silently change "overdue"
+semantics and every such reader. So `next_action_due` stays UNCHANGED as the day-level driver, and
+a precise callback layers on top: a wall-clock time in the prospect's zone resolves DST-correctly
+(zoneinfo) to `next_action_at`, and `next_action_due` is synced to that instant's LOCAL date so the
+day-level reads keep working. Migration `20260917120000_lead_callback_time.sql`, applied live.
+
+**Timezone is STORED per lead, not derived at display.** `next_action_tz` holds the prospect's zone
+(caller-editable), defaulted from a coarse continental-US longitude band then the configured
+`outreach_default_timezone`. Reason: there is no lat/lng→timezone library in platform-api (only
+tzdata/zoneinfo), so precise derivation would need a new dependency; the band guess is a
+DEFAULT the caller confirms, and the business-hours indicator reads the stored/derived zone. The
+band guess is explicitly approximate (Hawaii/Alaska overlap in longitude — Honolulu is the western
+fallback); documented as a hint, never a claim.
+
+**v_call_queue diverges from crm-layer-spec §6 in two forced ways (T1.1).** The spec's §6 SQL does
+not run against the live schema, so the built view (migration `20260917130000`) corrects it:
+  1. **Score source = `v_prospect_ranked` (channel 'phone'), not `pass=2 / model='value'`.** Phase-4
+     Stage 1 scores the phone track at PASS 1 (no email enrichment yet), so the spec's `pass=2`
+     join returns null for every lead — the exact pitfall `v_prospect_ranked` was built to dodge.
+     342 real `prospect_score` rows exist, so the queue shows real scores today.
+  2. **Suppression gate = `lead.suppressed_at`, not a `suppression.prospect_id` subquery.** The live
+     `suppression` table has NO `prospect_id` column (id/scope/value/reason); suppression reaches a
+     lead through the `lead_flag_suppressed` trigger that stamps `suppressed_at`. So the gate is
+     `l.suppressed_at is null` — intentionally conservative (the trigger doesn't record which scope
+     matched, so ANY suppression drops the lead from the CALL queue; over-excluding is the safe
+     error, calling a suppressed lead the unforgivable one, per crm-layer-spec §4).
+Also added a `due_rank` sort column so the route reproduces the queue order through PostgREST
+(which does not preserve a view's own ORDER BY).
+
+**Invariants untouched.** `outcome`/`touch`/`lead_activity` unchanged — the touch stays
+authoritative, the DB `lead_log_changes` trigger stays the sole writer of stage/owner activity
+rows (the one-step next-action patch in `record_touch` never changes stage or owner). Both
+migrations are additive/reversible and applied live to the Outreacher project. Landed in PR #1185
+(T1.2/T1.3/T1.4) + PR #1188 (T1.1/T1.5).

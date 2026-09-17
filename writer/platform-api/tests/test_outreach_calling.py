@@ -200,3 +200,20 @@ def test_resolve_callback_fields_bad_input_raises_named_error():
             default_tz="America/Denver",
         )
     assert e.value.code == "invalid_callback"
+
+
+# --- _attach_business_hours (queue row enrichment, T1.4/T1.5) ------------------------------------
+
+
+def test_attach_business_hours_resolves_zone_per_row():
+    rows = [
+        {"next_action_tz": "America/New_York", "lng": -118.0},  # stored zone wins over the guess
+        {"next_action_tz": None, "lng": -94.6},                 # derived from longitude (Central)
+        {"next_action_tz": None, "lng": None},                  # configured default (Pacific)
+    ]
+    out = svc._attach_business_hours(rows)
+    assert out[0]["business_hours"]["tz"] == "America/New_York"
+    assert out[1]["business_hours"]["tz"] == "America/Chicago"
+    assert out[2]["business_hours"]["tz"] == "America/Los_Angeles"
+    for row in out:
+        assert {"tz", "local_time", "in_business_hours"}.issubset(row["business_hours"].keys())
