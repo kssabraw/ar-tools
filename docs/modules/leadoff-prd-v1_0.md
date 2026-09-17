@@ -76,6 +76,37 @@ PostgREST **Exposed schemas** (dashboard → API settings) — see HANDOFF.md.
   assumption re-sorts).
 - Tests: `tests/test_leadoff.py` (15 pure-logic tests).
 
+### 3a. Board export / rebuild (`export_leadoff_board`)
+
+The app reads the computed **`leadoff_board`** table; it is a materialized
+**export** of `market_opportunity_master` (for the current run: the
+`supply_measured`, non-`low_coverage` rows, with xdemand / rankability / lead
+economics / build-score + grade recomputed at the board defaults capture 0.10 /
+mid tier, joined to `field_quality` for the WPA columns). The **external scanner
+does not build this table** — historically it was a one-off during the 2026-07
+integration, so a re-scan (e.g. adding the 15k–30k tier) landed in
+`market_opportunity_master` but never reached the app.
+
+`services/leadoff_export.py` (pure, unit-tested `tests/test_leadoff_export.py`)
+is a faithful port of the reference `report.py` computation; the runner
+**`scripts/export_leadoff_board.py`** rebuilds `leadoff_board` +
+`exp_val_percentiles` from Supabase — **machine-independent** (every input is in
+Supabase, so it runs from anywhere with the service role, no scanner machine).
+It **deletes + re-inserts** (never DDL) so the `service_role` grants survive, has
+a `--min-rows` safety floor (refuses to replace the board with too few rows) and
+a `--dry-run`. **Run it after the scanner loads a new run to master** — that is
+the step that makes a new population tier appear in the app. The port was
+validated against all 34,352 live rows (xdemand, rankability, field-quality join,
+v3, passthrough columns — zero mismatches).
+
+**Re-scan runbook (15k–30k tier, on the scanner machine):** the population floor
+is the `MIN_POPULATION` **env var** (`config.py` default 0; `run_full.ps1` sets
+it to 30000) — set it to 15000 and re-run; checkpoints mean ≥30k is not
+re-pulled. Note `run_full.ps1` is the **ungated** path (SERP for every combo,
+~$390 for this tier); the **demand-gated** path (`run_repull.ps1` logic: stage 04
+CPC → `04b_make_keeplist` `vol≥20` → stage 02 honours `SERP_KEEPLIST`) is ~$150.
+Then run `export_leadoff_board` to publish the tier to the app.
+
 ## 4. Frontend (built, v1)
 
 `pages/LeadOff.tsx`, suite-level route `/leadoff`, sidebar entry
