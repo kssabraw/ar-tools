@@ -4,9 +4,9 @@
 to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring pipeline (that is
 sound; see `START-HERE.md`).
 
-**Status:** **Tiers 1 + 2 BUILT and MERGED to `main` (2026-09-17)** — the caller cockpit is done bar
-one deliberately-deferred item (T2.3). **Tier 3: T3.2 (script + rebuttal library) BUILT (this
-session, draft PR to `main`); T3.1 (click-to-call) DEFERRED — owner ruled §5 Q4 "none for now" on
+**Status:** **Tiers 1 + 2 + T3.2 BUILT and MERGED to `main` (2026-09-17)** — the caller cockpit is
+done bar two standing deferrals (T2.3, T3.1). **Tier 3: T3.2 (script + rebuttal library) MERGED
+(#1196 → squash `2098547`); T3.1 (click-to-call) DEFERRED — owner ruled §5 Q4 "none for now" on
 2026-09-17, so no vendor / no code / no spend.** With T3.2 shipped and T3.1 deferred, Tier 3 is
 complete for now (T2.3 + T3.1 are the two standing deferrals). This doc drives Tier 3 (§3/§5/§6/§7
 below are the live parts — everything above §3 is background).
@@ -211,7 +211,7 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
   (the only activity kind allowed to). Migration: likely a `call`/recording table + a `touch`
   provenance column. **Confirm the outreach `tick`/signed-order + per-user-budget model** if the
   provider bills per minute — a paid dial should be as auditable as a scan.
-- **T3.2 — Script + objection/rebuttal library.** ✅ **BUILT (this session, draft PR).** The call
+- **T3.2 — Script + objection/rebuttal library.** ✅ **MERGED (#1196 → squash `2098547`).** The call
   hook is the opener only (one line); there is now a talk track past it plus rebuttals to what a
   local-business owner says back, **fed by the report data the pipeline already produces**
   (competitor names, the MAPS/ORGANIC/paid-placement gaps, review deltas) so a rebuttal names the
@@ -308,8 +308,8 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
    — solo caller (§5 Q3). **Tiers 1 + 2 complete** except deferred T2.3.
 6. **Tier 3, as separately-scoped projects:**
    a. ~~**T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
-      existing report/justification assembly; deterministic + fact-grounded.~~ ✅ BUILT (this
-      session, draft PR).
+      existing report/justification assembly; deterministic + fact-grounded.~~ ✅ MERGED
+      (#1196 → squash `2098547`).
    b. ~~**T3.1** (click-to-call + auto-`touch`)~~ **DEFERRED — owner ruled §5 Q4 "none for now"
       (2026-09-17).** Not built. Revisit when call volume justifies a telephony vendor; the build
       scope + invariants are preserved in §3's T3.1 bullet.
