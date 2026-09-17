@@ -34,7 +34,7 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional, Sequence
 
 from config import settings
@@ -175,6 +175,339 @@ def _client_names(supabase, client_ids: Sequence[str]) -> dict[str, str]:
         supabase.table("clients").select("id, name").in_("id", list(client_ids)).execute()
     ).data or []
     return {r["id"]: r.get("name") or "Unknown client" for r in rows}
+
+
+# ----------------------------------------------------------------------------
+# Rank-data FRESHNESS watch — the dead-man's switch.
+#
+# scan_health above catches jobs that FAIL. This catches the failure both prior
+# silent freezes shared: jobs SUCCEED but the data stops advancing. It reads the
+# actual data recency (rank_keyword_metrics) rather than job outcomes, so it fires
+# whatever the cause — a too-narrow ingest window, a materialize bug, a scheduler
+# outage, or the next unknown one. Edge-triggered via rank_freshness_status:
+# ok→stale opens an alert, stale→ok posts a recovery.
+# ----------------------------------------------------------------------------
+def freshness_threshold(has_gsc_property: bool, gsc_days: int, df_days: int) -> int:
+    """Max days a client's rank data may go without advancing before it's stale.
+
+    A GSC-connected client should get near-daily data (threshold just above GSC's
+    ~2-3 day finalization lag); a DataForSEO-only client refreshes weekly, so it
+    gets a longer leash. Pure."""
+    return gsc_days if has_gsc_property else df_days
+
+
+def evaluate_freshness(
+    last_data_at: Optional[date], has_gsc_property: bool, today: date,
+    gsc_days: int, df_days: int, last_active_fetch_at: Optional[date] = None,
+) -> dict:
+    """Classify one client's rank-data recency. Pure.
+
+    `last_data_at` is the ALL-TIME freshest date the tracker has any rank data
+    (GSC position or DataForSEO rank) for the client. None means it has never had
+    any data — a setup/first-pull matter, not a regression — so it is never
+    flagged stale here (scan_health / the empty-state UI cover that).
+
+    A client with no recent data is a genuine PIPELINE STALL only if DataForSEO
+    also hasn't ACTIVELY queried the SERP recently. `last_active_fetch_at` is the
+    date DataForSEO last truly queried (fetched ≥1 keyword, ranking or not — NOT a
+    run that skipped everything as GSC-covered). If that is within the DataForSEO
+    cadence window, the pipeline is provably alive and the site simply isn't
+    ranking (data is current) → NOT stale, so we don't blame the pipeline nor hold
+    the report; the ranking loss is surfaced by the rank-drop / unranked alerts.
+    Only "no recent data AND no recent active check" is a data stall.
+    `reason` ∈ fresh | current_not_ranking | stale_pipeline | no_data_ever.
+    Returns {stale, days_stale, threshold, no_data_ever, reason}."""
+    threshold = freshness_threshold(has_gsc_property, gsc_days, df_days)
+    if last_data_at is None:
+        return {"stale": False, "days_stale": None, "threshold": threshold,
+                "no_data_ever": True, "reason": "no_data_ever"}
+    days = (today - last_data_at).days
+    if days <= threshold:
+        return {"stale": False, "days_stale": days, "threshold": threshold,
+                "no_data_ever": False, "reason": "fresh"}
+    # Stale by data. Is the collection pipeline provably still active (DataForSEO
+    # queried the SERP within its cadence)? If so this is a ranking loss, not a
+    # data stall — never mask a real stall: only a recent ACTIVE fetch rescues it.
+    if last_active_fetch_at is not None and (today - last_active_fetch_at).days <= df_days:
+        return {"stale": False, "days_stale": days, "threshold": threshold,
+                "no_data_ever": False, "reason": "current_not_ranking"}
+    return {"stale": True, "days_stale": days, "threshold": threshold,
+            "no_data_ever": False, "reason": "stale_pipeline"}
+
+
+def freshness_episode_key(client_id: str, last_data_at: Optional[date], now: datetime) -> str:
+    """Dedupe key for a staleness episode. Anchored on the stuck date so data
+    resuming (then re-stalling) starts a fresh alert; the ISO-week suffix lets an
+    unresolved stall re-nudge at most weekly rather than every daily sweep. Pure."""
+    anchor = last_data_at.isoformat() if last_data_at else "none"
+    year, week, _ = now.isocalendar()
+    return f"rank_freshness:{client_id}:{anchor}:{year}W{week:02d}"
+
+
+def build_freshness_digest(
+    client_name: str, days_stale: Optional[int], threshold: int,
+    last_data_at: Optional[date], has_gsc_property: bool,
+) -> dict:
+    """{title, summary, severity} for one client whose rank data has stalled.
+    Critical once the stall is ≥ 2× the expected cadence. Pure — the alert copy."""
+    src = "GSC + DataForSEO" if has_gsc_property else "DataForSEO"
+    severity = "critical" if (days_stale is not None and days_stale >= 2 * threshold) else "warning"
+    last = last_data_at.isoformat() if last_data_at else "unknown"
+    span = f"{days_stale} days" if days_stale is not None else "an extended period"
+    title = f"Rank data has stopped updating for {client_name}"
+    summary = (
+        f"No new rank data in {span} (last update {last}; expected new data at least every "
+        f"{threshold} days from {src}). The rank tracker has silently stalled for this client — "
+        f"the collection jobs may be succeeding while returning nothing. Check the GSC/DataForSEO "
+        f"pipeline before the numbers reach a report."
+    )
+    return {"title": title, "summary": summary, "severity": severity}
+
+
+def build_freshness_portfolio_digest(stale: list[dict], now: datetime) -> dict:
+    """One loud portfolio alert when several clients are stale at once — the shape
+    of a systemic outage, which should scream on day one, not client-by-client.
+    `stale` is [{client_name, days_stale}, …]. Pure."""
+    n = len(stale)
+    names = ", ".join(s["client_name"] for s in stale[:8])
+    if n > 8:
+        names += f", +{n - 8} more"
+    title = f"Rank data has stalled for {n} clients"
+    summary = (
+        f"{n} clients' rank trackers have stopped receiving new data: {names}. "
+        f"This many at once points at a systemic pipeline outage (GSC ingest window / "
+        f"service account / DataForSEO), not a per-client issue — investigate now."
+    )
+    return {"title": title, "summary": summary, "severity": "critical"}
+
+
+def _max_date_where_not_null(supabase, keyword_ids: Sequence[str], field: str) -> Optional[date]:
+    """Freshest date across a client's keywords with a non-null `field`, or None.
+    One top-1 read using the codebase's standard not-null filter form."""
+    try:
+        rows = (
+            supabase.table("rank_keyword_metrics")
+            .select("date")
+            .in_("keyword_id", list(keyword_ids))
+            .not_.is_(field, "null")
+            .order("date", desc=True)
+            .limit(1)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("rank_freshness.latest_data_read_failed",
+                       extra={"field": field, "error": str(exc)})
+        return None
+    if not rows:
+        return None
+    raw = rows[0].get("date")
+    try:
+        return date.fromisoformat(str(raw)[:10]) if raw else None
+    except ValueError:
+        return None
+
+
+def _latest_data_date(supabase, keyword_ids: Sequence[str]) -> Optional[date]:
+    """Freshest date the tracker has ANY rank data (GSC position or DataForSEO
+    rank) across a client's keywords, all-time — the max of the two sources."""
+    if not keyword_ids:
+        return None
+    dates = [
+        d for d in (
+            _max_date_where_not_null(supabase, keyword_ids, "gsc_position"),
+            _max_date_where_not_null(supabase, keyword_ids, "tracked_rank"),
+        )
+        if d is not None
+    ]
+    return max(dates) if dates else None
+
+
+def run_rank_freshness_sweep() -> dict:
+    """Daily: alert when a client's rank tracker stops receiving new data even
+    though its collection jobs report success — the dead-man's switch. DB reads
+    only (plus the rank_freshness_status upsert). Best-effort; never raises."""
+    if not settings.rank_freshness_enabled:
+        return {"skipped": "disabled"}
+    supabase = get_supabase()
+    now = datetime.now(timezone.utc)
+    today = now.date()
+
+    try:
+        kw_rows = (
+            supabase.table("tracked_keywords")
+            .select("id, client_id")
+            .eq("active", True)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.error("rank_freshness.keyword_read_failed", extra={"error": str(exc)})
+        return {"error": str(exc)}
+    by_client: dict[str, list[str]] = defaultdict(list)
+    for r in kw_rows:
+        if r.get("client_id"):
+            by_client[r["client_id"]].append(r["id"])
+    if not by_client:
+        return {"clients": 0}
+
+    # Which clients have a verified GSC property (→ expect near-daily data)?
+    try:
+        props = (
+            supabase.table("gsc_properties")
+            .select("client_id")
+            .eq("access_status", "ok")
+            .in_("client_id", list(by_client))
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("rank_freshness.property_read_failed", extra={"error": str(exc)})
+        props = []
+    gsc_clients = {p["client_id"] for p in props if p.get("client_id")}
+
+    try:
+        prior_rows = (
+            supabase.table("rank_freshness_status")
+            .select("client_id, status")
+            .in_("client_id", list(by_client))
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("rank_freshness.status_read_failed", extra={"error": str(exc)})
+        prior_rows = []
+    prior_status = {r["client_id"]: r.get("status") for r in prior_rows}
+
+    # When did DataForSEO last ACTIVELY query the SERP per client (fetched ≥1
+    # keyword)? A recent active fetch means a "no recent data" client was checked
+    # and simply isn't ranking (data current) — not a pipeline stall.
+    try:
+        cfg_rows = (
+            supabase.table("rank_fetch_config")
+            .select("client_id, last_active_fetch_at")
+            .in_("client_id", list(by_client))
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("rank_freshness.fetch_config_read_failed", extra={"error": str(exc)})
+        cfg_rows = []
+    active_fetch: dict[str, Optional[date]] = {}
+    for r in cfg_rows:
+        raw = r.get("last_active_fetch_at")
+        ts = _parse_ts(raw)
+        active_fetch[r["client_id"]] = ts.date() if ts else None
+
+    gsc_days = settings.rank_freshness_gsc_stale_days
+    df_days = settings.rank_freshness_df_stale_days
+    names = _client_names(supabase, list(by_client))
+
+    stale_now: list[dict] = []
+    opened = recovered = 0
+    for client_id, keyword_ids in by_client.items():
+        has_gsc = client_id in gsc_clients
+        last_data_at = _latest_data_date(supabase, keyword_ids)
+        # None = the client has no rank data at all yet (awaiting first pull) OR
+        # both metric reads failed transiently. Either way we can't judge freshness
+        # this sweep, so leave the prior verdict untouched — never flip a genuinely
+        # stale client to 'ok' (which would also un-gate the report guard) on a
+        # transient read hiccup, and never alert a brand-new client.
+        if last_data_at is None:
+            continue
+        verdict = evaluate_freshness(
+            last_data_at, has_gsc, today, gsc_days, df_days,
+            last_active_fetch_at=active_fetch.get(client_id),
+        )
+        was_stale = prior_status.get(client_id) == "stale"
+
+        # Persist current state (powers the portfolio read + UI freshness).
+        row = {
+            "client_id": client_id,
+            "status": "stale" if verdict["stale"] else "ok",
+            "last_data_at": last_data_at.isoformat(),
+            "days_stale": verdict["days_stale"],
+            "threshold_days": verdict["threshold"],
+            "updated_at": now.isoformat(),
+        }
+        # stale_since marks the ok→stale transition and must be PRESERVED while the
+        # client stays stale — so it is only written on a transition (omitted while
+        # stale so the stored value stands; a daily re-sweep can't wipe it), and
+        # cleared on recovery.
+        if verdict["stale"] and not was_stale:
+            row["stale_since"] = now.isoformat()
+        elif not verdict["stale"] and was_stale:
+            row["stale_since"] = None
+        try:
+            supabase.table("rank_freshness_status").upsert(row, on_conflict="client_id").execute()
+        except Exception as exc:
+            logger.warning("rank_freshness.status_upsert_failed",
+                           extra={"client_id": client_id, "error": str(exc)})
+
+        client_name = names.get(client_id, "Unknown client")
+        if verdict["stale"]:
+            stale_now.append({"client_id": client_id, "client_name": client_name,
+                              "days_stale": verdict["days_stale"]})
+            # Alert on the ok→stale transition, and re-nudge weekly while unresolved
+            # (the episode key carries the ISO week). emit() dedupes atomically.
+            try:
+                digest = build_freshness_digest(
+                    client_name, verdict["days_stale"], verdict["threshold"],
+                    last_data_at, has_gsc,
+                )
+                nid = notifications.emit(
+                    client_id=client_id,
+                    kind="rank_data_stale",
+                    title=digest["title"],
+                    summary=digest["summary"],
+                    severity=digest["severity"],
+                    payload={"link": f"clients/{client_id}/rankings",
+                             "days_stale": verdict["days_stale"],
+                             "last_data_at": last_data_at.isoformat() if last_data_at else None},
+                    dedupe_key=freshness_episode_key(client_id, last_data_at, now),
+                )
+                if nid and not was_stale:
+                    opened += 1
+            except Exception as exc:
+                logger.warning("rank_freshness.emit_failed",
+                               extra={"client_id": client_id, "error": str(exc)})
+        elif was_stale:
+            # stale→ok: post a recovery once (deduped on the recovery date).
+            # last_data_at is guaranteed non-None here (None clients `continue`d).
+            try:
+                notifications.emit(
+                    client_id=client_id,
+                    kind="rank_data_recovered",
+                    title=f"Rank data is flowing again for {client_name}",
+                    summary=(f"New rank data has resumed (last update "
+                             f"{last_data_at.isoformat() if last_data_at else 'recent'}). "
+                             f"The earlier stall has cleared."),
+                    severity="info",
+                    payload={"link": f"clients/{client_id}/rankings"},
+                    dedupe_key=f"rank_freshness_recovered:{client_id}:{today.isoformat()}",
+                )
+                recovered += 1
+            except Exception as exc:
+                logger.warning("rank_freshness.recovery_emit_failed",
+                               extra={"client_id": client_id, "error": str(exc)})
+
+    # Systemic outage → one loud portfolio alert (deduped per day).
+    if len(stale_now) >= settings.rank_freshness_portfolio_min:
+        try:
+            digest = build_freshness_portfolio_digest(stale_now, now)
+            notifications.emit(
+                client_id=None,
+                kind="rank_data_stale",
+                title=digest["title"],
+                summary=digest["summary"],
+                severity=digest["severity"],
+                payload={"link": "rankings", "stale_clients": len(stale_now)},
+                dedupe_key=f"rank_freshness_portfolio:{today.isoformat()}",
+            )
+        except Exception as exc:
+            logger.warning("rank_freshness.portfolio_emit_failed", extra={"error": str(exc)})
+
+    if stale_now:
+        logger.info("rank_freshness.sweep_complete",
+                    extra={"clients": len(by_client), "stale": len(stale_now),
+                           "opened": opened, "recovered": recovered})
+    return {"clients": len(by_client), "stale": len(stale_now),
+            "opened": opened, "recovered": recovered}
 
 
 def run_scan_health_sweep() -> dict:

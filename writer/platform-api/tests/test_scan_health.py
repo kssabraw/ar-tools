@@ -238,3 +238,218 @@ def test_producer_noop_when_disabled(monkeypatch):
          "streak": 9, "summary": "x"},
     ])
     assert created == [] and closed == []
+
+
+# ---------------------------------------------------------------------------
+# Rank-data freshness watch (the dead-man's switch for silent stalls)
+# ---------------------------------------------------------------------------
+from datetime import date  # noqa: E402
+
+_TODAY = date(2026, 9, 16)
+
+
+def test_freshness_threshold_gsc_vs_dataforseo():
+    assert sh.freshness_threshold(True, 5, 10) == 5    # GSC client: near-daily
+    assert sh.freshness_threshold(False, 5, 10) == 10  # DataForSEO-only: weekly
+
+
+def test_evaluate_freshness_fresh_gsc_not_stale():
+    v = sh.evaluate_freshness(date(2026, 9, 14), True, _TODAY, 5, 10)  # 2 days old
+    assert v["stale"] is False and v["days_stale"] == 2
+
+
+def test_evaluate_freshness_stalled_gsc_is_stale():
+    # 11 days with no new data on a GSC client (the WheelHouse case) → stale.
+    v = sh.evaluate_freshness(date(2026, 9, 5), True, _TODAY, 5, 10)
+    assert v["stale"] is True and v["days_stale"] == 11
+
+
+def test_evaluate_freshness_weekly_dataforseo_gets_longer_leash():
+    # 8 days old on a DataForSEO-only client is within its weekly cadence.
+    v = sh.evaluate_freshness(date(2026, 9, 8), False, _TODAY, 5, 10)
+    assert v["stale"] is False
+    # …but the same 8-day gap on a GSC client IS stale.
+    assert sh.evaluate_freshness(date(2026, 9, 8), True, _TODAY, 5, 10)["stale"] is True
+
+
+def test_evaluate_freshness_no_data_ever_never_alerts():
+    # A brand-new client with no data yet must not be flagged (setup, not regression).
+    v = sh.evaluate_freshness(None, True, _TODAY, 5, 10)
+    assert v["stale"] is False and v["no_data_ever"] is True
+
+
+def test_freshness_digest_severity_escalates_when_very_stale():
+    warn = sh.build_freshness_digest("Acme", 6, 5, date(2026, 9, 10), True)
+    crit = sh.build_freshness_digest("Acme", 12, 5, date(2026, 9, 4), True)
+    assert warn["severity"] == "warning"
+    assert crit["severity"] == "critical"       # ≥ 2× threshold
+    assert "Acme" in crit["title"]
+
+
+def test_freshness_episode_key_changes_with_stuck_date_and_week():
+    now = datetime(2026, 9, 16, 8, 0, tzinfo=timezone.utc)
+    k1 = sh.freshness_episode_key("c1", date(2026, 9, 5), now)
+    k2 = sh.freshness_episode_key("c1", date(2026, 9, 8), now)      # data advanced then re-stalled
+    later = datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc)        # a different ISO week
+    k3 = sh.freshness_episode_key("c1", date(2026, 9, 5), later)
+    assert k1 != k2 and k1 != k3
+
+
+def test_freshness_portfolio_digest_names_clients():
+    stale = [{"client_name": "Acme", "days_stale": 11}, {"client_name": "Beta", "days_stale": 9},
+             {"client_name": "Gamma", "days_stale": 7}]
+    d = sh.build_freshness_portfolio_digest(stale, NOW)
+    assert d["severity"] == "critical"
+    assert "3 clients" in d["title"]
+    assert "Acme" in d["summary"] and "Gamma" in d["summary"]
+
+
+# ---------------------------------------------------------------------------
+# Freshness sweep flow — the two adversarial-review fixes:
+#   * last_data_at None (no data / transient read fail) → skip, don't flip state
+#   * stale_since is written only on transition, preserved while stale
+# A faithful fake honouring table routing + the .not_.is_(field) metric reads.
+# ---------------------------------------------------------------------------
+class _FreshFake:
+    def __init__(self, *, kw_rows, gsc_client_ids, prior, gsc_max, df_max):
+        self._kw_rows = kw_rows                 # [{id, client_id}]
+        self._gsc_client_ids = set(gsc_client_ids)
+        self._prior = prior                     # {client_id: status}
+        self._gsc_max = gsc_max                 # date|None (gsc_position latest)
+        self._df_max = df_max                   # date|None (tracked_rank latest)
+        self.upserts: list[dict] = []
+
+    def table(self, name):
+        return _FreshBuilder(self, name)
+
+
+class _FreshBuilder:
+    def __init__(self, parent, name):
+        self.p = parent
+        self.name = name
+        self._field = None  # which column a .not_.is_ targeted
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def in_(self, *_a, **_k):
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, field, _val):
+        self._field = field
+        return self
+
+    def upsert(self, row, **_k):
+        if self.name == "rank_freshness_status":
+            self.p.upserts.append(row)
+        return self
+
+    def execute(self):
+        R = lambda data: type("R", (), {"data": data})()
+        if self.name == "tracked_keywords":
+            return R(self.p._kw_rows)
+        if self.name == "gsc_properties":
+            return R([{"client_id": c} for c in self.p._gsc_client_ids])
+        if self.name == "rank_freshness_status":
+            return R([{"client_id": c, "status": s} for c, s in self.p._prior.items()])
+        if self.name == "clients":
+            return R([{"id": r["client_id"], "name": "Acme"} for r in self.p._kw_rows])
+        if self.name == "rank_keyword_metrics":
+            d = self.p._gsc_max if self._field == "gsc_position" else self.p._df_max
+            return R([{"date": d.isoformat()}] if d else [])
+        return R([])
+
+
+def _run_sweep(monkeypatch, fake, emitted):
+    monkeypatch.setattr(sh, "get_supabase", lambda: fake)
+    monkeypatch.setattr("services.notifications.emit", lambda **k: emitted.append(k) or "nid")
+    return sh.run_rank_freshness_sweep()
+
+
+def test_sweep_skips_client_with_no_data(monkeypatch):
+    # last_data_at None (no non-null metrics / transient read fail): do NOT write a
+    # status row and do NOT alert — never flip a prior verdict on an indeterminate read.
+    fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                      prior={"c1": "stale"}, gsc_max=None, df_max=None)
+    emitted: list = []
+    _run_sweep(monkeypatch, fake, emitted)
+    assert fake.upserts == []          # prior 'stale' left untouched (report guard stays gated)
+    assert emitted == []
+
+
+def test_sweep_preserves_stale_since_while_stale(monkeypatch):
+    # Already-stale client, still stale → the upsert must OMIT stale_since so the
+    # stored transition timestamp isn't wiped by the daily re-sweep.
+    fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                      prior={"c1": "stale"}, gsc_max=date(2026, 9, 5), df_max=None)  # 11d stale
+    emitted: list = []
+    _run_sweep(monkeypatch, fake, emitted)
+    assert len(fake.upserts) == 1
+    row = fake.upserts[0]
+    assert row["status"] == "stale"
+    assert "stale_since" not in row     # preserved, not overwritten
+
+
+def test_sweep_opens_and_recovers_set_stale_since(monkeypatch):
+    # ok→stale writes stale_since; stale→ok clears it + emits recovery.
+    open_fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                           prior={}, gsc_max=date(2026, 9, 5), df_max=None)  # newly stale
+    opened: list = []
+    _run_sweep(monkeypatch, open_fake, opened)
+    assert open_fake.upserts[0]["status"] == "stale"
+    assert open_fake.upserts[0]["stale_since"] is not None
+    assert any(e["kind"] == "rank_data_stale" for e in opened)
+
+    rec_fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                          prior={"c1": "stale"}, gsc_max=date.today(), df_max=None)  # fresh again
+    recovered: list = []
+    _run_sweep(monkeypatch, rec_fake, recovered)
+    assert rec_fake.upserts[0]["status"] == "ok"
+    assert rec_fake.upserts[0]["stale_since"] is None
+    assert any(e["kind"] == "rank_data_recovered" for e in recovered)
+
+
+# ---------------------------------------------------------------------------
+# Freshness: pipeline-stall vs site-ranks-for-nothing (#3 fix)
+# ---------------------------------------------------------------------------
+def test_evaluate_freshness_recent_active_fetch_is_not_a_stall():
+    # No recent data (11 days) BUT DataForSEO actively queried the SERP 2 days ago
+    # → the site is checked and simply not ranking (data current), not a pipeline
+    # stall. Must NOT be flagged stale (so the report guard doesn't hold it).
+    v = sh.evaluate_freshness(
+        date(2026, 9, 5), True, _TODAY, 5, 10, last_active_fetch_at=date(2026, 9, 15)
+    )
+    assert v["stale"] is False and v["reason"] == "current_not_ranking"
+
+
+def test_evaluate_freshness_stale_data_and_no_active_fetch_is_a_stall():
+    # No recent data AND DataForSEO hasn't actively checked (last active fetch 20d
+    # ago, outside the 10-day cadence) → genuine pipeline stall.
+    v = sh.evaluate_freshness(
+        date(2026, 9, 5), True, _TODAY, 5, 10, last_active_fetch_at=date(2026, 8, 28)
+    )
+    assert v["stale"] is True and v["reason"] == "stale_pipeline"
+
+
+def test_evaluate_freshness_stale_data_no_fetch_signal_is_a_stall():
+    # No active-fetch signal at all (None) → never masks a stall.
+    v = sh.evaluate_freshness(date(2026, 9, 5), True, _TODAY, 5, 10)
+    assert v["stale"] is True and v["reason"] == "stale_pipeline"
+
+
+def test_evaluate_freshness_fresh_data_reason_fresh():
+    v = sh.evaluate_freshness(date(2026, 9, 14), True, _TODAY, 5, 10)
+    assert v["stale"] is False and v["reason"] == "fresh"

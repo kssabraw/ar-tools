@@ -275,6 +275,27 @@ def is_gsc_covered(rows: list[dict], today: date, days: int) -> bool:
     return False
 
 
+def is_stale_refetch_due(last_fetched_at: Optional[str], today: date, stale_days: int) -> bool:
+    """Whether an off-cadence DataForSEO pull should fire for a GSC-stalled client.
+
+    Bounds the stall-triggered refresh to at most once per `stale_days`: fires
+    when there's no prior pull, or the last one is at least `stale_days` old. Pure.
+    """
+    if not last_fetched_at:
+        return True
+    last = date.fromisoformat(last_fetched_at[:10])
+    return (today.toordinal() - last.toordinal()) >= max(1, stale_days)
+
+
+def is_gsc_stalled(max_gsc_date: Optional[str], today: date, stale_days: int) -> bool:
+    """True when a property's freshest GSC date is older than `stale_days`
+    (or it has no GSC data at all). Pure."""
+    if not max_gsc_date:
+        return True
+    latest = date.fromisoformat(max_gsc_date[:10])
+    return (today.toordinal() - latest.toordinal()) > max(1, stale_days)
+
+
 def is_fetch_due(config: dict, today: date, default_weekday: int) -> bool:
     """Whether a client's scheduled DataForSEO rank pull should fire today.
 
@@ -489,9 +510,14 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
     fetched = skipped = failed = 0
     failed_details: list[dict] = []
     terminal_error: Optional[dict] = None
+    # Treat GSC as "covering" a keyword only while its data is fresh
+    # (rank_gsc_stale_refetch_days), NOT the full display-coverage window: once
+    # GSC stalls past that, step in with a live DataForSEO rank rather than
+    # leaving the keyword unmeasured until GSC's silence trips a false deindex.
+    stale_days = settings.rank_gsc_stale_refetch_days
     for kw in keywords:
         covered = gsc_available and is_gsc_covered(
-            by_keyword.get(kw["id"], []), today, settings.rank_gsc_coverage_days
+            by_keyword.get(kw["id"], []), today, stale_days
         )
         if covered:
             skipped += 1
@@ -534,10 +560,15 @@ async def refresh_client_ranks(client_id: str, today: Optional[date] = None) -> 
     # are GSC-covered, both stamp.)
     if terminal_error is None and not (fetched == 0 and failed > 0):
         now_iso = datetime.now(timezone.utc).isoformat()
-        supabase.table("rank_fetch_config").upsert(
-            {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso},
-            on_conflict="client_id",
-        ).execute()
+        cfg_row = {"client_id": client_id, "last_fetched_at": now_iso, "updated_at": now_iso}
+        # last_active_fetch_at advances ONLY when we actually queried the SERP for
+        # >=1 keyword (fetched > 0) — a run that skipped every keyword because GSC
+        # covers them leaves it untouched. The freshness watch relies on this to
+        # tell a genuine pipeline stall (never actively checked) from a site that
+        # was checked and simply isn't ranking (fetched, found nothing).
+        if fetched > 0:
+            cfg_row["last_active_fetch_at"] = now_iso
+        supabase.table("rank_fetch_config").upsert(cfg_row, on_conflict="client_id").execute()
 
     result: dict = {
         "status": "failed" if terminal_error else "ok",

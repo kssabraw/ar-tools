@@ -137,6 +137,56 @@ def _df_rows(points):
     ]
 
 
+def test_determine_primary_source_prefers_fresher_dataforseo_over_stale_gsc():
+    # GSC last point is 11 days ago (still inside the 14-day coverage window) but
+    # a DataForSEO rank landed 2 days ago — the fresher source wins, so the
+    # keyword shows the live rank instead of being pinned to a stale GSC series
+    # (the exact condition behind the false-"deindexed" bug).
+    rows = [
+        {"date": (_TODAY - timedelta(days=11)).isoformat(), "gsc_position": 7.0, "tracked_rank": None},
+        {"date": (_TODAY - timedelta(days=2)).isoformat(), "gsc_position": None, "tracked_rank": 6},
+    ]
+    assert rank_status.determine_primary_source(rows, _TODAY, 14) == "dataforseo"
+
+
+def test_determine_primary_source_gsc_wins_when_at_least_as_recent():
+    rows = [
+        {"date": (_TODAY - timedelta(days=1)).isoformat(), "gsc_position": 7.0, "tracked_rank": None},
+        {"date": (_TODAY - timedelta(days=5)).isoformat(), "gsc_position": None, "tracked_rank": 6},
+    ]
+    assert rank_status.determine_primary_source(rows, _TODAY, 14) == "gsc"
+
+
+def test_compute_trend_deindex_vetoed_by_recent_dataforseo_rank():
+    # GSC went silent for 8 days after an established baseline (would trip
+    # deindex_risk on its own), but DataForSEO found the site ranking 10 days ago
+    # — a live rank contradicts a deindex, so the flag is vetoed.
+    rows = [
+        {"date": (_TODAY - timedelta(days=da)).isoformat(),
+         "gsc_position": 5.0 if da >= 8 else None, "tracked_rank": None}
+        for da in range(30, -1, -1)
+    ]
+    rows.append({"date": (_TODAY - timedelta(days=10)).isoformat(),
+                 "gsc_position": None, "tracked_rank": 6})
+    _, _, band = rank_status.compute_trend(rows, _TODAY, 14)
+    assert band != "deindex_risk"
+
+
+def test_compute_trend_deindex_kept_when_no_source_confirms_rank():
+    # Same GSC silence, but the only DataForSEO point is 20 days ago (outside the
+    # coverage window) — nothing confirms a live rank, so a genuine disappearance
+    # still trips deindex_risk.
+    rows = [
+        {"date": (_TODAY - timedelta(days=da)).isoformat(),
+         "gsc_position": 5.0 if da >= 8 else None, "tracked_rank": None}
+        for da in range(30, -1, -1)
+    ]
+    rows.append({"date": (_TODAY - timedelta(days=20)).isoformat(),
+                 "gsc_position": None, "tracked_rank": 6})
+    _, _, band = rank_status.compute_trend(rows, _TODAY, 14)
+    assert band == "deindex_risk"
+
+
 def test_compute_trend_dataforseo_climb():
     direction, improvement, band = rank_status.compute_trend(
         _df_rows([(40, 35), (5, 29)]), _TODAY, 14

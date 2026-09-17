@@ -483,6 +483,18 @@ class Settings(BaseSettings):
     scan_health_min_streak: int = 3      # consecutive failed scheduled runs to fire
     scan_health_min_days: int = 3        # ...the failing run must also span this many days
     scan_health_lookback_days: int = 21  # async_jobs history read per sweep
+    # Rank-data FRESHNESS watch — the dead-man's switch. scan_health above catches
+    # jobs that FAIL; this catches the more insidious case where jobs succeed but
+    # the data stops advancing (GSC returns 0 rows inside its lag window, a
+    # materialize bug freezes the axis, …) — the signature of both prior silent
+    # freezes. A daily DB-reads-only sweep alerts (Slack + in-app) when a client's
+    # tracker hasn't learned ANYTHING new for longer than its expected cadence,
+    # auto-resolving when data resumes, so reporting can never silently stall for
+    # days again without the team being paged within ~24h.
+    rank_freshness_enabled: bool = True
+    rank_freshness_gsc_stale_days: int = 5   # GSC-connected client: >this many days w/o new data = stale (GSC lag ~3)
+    rank_freshness_df_stale_days: int = 10   # DataForSEO-only client: weekly cadence, >this = a missed cycle
+    rank_freshness_portfolio_min: int = 3    # ≥this many stale clients at once → one loud portfolio alert (systemic outage)
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored
@@ -652,7 +664,14 @@ class Settings(BaseSettings):
     # last `gsc_repull_days` days to catch GSC's ~2–3 day late-arriving data
     # (a missed run is therefore self-healing on the next pull). The scheduler
     # loop wakes every `gsc_scheduler_poll_interval_seconds`.
-    gsc_repull_days: int = 3
+    # NOTE: must comfortably exceed GSC's finalization lag. A 3-day window
+    # ([today-2,today]) sat entirely inside the lag zone, so finalized days
+    # scrolled out of range before a run ever caught them — low-traffic
+    # properties stalled for days (a keyword ranking fine then read as
+    # "deindexed"). 10 days re-pulls a generous trailing window; the upsert is
+    # idempotent (chunked in gsc_ingest) so the overlap is harmless and gaps
+    # self-heal.
+    gsc_repull_days: int = 10
     gsc_ingest_hour_utc: int = 8
     gsc_scheduler_poll_interval_seconds: int = 300
     # One-time historical backfill window. GSC retains ~16 months; pull it all so
@@ -897,6 +916,15 @@ class Settings(BaseSettings):
     # last `rank_gsc_coverage_days` days; otherwise it falls back to DataForSEO.
     dataforseo_rank_weekday: int = 0
     rank_gsc_coverage_days: int = 14
+    # When GSC data goes stale, the DataForSEO fallback should step in as the live
+    # rank source WITHOUT waiting the full `rank_gsc_coverage_days`. A keyword is
+    # treated as needing a DataForSEO pull once its freshest GSC position is older
+    # than `rank_gsc_stale_refetch_days`, and the daily scheduler additionally
+    # fires an off-cadence DataForSEO run (bounded to at most once per this many
+    # days via last_fetched_at) for a GSC-connected client whose whole property
+    # has stalled — so a GSC outage never leaves a keyword unmeasured long enough
+    # to trip the 7-day deindex signal. Must be < the deindex threshold (7).
+    rank_gsc_stale_refetch_days: int = 5
     # Gradual-drop alert: a slow, sustained multi-week slide the window-over-window
     # rank rules miss (e.g. ~1 spot/week erosion that never accumulates ≥6 spots
     # inside a single 7- or 30-day window). Opens a `gradual_drop` rank alert with

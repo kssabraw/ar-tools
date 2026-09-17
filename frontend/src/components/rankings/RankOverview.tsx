@@ -19,6 +19,7 @@ interface RankSummary {
   }
   top_gainer: { keyword: string; delta: number; position: number | null } | null
   top_decliner: { keyword: string; delta: number; position: number | null } | null
+  data_freshness?: { stale: boolean; last_data_at: string | null; days_stale: number | null } | null
 }
 
 export function RankOverview({ clientId }: { clientId: string }) {
@@ -64,8 +65,25 @@ export function RankOverview({ clientId }: { clientId: string }) {
 
   const gsc = ov.gsc_connected
 
+  const fresh = summary?.data_freshness
+
   return (
     <div>
+      {/* Data-freshness watch: a visible flag when the tracker has stopped
+          receiving new data (the team is also alerted via Slack + in-app). */}
+      {fresh?.stale && (
+        <div style={staleBanner}>
+          <AlertTriangle size={16} color="#b91c1c" style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            <strong>Rank data has stopped updating.</strong>{' '}
+            {fresh.last_data_at
+              ? `The most recent data is from ${fresh.last_data_at}`
+              : 'No recent data'}
+            {fresh.days_stale != null ? ` (${fresh.days_stale} days ago)` : ''}. The numbers below
+            may be out of date — the data pipeline needs attention.
+          </span>
+        </div>
+      )}
       {/* Plain-English whole-tracker summary (deterministic, server-computed). */}
       {summary && (
         <div style={summaryCard}>
@@ -214,4 +232,5 @@ function Kpi({ icon, label, value, emphasis }: { icon: React.ReactNode; label: s
 const chartTitle: React.CSSProperties = { fontSize: 13, fontWeight: 700, color: '#0f172a', margin: 0, textTransform: 'uppercase', letterSpacing: '0.04em' }
 const chartHint: React.CSSProperties = { fontSize: 12, color: '#94a3b8', margin: '4px 0 12px' }
 const dfBanner: React.CSSProperties = { background: '#f0f9ff', border: '1px solid #bae6fd', borderRadius: 8, padding: '10px 14px', fontSize: 12, color: '#0369a1', marginBottom: 20, lineHeight: 1.5 }
+const staleBanner: React.CSSProperties = { display: 'flex', gap: 8, alignItems: 'flex-start', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#991b1b', marginBottom: 16, lineHeight: 1.5 }
 const summaryCard: React.CSSProperties = { background: '#f5f3ff', border: '1px solid #ddd6fe', borderRadius: 10, padding: '14px 16px', marginBottom: 20 }

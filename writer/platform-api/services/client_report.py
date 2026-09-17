@@ -1726,6 +1726,10 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
         "period": {"start": period_start.isoformat(), "end": period_end.isoformat()},
         "agency_name": settings.client_report_agency_name,
         "section_status": {},
+        # Rank-data freshness at build time (the freshness watch's verdict). Carried
+        # on the report data so callers/schedulers can tell a report was built on
+        # stale numbers; deliberately NOT rendered on the client-facing PDF.
+        "data_freshness": _gather_data_freshness(supabase, client_id),
     }
     for key, fn in (
         ("goals", lambda: _gather_goals(supabase, client_id, period_start, period_end)),
@@ -1747,6 +1751,30 @@ def gather_report_data(client_id: str, period_start: date, period_end: date) -> 
             data["section_status"][key] = "failed"
             logger.warning("report_section_failed", extra={"client_id": client_id, "section": key, "error": str(exc)})
     return data
+
+
+def _gather_data_freshness(supabase, client_id: str) -> Optional[dict]:
+    """The freshness watch's current verdict for this client ({stale, last_data_at,
+    days_stale}), or None when no verdict exists yet. Best-effort — a read error
+    never fails report assembly."""
+    try:
+        row = (
+            supabase.table("rank_freshness_status")
+            .select("status, last_data_at, days_stale")
+            .eq("client_id", client_id)
+            .limit(1)
+            .execute()
+        ).data
+    except Exception:
+        return None
+    if not row:
+        return None
+    r = row[0]
+    return {
+        "stale": r.get("status") == "stale",
+        "last_data_at": r.get("last_data_at"),
+        "days_stale": r.get("days_stale"),
+    }
 
 
 def _gather_goals(supabase, client_id: str, period_start: date, period_end: date) -> Optional[dict]:
