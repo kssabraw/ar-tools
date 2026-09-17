@@ -24,11 +24,12 @@ from db.supabase_client import get_supabase
 
 logger = logging.getLogger(__name__)
 
-# A human can only APPROVE or DISMISS; ``superseded`` is a system state (the
-# proposal was replaced by a newer recovery plan — services/goal_recovery.py)
-# that closes the proposal without a human verdict.
+# A human can only APPROVE or DISMISS; ``superseded`` (replaced by a newer
+# recovery plan — services/goal_recovery.py) and ``expired`` (aged out
+# un-actioned — services/strategist_expiry.py) are system states that close a
+# proposal without a human verdict, so neither is "open" for the bulk handoff.
 _TERMINAL = ("approved", "dismissed")
-_CLOSED = ("approved", "dismissed", "superseded")
+_CLOSED = ("approved", "dismissed", "superseded", "expired")
 
 
 class ProposalError(Exception):

@@ -887,6 +887,13 @@ async def gsc_scheduler() -> None:
                 from services.pace_proposals import run_daily_chase_plan
                 _safe("pace_episode_sync", run_pace_episode_sync, now.date())
                 await _safe_async("pace_chase_plan", run_daily_chase_plan, now.date())
+                # Strategist proposal auto-expiry — retire 'proposed' proposals
+                # older than the window (self-gated). Runs BEFORE director_reconcile
+                # so a freshly-expired proposal's strategist_proposal_pending seam
+                # is closed in the SAME tick. Off the event loop (Supabase I/O).
+                from services.strategist_expiry import expire_stale_proposals
+                await _safe_async("strategist_proposal_expiry", asyncio.to_thread,
+                                  expire_stale_proposals, now)
                 # Director of Operations — daily reversible reconciliation
                 # (build spec §6.1): opens/auto-closes board-task seam flags +
                 # the qa_idle notification. Self-gated on director_enabled;

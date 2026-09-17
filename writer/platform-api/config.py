@@ -447,6 +447,17 @@ class Settings(BaseSettings):
     # The `open_proposals` digest section (+ the card window): how far back the
     # strategist sees its own still-unactioned proposals.
     strategist_open_proposals_days: int = 60
+    # Auto-expiry of stale proposals. A strategist recommendation nobody
+    # approves/dismisses is time-decaying advice, but nothing retired it, so
+    # 'proposed' proposals accumulated forever (and DORA opened a
+    # strategist_proposal_pending seam task per one past
+    # director_seam_proposal_pending_days). A daily sweep moves a proposal whose
+    # review is older than the window to 'expired' (a SYSTEM state, distinct from
+    # a human 'dismissed', excluded from the audit learning rates — mirrors
+    # 'superseded'), which clears its seam flag on the next reconcile. Set days
+    # to 0 (or disable) to turn expiry off.
+    strategist_proposal_expiry_enabled: bool = True
+    strategist_proposal_expiry_days: int = 30
     # Offpage agent extensions: weekly citation-liveness sweep + monthly
     # page-level RD-imbalance capture (paid DataForSEO page summaries).
     citation_check_enabled: bool = True
