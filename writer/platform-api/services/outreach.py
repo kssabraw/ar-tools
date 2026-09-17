@@ -268,12 +268,17 @@ def resolve_callback_fields(payload: dict[str, Any], *, default_tz: str) -> dict
 
     out = dict(payload)
     local = out.pop("next_action_local")
-    tz = out.pop("next_action_tz", None) or default_tz
+    provided_tz = out.pop("next_action_tz", None)
     if not local:
+        # Clearing the precise time. Keep a zone the caller sent alongside the clear (so "drop the
+        # time but set/keep the zone" works), but never inject the DEFAULT zone here — that would
+        # silently overwrite the lead's stored zone on a bare clear.
         out["next_action_at"] = None
+        if provided_tz:
+            out["next_action_tz"] = provided_tz
         return out
     try:
-        resolved = _oc.resolve_callback(str(local), tz)
+        resolved = _oc.resolve_callback(str(local), provided_tz or default_tz)
     except ValueError as exc:
         raise OutreachError("invalid_callback", str(exc)) from exc
     out["next_action_at"] = resolved["next_action_at"]
@@ -3106,6 +3111,8 @@ def record_touch(
         raise OutreachError("invalid_disposition", str(e)) from e
 
     # Build the optional next-action patch and validate it up front (fail before writing a touch).
+    # Resolve the callback ONCE here and reuse it for the write below — the resolved patch carries
+    # next_action_at/_due/_tz and no next_action_local, so update_lead's own resolve step is a no-op.
     lead_patch: dict[str, Any] = {}
     if next_action is not None:
         lead_patch["next_action"] = next_action.strip() or None
@@ -3115,11 +3122,12 @@ def record_touch(
         lead_patch["next_action_local"] = next_action_local
         if next_action_tz:
             lead_patch["next_action_tz"] = next_action_tz
+    resolved_patch: dict[str, Any] | None = None
     if lead_patch:
-        validate_lead_write(
-            resolve_callback_fields(lead_patch, default_tz=settings.outreach_default_timezone),
-            creating=False,
+        resolved_patch = resolve_callback_fields(
+            lead_patch, default_tz=settings.outreach_default_timezone
         )
+        validate_lead_write(resolved_patch, creating=False)
 
     client = get_outreach_client()
     leads = (
@@ -3131,7 +3139,10 @@ def record_touch(
         .data
         or []
     )
-    if not leads:
+    if not leads or leads[0].get("deleted_at"):
+        # A soft-deleted (trashed) lead accepts no touch: the queue/board never surface one, and
+        # the trailing next-action update filters `deleted_at is null` anyway — rejecting here means
+        # we never write a touch we then can't attach a next action to (no partial write).
         raise OutreachError("lead_not_found", "no such lead")
     lead = leads[0]
 
@@ -3189,9 +3200,9 @@ def record_touch(
             agg=agg,
         )
 
-    # T1.3: apply the next action / callback in the same call. Validated above, so this only
-    # writes; the DB's lead_log_changes trigger stays the sole writer of stage/owner activity rows.
-    updated_lead = update_lead(lead_id, lead_patch, actor_id) if lead_patch else None
+    # T1.3: apply the next action / callback in the same call, reusing the already-resolved+validated
+    # patch. update_lead re-validates (cheap) and the trigger stays the sole writer of stage/owner rows.
+    updated_lead = update_lead(lead_id, resolved_patch, actor_id) if resolved_patch is not None else None
 
     return {"touch": touch, "outcome": outcome, "lead": updated_lead}
 

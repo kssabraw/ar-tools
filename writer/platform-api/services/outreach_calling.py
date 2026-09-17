@@ -173,6 +173,11 @@ def guess_timezone(lng: Optional[float]) -> Optional[str]:
         lo = float(lng)
     except (TypeError, ValueError):
         return None
+    # East of ~-60° is the Atlantic / Eastern hemisphere, not a US longitude — the bands below
+    # would otherwise map every positive/European longitude to Eastern. Continental US reaches only
+    # ~-66.9 (Maine), so -60 keeps all of it and rejects clearly non-US coordinates as unknowable.
+    if lo > -60.0:
+        return None
     for edge, zone in _US_LNG_BANDS:
         if lo >= edge:
             return zone
@@ -212,7 +217,8 @@ def business_hours_status(
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     if not tz_name or not _valid_zone(tz_name):
-        return {"tz": None, "local_time": None, "local_hour": None, "in_business_hours": None}
+        # Same key set as the valid branch (weekday included) so consumers see one stable shape.
+        return {"tz": None, "local_time": None, "local_hour": None, "weekday": None, "in_business_hours": None}
     local = now.astimezone(ZoneInfo(tz_name))
     weekday = local.weekday()  # Mon=0 .. Sun=6
     in_hours = weekday < 5 and open_hour <= local.hour < close_hour

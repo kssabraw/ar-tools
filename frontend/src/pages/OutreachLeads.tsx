@@ -104,7 +104,9 @@ const US_TIMEZONES: { value: string; label: string }[] = [
 // A default zone for the picker only — a rough longitude band, drift-tolerant because the caller
 // confirms it. The backend owns the authoritative derivation; this just seeds the dropdown.
 function guessTz(lng: number | null | undefined): string {
-  if (lng == null) return 'America/Los_Angeles'
+  // Out of the US longitude range (or unknown) → the config default; the bands only mean anything
+  // for a US coordinate, and a positive/European lng would otherwise seed the picker with Eastern.
+  if (lng == null || lng > -60) return 'America/Los_Angeles'
   if (lng >= -87.5) return 'America/New_York'
   if (lng >= -102) return 'America/Chicago'
   if (lng >= -115) return 'America/Denver'
@@ -250,7 +252,7 @@ export function OutreachLeads() {
 
       {adding && <AddLeadModal onClose={() => setAdding(false)} />}
       {openLead && (
-        <LeadDrawer id={openLead} stages={stages} onClose={() => {
+        <LeadDrawer key={openLead} id={openLead} stages={stages} onClose={() => {
           setOpenLead(null)
           queryClient.invalidateQueries({ queryKey: ['outreach-leads'] })
         }} />
@@ -397,6 +399,12 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
     onSuccess: () => { setNote(''); refresh() },
   })
   const defaultTz = lead?.next_action_tz || guessTz(lead?.prospect?.lng)
+  // What a do-not-contact would suppress on: the phone digits (what "don't call this number" means),
+  // else the prospect's stable place_id, else the email. Empty ⇒ nothing to suppress on, so the
+  // one-click button is hidden rather than 422-ing with `empty_value`.
+  const suppressValue =
+    (lead?.phone ?? lead?.prospect?.phone ?? '').replace(/\D/g, '')
+    || lead?.prospect?.place_id || lead?.email || ''
 
   // Picking a disposition prefills the next-action fields from its hint (T1.3) — editable before
   // saving. A callback disposition reveals the wall-time + zone; a follow-up one prefills a due date.
@@ -439,11 +447,9 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
   // prospect's place_id; scope from the disposition hint ('all' covers phone AND email).
   const suppress = useMutation({
     mutationFn: () => {
-      const digits = (lead?.phone ?? lead?.prospect?.phone ?? '').replace(/\D/g, '')
-      const value = digits || lead?.prospect?.place_id || lead?.email || ''
       return api.post('/outreach/suppressions', {
         scope: dispHint?.suppress_scope ?? 'all',
-        value,
+        value: suppressValue,
         reason: `${touchDisposition || 'do_not_contact'} (logged by caller)`,
       })
     },
@@ -627,7 +633,7 @@ function LeadDrawer({ id, stages, onClose }: { id: string; stages: LeadStage[]; 
                     Mark lost ({dispHint.suggest_lost_reason!.replace('_', ' ')})
                   </button>
                 )}
-                {dispHint?.suggest_suppress && !lead.suppressed_at && (
+                {dispHint?.suggest_suppress && !lead.suppressed_at && suppressValue && (
                   <button disabled={suppress.isPending} onClick={() => suppress.mutate()}
                     style={{ padding: '6px 10px', borderRadius: 8, border: '1px solid #fecaca',
                       background: '#fef2f2', color: '#b91c1c', fontSize: 12, fontWeight: 600, cursor: 'pointer',
