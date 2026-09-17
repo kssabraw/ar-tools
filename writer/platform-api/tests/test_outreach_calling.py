@@ -60,7 +60,15 @@ def test_guess_timezone_bands():
     assert oc.guess_timezone(-73.9) == "America/New_York"       # NYC
     assert oc.guess_timezone(-105.0) == "America/Denver"        # Denver
     assert oc.guess_timezone(-157.8) == "Pacific/Honolulu"      # Honolulu
+    assert oc.guess_timezone(-66.9) == "America/New_York"       # Maine (continental US east edge)
     assert oc.guess_timezone(None) is None
+
+
+def test_guess_timezone_rejects_non_us_longitudes():
+    # East of ~-60 is the Atlantic / Eastern hemisphere — unknowable, never a wrong US zone.
+    assert oc.guess_timezone(10.0) is None      # Europe
+    assert oc.guess_timezone(-50.0) is None     # mid-Atlantic
+    assert oc.guess_timezone(139.7) is None     # Tokyo
 
 
 def test_resolve_timezone_prefers_stored_then_guess_then_default():
@@ -96,6 +104,10 @@ def test_business_hours_unknown_zone_is_none_not_false():
     assert s["in_business_hours"] is None and s["tz"] is None
     s2 = oc.business_hours_status("Not/AZone", datetime(2026, 9, 16, 20, 0, tzinfo=timezone.utc))
     assert s2["in_business_hours"] is None
+    # Same key set as the valid branch, so a consumer sees one stable shape either way.
+    valid = oc.business_hours_status("America/Los_Angeles", datetime(2026, 9, 16, 20, 0, tzinfo=timezone.utc))
+    assert set(s.keys()) == set(valid.keys())
+    assert "weekday" in s and s["weekday"] is None
 
 
 def test_business_hours_accepts_naive_now_as_utc():
@@ -162,6 +174,17 @@ def test_resolve_callback_fields_uses_default_zone_when_unset():
 def test_resolve_callback_fields_null_local_clears_the_instant():
     out = svc.resolve_callback_fields({"next_action_local": None}, default_tz="America/Denver")
     assert out["next_action_at"] is None
+    assert "next_action_local" not in out
+    # A bare clear does not inject the default zone (it would overwrite the lead's stored zone).
+    assert "next_action_tz" not in out
+
+
+def test_resolve_callback_fields_clear_keeps_a_co_sent_zone():
+    out = svc.resolve_callback_fields(
+        {"next_action_local": None, "next_action_tz": "America/New_York"}, default_tz="America/Denver"
+    )
+    assert out["next_action_at"] is None
+    assert out["next_action_tz"] == "America/New_York"
     assert "next_action_local" not in out
 
 
