@@ -18,7 +18,7 @@ import math
 import re
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Protocol
 
 from . import budget as budget_mod
 from . import validators as v
@@ -46,10 +46,30 @@ _ENTITY_COVER_DEFAULT = 12
 _ENTITY_COVER_CAP = 30
 
 
+class WriterLLM(Protocol):
+    """The two calls the writer drives its prose steps through — implemented by both
+    ``AnthropicLLM`` and the Luna ``OpenAIWriterLLM``. Typing the deps LLM fields with
+    this (rather than bare ``object``) lets the type-checker resolve the methods AND
+    see their return types — notably ``call_tool -> dict`` — so a structured result
+    (e.g. the intro beats dict) handed to a string-only sink is caught statically,
+    the class of bug that failed every Nova article (PR #1199)."""
+
+    def complete_text(
+        self, *, system: str, user: str, purpose: str,
+        max_tokens: int | None = ..., temperature: float | None = ...,
+    ) -> str: ...
+
+    def call_tool(
+        self, *, system: str, user: str, tool_name: str, tool_description: str,
+        input_schema: dict, purpose: str,
+        max_tokens: int | None = ..., temperature: float | None = ...,
+    ) -> dict: ...
+
+
 @dataclass
 class WriterDeps:
-    section_llm: object       # Sonnet — prose (sections/intro/FAQ/conclusion/takeaways)
-    short_llm: object         # Haiku — CTA
+    section_llm: WriterLLM     # Sonnet — prose (sections/intro/FAQ/conclusion/takeaways)
+    short_llm: WriterLLM       # Haiku — CTA
     embed_fn: EmbedFn         # text-embedding-3-small (title anchor + H2 + takeaways)
     # The client's Voice & Audience Card rendered as a high-priority prompt
     # block, appended to every prose call so a client-linked article is written
@@ -75,8 +95,8 @@ def build_writer_deps(content_writer_provider: str | None = None) -> WriterDeps:
     if use_openai:
         from fanout.llm.openai_writer_client import OpenAIWriterLLM
 
-        section_llm: object = OpenAIWriterLLM(api_key=s.openai_api_key, model=s.content_writer_openai_model)
-        short_llm: object = OpenAIWriterLLM(api_key=s.openai_api_key, model=s.content_writer_openai_model)
+        section_llm: WriterLLM = OpenAIWriterLLM(api_key=s.openai_api_key, model=s.content_writer_openai_model)
+        short_llm: WriterLLM = OpenAIWriterLLM(api_key=s.openai_api_key, model=s.content_writer_openai_model)
     else:
         section_llm = AnthropicLLM(api_key=s.anthropic_api_key, model=s.writer_section_model)
         short_llm = AnthropicLLM(api_key=s.anthropic_api_key, model=s.writer_short_model)
@@ -607,18 +627,29 @@ def generate_article(
                 # plain substitute_text regex pass ("expected string ... got 'dict'").
                 return _ts.substitute_value(value, _subs)
 
-            title = _s(title) or title
-            seo_title = _s(seo_title) or seo_title
-            intro = _s(intro) or intro
-            cta = _s(cta) or cta
-            takeaways = [_s(t) or t for t in takeaways]
-            article = [
-                it.model_copy(update={
-                    "heading": _s(it.heading) if it.heading else it.heading,
-                    "body": _s(it.body) if it.body else it.body,
-                })
-                for it in article
-            ]
+            # Best-effort: a cosmetic compliance recode must NEVER discard a
+            # fully-generated (minutes-long, paid) article. On any failure, log
+            # and ship the article as written — the deterministic never-use voice
+            # check + the publish-time compliance gate are the downstream nets.
+            try:
+                title = _s(title) or title
+                seo_title = _s(seo_title) or seo_title
+                intro = _s(intro) or intro
+                cta = _s(cta) or cta
+                takeaways = [_s(t) or t for t in takeaways]
+                article = [
+                    it.model_copy(update={
+                        "heading": _s(it.heading) if it.heading else it.heading,
+                        "body": _s(it.body) if it.body else it.body,
+                    })
+                    for it in article
+                ]
+            except Exception as exc:  # noqa: BLE001 — never fail a generated article on a recode bug
+                logger.warning(
+                    "fanout.term_substitution_inwriter_failed",
+                    extra={"event": "fanout.term_substitution_inwriter_failed",
+                           "reason": repr(exc)},
+                )
 
     # ----- brand-voice enforcement (client-linked only) ----
     # Score the finished body against the client's guide and rewrite the
