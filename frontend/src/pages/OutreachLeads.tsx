@@ -400,7 +400,11 @@ export function OutreachLeads() {
 
       {adding && <AddLeadModal onClose={() => setAdding(false)} />}
       {openLead && (
-        <LeadDrawer id={openLead} stages={stages}
+        // key on the lead id so switching leads — especially the queue's auto-advance — REMOUNTS
+        // the drawer, resetting its form state (disposition, note) and NextAction's lead-seeded
+        // editor. Without it React reuses the instance and the previous lead's next-action/notes
+        // bleed into the next one (and a Save would write them onto the wrong lead).
+        <LeadDrawer key={openLead} id={openLead} stages={stages}
           onAdvance={view === 'queue' ? () => advanceQueue(openLead) : undefined}
           onClose={() => {
             setOpenLead(null)
