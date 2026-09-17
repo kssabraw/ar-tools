@@ -5,10 +5,11 @@ to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring p
 sound; see `START-HERE.md`).
 
 **Status:** **Tiers 1 + 2 BUILT and MERGED to `main` (2026-09-17)** — the caller cockpit is done bar
-one deliberately-deferred item (T2.3). **Tier 3 is in progress: T3.2 (script + rebuttal library)
-BUILT (this session, draft PR to `main`); T3.1 (click-to-call) STILL BLOCKED on §5 Q4 (vendor) —
-not started, ask the owner first.** This doc drives Tier 3 (§3/§5-Q4/§6/§7 below are the live
-parts — everything above §3 is background).
+one deliberately-deferred item (T2.3). **Tier 3: T3.2 (script + rebuttal library) BUILT (this
+session, draft PR to `main`); T3.1 (click-to-call) DEFERRED — owner ruled §5 Q4 "none for now" on
+2026-09-17, so no vendor / no code / no spend.** With T3.2 shipped and T3.1 deferred, Tier 3 is
+complete for now (T2.3 + T3.1 are the two standing deferrals). This doc drives Tier 3 (§3/§5/§6/§7
+below are the live parts — everything above §3 is background).
 
 - **Tier 1** (merged #1185 + #1188 → promotion #1190): T1.2/T1.3/T1.4 (structured disposition,
   one-step next action, callback time + timezone) and T1.1/T1.5 (`v_call_queue` / `v_overdue_actions`
@@ -196,7 +197,10 @@ Two independent tracks. **T3.2 has no external dependency and is the recommended
 **T3.1 is blocked on the §5 Q4 vendor decision** (and carries provider lead time), so it should not
 start until the owner picks Twilio vs Aircall vs none-for-now.
 
-- **T3.1 — Click-to-call / softphone.** Dial from the queue/drawer through a telephony provider
+- **T3.1 — Click-to-call / softphone.** ⏸ **DEFERRED (owner ruling 2026-09-17, §5 Q4: none for
+  now).** Not built — no vendor, no code, no spend; revisit when call volume justifies the per-minute
+  cost + provider setup. The scope below is the record for that future build. Dial from the
+  queue/drawer through a telephony provider
   (Twilio Voice / Aircall), with **call recording → an automatic `touch`** (so a dialed call logs
   itself instead of relying on the caller to hit "Log call"). **Blocked on §5 Q4** (vendor). Real
   scope beyond a button: number provisioning + caller-ID / local-presence, a webhook that maps a
@@ -281,10 +285,14 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
 3. ~~**Multi-user / RLS**~~ (T2.3) — **ANSWERED (owner, 2026-09-17): solo caller.** T2.3 deferred;
    `owner_id` stays backend-only, no owner-assignment UI, no RLS. Revisit at multi-user (design the
    isolation model before a second caller — `crm-layer-spec.md` §8a).
-4. **Click-to-call vendor** (T3.1) — **STILL OPEN, blocks T3.1.** Twilio Voice vs Aircall vs
-   none-for-now. Has provider lead time (number provisioning, caller-ID / local-presence) and a
-   per-minute billing model to fit into the signed-order/budget discipline. **Ask this before
-   starting T3.1** (T3.2 needs no answer and can go first).
+4. ~~**Click-to-call vendor**~~ (T3.1) — **ANSWERED (owner, 2026-09-17): none for now.** No
+   telephony provider yet — callers keep dialing via the `tel:` link and hitting "Log contact".
+   **T3.1 is not built** (no code, no provider account, no per-minute billing, no webhook receiver).
+   Revisit when call volume justifies the setup + per-minute cost; when picked (Twilio Voice vs
+   Aircall), the build is: dial from the queue/drawer, a completed-call webhook → an automatic
+   `touch` (channel `phone`, actor = the caller) mapping the call back to its lead, recording as a
+   `call_note` carrying the `touch_id`, and the paid dial fit into the signed-order/per-user-budget
+   model. The invariants in §3's T3.1 bullet still govern that future build.
 5. ~~**Scoreboard scope**~~ (T2.2) — **ANSWERED (owner, 2026-09-17): both** — a per-caller "your
    numbers" card AND a team leaderboard. Built in #1191.
 
@@ -302,9 +310,9 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
    a. ~~**T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
       existing report/justification assembly; deterministic + fact-grounded.~~ ✅ BUILT (this
       session, draft PR).
-   b. **← NEXT — T3.1** (click-to-call + auto-`touch`) only after the owner answers §5 Q4 (vendor).
-      Fit the paid dial into the signed-order/per-user-budget model if it bills per minute. **STILL
-      BLOCKED — ask the owner before starting.**
+   b. ~~**T3.1** (click-to-call + auto-`touch`)~~ **DEFERRED — owner ruled §5 Q4 "none for now"
+      (2026-09-17).** Not built. Revisit when call volume justifies a telephony vendor; the build
+      scope + invariants are preserved in §3's T3.1 bullet.
 
 Ship each tier behind the existing `/outreach/leads` surface; don't gate one on the next.
 
