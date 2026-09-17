@@ -22,8 +22,8 @@ from typing import Optional
 from fastapi import HTTPException
 
 from config import settings
-from services.social import budget
-from services.social.postpeer_adapter import get_adapter, x_credit_cost
+from services.social import budget, get_adapter
+from services.social.postpeer_adapter import x_credit_cost  # PostPeer credit model (fallback provider)
 
 logger = logging.getLogger(__name__)
 
@@ -72,13 +72,21 @@ def validate_post(
             hard.append(f"too_many_images:{len(images)}>{max_images}")
     if len(videos) > 1:
         hard.append(f"too_many_videos:{len(videos)}")
-    if (platform or "").lower() in ("twitter", "x") and x_credit_cost(platform, copy) >= 50:
+    # The X-link credit surcharge is a PostPeer-only pricing quirk; PostForMe is flat-priced.
+    if (
+        (platform or "").lower() in ("twitter", "x")
+        and (settings.social_posting_provider or "").lower() == "postpeer"
+        and x_credit_cost(platform, copy) >= 50
+    ):
         warnings.append("x_link_post_50_credits")
     return {"hard": hard, "warnings": warnings}
 
 
 def estimate_cost_usd(platform: str, copy: str, per_credit_usd: Optional[float] = None) -> float:
-    """Estimated USD to publish one post (credits × per-credit price). Pure."""
+    """Estimated USD to publish one post, reserved against the fail-closed budget. Pure.
+    PostForMe is flat per-post; PostPeer is credits × per-credit price (X links cost more)."""
+    if (settings.social_posting_provider or "").lower() == "postforme":
+        return round(float(settings.social_postforme_cost_per_post_usd), 4)
     price = per_credit_usd if per_credit_usd is not None else settings.social_credit_usd
     return round(x_credit_cost(platform, copy) * float(price), 4)
 
@@ -140,7 +148,10 @@ def _assert_account_allowed(client_id: str, account_id: str, *, require_live: bo
     if not profile_id:
         raise HTTPException(status_code=409, detail="social_profile_not_set")
     try:
-        allowed = {i.account_id for i in get_adapter().list_integrations(profile_id=profile_id)}
+        allowed = {
+            i.account_id
+            for i in get_adapter(client_id=client_id).list_integrations(profile_id=profile_id)
+        }
     except HTTPException:
         if require_live:
             raise
@@ -240,14 +251,22 @@ def run_profile_provision_job(job: dict) -> None:
 def connect_url_for_client(
     client_id: str, platform: str, redirect_uri: Optional[str] = None
 ) -> str:
-    """A per-client OAuth connect URL for one platform, scoped to the client's
-    Social group so the newly-authorized account lands in the right profile."""
+    """A per-client OAuth connect URL for one platform. For PostForMe the account lands in
+    the client's own Project (the per-client key scopes it); for PostPeer it's scoped to the
+    client's Social group. 409 if the client isn't connected yet (no key / no profile)."""
     _assert_enabled()
     profile_id = _client_profile_id(client_id)
     if not profile_id:
         raise HTTPException(status_code=409, detail="social_profile_not_set")
-    return get_adapter().connect_url(
-        profile_id=profile_id, platform=(platform or "").lower(), redirect_uri=redirect_uri
+    # The adapter tags the new account with this as external_id. For PostForMe use the real
+    # client id (a reconciliation reference), not the "postforme" connected-marker.
+    scope = (
+        client_id
+        if (settings.social_posting_provider or "").lower() == "postforme"
+        else profile_id
+    )
+    return get_adapter(client_id=client_id).connect_url(
+        profile_id=scope, platform=(platform or "").lower(), redirect_uri=redirect_uri
     )
 
 
@@ -269,7 +288,7 @@ def list_accounts(client_id: str) -> list[dict]:
     profile_id = _client_profile_id(client_id)
     if not profile_id:
         return []
-    integrations = get_adapter().list_integrations(profile_id=profile_id)
+    integrations = get_adapter(client_id=client_id).list_integrations(profile_id=profile_id)
     return [
         {"account_id": i.account_id, "platform": i.platform, "handle": i.handle,
          "reconnect_required": i.reconnect_required}
@@ -510,7 +529,8 @@ async def run_publish_job(job: dict) -> None:
         ).eq("id", post_id).execute()
 
         result = await asyncio.to_thread(
-            get_adapter().post, account_id, platform, copy, media or None, platform_specific
+            get_adapter(client_id=client_id).post,
+            account_id, platform, copy, media or None, platform_specific,
         )
         if result.ok:
             sb.table("social_posts").update({

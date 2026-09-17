@@ -82,13 +82,26 @@ class Settings(BaseSettings):
     perplexity_api_key: str = ""
     gemini_api_key: str = ""
     # ── Social Media module — posting provider (ADR-0001) ────────────────
-    # PostPeer is the v1 provider, behind a swappable adapter. One
-    # account-wide key (x-access-key); it is NOT a per-client security
-    # boundary, so client isolation is enforced app-side via each client's
-    # stored profile_id. See docs/modules/social-media/CLAUDE.md.
-    social_posting_provider: str = "postpeer"   # SOCIAL_POSTING_PROVIDER
+    # Swappable posting adapter. "postforme" (PostForMe) is the live provider;
+    # "postpeer" is the retired original, kept behind the adapter as a dormant
+    # fallback. The code default stays "postpeer" (inert without POSTPEER_API_KEY)
+    # so a fresh env ships dark; PLATFORM sets SOCIAL_POSTING_PROVIDER=postforme.
+    # PostForMe isolation is PROVIDER-ENFORCED: one Project (→ one API key) per
+    # client, stored in social_client_credentials — a client's key cannot see or
+    # post to another client's accounts. PostPeer used one account-wide key with
+    # app-side profile scoping. See docs/modules/social-media/CLAUDE.md.
+    social_posting_provider: str = "postpeer"   # SOCIAL_POSTING_PROVIDER (PLATFORM: postforme)
     postpeer_api_key: str = ""                   # POSTPEER_API_KEY (PLATFORM)
     postpeer_base_url: str = "https://api.postpeer.dev/v1"
+    # PostForMe (api.postforme.dev/v1; Authorization: Bearer <per-client project key>).
+    # No global key — keys are per client (social_client_credentials). Flat pricing
+    # (~$10 / 1,000 posts, team-pooled quota); posts are ASYNC — create returns a
+    # status, the per-platform URL + real success come from /social-post-results, so
+    # post() bounded-polls that endpoint (Decision 2=A).
+    postforme_base_url: str = "https://api.postforme.dev/v1"
+    social_postforme_cost_per_post_usd: float = 0.01   # flat per-post budget estimate
+    social_postforme_result_poll_attempts: int = 6     # /social-post-results polls after create
+    social_postforme_result_poll_interval_secs: float = 5.0   # ~30s total ceiling
     social_enabled: bool = False                # SOCIAL_ENABLED — module master gate
     social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)

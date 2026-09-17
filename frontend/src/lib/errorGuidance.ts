@@ -492,6 +492,57 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'That competitor handle no longer exists (it may have been removed).',
     steps: ['Refresh the Competitors tab.'],
   },
+  social_not_configured: {
+    title: 'This client isn’t connected to PostForMe',
+    meaning: 'No PostForMe project API key is set for this client, so accounts can’t be listed or posted to.',
+    steps: [
+      'In the PostForMe dashboard, create a Project for this client and generate its API key.',
+      'Paste the key into the client’s Social setup (“Save API key”), then connect accounts.',
+    ],
+  },
+  social_key_required: {
+    title: 'Enter the PostForMe API key',
+    meaning: 'Saving the connection needs the client’s PostForMe project API key.',
+    steps: ['Paste the project’s API key from the PostForMe dashboard, then save.'],
+  },
+  social_key_invalid: {
+    title: 'That API key didn’t work',
+    meaning: 'PostForMe rejected the key — it may be wrong, revoked, or for a different project.',
+    steps: [
+      'Copy the key again from the PostForMe project’s API Keys page.',
+      'Make sure it’s the key for THIS client’s project, then save.',
+    ],
+  },
+  postforme_auth_failed: {
+    title: 'PostForMe rejected the API key',
+    meaning: 'The stored project API key is invalid or revoked.',
+    steps: ['Re-generate the key in the PostForMe dashboard and paste the new one into the client’s Social setup.'],
+  },
+  postforme_out_of_quota: {
+    title: 'PostForMe post quota reached',
+    meaning: 'The PostForMe plan’s monthly post quota (shared across all projects on the team) is used up.',
+    steps: ['Upgrade the PostForMe plan or wait for the quota to reset, then retry.'],
+  },
+  postforme_rate_limited: {
+    title: 'PostForMe is rate-limiting requests',
+    meaning: 'Too many PostForMe requests in a short window.',
+    steps: ['Wait a minute and try again.'],
+  },
+  postforme_invalid_request: {
+    title: 'PostForMe rejected the post',
+    meaning: 'The post didn’t meet a platform/PostForMe requirement (e.g. media or caption constraints).',
+    steps: ['Check the platform’s media/caption rules and try again.'],
+  },
+  postforme_server_error: {
+    title: 'PostForMe had a server error',
+    meaning: 'A temporary error on PostForMe’s side.',
+    steps: ['Try again shortly. If it persists, check PostForMe’s status.'],
+  },
+  postforme_manual_provision: {
+    title: 'Create the PostForMe project first',
+    meaning: 'PostForMe projects and keys are created in its dashboard, not automatically.',
+    steps: ['Create the client’s Project + key in PostForMe, then paste the key into the client’s Social setup.'],
+  },
   social_draft_already_published: {
     title: 'Already published',
     meaning: 'This draft has already been published to an account.',

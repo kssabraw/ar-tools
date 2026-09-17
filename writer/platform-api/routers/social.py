@@ -11,6 +11,7 @@ import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from middleware.auth import require_auth, require_staff
 from models.social import (
@@ -22,6 +23,7 @@ from models.social import (
     SocialCompetitorResponse,
     SocialCompetitorSignalResponse,
     SocialConnectUrlResponse,
+    SocialCredentialStatusResponse,
     SocialDraftCopyRequest,
     SocialDraftCopyResponse,
     SocialDraftPublishRequest,
@@ -39,8 +41,10 @@ from models.social import (
     SocialPresignResponse,
     SocialProfileResponse,
     SocialResearchTriggerResponse,
+    SocialSetCredentialRequest,
 )
 from services.freeze import assert_not_frozen
+from services.social import credentials as social_credentials
 from services.social import competitor_research as social_research
 from services.social import creator as social_creator
 from services.social import fanout as social_fanout
@@ -66,6 +70,40 @@ async def ensure_social_profile(client_id: UUID, auth: dict = Depends(require_st
     isolation boundary every account and post is scoped to. Idempotent."""
     social_publish._assert_enabled()
     return {"profile_id": social_publish.ensure_profile_for_client(str(client_id))}
+
+
+@router.get(
+    "/clients/{client_id}/social/credentials", response_model=SocialCredentialStatusResponse
+)
+async def get_social_credentials(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Whether the client's PostForMe project API key is configured (never the key itself)."""
+    social_publish._assert_enabled()
+    return social_credentials.status(str(client_id))
+
+
+@router.put(
+    "/clients/{client_id}/social/credentials", response_model=SocialCredentialStatusResponse
+)
+async def set_social_credentials(
+    client_id: UUID, body: SocialSetCredentialRequest, auth: dict = Depends(require_staff)
+):
+    """Store the client's PostForMe project API key (validated live before storing; a bad key
+    is rejected and nothing is saved). The key is a secret — kept service-role only and never
+    returned. Manual provisioning: an admin creates the client's PostForMe Project + key in the
+    PostForMe dashboard, then pastes it here (PostForMe has no project/key API)."""
+    social_publish._assert_enabled()
+    return await run_in_threadpool(
+        social_credentials.set_client_key, str(client_id), body.api_key
+    )
+
+
+@router.delete(
+    "/clients/{client_id}/social/credentials", response_model=SocialCredentialStatusResponse
+)
+async def delete_social_credentials(client_id: UUID, auth: dict = Depends(require_staff)):
+    """Remove the client's PostForMe key (disconnects the client's Social integration)."""
+    social_publish._assert_enabled()
+    return social_credentials.delete_client_key(str(client_id))
 
 
 @router.get("/clients/{client_id}/social/connect-url", response_model=SocialConnectUrlResponse)

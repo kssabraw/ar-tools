@@ -21,6 +21,17 @@ class SocialProfileResponse(BaseModel):
     profile_id: str
 
 
+class SocialSetCredentialRequest(BaseModel):
+    """Set the client's PostForMe project API key (validated live before storing)."""
+    api_key: str = Field(min_length=1)
+
+
+class SocialCredentialStatusResponse(BaseModel):
+    """Non-secret connection status for the UI — the key itself is never returned."""
+    configured: bool
+    provider: str
+
+
 class SocialConnectUrlResponse(BaseModel):
     """A per-client OAuth connect URL for one platform (open in a new tab)."""
     platform: str
