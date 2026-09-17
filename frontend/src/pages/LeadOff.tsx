@@ -508,7 +508,12 @@ export function LeadOff() {
                 onChange={e => setFilters({ ...filters, maxPop: e.target.value })} />
               <button type="button" style={{ ...secondaryBtn, padding: '2px 6px', fontSize: 11 }}
                 title="Isolate the small-market tier (15k–30k population)"
-                onClick={() => { const f = { ...filters, minPop: '15000', maxPop: '30000' }; setFilters(f); setApplied(f) }}>
+                onClick={() => {
+                  // Apply ONLY the population bounds over the last-applied baseline
+                  // so any other pending (un-Applied) filter edits aren't committed.
+                  setFilters(f => ({ ...f, minPop: '15000', maxPop: '30000' }))
+                  setApplied(a => ({ ...a, minPop: '15000', maxPop: '30000' }))
+                }}>
                 15–30k
               </button>
             </div>
@@ -640,7 +645,9 @@ export function LeadOff() {
                 )}
                 {!isLoading && !displayRows.length && (
                   <tr><td colSpan={BOARD_COLUMNS.length} style={{ ...tdStyle, textAlign: 'center', padding: 32, color: '#64748b' }}>
-                    No markets match.
+                    No markets match.{applied.maxPop && Number(applied.maxPop) <= 30000
+                      ? ' The board currently covers ≥30k population — sub-30k markets appear once the scanner is rerun at a lower floor.'
+                      : ''}
                   </td></tr>
                 )}
               </tbody>
