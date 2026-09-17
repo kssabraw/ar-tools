@@ -323,6 +323,32 @@ async def list_leads(
     )
 
 
+@router.get("/outreach/call-queue")
+async def call_queue(
+    owner_id: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """The score-ordered "work the queue" call list (T1.1): workable, non-suppressed leads ordered
+    by due-date then value score, each carrying score/decile/vendor-failing, phone/phone_type and a
+    local-time / business-hours indicator (T1.5). This is the triage surface the caller works
+    top-down, not the newest-first board."""
+    return _handle(outreach_service.list_call_queue, owner_id=owner_id, limit=limit, offset=offset)
+
+
+@router.get("/outreach/overdue-actions")
+async def overdue_actions(
+    owner_id: Optional[str] = None,
+    limit: int = Query(default=outreach_service.DEFAULT_PAGE_SIZE, ge=1),
+    offset: int = Query(default=0, ge=0),
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """Leads past their next_action_due, soonest-overdue first (crm-layer-spec §6/§10's forcing
+    function) — now a first-class route, dial-ready."""
+    return _handle(outreach_service.list_overdue_actions, owner_id=owner_id, limit=limit, offset=offset)
+
+
 @router.get("/outreach/leads/{lead_id}")
 async def get_lead(lead_id: str, auth: dict = Depends(require_outreach)) -> dict:
     return _handle(outreach_service.get_lead, lead_id)
