@@ -2576,3 +2576,37 @@ kanban columns already are stages) and owner isn't (solo caller); both stay avai
 **Invariants untouched.** No new writes; `outcome`/`touch`/`lead_activity` unchanged. All Tier-2 objects
 are read-only (one view, two view updates, one `stable` function) in migration
 `20260917140000_cadence_and_scoreboard.sql`, applied live to the Outreacher project.
+
+## 2026-09-17 — Cold-caller CRM Tier 2.5 (link a manual lead to a scanned prospect)
+
+**The handoff's T2.5 framing was inaccurate; built the light no-spend path (owner, §T2.5).** T2.5 as
+written ("wire `/promote` + enrich into the drawer") named two things that were ALREADY wired: the
+prospect→lead `/promote` lives on the prospect coverage table (`Outreach.tsx` "Send to CRM"), and
+enrich (`LeadContacts`) was already in the lead drawer for prospect-linked leads. The genuine gap was
+the reverse direction: a manual/inbound lead carries no `prospect_id`, so its drawer shows no hook /
+report / heatmap / enrich — all keyed on the prospect — and there was no route to attach one. The
+owner chose the **light link (no spend)** over a full lead→prospect ingest.
+
+**Link = a pure `prospect_id` write from null, reusing the existing prospect search.** New
+`POST /outreach/leads/{id}/link-prospect` (`link_lead_prospect`) sets `prospect_id` when the business
+was ALREADY scanned; the drawer control (`LinkProspect`) finds candidates via the existing
+`GET /outreach/prospects?search=`. NO paid call, NO ingest — the "ingestion is the Railway job's
+business / platform-api must not spend" invariant is untouched, and a business with no scan simply
+isn't found to link. This is the ONE controlled path that sets `prospect_id` (otherwise immutable —
+it is the join the scoring model rests on), and only from null.
+
+**Guards.** Refuses a lead already linked (`lead_already_linked` — re-pointing the model's join is not
+a caller action; same id → idempotent no-op), a prospect another LIVE lead owns
+(`prospect_already_linked`), a missing/soft-deleted lead (`lead_not_found`), a missing prospect
+(`prospect_not_found`). The update is wrapped so the DB's `UNIQUE(prospect_id, source)` colliding with
+a TRASHED lead (which the live-lead guard can't see, since the constraint ignores `deleted_at`) maps
+to a named `prospect_already_linked` 422 rather than a raw 500 — mirroring `promote_prospect`'s race
+handling.
+
+**`source` is left as-is → no modelling contamination.** A linked `manual` lead gains the prospect's
+audit surface (hook/report/enrich) but stays `manual`, so it never enters the outbound-only `outcome`
+substrate (`outcome` rows exist only for `source='outbound_scan'`). Consistent with the model rules;
+no invariant bent to add a UI convenience.
+
+**Staff-gated, no migration.** The link is a write (staff bar, like `create_lead`/`promote_prospect`);
+the reads it depends on already exist. Nothing schema-level changed.

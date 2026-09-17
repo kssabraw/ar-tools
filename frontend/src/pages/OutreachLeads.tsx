@@ -95,6 +95,15 @@ interface ScoreboardCaller {
   last_touch_at: string | null
 }
 interface Scoreboard { window_days: number; since: string; callers: ScoreboardCaller[]; me: ScoreboardCaller | null }
+// A prospect-search result for the T2.5 "link to a scanned prospect" control (GET /outreach/prospects).
+interface ProspectLite {
+  id: string
+  name: string
+  submarket_name: string | null
+  address: string | null
+  review_count: number | null
+  rating: number | null
+}
 interface Activity {
   id: number
   occurred_at: string
@@ -884,7 +893,7 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
             </>}
           </div>
 
-          {lead.prospect_id && (
+          {lead.prospect_id ? (
             <div style={{ marginTop: 14 }}>
               <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
                 <button onClick={() => setShowHook(h => !h)}
@@ -902,7 +911,11 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
               )}
               <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} isStaff={isStaff} />
             </div>
-          )}
+          ) : isStaff ? (
+            // T2.5: a manual/inbound lead has no scan behind it, so no hook/report/enrich. Offer to
+            // link it to an already-scanned prospect (no new scan, no spend). Staff-gated like the write.
+            <LinkProspect leadId={id} defaultQuery={lead.company_name} onLinked={refresh} />
+          ) : null}
 
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>Stage</div>
@@ -1164,6 +1177,90 @@ function NextAction({ lead, defaultTz, onSave }: {
             background: '#0f172a', color: '#fff', cursor: 'pointer' }}>Save</button>
       </div>
       {mode === 'time' && <BusinessHours tz={tz} />}
+    </div>
+  )
+}
+
+// Link a manual/inbound lead to an already-scanned prospect (T2.5). Reuses the prospect search
+// (GET /outreach/prospects?search=) — a pure link, no new scan and no spend; a business with no
+// scan simply won't be found. On success the drawer refreshes and the hook/report/enrich appear.
+function LinkProspect({ leadId, defaultQuery, onLinked }: {
+  leadId: string; defaultQuery: string | null; onLinked: () => void
+}) {
+  const [q, setQ] = useState(defaultQuery ?? '')
+  const [active, setActive] = useState(false)
+  const term = q.trim()
+  const { data, isFetching } = useQuery<{ prospects: ProspectLite[] }>({
+    queryKey: ['outreach-prospect-search', term],
+    queryFn: () => api.get(`/outreach/prospects?search=${encodeURIComponent(term)}&limit=8`),
+    enabled: active && term.length >= 2,
+  })
+  const link = useMutation({
+    mutationFn: (prospectId: string) =>
+      api.post(`/outreach/leads/${leadId}/link-prospect`, { prospect_id: prospectId }),
+    onSuccess: () => { setActive(false); onLinked() },
+  })
+  const results = data?.prospects ?? []
+  return (
+    <div style={{ marginTop: 14 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
+        Link to a scanned prospect
+      </div>
+      <p style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+        This lead isn't tied to a scan, so it has no call hook, report or contact enrichment. If the
+        business was already scanned, link it — no new scan, no spend.
+      </p>
+      {!active ? (
+        <button onClick={() => setActive(true)}
+          style={{ marginTop: 4, padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0',
+            background: '#fff', fontSize: 12, fontWeight: 600, color: '#0369a1', cursor: 'pointer' }}>
+          Find a scanned prospect
+        </button>
+      ) : (
+        <div style={{ marginTop: 6 }}>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search prospects by name…"
+            autoFocus
+            style={{ width: '100%', padding: '6px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }} />
+          {term.length < 2 ? (
+            <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>Type at least 2 characters.</p>
+          ) : isFetching ? (
+            <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>Searching…</p>
+          ) : results.length === 0 ? (
+            <p style={{ fontSize: 11, color: '#94a3b8', marginTop: 6 }}>
+              No scanned prospects match. Only a business a scan has covered can be linked.
+            </p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+              {results.map(p => (
+                <div key={p.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8,
+                  alignItems: 'center', padding: 8, border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#0f172a', overflow: 'hidden',
+                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>
+                      {[p.submarket_name, p.address, p.review_count != null ? `${p.review_count} reviews` : null]
+                        .filter(Boolean).join(' · ')}
+                    </div>
+                  </div>
+                  <button disabled={link.isPending} onClick={() => link.mutate(p.id)}
+                    style={{ padding: '5px 10px', borderRadius: 8, border: 'none', fontSize: 12,
+                      fontWeight: 600, background: '#0369a1', color: '#fff', cursor: 'pointer' }}>
+                    Link
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <button onClick={() => setActive(false)}
+            style={{ marginTop: 6, padding: '4px 8px', borderRadius: 8, border: 'none', background: 'none',
+              fontSize: 12, color: '#64748b', cursor: 'pointer' }}>
+            Cancel
+          </button>
+          {link.error instanceof Error && (
+            <p style={{ fontSize: 12, color: '#b91c1c', marginTop: 6 }}>{link.error.message}</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

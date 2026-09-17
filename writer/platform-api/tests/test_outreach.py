@@ -509,3 +509,127 @@ def test_attach_cadence_best_effort_on_lookup_failure(monkeypatch):
     rows = [{"id": "l1"}]
     # A failed cadence read still yields a stable shape (cadence: None), never raises.
     assert svc._attach_cadence(rows) == [{"id": "l1", "cadence": None}]
+
+
+# --- Tier 2.5 link a manual lead to a scanned prospect ------------------------------------------
+
+
+class _SeqClient:
+    """A fake client that returns queued responses in call order — enough for `link_lead_prospect`,
+    whose reads (lead / prospect / other-leads / update / activity-insert) happen in a fixed sequence."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._i = 0
+
+    def _next(self):
+        r = self._responses[self._i] if self._i < len(self._responses) else []
+        self._i += 1
+        return r
+
+    def table(self, _name):
+        return _SeqClient._Q(self)
+
+    class _Q:
+        def __init__(self, parent):
+            self._p = parent
+
+        def select(self, *a, **k):
+            return self
+
+        def insert(self, *a, **k):
+            return self
+
+        def update(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def is_(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=self._p._next())
+
+
+def test_link_lead_prospect_sets_prospect_id(monkeypatch):
+    responses = [
+        [{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": None, "company_name": "Acme"}],
+        [{"id": "p1", "name": "Acme Plumbing"}],  # prospect exists
+        [],                                        # no other live lead owns it
+        [{"id": "l1"}],                            # update wrote a row
+        [{}],                                      # activity note insert
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": "p1"})
+    out = svc.link_lead_prospect("l1", "p1", "actor")
+    assert out["already_linked"] is False
+    assert out["lead"]["prospect_id"] == "p1"
+
+
+def test_link_lead_prospect_same_id_is_idempotent(monkeypatch):
+    responses = [[{"id": "l1", "source": "manual", "prospect_id": "p1", "deleted_at": None}]]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": "p1"})
+    out = svc.link_lead_prospect("l1", "p1", "actor")
+    assert out["already_linked"] is True
+
+
+def test_link_lead_prospect_refuses_relinking_a_different_prospect(monkeypatch):
+    responses = [[{"id": "l1", "source": "manual", "prospect_id": "pX", "deleted_at": None}]]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect("l1", "p1", "actor")
+    assert e.value.code == "lead_already_linked"
+
+
+def test_link_lead_prospect_refuses_when_prospect_owned_by_another_lead(monkeypatch):
+    responses = [
+        [{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": None}],
+        [{"id": "p1", "name": "Acme"}],  # prospect exists
+        [{"id": "l2"}],                  # another live lead already owns p1
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect("l1", "p1", "actor")
+    assert e.value.code == "prospect_already_linked"
+
+
+def test_link_lead_prospect_missing_lead(monkeypatch):
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient([[]]))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect("l1", "p1", "actor")
+    assert e.value.code == "lead_not_found"
+
+
+def test_link_lead_prospect_rejects_soft_deleted_lead(monkeypatch):
+    responses = [[{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": "2026-01-01"}]]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect("l1", "p1", "actor")
+    assert e.value.code == "lead_not_found"
+
+
+def test_link_lead_prospect_missing_prospect(monkeypatch):
+    responses = [
+        [{"id": "l1", "source": "manual", "prospect_id": None, "deleted_at": None}],
+        [],  # prospect not found
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect("l1", "p1", "actor")
+    assert e.value.code == "prospect_not_found"
+
+
+def test_link_prospect_route_is_staff_gated():
+    import pathlib
+
+    source = (
+        pathlib.Path(svc.__file__).resolve().parents[1] / "routers" / "outreach.py"
+    ).read_text()
+    head = source.split("async def link_prospect", 1)[1].split(") -> dict")[0]
+    assert "require_staff" in head

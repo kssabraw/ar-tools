@@ -5,12 +5,13 @@ to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring p
 sound; see `START-HERE.md`).
 
 **Status:** **Tier 1 BUILT (2026-09-17)**, merged to `main` (#1185 + #1188 → promotion #1190).
-**Tier 2 in progress (2026-09-17):** T2.1 (cadence) + T2.2 (caller scoreboard) + T2.4 (board
-filters + sort) BUILT this session; migration `20260917140000_cadence_and_scoreboard.sql` applied
-live (`v_lead_cadence` + cadence columns on `v_call_queue`/`v_overdue_actions` + the
+**Tier 2 BUILT (2026-09-17)** except the deliberately-deferred T2.3. T2.1 (cadence) + T2.2 (caller
+scoreboard) + T2.4 (board filters + sort) + T2.5 (link a manual lead to a scanned prospect, the
+light no-spend path) all landed this session; migration `20260917140000_cadence_and_scoreboard.sql`
+applied live (`v_lead_cadence` + cadence columns on `v_call_queue`/`v_overdue_actions` + the
 `outreach_caller_scoreboard(since)` function). **T2.3 deferred** (owner ruling 2026-09-17: solo
-caller — `owner_id` stays backend-only, no owner-assignment UI, no RLS). **T2.5 next** (wire
-`/promote` + enrich into the drawer). §5 Q3 + Q5 answered (owner, 2026-09-17). Tier 3 remains.
+caller — `owner_id` stays backend-only, no owner-assignment UI, no RLS). §5 Q3 + Q5 answered (owner,
+2026-09-17). Tier 3 remains.
 
 Tier-1 detail: T1.2/T1.3/T1.4 (#1185 — structured disposition, one-step next action, callback time
 + timezone); T1.1/T1.5 (#1188 — v_call_queue / v_overdue_actions routes, score-ordered "Work the
@@ -163,9 +164,24 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
   `due`/`name` are nulls-last). Stage isn't a board filter (the columns already are stages) and
   owner isn't (solo caller, T2.3); both params stay exposed on `GET /outreach/leads` for later.
   Migration: none.
-- **T2.5 — Wire `/promote` + enrich into the drawer.** ← **NEXT.** Let a caller turn an
-  inbound/manual lead into a scanned prospect (→ gains the hook + report + heatmap) from where they
-  work. Route exists; UI doesn't. Migration: none.
+- **T2.5 — Link a manual/inbound lead to a scanned prospect.** ✅ **BUILT (this session, light-link
+  path — owner ruling 2026-09-17).** *The handoff's original framing was inaccurate:* both things it
+  named were already wired — the prospect→lead `/promote` lives on the prospect **coverage table**
+  (`Outreach.tsx` "Send to CRM"), and enrich (`LeadContacts`) was already in the drawer for
+  prospect-linked leads. The genuine gap was the reverse: a **manual/inbound lead has no
+  `prospect_id`**, so its drawer shows no hook/report/heatmap/enrich, and there was **no route** to
+  attach one (and `prospect_id` is deliberately immutable). Built as a **pure link, no spend**: a new
+  `POST /outreach/leads/{id}/link-prospect` (`link_lead_prospect`) sets `prospect_id` from null when
+  the business was **already scanned** — reusing the existing prospect search (`GET
+  /outreach/prospects?search=`) in a new drawer control (`LinkProspect`). No paid call, no ingest
+  (the "ingestion is the Railway job's business" invariant is untouched — a business with no scan
+  simply isn't found to link). Guards: refuses a lead already linked (re-pointing the model's join
+  isn't a caller action; same id → idempotent), a prospect another live lead owns
+  (`prospect_already_linked`, also the graceful map for the trashed-lead `UNIQUE(prospect_id,source)`
+  collision), a missing/soft-deleted lead, a missing prospect. `source` is left as-is, so a linked
+  `manual` lead gains the audit surface but never enters the outbound-only `outcome` substrate.
+  Staff-gated. Migration: none. **The heavier lead→prospect ingest (single-business lookup + scan)
+  was NOT built** — deferred as a separate paid feature if ever wanted.
 
 ### TIER 3 — bigger bets (defer unless prioritized)
 
@@ -230,7 +246,8 @@ Ordered by (impact ÷ effort). Each carries evidence, whether it needs a migrati
 2. ~~**T1.2 + T1.3 + T1.4** together (one coherent "log a call properly" change).~~ ✅ PR #1185.
 3. ~~**T1.1** (queue view) + **T1.5** (score/tel on card) — the triage layer.~~ ✅ PR #1188.
 4. ~~**T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.~~ ✅ this session.
-5. **← NEXT: T2.5** (wire `/promote` + enrich). **T2.3 deferred** — solo caller (§5 Q3).
+5. ~~**T2.5** (link a manual lead to a scanned prospect, light path).~~ ✅ this session. **T2.3
+   deferred** — solo caller (§5 Q3). **Tier 2 is now complete** except the deferred T2.3.
 6. Tier 3 as separately-scoped projects.
 
 Ship T1 behind the existing `/outreach/leads` surface; don't gate it on Tier 2/3.

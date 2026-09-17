@@ -437,6 +437,26 @@ async def promote_prospect(
     return {"lead": _handle(outreach_service.promote_prospect, prospect_id, auth["user_id"])}
 
 
+class LinkProspectRequest(BaseModel):
+    """Attach a manual/inbound lead to an already-scanned prospect (T2.5). `prospect_id` comes from
+    a prospect search the caller ran in the drawer."""
+
+    prospect_id: str
+
+
+@router.post("/outreach/leads/{lead_id}/link-prospect")
+async def link_prospect(
+    lead_id: str, payload: LinkProspectRequest, auth: dict = Depends(require_staff)
+) -> dict:
+    """Link a manual/inbound lead to an already-scanned prospect so it gains the call hook / report /
+    heatmap / enrich (T2.5, light-link path — no paid call, no ingest). Refuses if the lead is already
+    linked, or if another live lead already owns that prospect. Staff-gated like promote/create."""
+    _require_outreach_ready()
+    return _handle(
+        outreach_service.link_lead_prospect, lead_id, payload.prospect_id, auth["user_id"]
+    )
+
+
 # --- Emit + touch (Phase 3 — the learning substrate) -------------------------------------------
 #
 # `emit` sends a prospect to the external outreach queue (n8n / Encharge) and writes the `outcome`

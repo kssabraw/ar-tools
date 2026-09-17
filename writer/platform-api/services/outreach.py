@@ -3104,6 +3104,106 @@ def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
     return dict(lead, already_existed=False)
 
 
+def link_lead_prospect(lead_id: str, prospect_id: str, actor_id: str) -> dict[str, Any]:
+    """Attach a manual/inbound lead to an ALREADY-SCANNED prospect (T2.5, light-link path).
+
+    The reverse of `promote_prospect`: a hand-entered lead has no `prospect_id`, so its drawer shows
+    no call hook / report / heatmap / enrich (all keyed on the prospect). When the business was
+    already scanned, this links the two — a pure `prospect_id` write, NO paid call and no ingest (the
+    "ingestion is the Railway job's business" invariant is untouched; a business with no scan simply
+    won't be found to link).
+
+    `prospect_id` is otherwise immutable on a lead (excluded from LEAD_MUTABLE_FIELDS — it is the join
+    the scoring model rests on), so this is the ONE controlled path that sets it, and only from null:
+      * a lead already carrying a prospect (every `outbound_scan` lead does) is refused `lead_already_linked`
+        — re-pointing the model's join is not a caller action (same id → idempotent no-op);
+      * a prospect that already has any live lead is refused `prospect_already_linked` — that business is
+        already on the board, and a second lead for it would duplicate the promote flow's one-lead-per-prospect
+        assumption (the DB's UNIQUE(prospect_id, source) only stops a same-source duplicate).
+    The lead's `source` is left as-is: a linked `manual` lead gains the prospect's audit surface but stays
+    `manual`, so it never enters the outbound-only `outcome` substrate — consistent with the model rules.
+    """
+    client = get_outreach_client()
+    leads = (
+        client.table("lead")
+        .select("id, source, prospect_id, deleted_at, company_name")
+        .eq("id", lead_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not leads or leads[0].get("deleted_at"):
+        raise OutreachError("lead_not_found", "no such lead")
+    lead = leads[0]
+    if lead.get("prospect_id"):
+        if lead["prospect_id"] == prospect_id:
+            return {"lead": get_lead(lead_id), "already_linked": True}
+        raise OutreachError("lead_already_linked", "this lead is already linked to a prospect")
+
+    prospect = (
+        client.table("prospect")
+        .select("id, name")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not prospect:
+        raise OutreachError("prospect_not_found", "no such prospect")
+
+    other = (
+        client.table("lead")
+        .select("id")
+        .eq("prospect_id", prospect_id)
+        .is_("deleted_at", "null")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if other:
+        raise OutreachError("prospect_already_linked", "another lead is already linked to this prospect")
+
+    try:
+        updated = (
+            client.table("lead")
+            .update({"prospect_id": prospect_id, "updated_by": actor_id})
+            .eq("id", lead_id)
+            .is_("deleted_at", "null")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The likeliest failure is the UNIQUE(prospect_id, source) key: a TRASHED lead can still hold
+        # (this prospect, this source) — the `other` guard above only sees live leads, but the
+        # constraint ignores deleted_at. Surface it as a named 422, not a raw 500.
+        logger.warning("outreach_link_prospect_update_failed", extra={"error": str(exc)})
+        raise OutreachError(
+            "prospect_already_linked", "this prospect is already tied to another lead"
+        ) from exc
+    if not updated:
+        raise OutreachError("link_failed", "the link was not written")
+
+    # A timeline note so the drawer explains why the lead suddenly has a scan behind it. Best-effort:
+    # a 'note' is human commentary (never a trigger-owned kind), and a failed note must not undo the link.
+    try:
+        client.table("lead_activity").insert(
+            {
+                "lead_id": lead_id,
+                "kind": "note",
+                "body": f"Linked to scanned prospect: {prospect[0].get('name') or prospect_id}.",
+                "actor_id": actor_id,
+            }
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_link_prospect_note_failed", extra={"error": str(exc)})
+
+    return {"lead": get_lead(lead_id), "already_linked": False}
+
+
 # --- Emit + touch (Phase 3 — the learning substrate) -------------------------------------------
 #
 # `emit_prospect` sends a prospect to the external outreach queue (n8n / Encharge) and writes the
