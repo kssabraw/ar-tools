@@ -262,6 +262,12 @@ class LeadUpdateRequest(BaseModel):
     lost_to: Optional[str] = None
     next_action: Optional[str] = None
     next_action_due: Optional[str] = None
+    # A precise callback (T1.4): a wall-clock time ("2026-09-22T14:00") in the prospect's zone.
+    # Resolved server-side into next_action_at (instant) + next_action_due (local date) + the zone.
+    # `next_action_local: null` clears the precise time; `next_action_due` alone stays a day-only
+    # follow-up. `next_action_tz` also sets/updates the lead's zone on its own.
+    next_action_local: Optional[str] = None
+    next_action_tz: Optional[str] = None
 
 
 class ActivityCreateRequest(BaseModel):
@@ -282,6 +288,14 @@ async def list_lead_stages(auth: dict = Depends(require_outreach)) -> dict:
     """Board columns, in order. Also carries `is_terminal`, which is why this is a lookup table
     rather than an enum."""
     return {"stages": _handle(outreach_service.list_lead_stages)}
+
+
+@router.get("/outreach/dispositions")
+async def list_dispositions(auth: dict = Depends(require_outreach)) -> dict:
+    """The structured disposition picker (T1.2), per channel, each value carrying its
+    next-action hints (T1.3). App-level vocabulary, so the caller UI reads it here rather than
+    hard-coding a list that would drift from the backend's validation."""
+    return _handle(outreach_service.list_dispositions)
 
 
 @router.get("/outreach/leads")
@@ -411,6 +425,12 @@ class TouchCreateRequest(BaseModel):
     touch_number: Optional[int] = None
     disposition: Optional[str] = None
     note: Optional[str] = None
+    # T1.3 — book the next action in the same save as the call. `next_action_local`(+`next_action_tz`)
+    # is a precise callback (wall-time in the prospect's zone); `next_action_due` a day-only follow-up.
+    next_action: Optional[str] = None
+    next_action_due: Optional[str] = None
+    next_action_local: Optional[str] = None
+    next_action_tz: Optional[str] = None
 
 
 @router.post("/outreach/prospects/{prospect_id}/emit")
@@ -454,6 +474,10 @@ async def record_touch(
         touch_number=payload.touch_number,
         disposition=payload.disposition,
         note=payload.note,
+        next_action=payload.next_action,
+        next_action_due=payload.next_action_due,
+        next_action_local=payload.next_action_local,
+        next_action_tz=payload.next_action_tz,
     )
 
 
