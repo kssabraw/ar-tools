@@ -115,12 +115,13 @@ def test_gbp_post_all_present_passes():
     assert sig.build_verdict(checks)["verdict"] == sig.PASS
 
 
-def test_gbp_post_missing_emoji_is_revisions():
-    # A missing emoji is a fixable, non-critical blocking failure (1 of 3) →
-    # revisions, not an escalated fail (graduated verdicts 2026-09-08).
+def test_gbp_post_missing_emoji_is_minor_revision():
+    # A missing emoji is a single fixable, non-critical blocking failure (1 of 3)
+    # → minor_revisions, not an escalated fail (graduated verdicts 2026-09-08;
+    # finer split 2026-09-17).
     text = "Need roof repair? Call us today for a free estimate!"
     v = sig.build_verdict(sig.check_gbp_post(text, "roof repair"))
-    assert v["verdict"] == sig.REVISIONS
+    assert v["verdict"] == sig.MINOR_REVISIONS
     assert any("emoji" in f.lower() for f in v["failed"])
 
 
@@ -185,8 +186,8 @@ def test_press_release_exact_match_anchor_only_fails():
         "123 Main Street Springfield", "555 010 2000", client_domain="acme.com",
     )
     v = sig.build_verdict(checks)
-    # An exact-match anchor is a fixable, non-critical failure → revisions.
-    assert v["verdict"] == sig.REVISIONS
+    # An exact-match anchor is a single fixable, non-critical failure → minor.
+    assert v["verdict"] == sig.MINOR_REVISIONS
     assert any("anchor" in f.lower() for f in v["failed"])
 
 
@@ -253,11 +254,12 @@ def test_blog_markdown_good_passes():
     assert v["verdict"] == sig.PASS
 
 
-def test_blog_markdown_missing_takeaways_and_dup_headings_is_revisions():
-    # Two fixable, non-critical structural misses (2 < the count net) → revisions.
+def test_blog_markdown_missing_takeaways_and_dup_headings_is_major_revisions():
+    # Two fixable, non-critical structural misses (> minor_revision_max, < the
+    # count net) → major_revisions.
     bad = _GOOD_BLOG.replace("## Key Takeaways", "## How it works")
     v = sig.build_verdict(sig.check_blog_markdown(bad))
-    assert v["verdict"] == sig.REVISIONS
+    assert v["verdict"] == sig.MAJOR_REVISIONS
     labels = " ".join(v["failed"]).lower()
     assert "key takeaways" in labels and "duplicate" in labels
 
@@ -387,7 +389,8 @@ def test_website_page_meta_description_optional():
     )
     v = sig.build_verdict(checks)
     assert v["verdict"] == sig.ADVISORY
-    assert v["verdict"] not in (sig.REVISIONS, sig.FAIL)  # advisory never bounces
+    # advisory never bounces
+    assert v["verdict"] not in (sig.MINOR_REVISIONS, sig.MAJOR_REVISIONS, sig.FAIL)
     assert any("meta description" in a.lower() for a in v["advisories"])
 
 
@@ -663,14 +666,15 @@ def test_deliverable_subtask_name_matches_and_is_not_work_item():
 # Verdict fold
 # ---------------------------------------------------------------------------
 def test_build_verdict_blocking_failure_outranks_unknown():
-    # A blocking failure (here non-critical → revisions) is reported over an
-    # unknown blocking check — the fail/revisions tier always outranks unknown.
+    # A blocking failure (here one non-critical → minor_revisions) is reported
+    # over an unknown blocking check — the fail/revisions tier always outranks
+    # unknown.
     checks = [
         sig._check("a", "A", False),
         sig._check("b", "B", None),
         sig._check("c", "C", True),
     ]
-    assert sig.build_verdict(checks)["verdict"] == sig.REVISIONS
+    assert sig.build_verdict(checks)["verdict"] == sig.MINOR_REVISIONS
 
 
 def test_build_verdict_unknown_blocking_is_needs_human():
@@ -679,7 +683,8 @@ def test_build_verdict_unknown_blocking_is_needs_human():
 
 
 # ---------------------------------------------------------------------------
-# Graduated verdicts (owner ruling 2026-09-08): advisory / revisions / fail
+# Graduated verdicts (owner ruling 2026-09-08; finer split 2026-09-17):
+# advisory / minor_revisions / major_revisions / fail
 # ---------------------------------------------------------------------------
 def test_build_verdict_advisory_only_is_advisory():
     # Clean on every blocking check; a non-blocking recommendation tripped.
@@ -693,11 +698,30 @@ def test_build_verdict_all_clean_is_pass():
     assert sig.build_verdict(checks)["verdict"] == sig.PASS
 
 
-def test_build_verdict_noncritical_blocking_failure_is_revisions():
+def test_build_verdict_single_noncritical_blocking_failure_is_minor():
+    # Exactly one non-critical blocking fail (<= minor_revision_max) → minor.
+    checks = [sig._check("cta", "A CTA is present", False), sig._check("meta", "Meta", True)]
+    v = sig.build_verdict(checks)
+    assert v["verdict"] == sig.MINOR_REVISIONS
+    assert not v["critical"] and v["escalated_by_count"] is False
+
+
+def test_build_verdict_several_noncritical_blocking_failures_is_major():
+    # Two non-critical blocking fails (> minor_revision_max, < count net) → major.
     checks = [sig._check("cta", "A CTA is present", False), sig._check("emoji", "Emoji", False)]
     v = sig.build_verdict(checks)
-    assert v["verdict"] == sig.REVISIONS
+    assert v["verdict"] == sig.MAJOR_REVISIONS
     assert not v["critical"] and v["escalated_by_count"] is False
+
+
+def test_build_verdict_minor_max_knob_collapses_or_widens_the_split():
+    two = [sig._check("cta", "A CTA is present", False), sig._check("emoji", "Emoji", False)]
+    # minor_revision_max=0 collapses the split → every revisions bounce is major.
+    assert sig.build_verdict(two, minor_revision_max=0)["verdict"] == sig.MAJOR_REVISIONS
+    one = [sig._check("cta", "A CTA is present", False)]
+    assert sig.build_verdict(one, minor_revision_max=0)["verdict"] == sig.MAJOR_REVISIONS
+    # A wider band keeps two fails minor.
+    assert sig.build_verdict(two, minor_revision_max=2)["verdict"] == sig.MINOR_REVISIONS
 
 
 def test_build_verdict_critical_check_failure_is_fail():
@@ -715,15 +739,16 @@ def test_build_verdict_count_net_escalates_many_noncritical_fails():
     checks = [sig._check(f"k{i}", f"Check {i}", False) for i in range(4)]
     v = sig.build_verdict(checks)
     assert v["verdict"] == sig.FAIL and v["escalated_by_count"] is True and not v["critical"]
-    # Below the threshold stays revisions.
+    # Below the threshold stays in the revisions band (3 > minor_max → major).
     fewer = [sig._check(f"k{i}", f"Check {i}", False) for i in range(3)]
-    assert sig.build_verdict(fewer)["verdict"] == sig.REVISIONS
+    assert sig.build_verdict(fewer)["verdict"] == sig.MAJOR_REVISIONS
 
 
 def test_build_verdict_count_net_can_be_disabled():
-    # threshold=0 disables the count net → many non-critical fails stay revisions.
+    # threshold=0 disables the count net → many non-critical fails stay in the
+    # revisions band (major, since > minor_revision_max).
     checks = [sig._check(f"k{i}", f"Check {i}", False) for i in range(6)]
-    assert sig.build_verdict(checks, 0)["verdict"] == sig.REVISIONS
+    assert sig.build_verdict(checks, 0)["verdict"] == sig.MAJOR_REVISIONS
 
 
 def test_build_verdict_critical_beats_count_disabled():
@@ -733,14 +758,29 @@ def test_build_verdict_critical_beats_count_disabled():
 
 
 def test_narrative_of_labels_graduated_verdicts():
-    rev = sig.build_verdict([sig._check("cta", "A CTA is present", False)])
-    assert "minor revision" in sig.narrative_of("gbp_posts", rev, []).lower()
+    minor = sig.build_verdict([sig._check("cta", "A CTA is present", False)])
+    assert "minor revision" in sig.narrative_of("gbp_posts", minor, []).lower()
+    major = sig.build_verdict([sig._check("cta", "A CTA is present", False),
+                              sig._check("emoji", "Emoji", False)])
+    n_major = sig.narrative_of("gbp_posts", major, []).lower()
+    assert "needs revisions" in n_major and "2 fixable" in n_major
     adv = sig.build_verdict([sig._check("a", "A", True),
                              sig._check("b", "B", False, blocking=False)])
     assert "recommendation" in sig.narrative_of("blog_article", adv, []).lower()
     crit = sig.build_verdict([sig._check("nap", "NAP included", False)])
     n = sig.narrative_of("citations", crit, []).lower()
     assert "needs a human" in n and "critical" in n
+
+
+def test_mark_critical_annotates_critical_checks():
+    checks = [sig._check("nap", "NAP included", False),
+              sig._check("cta", "A CTA is present", False)]
+    marked = sig.mark_critical(checks)
+    by_key = {c["key"]: c for c in marked}
+    assert by_key["nap"]["critical"] is True      # key ∈ CRITICAL_CHECK_KEYS
+    assert by_key["cta"]["critical"] is False
+    # Pure — the originals are untouched.
+    assert "critical" not in checks[0]
 
 
 # ---------------------------------------------------------------------------

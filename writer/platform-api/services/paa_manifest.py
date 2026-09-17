@@ -60,8 +60,13 @@ __all__ = [
 CONTENT_CATEGORIES = frozenset({"paa_post", "gbp_post", "syndication", "image"})
 
 # Most-severe → least, for the QA rollup's `worst`. 'pending' = has no live URL to
-# review yet (not a failure). 'skipped' = a category QA doesn't grade.
-QA_SEVERITY = ["fail", "needs_human", "revisions", "advisory", "pass", "skipped", "pending"]
+# review yet (not a failure). 'skipped' = a category QA doesn't grade. The
+# manifest's own item verdicts are pass/'revisions'; a real QA review folded in
+# (paa_manifest_qa → qa_service) also carries 'minor_'/'major_revisions'.
+QA_SEVERITY = [
+    "fail", "needs_human", "major_revisions", "minor_revisions", "revisions",
+    "advisory", "pass", "skipped", "pending",
+]
 
 # Carried onto every export + the manifest UI — the load-bearing boundary.
 GUARDRAIL_NOTE = (

@@ -33,18 +33,23 @@ from bs4 import BeautifulSoup
 # ---------------------------------------------------------------------------
 PASS = "pass"
 ADVISORY = "advisory"
-REVISIONS = "revisions"
+MINOR_REVISIONS = "minor_revisions"
+MAJOR_REVISIONS = "major_revisions"
 FAIL = "fail"
 NEEDS_HUMAN = "needs_human"
 SKIPPED = "skipped"
 
-# Graduated verdicts (owner ruling 2026-09-08): instead of a binary
-# pass/fail, blocking failures split by the NATURE of the failure, not the
-# count. A failure of a CRITICAL check — the deliverable is wrong, does harm,
-# or omitted its whole purpose — escalates (``fail``); everything else is a
-# fixable ``revisions`` bounce. ``advisory`` surfaces a shippable deliverable
-# that only tripped non-blocking recommendations (previously folded into
-# ``pass``). Best → worst: pass · advisory · needs_human · revisions · fail.
+# Graduated verdicts (owner ruling 2026-09-08; finer split 2026-09-17): instead
+# of a binary pass/fail, blocking failures split by the NATURE and the COUNT of
+# the failure. A failure of a CRITICAL check — the deliverable is wrong, does
+# harm, or omitted its whole purpose — escalates (``fail``). Everything else is
+# a fixable revisions bounce, and the revisions band itself splits by how much
+# is wrong: a single non-critical blocking miss is a ``minor_revisions`` (a
+# quick VA fix, notified quietly), several are ``major_revisions`` (the pre-
+# split ``revisions`` behaviour — same For-Revision lane + self-re-QA loop, just
+# louder). ``advisory`` surfaces a shippable deliverable that only tripped non-
+# blocking recommendations (previously folded into ``pass``). Best → worst:
+# pass · advisory · needs_human · minor_revisions · major_revisions · fail.
 #
 # The critical set is static + code-defined (the LLM never sets severity — same
 # discipline as ``blocking``): a wrong/missing business NAME (it's for the wrong
@@ -55,7 +60,7 @@ SKIPPED = "skipped"
 # unstyled HTML / a dead stylesheet — the page isn't shippable and needs a human
 # to find out WHY it broke, not a VA ticking a checklist item). Keyed by check
 # ``key`` (see the check builders); a key not in this set is a "standard"
-# blocking check → revisions.
+# blocking check → the minor/major revisions band.
 CRITICAL_CHECK_KEYS: frozenset[str] = frozenset({
     "client_name", "nap", "link_back", "map_embed", "keyword_in_url",
     "visual_render",
@@ -68,6 +73,12 @@ CRITICAL_CHECK_KEYS: frozenset[str] = frozenset({
 # primary signal; this catches the degenerate "most of the page is missing"
 # case the per-check severity can't. ``0`` disables the net.
 DEFAULT_FAIL_COUNT_THRESHOLD = 4
+
+# The minor/major split within the revisions band: this many or fewer non-
+# critical blocking failures is a ``minor_revisions`` (a quick fix), more is a
+# ``major_revisions`` (up to the fail-count net, which escalates to ``fail``).
+# ``0`` collapses the split so every revisions bounce is ``major_revisions``.
+DEFAULT_MINOR_REVISION_MAX = 1
 
 # Rubric keys. 'skip' = owner ruled QA must not check; 'handoff_sermastr' =
 # out of QA's scope, points at the strategist; 'generic' = no checklist —
@@ -950,31 +961,43 @@ def _name_present(text: Optional[str], name: Optional[str]) -> Optional[bool]:
 def build_verdict(
     checks: list[dict],
     fail_count_threshold: int = DEFAULT_FAIL_COUNT_THRESHOLD,
+    minor_revision_max: int = DEFAULT_MINOR_REVISION_MAX,
 ) -> dict[str, Any]:
     """Fold a check list into a GRADUATED review verdict (owner ruling
-    2026-09-08). Precedence, worst signal first:
+    2026-09-08; finer revisions split 2026-09-17). Precedence, worst signal
+    first:
 
     - a CRITICAL blocking check failed, OR ≥ ``fail_count_threshold`` blocking
       checks failed                        → FAIL (escalate; the deliverable is
       wrong / broken, a human decides)
-    - else any blocking check failed        → REVISIONS (fixable; VA reworks,
-      the bot re-checks)
+    - else > ``minor_revision_max`` blocking checks failed → MAJOR_REVISIONS
+      (fixable, several issues; VA reworks, the bot re-checks)
+    - else any blocking check failed        → MINOR_REVISIONS (fixable, one
+      quick issue; same rework loop, notified quietly)
     - else any blocking check ok=None       → NEEDS_HUMAN (fail-open, never guess)
     - else any advisory (non-blocking) failed → ADVISORY (shippable; recorded)
     - else                                  → PASS
 
     Severity is the primary signal; the count net (``fail_count_threshold``,
-    ``0`` disables) only catches a mostly-broken deliverable. Advisory checks
-    never turn a clean deliverable into revisions/fail; they only distinguish
-    ADVISORY from PASS. The ``failed``/``unverified``/``advisories`` lists are
-    always populated (a REVISIONS still has its rework list). Pure."""
+    ``0`` disables) only catches a mostly-broken deliverable, and the minor/major
+    split (``minor_revision_max``, ``0`` collapses it to all-major) grades how
+    much is wrong within the fixable band. Advisory checks never turn a clean
+    deliverable into revisions/fail; they only distinguish ADVISORY from PASS.
+    The ``failed``/``unverified``/``advisories`` lists are always populated (a
+    revisions verdict still has its rework list). Pure."""
     failed = [c for c in checks if c.get("blocking") and c.get("ok") is False]
     unknown = [c for c in checks if c.get("blocking") and c.get("ok") is None]
     advisories = [c for c in checks if not c.get("blocking") and c.get("ok") is False]
     critical_failed = [c for c in failed if c.get("key") in CRITICAL_CHECK_KEYS]
     over_count = fail_count_threshold > 0 and len(failed) >= fail_count_threshold
+    is_minor = minor_revision_max > 0 and len(failed) <= minor_revision_max
     if failed:
-        verdict = FAIL if (critical_failed or over_count) else REVISIONS
+        if critical_failed or over_count:
+            verdict = FAIL
+        elif is_minor:
+            verdict = MINOR_REVISIONS
+        else:
+            verdict = MAJOR_REVISIONS
     elif unknown:
         verdict = NEEDS_HUMAN
     elif advisories:
@@ -991,6 +1014,14 @@ def build_verdict(
         "critical": [c["label"] + (f" — {c['note']}" if c.get("note") else "") for c in critical_failed],
         "escalated_by_count": bool(over_count and not critical_failed),
     }
+
+
+def mark_critical(checks: list[dict]) -> list[dict]:
+    """Annotate each check with a ``critical`` boolean (its ``key`` is in
+    CRITICAL_CHECK_KEYS) so surfaces can distinguish a critical blocking failure
+    from a standard one without duplicating the key set. Returns new dicts;
+    pure."""
+    return [{**c, "critical": c.get("key") in CRITICAL_CHECK_KEYS} for c in checks]
 
 
 # ---------------------------------------------------------------------------
@@ -1224,8 +1255,11 @@ def narrative_of(rubric: str, verdict: dict[str, Any], urls: list[str]) -> str:
         why = ("critical: " + "; ".join(verdict["critical"])) if verdict.get("critical") \
             else f"{len(verdict['failed'])} blocking issue(s)"
         head = f"QA failed — needs a human ({why}): " + "; ".join(verdict["failed"])
-    elif v == REVISIONS:
-        head = (f"QA needs minor revisions — {len(verdict['failed'])} fixable "
+    elif v == MINOR_REVISIONS:
+        head = ("QA needs a minor revision — 1 fixable issue: "
+                + "; ".join(verdict["failed"]))
+    elif v == MAJOR_REVISIONS:
+        head = (f"QA needs revisions — {len(verdict['failed'])} fixable "
                 "issue(s): " + "; ".join(verdict["failed"]))
     else:
         head = "QA needs a human — could not verify: " + "; ".join(verdict["unverified"])

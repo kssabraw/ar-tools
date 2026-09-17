@@ -12,16 +12,22 @@ when its last work item is ticked, so QA runs automatically as work
 completes) + on-demand via ``POST /tasks/{id}/qa``.
 
 Outcomes (QA_Checklists.md is the grounding standard). Graduated verdicts
-(owner ruling 2026-09-08) split a blocking failure by SEVERITY, not count:
-- ``revisions``   → a fixable, non-critical blocking failure. Bounce to
-                    ``qa_fail_status`` (default "For Revision", the dedicated
-                    lane a client-requested revision also uses; entry bumps
-                    revision_count) + a "Rework: …" subtask per failed check.
-                    The "Rework:" prefix is deliberate — "QA fix:" would trip
-                    task_service's marker classifier (the "qa" token) and make
-                    these NOT work items. As "Rework:" they ARE work items, so
-                    ticking them ALL re-enters In QA (For Revision is in
-                    _AUTO_ADVANCE_FROM) — the rework loop re-QAs itself.
+(owner ruling 2026-09-08; finer revisions split 2026-09-17) split a blocking
+failure by SEVERITY and COUNT:
+- ``minor_revisions`` / ``major_revisions`` → a fixable, non-critical blocking
+                    failure: one issue is ``minor_revisions`` (notified quietly,
+                    info severity), several (> qa_minor_revision_max) is
+                    ``major_revisions`` (warning severity). Both route
+                    identically — bounce to ``qa_fail_status`` (default "For
+                    Revision", the dedicated lane a client-requested revision
+                    also uses; entry bumps revision_count) + a "Rework: …"
+                    subtask per failed check. The "Rework:" prefix is deliberate
+                    — "QA fix:" would trip task_service's marker classifier (the
+                    "qa" token) and make these NOT work items. As "Rework:" they
+                    ARE work items, so ticking them ALL re-enters In QA (For
+                    Revision is in _AUTO_ADVANCE_FROM) — the rework loop re-QAs
+                    itself. The minor/major split is a severity/legibility signal
+                    (badge + notification urgency), not a different board flow.
 - ``fail``        → a CRITICAL blocking failure (qa_signals.CRITICAL_CHECK_KEYS)
                     OR ≥ qa_fail_count_threshold blocking fails — the deliverable
                     is wrong/broken. Escalates: a critical-severity notification
@@ -690,7 +696,9 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
         narrative = "QA needs a human — no checklist covers this task type (QA_Checklists Group C)."
     else:
         checks, urls, composite = await _run_rubric(rubric, task, fields, client)
-        verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
+        verdict = sig.build_verdict(
+            checks, settings.qa_fail_count_threshold, settings.qa_minor_revision_max
+        )
         narrative = sig.narrative_of(rubric, verdict, urls)
         # Phase 3: SOP-grounded phrasing for fail/needs_human — cites the
         # QA_Checklists / On-Page-Criteria standard so the rework guidance
@@ -702,7 +710,9 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
         if (
             settings.qa_narrative_enabled
             and checks
-            and verdict["verdict"] in (sig.FAIL, sig.REVISIONS, sig.NEEDS_HUMAN)
+            and verdict["verdict"] in (
+                sig.FAIL, sig.MAJOR_REVISIONS, sig.MINOR_REVISIONS, sig.NEEDS_HUMAN
+            )
             and not sig.gathering_only(checks)
         ):
             llm_text = await _synthesize_narrative(task.get("name") or "", rubric, verdict, checks)
@@ -717,7 +727,9 @@ async def review_task(task_id: str, *, trigger: str = "manual") -> Optional[dict
             "rubric": rubric,
             "verdict": verdict["verdict"],
             "composite": composite,
-            "checks": checks,
+            # Persist a per-check ``critical`` flag so the panel can distinguish a
+            # critical blocking failure from a standard one (option 3 surfacing).
+            "checks": sig.mark_critical(checks),
             "issues": verdict["failed"],
             "urls": urls,
             "narrative": narrative,
@@ -1030,12 +1042,15 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
         logger.warning("qa_activity_failed", extra={"task_id": task_id, "error": str(exc)})
 
     try:
-        if v == sig.REVISIONS:
-            # Minor, fixable failures: the pre-2026-09-08 fail behaviour —
-            # "Rework:" subtasks (new_rework_names), deduped vs still-open ones
-            # so repeated fails don't stack duplicates (hardening #1). As work
-            # items they gate auto-advance, so ticking them ALL re-enters In QA
-            # (the self-re-QA loop; For Revision is in _AUTO_ADVANCE_FROM).
+        if v in (sig.MINOR_REVISIONS, sig.MAJOR_REVISIONS):
+            # Fixable failures (one = minor, several = major): the pre-2026-09-08
+            # fail behaviour — "Rework:" subtasks (new_rework_names), deduped vs
+            # still-open ones so repeated fails don't stack duplicates (hardening
+            # #1). As work items they gate auto-advance, so ticking them ALL re-
+            # enters In QA (the self-re-QA loop; For Revision is in
+            # _AUTO_ADVANCE_FROM). Minor and major route identically — the split
+            # is a severity/legibility signal (badge + notification urgency),
+            # not a different board flow.
             if settings.qa_fail_creates_subtasks and verdict.get("failed"):
                 open_names = [
                     s.get("name") or ""
@@ -1073,7 +1088,7 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
         logger.warning("qa_outcome_move_failed", extra={"task_id": task_id, "error": str(exc)})
 
     notify = (
-        v in (sig.FAIL, sig.REVISIONS, sig.NEEDS_HUMAN)
+        v in (sig.FAIL, sig.MAJOR_REVISIONS, sig.MINOR_REVISIONS, sig.NEEDS_HUMAN)
         or (v in (sig.PASS, sig.ADVISORY) and settings.qa_notify_on_pass)
     )
     if not notify:
@@ -1085,9 +1100,15 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             f"/clients/{task['client_id']}/tasks?task={task_id}"
             if task.get("client_id") else "/my-tasks"
         )
+        # Name WHY a fail escalated (critical vs count) and how many issues a
+        # revisions bounce carries — the data is already on the verdict dict
+        # (option 3 surfacing), so the Slack/board line is self-explaining.
+        n_failed = len(verdict.get("failed") or [])
+        fail_reason = "critical issue" if verdict.get("critical") else f"{n_failed} blocking issues"
         titles = {
-            sig.FAIL: f"QA failed — needs a human: '{task.get('name')}'",
-            sig.REVISIONS: f"QA — minor revisions needed: '{task.get('name')}'",
+            sig.FAIL: f"QA failed — needs a human ({fail_reason}): '{task.get('name')}'",
+            sig.MAJOR_REVISIONS: f"QA — {n_failed} revisions needed: '{task.get('name')}'",
+            sig.MINOR_REVISIONS: f"QA — one minor revision: '{task.get('name')}'",
             sig.NEEDS_HUMAN: f"QA needs a human: '{task.get('name')}'",
             sig.ADVISORY: f"QA passed with recommendations: '{task.get('name')}'",
             sig.PASS: f"QA passed: '{task.get('name')}'",
@@ -1103,10 +1124,13 @@ def _apply_outcome(task: dict, review: dict, verdict: dict) -> None:
             kind="qa_result",
             title=titles[v],
             summary=review.get("narrative"),
-            # A critical fail escalates louder than a routine revisions bounce.
+            # Severity ladder: a critical fail escalates loudest, a major
+            # revisions bounce + needs-human warn, a single minor revision (and
+            # any clean pass) is info — so PACE/Slack urgency tracks how wrong it
+            # is (option 2 finer tiers + option 3 surfacing).
             severity=(
                 "critical" if v == sig.FAIL
-                else "warning" if v in (sig.REVISIONS, sig.NEEDS_HUMAN)
+                else "warning" if v in (sig.MAJOR_REVISIONS, sig.NEEDS_HUMAN)
                 else "info"
             ),
             payload={"link": link, "task_id": task_id, "review_id": review["id"]},
@@ -1404,7 +1428,9 @@ async def review_url(
     else:  # defensive — resolve_url_rubric only yields URL rubrics
         checks, composite = await _website_page_checks(html, url, fields, client)
 
-    verdict = sig.build_verdict(checks, settings.qa_fail_count_threshold)
+    verdict = sig.build_verdict(
+        checks, settings.qa_fail_count_threshold, settings.qa_minor_revision_max
+    )
     narrative = sig.narrative_of(rub, verdict, [url])
     return _url_review_payload(rub, verdict, checks, [url], composite, narrative)
 
@@ -1417,7 +1443,7 @@ def _url_review_payload(rubric: str, verdict: dict, checks: list[dict],
         "rubric": rubric,
         "verdict": verdict["verdict"],
         "composite": composite,
-        "checks": checks,
+        "checks": sig.mark_critical(checks),
         "issues": verdict["failed"],
         "urls": urls,
         "narrative": narrative,

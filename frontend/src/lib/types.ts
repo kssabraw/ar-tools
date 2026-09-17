@@ -2199,6 +2199,7 @@ export interface QaCheck {
   ok: boolean | null // null = could not verify (fail-open → needs_human)
   blocking: boolean
   note: string
+  critical?: boolean // key ∈ qa_signals.CRITICAL_CHECK_KEYS — a fail here escalates
 }
 
 export interface QaReview {
@@ -2206,7 +2207,7 @@ export interface QaReview {
   task_id: string
   client_id: string | null
   rubric: string
-  verdict: 'pass' | 'advisory' | 'revisions' | 'fail' | 'needs_human' | 'skipped'
+  verdict: 'pass' | 'advisory' | 'minor_revisions' | 'major_revisions' | 'fail' | 'needs_human' | 'skipped'
   composite: number | null
   checks: QaCheck[]
   issues: string[]

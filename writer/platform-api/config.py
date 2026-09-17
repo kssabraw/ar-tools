@@ -2324,19 +2324,27 @@ class Settings(BaseSettings):
     # into the working column). The rework subtasks are work items, so ticking
     # them all re-enters In QA (self-closing loop) — For Revision is in
     # _AUTO_ADVANCE_FROM for that reason.
-    qa_fail_status: str = "for_revision"         # bounce target on a REVISIONS review
-    qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks (revisions only)
-    # Graduated verdicts (owner ruling 2026-09-08): a blocking failure splits by
-    # severity — a CRITICAL check (qa_signals.CRITICAL_CHECK_KEYS: wrong/missing
-    # business name, NAP mismatch, no link-back, no map embed, keyword missing
-    # from the URL) OR ≥ qa_fail_count_threshold blocking fails → "fail"
-    # (escalate to a human; NO self-looping Rework subtasks); any other blocking
-    # failure → "revisions" (the pre-2026-09-08 fail behaviour: Rework subtasks +
-    # self-re-QA loop). The count net (0 disables) catches a mostly-broken
-    # deliverable no single critical check would; the critical set is the primary
-    # signal. "advisory" is a clean pass that only tripped non-blocking
-    # recommendations — ships like pass, badged + logged.
+    qa_fail_status: str = "for_revision"         # bounce target on a minor/major revisions review
+    qa_fail_creates_subtasks: bool = True        # rework checklist from failed checks (revisions band only)
+    # Graduated verdicts (owner ruling 2026-09-08; finer split 2026-09-17): a
+    # blocking failure splits by severity — a CRITICAL check
+    # (qa_signals.CRITICAL_CHECK_KEYS: wrong/missing business name, NAP mismatch,
+    # no link-back, no map embed, keyword missing from the URL) OR
+    # ≥ qa_fail_count_threshold blocking fails → "fail" (escalate to a human; NO
+    # self-looping Rework subtasks). Any other blocking failure is the fixable
+    # revisions band (the pre-2026-09-08 fail behaviour: Rework subtasks +
+    # self-re-QA loop), now itself split by count: ≤ qa_minor_revision_max blocking
+    # fails → "minor_revisions" (a quick fix, info-severity notification), more →
+    # "major_revisions" (warning-severity). The count net (0 disables) catches a
+    # mostly-broken deliverable no single critical check would; the critical set
+    # is the primary signal. "advisory" is a clean pass that only tripped non-
+    # blocking recommendations — ships like pass, badged + logged.
     qa_fail_count_threshold: int = 4
+    # The minor/major boundary within the revisions band: this many or fewer
+    # non-critical blocking fails is a "minor_revisions", more is
+    # "major_revisions" (until qa_fail_count_threshold escalates to "fail").
+    # 0 collapses the split so every revisions bounce is "major_revisions".
+    qa_minor_revision_max: int = 1
     # Where an escalated "fail" lands. Empty = the same lane as revisions
     # (qa_fail_status); the critical-severity notification + the distinct verdict
     # badge already set it apart. Point it at another status to give critical

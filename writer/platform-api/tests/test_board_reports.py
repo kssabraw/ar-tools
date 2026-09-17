@@ -147,7 +147,7 @@ def test_dora_reliability():
                                 "denied": 1, "deferred": 0, "cancelled": 0, "reverted": 2}}
     sermastr_audit = {"decisions": {"approved": 6, "dismissed": 2, "worked": 3,
                                     "partial": 1, "no_effect": 2}}
-    qa = {"verdict_mix": {"pass": 7, "advisory": 1, "revisions": 2}, "reviews_considered": 10}
+    qa = {"verdict_mix": {"pass": 7, "advisory": 1, "major_revisions": 1, "minor_revisions": 1}, "reviews_considered": 10}
     rel = director_board.reliability(pace_audit, sermastr_audit, qa)
     assert rel["pace_approved_pct"] == 90          # (8+1)/10
     assert rel["pace_reverted"] == 2

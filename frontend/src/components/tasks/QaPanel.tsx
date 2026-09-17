@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, HelpCircle, Info, MinusCircle, ShieldCheck, Wrench, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, ExternalLink, HelpCircle, Info, MinusCircle, ShieldAlert, ShieldCheck, Wrench, XCircle } from 'lucide-react'
 import { api } from '../../lib/api'
 import type { QaCheck, QaReview } from '../../lib/types'
 
@@ -15,7 +15,8 @@ const POLL_MAX_MS = 3 * 60 * 1000
 const VERDICT_META: Record<QaReview['verdict'], { label: string; color: string; bg: string; Icon: typeof CheckCircle2 }> = {
   pass: { label: 'Passed', color: '#15803d', bg: '#f0fdf4', Icon: CheckCircle2 },
   advisory: { label: 'Passed · advisory', color: '#0369a1', bg: '#f0f9ff', Icon: Info },
-  revisions: { label: 'Minor revisions', color: '#c2410c', bg: '#fff7ed', Icon: Wrench },
+  minor_revisions: { label: 'Minor revision', color: '#d97706', bg: '#fffbeb', Icon: Wrench },
+  major_revisions: { label: 'Revisions needed', color: '#c2410c', bg: '#fff7ed', Icon: Wrench },
   fail: { label: 'Failed · escalated', color: '#b91c1c', bg: '#fef2f2', Icon: XCircle },
   needs_human: { label: 'Needs a human', color: '#b45309', bg: '#fffbeb', Icon: AlertTriangle },
   skipped: { label: 'Not QA-checked', color: '#64748b', bg: '#f8fafc', Icon: MinusCircle },
@@ -47,18 +48,42 @@ const label: React.CSSProperties = { fontSize: 11, fontWeight: 600, color: '#94a
 const fieldInput: React.CSSProperties = { width: '100%', padding: '6px 9px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 12.5, fontFamily: 'inherit', background: '#fff', color: '#0f172a', boxSizing: 'border-box' }
 
 function CheckRow({ c }: { c: QaCheck }) {
+  const failedBlocking = c.ok === false && c.blocking
+  const isCritical = failedBlocking && c.critical === true
   const icon =
     c.ok === true ? <CheckCircle2 size={14} color="#22c55e" /> :
-    c.ok === false ? <XCircle size={14} color={c.blocking ? '#ef4444' : '#f59e0b'} /> :
+    c.ok === false ? (isCritical
+      ? <ShieldAlert size={14} color="#b91c1c" />
+      : <XCircle size={14} color={c.blocking ? '#ef4444' : '#f59e0b'} />) :
     <HelpCircle size={14} color="#f59e0b" />
   return (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, padding: '4px 0' }}>
       <span style={{ marginTop: 1, flexShrink: 0 }}>{icon}</span>
-      <span style={{ fontSize: 12.5, color: c.ok === false && c.blocking ? '#b91c1c' : '#334155', overflowWrap: 'anywhere' }}>
+      <span style={{ fontSize: 12.5, color: failedBlocking ? '#b91c1c' : '#334155', overflowWrap: 'anywhere' }}>
         {c.label}
+        {isCritical && <span style={{ color: '#b91c1c', fontWeight: 700 }}> · critical</span>}
         {!c.blocking && <span style={{ color: '#94a3b8' }}> (advisory)</span>}
         {c.note && <span style={{ color: '#94a3b8' }}> — {c.note}</span>}
       </span>
+    </div>
+  )
+}
+
+// At-a-glance breakdown of a review's checks (option 3 surfacing): a review is
+// never binary — show how many checks passed vs failed vs couldn't be verified.
+function CheckSummary({ checks }: { checks: QaCheck[] }) {
+  const passed = checks.filter((c) => c.ok === true).length
+  const failed = checks.filter((c) => c.ok === false && c.blocking).length
+  const unverified = checks.filter((c) => c.ok === null).length
+  const advisory = checks.filter((c) => c.ok === false && !c.blocking).length
+  if (!checks.length) return null
+  const chip: React.CSSProperties = { fontSize: 11, fontWeight: 600 }
+  return (
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 8 }}>
+      {passed > 0 && <span style={{ ...chip, color: '#15803d' }}>✓ {passed} passed</span>}
+      {failed > 0 && <span style={{ ...chip, color: '#b91c1c' }}>✗ {failed} failed</span>}
+      {unverified > 0 && <span style={{ ...chip, color: '#b45309' }}>? {unverified} unverifiable</span>}
+      {advisory > 0 && <span style={{ ...chip, color: '#0369a1' }}>· {advisory} advisory</span>}
     </div>
   )
 }
@@ -83,6 +108,7 @@ function ReviewCard({ review }: { review: QaReview }) {
             {review.narrative}
           </div>
         )}
+        <CheckSummary checks={review.checks} />
         {review.checks.map((c, i) => <CheckRow key={`${c.key}-${i}`} c={c} />)}
         {review.urls.length > 0 && (
           <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 3 }}>

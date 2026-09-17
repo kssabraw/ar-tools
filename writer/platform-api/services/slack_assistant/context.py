@@ -1246,9 +1246,13 @@ def _ctx_qa(supabase, client_id: str, today: date) -> Optional[dict]:
     for r in latest.values():
         by_verdict[r.get("verdict") or "unknown"] = by_verdict.get(r.get("verdict") or "unknown", 0) + 1
     out: dict = {"reviewed_tasks": len(latest), "by_verdict": by_verdict}
-    # fail (critical, escalated) + revisions (fixable) + needs_human all still
-    # need work — advisory/pass are shippable, so they're not "attention".
-    attention = [r for r in latest.values() if r.get("verdict") in ("fail", "revisions", "needs_human")]
+    # fail (critical, escalated) + the fixable revisions band (minor/major) +
+    # needs_human all still need work — advisory/pass are shippable, so they're
+    # not "attention". 'revisions' retained for pre-2026-09-17 rows.
+    attention = [
+        r for r in latest.values()
+        if r.get("verdict") in ("fail", "major_revisions", "minor_revisions", "revisions", "needs_human")
+    ]
     if attention:
         ids = [r["task_id"] for r in attention[:6]]
         names = {
