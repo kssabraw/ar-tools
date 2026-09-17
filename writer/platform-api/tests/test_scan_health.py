@@ -302,3 +302,121 @@ def test_freshness_portfolio_digest_names_clients():
     assert d["severity"] == "critical"
     assert "3 clients" in d["title"]
     assert "Acme" in d["summary"] and "Gamma" in d["summary"]
+
+
+# ---------------------------------------------------------------------------
+# Freshness sweep flow — the two adversarial-review fixes:
+#   * last_data_at None (no data / transient read fail) → skip, don't flip state
+#   * stale_since is written only on transition, preserved while stale
+# A faithful fake honouring table routing + the .not_.is_(field) metric reads.
+# ---------------------------------------------------------------------------
+class _FreshFake:
+    def __init__(self, *, kw_rows, gsc_client_ids, prior, gsc_max, df_max):
+        self._kw_rows = kw_rows                 # [{id, client_id}]
+        self._gsc_client_ids = set(gsc_client_ids)
+        self._prior = prior                     # {client_id: status}
+        self._gsc_max = gsc_max                 # date|None (gsc_position latest)
+        self._df_max = df_max                   # date|None (tracked_rank latest)
+        self.upserts: list[dict] = []
+
+    def table(self, name):
+        return _FreshBuilder(self, name)
+
+
+class _FreshBuilder:
+    def __init__(self, parent, name):
+        self.p = parent
+        self.name = name
+        self._field = None  # which column a .not_.is_ targeted
+
+    def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
+        return self
+
+    def in_(self, *_a, **_k):
+        return self
+
+    def order(self, *_a, **_k):
+        return self
+
+    def limit(self, *_a, **_k):
+        return self
+
+    @property
+    def not_(self):
+        return self
+
+    def is_(self, field, _val):
+        self._field = field
+        return self
+
+    def upsert(self, row, **_k):
+        if self.name == "rank_freshness_status":
+            self.p.upserts.append(row)
+        return self
+
+    def execute(self):
+        R = lambda data: type("R", (), {"data": data})()
+        if self.name == "tracked_keywords":
+            return R(self.p._kw_rows)
+        if self.name == "gsc_properties":
+            return R([{"client_id": c} for c in self.p._gsc_client_ids])
+        if self.name == "rank_freshness_status":
+            return R([{"client_id": c, "status": s} for c, s in self.p._prior.items()])
+        if self.name == "clients":
+            return R([{"id": r["client_id"], "name": "Acme"} for r in self.p._kw_rows])
+        if self.name == "rank_keyword_metrics":
+            d = self.p._gsc_max if self._field == "gsc_position" else self.p._df_max
+            return R([{"date": d.isoformat()}] if d else [])
+        return R([])
+
+
+def _run_sweep(monkeypatch, fake, emitted):
+    monkeypatch.setattr(sh, "get_supabase", lambda: fake)
+    monkeypatch.setattr("services.notifications.emit", lambda **k: emitted.append(k) or "nid")
+    return sh.run_rank_freshness_sweep()
+
+
+def test_sweep_skips_client_with_no_data(monkeypatch):
+    # last_data_at None (no non-null metrics / transient read fail): do NOT write a
+    # status row and do NOT alert — never flip a prior verdict on an indeterminate read.
+    fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                      prior={"c1": "stale"}, gsc_max=None, df_max=None)
+    emitted: list = []
+    _run_sweep(monkeypatch, fake, emitted)
+    assert fake.upserts == []          # prior 'stale' left untouched (report guard stays gated)
+    assert emitted == []
+
+
+def test_sweep_preserves_stale_since_while_stale(monkeypatch):
+    # Already-stale client, still stale → the upsert must OMIT stale_since so the
+    # stored transition timestamp isn't wiped by the daily re-sweep.
+    fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                      prior={"c1": "stale"}, gsc_max=date(2026, 9, 5), df_max=None)  # 11d stale
+    emitted: list = []
+    _run_sweep(monkeypatch, fake, emitted)
+    assert len(fake.upserts) == 1
+    row = fake.upserts[0]
+    assert row["status"] == "stale"
+    assert "stale_since" not in row     # preserved, not overwritten
+
+
+def test_sweep_opens_and_recovers_set_stale_since(monkeypatch):
+    # ok→stale writes stale_since; stale→ok clears it + emits recovery.
+    open_fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                           prior={}, gsc_max=date(2026, 9, 5), df_max=None)  # newly stale
+    opened: list = []
+    _run_sweep(monkeypatch, open_fake, opened)
+    assert open_fake.upserts[0]["status"] == "stale"
+    assert open_fake.upserts[0]["stale_since"] is not None
+    assert any(e["kind"] == "rank_data_stale" for e in opened)
+
+    rec_fake = _FreshFake(kw_rows=[{"id": "k1", "client_id": "c1"}], gsc_client_ids=["c1"],
+                          prior={"c1": "stale"}, gsc_max=date.today(), df_max=None)  # fresh again
+    recovered: list = []
+    _run_sweep(monkeypatch, rec_fake, recovered)
+    assert rec_fake.upserts[0]["status"] == "ok"
+    assert rec_fake.upserts[0]["stale_since"] is None
+    assert any(e["kind"] == "rank_data_recovered" for e in recovered)

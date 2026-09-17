@@ -364,23 +364,35 @@ def run_rank_freshness_sweep() -> dict:
     for client_id, keyword_ids in by_client.items():
         has_gsc = client_id in gsc_clients
         last_data_at = _latest_data_date(supabase, keyword_ids)
+        # None = the client has no rank data at all yet (awaiting first pull) OR
+        # both metric reads failed transiently. Either way we can't judge freshness
+        # this sweep, so leave the prior verdict untouched — never flip a genuinely
+        # stale client to 'ok' (which would also un-gate the report guard) on a
+        # transient read hiccup, and never alert a brand-new client.
+        if last_data_at is None:
+            continue
         verdict = evaluate_freshness(last_data_at, has_gsc, today, gsc_days, df_days)
         was_stale = prior_status.get(client_id) == "stale"
 
         # Persist current state (powers the portfolio read + UI freshness).
+        row = {
+            "client_id": client_id,
+            "status": "stale" if verdict["stale"] else "ok",
+            "last_data_at": last_data_at.isoformat(),
+            "days_stale": verdict["days_stale"],
+            "threshold_days": verdict["threshold"],
+            "updated_at": now.isoformat(),
+        }
+        # stale_since marks the ok→stale transition and must be PRESERVED while the
+        # client stays stale — so it is only written on a transition (omitted while
+        # stale so the stored value stands; a daily re-sweep can't wipe it), and
+        # cleared on recovery.
+        if verdict["stale"] and not was_stale:
+            row["stale_since"] = now.isoformat()
+        elif not verdict["stale"] and was_stale:
+            row["stale_since"] = None
         try:
-            supabase.table("rank_freshness_status").upsert(
-                {
-                    "client_id": client_id,
-                    "status": "stale" if verdict["stale"] else "ok",
-                    "last_data_at": last_data_at.isoformat() if last_data_at else None,
-                    "days_stale": verdict["days_stale"],
-                    "threshold_days": verdict["threshold"],
-                    "stale_since": now.isoformat() if (verdict["stale"] and not was_stale) else None,
-                    "updated_at": now.isoformat(),
-                },
-                on_conflict="client_id",
-            ).execute()
+            supabase.table("rank_freshness_status").upsert(row, on_conflict="client_id").execute()
         except Exception as exc:
             logger.warning("rank_freshness.status_upsert_failed",
                            extra={"client_id": client_id, "error": str(exc)})
@@ -412,8 +424,9 @@ def run_rank_freshness_sweep() -> dict:
             except Exception as exc:
                 logger.warning("rank_freshness.emit_failed",
                                extra={"client_id": client_id, "error": str(exc)})
-        elif was_stale and not verdict["no_data_ever"]:
+        elif was_stale:
             # stale→ok: post a recovery once (deduped on the recovery date).
+            # last_data_at is guaranteed non-None here (None clients `continue`d).
             try:
                 notifications.emit(
                     client_id=client_id,
