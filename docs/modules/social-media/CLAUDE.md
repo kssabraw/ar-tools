@@ -17,9 +17,14 @@
 > in. Posts are **async** (create → bounded-poll `/social-post-results` for the URL, Decision
 > 2=A); pricing is **flat** (X credit surcharge gated to PostPeer only); quota **pools at the
 > Team level** (per-client isolation ≠ per-client quota; our `social_usage` meter does spend).
-> Project type = **Quickstart** (owner). Activate on PLATFORM: `SOCIAL_POSTING_PROVIDER=postforme`
-> (code default stays `postpeer`, inert without a key). PostPeer stays behind the adapter as a
-> dormant fallback. Live post-path verification is deployed-only (sandbox egress-blocked from PostForMe).
+> Project type = **Quickstart** (owner). **MERGED + ACTIVATED + LIVE** (PR #1198, squash
+> `961d57c`): `SOCIAL_POSTING_PROVIDER=postforme` is **set on PLATFORM** and the activation
+> deploy (`df6323b0` = `961d57c` + the var) booted healthy. The code default stays `postpeer`
+> (inert without a key), so a fresh env still ships dark; PostPeer stays behind the adapter as
+> a dormant fallback. **Still open (human, deployed-only):** paste each client's PostForMe
+> project key (Social setup → "Save API key"); run one live end-to-end test post + account
+> connect (sandbox egress-blocked from PostForMe, so the post path is verifiable only on the
+> deployed service); delete the dashboard test project + its throwaway keys.
 >
 > **Build status (2026-09-16):** **The module is fully wired and live, and P1 competitor research is now BUILT + LIVE.**
 > P0 foundations + the backend publish path + the R2 media store (PR #1027) and the frontend compose screen

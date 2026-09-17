@@ -4,11 +4,16 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
-## Update (2026-09-17) — **Posting provider swapped: PostForMe replaces PostPeer** (ADR-0006)
+## Update (2026-09-17) — **Posting provider swapped: PostForMe replaces PostPeer — MERGED + ACTIVATED + LIVE** (ADR-0006)
 
 The agency moved off PostPeer to **PostForMe** (api.postforme.dev). Built behind the existing
-adapter seam (ADR-0001), so it's a contained change. Authoritative facts:
-`docs/modules/social-media-vendor-confirm-postforme-v1_0.md`; decision: `docs/adr/0006-...md`.
+adapter seam (ADR-0001), so it's a contained change. **Merged** (PR #1198, squash `961d57c`),
+**activated** on PLATFORM (`SOCIAL_POSTING_PROVIDER=postforme`), and the activation deploy is
+**verified healthy** (deploy `df6323b0` = `961d57c` + the provider var reached SUCCESS + active;
+boot logs clean: `job_worker.started` / `gsc_scheduler.started` / `event_loop_watchdog.started` /
+Uvicorn up, no `gsc_scheduler.step_failed`). The Social module now posts via PostForMe in prod.
+Authoritative facts: `docs/modules/social-media-vendor-confirm-postforme-v1_0.md`;
+decision: `docs/adr/0006-social-posting-provider-postforme.md`.
 
 **What shipped:**
 - `services/social/postforme_adapter.py` — the 5 adapter methods vs PostForMe's `/v1` API
@@ -31,13 +36,18 @@ adapter seam (ADR-0001), so it's a contained change. Authoritative facts:
 API key in the PostForMe dashboard, paste it into the client's Social setup. Quota pools at
 the **Team** level (per-client isolation ≠ per-client quota). Project type = **Quickstart**.
 
-**To activate on PLATFORM:** set `SOCIAL_POSTING_PROVIDER=postforme` (code default stays
-`postpeer`, inert without a key). No global key. Then per client: paste its project key.
+**Activation (DONE):** `SOCIAL_POSTING_PROVIDER=postforme` is set on PLATFORM (code default
+stays `postpeer`, inert without a key, so a fresh env still ships dark). No global key. **Now
+per client:** create its PostForMe Project + API key in the dashboard and paste it into the
+client's **Social setup → Save API key**; a client with no key returns `social_not_configured`
+(safe/inert) until then.
 
-**Still to verify (deployed-only — sandbox is egress-blocked from PostForMe):** a live test
-post end-to-end (create → result poll → published URL) and a live account-connect via the
-auth-url flow. **Cleanup:** the owner should delete the dashboard test project + 3 test keys
-created during the isolation investigation.
+**Still open (human, deployed-only — sandbox is egress-blocked from PostForMe):**
+- **Per-client keys:** paste each Social client's PostForMe project key (the one recurring step).
+- **Live verification** once a key is in place: one end-to-end test post (create → result poll →
+  published URL) and a live account-connect via the auth-url flow.
+- **Cleanup:** delete the dashboard **test project** ("Isolation Test Client") + the **3 test
+  API keys** from the isolation investigation — they're live keys returning real tokens.
 
 ---
 
