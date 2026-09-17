@@ -748,6 +748,12 @@ def test_parent_advance_target_rules():
     assert f("in_progress", False,
              [{"name": "Citations Started", "completed": True},
               {"name": "Citations QA'd", "completed": True}]) == "in_qa"
+    # Rule B2 NEVER fires from For Revision, even on a marker-only checklist with
+    # its QA step ticked: a critical QA fail parks the task there with no rework
+    # subtasks but the QA marker still ticked, and it must NOT auto-bounce back to
+    # In QA (the escalation left the auto-loop for a human). Only Rule B (rework
+    # work items) re-enters In QA from For Revision.
+    assert f("for_revision", False, [{"name": "Citations QA'd", "completed": True}]) is None
     # A checklist with real work items ignores Rule B2 while work is pending —
     # a stale ticked QA marker must NOT short-circuit a For-Revision task whose
     # Rework: items are still open.
