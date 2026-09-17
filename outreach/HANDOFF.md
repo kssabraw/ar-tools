@@ -2,6 +2,37 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
+Status as of 2026-09-17 (**cold-caller CRM Tier 3 landed: T3.2 (call script + rebuttal library) MERGED; T3.1 (click-to-call) deferred by owner ruling** — everything below from 2026-08-27 and earlier still stands).
+
+### 2026-09-17 session — cold-caller CRM Tier 3 / T3.2 (MERGED)
+
+- **T3.2 — CALL SCRIPT + OBJECTION/REBUTTAL LIBRARY — BUILT + MERGED (#1196 → squash `2098547`;
+  handoff-status follow-up #1197 → squash `f242c1d`).** The "Why call?" hook is only the opener (one
+  line); this adds the talk track past it plus answers to what a local-business owner says back. A
+  5-part script (open → discovery → evidence → value → close) + a fixed, ordered **9-objection
+  rebuttal library** (`already_ranking`/`has_agency`/`already_ads`/`not_interested`/`too_busy`/
+  `price`/`email_me`/`tried_before`/`referral_only`), each **fed by the prospect's own measured
+  facts** (coverage deficit, the named competitor taking its searches, paid/paying evidence, review
+  delta, organic rank) so the rebuttal names the real situation. **PURE deterministic assembly** —
+  no LLM, never a fabricated fact/competitor/number (the 2026-08-08 design-fork ruling, applied
+  verbatim; DECISIONS 2026-09-17). It **re-grounds nothing**: opener = the report's hook verbatim
+  (shares "Why call?" + its cached phrasing pass), evidence = the `talking_points` verbatim, value =
+  the deterministic `valuation.line`; each grounded rebuttal carries its `facts` (replayable) and
+  degrades to a generic-but-honest line when a fact is absent (never omitted, never a promise). The
+  paid `conversion_tag` claim stays evidence-gated (I-099 — a site tag never asserts a keyword bid).
+  Files: `writer/platform-api/services/outreach_script.py` (pure) + `services/outreach.prospect_script`
+  (I/O, reuses `prospect_report` as the single source) + `GET /outreach/prospects/{id}/script` +
+  `frontend/src/components/outreach/Script.tsx` (a "Script & rebuttals" toggle beside "Why call?" in
+  the lead drawer) + `tests/test_outreach_script.py` (17 pure cases). **No migration** (renders from
+  the existing report/justification; the Outreacher DB is untouched). Invariants held: outcome /
+  touch / lead_activity untouched (read-only, spends nothing), no prospect-facing asset generated.
+- **T3.1 — CLICK-TO-CALL — DEFERRED (owner ruling §5 Q4: none for now; DECISIONS 2026-09-17).** No
+  telephony vendor yet — no provider, no code, no per-minute spend. Callers keep dialing via the
+  `tel:` link (T1.5) and logging the contact by hand. Build scope + invariants preserved in the
+  cold-caller CRM handoff's §3 T3.1 bullet; revisit when call volume justifies the setup + cost.
+- **Standing deferrals on the cold-caller CRM surface:** T2.3 (owner-assignment UI + per-owner RLS —
+  solo caller) and T3.1 (above). Everything else in Tiers 1–3 is merged.
+
 Status as of 2026-08-27 (**enrichment hardened + made reliable; the ORGANIC/paid-placement signal now runs automatically; the outreach worker finally has CI** — all MERGED to `main`; the four live geogrid scans below still stand).
 
 ### 2026-08-27 session — enrichment reliability, auto-organic, CI, LA data repair (all MERGED)

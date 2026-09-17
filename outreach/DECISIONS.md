@@ -2615,6 +2615,8 @@ the reads it depends on already exist. Nothing schema-level changed.
 
 ## 2026-09-17 — Tier 3 / T3.2: the call script + rebuttal library is PURE assembly over the report, not a new LLM
 
+**MERGED to `main` (#1196 → squash `2098547`; handoff-status follow-up #1197 → squash `f242c1d`).**
+
 The "Why call?" hook is one line — the opener. A caller has no talk track past it and no answer to
 what an owner says back. T3.2 adds a per-call script (open → discovery → evidence → value → close)
 and a rebuttal library, both surfaced beside "Why call?" in the lead drawer. Built as
@@ -2653,3 +2655,23 @@ sentences are filled from persisted scan data and never improvised at send time,
 §716's "template MUST be config" protects against. Persisting per-market/category script templates is
 a later cheap-to-reverse step if an A/B need arises. v1 renders entirely from the existing
 report/justification, so nothing schema-level changed.
+
+---
+
+## 2026-09-17 — Tier 3 / T3.1 (click-to-call): none for now (owner ruling, §5 Q4)
+
+The cold-caller CRM handoff's one open Tier-3 blocker was the telephony vendor for click-to-call +
+auto-`touch` (Twilio Voice vs Aircall vs none-for-now). **Owner ruled: none for now.** T3.1 is NOT
+built — no provider account, no code, no per-minute spend, no webhook receiver. Callers keep dialing
+via the `tel:` link (T1.5) and logging the contact by hand.
+
+*Reasoning:* the build carries real provider lead time (number provisioning, caller-ID /
+local-presence) and a per-minute billing model that has to be fit into the outreach signed-order +
+per-user-budget discipline; at current call volume that setup + cost isn't yet worth it. Deferring
+costs nothing — the manual dial+log path already works and the outcome/touch substrate fills from it.
+
+*Revisit* when call volume justifies the setup + per-minute cost. The build scope + invariants are
+preserved in the handoff's §3 T3.1 bullet: dial from the queue/drawer, a completed-call webhook →
+an automatic `touch` (channel `phone`, actor = the caller) mapping the call back to its lead, the
+recording as a `call_note` carrying the `touch_id`, and the paid dial as an auditable signed order.
+The `touch`-is-authoritative / no-`call`-activity-kind invariant governs that future build.
