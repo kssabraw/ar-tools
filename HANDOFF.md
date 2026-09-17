@@ -19,7 +19,7 @@ Goal: let LeadOff cover **small-market (15k–30k population) cities** — the s
    python scripts/export_leadoff_board.py --dry-run   # summarize (row count, grades, pop range); no writes
    python scripts/export_leadoff_board.py             # rebuild from the latest run
    ```
-   Needs `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` (the supabase-py creds — NOT the scanner's `SUPABASE_DB_URL`) + platform-api deps. Run it from the ar-tools clone (`%USERPROFILE%\repos\ar-tools`) if those are set, **or** from an ar-tools web/Railway context. `--min-rows` (default 1000) refuses to wipe the board on a too-small compute; `--run N` targets a specific run.
+   **Credentials auto-select** (override with `--via`): the **scanner machine** already has `SUPABASE_DB_URL` (the creds report.py uses) → the export uses the **direct-Postgres path** (SQLAlchemy, replace done in one transaction — no empty-board window); the **app runtime** has `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` → the supabase-py path. So it runs from the ar-tools clone (`%USERPROFILE%\repos\ar-tools`) on the scanner box with the DB-URL cred, **or** from an ar-tools web/Railway context. `--min-rows` (default 1000) refuses to wipe the board on a too-small compute; `--run N` targets a specific run.
 6. **Verify in the app:** `GET /leadoff/board?min_pop=15000&max_pop=30000` returns the small-market rows (the 15–30k preset).
 
 Reference detail lives in `docs/modules/leadoff-prd-v1_0.md` §3a + §4.

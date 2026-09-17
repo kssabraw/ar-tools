@@ -6,16 +6,23 @@ math). Run this AFTER the scanner loads a new run to master (e.g. a 15k-30k
 population top-up) — otherwise the new tier sits in master and never reaches the
 app.
 
-Machine-independent: every input already lives in Supabase, so this runs from
-anywhere with the service-role creds (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY).
-It does NOT drop/recreate the table (which would strip the service_role grants) —
-it deletes rows and re-inserts, preserving grants.
+Machine-independent: every input already lives in Supabase. Two access paths,
+auto-selected (override with --via):
+  * ``rest`` — supabase-py (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY). The
+    default when those are set (e.g. the platform-api / ar-tools runtime).
+  * ``db``  — a direct Postgres connection (SUPABASE_DB_URL, via SQLAlchemy).
+    The default when only SUPABASE_DB_URL is set (e.g. the scanner machine,
+    which already has that credential + SQLAlchemy from report.py). This path
+    does the replace in a single transaction (atomic — no empty-board window).
+
+Neither path drops/recreates the table (which would strip the service_role
+grants) — both delete rows and re-insert, preserving grants.
 
 Usage:
   python scripts/export_leadoff_board.py --dry-run      # compute + summarize, no writes
   python scripts/export_leadoff_board.py                # rebuild from the latest run
   python scripts/export_leadoff_board.py --run 4        # rebuild from a specific run_id
-  python scripts/export_leadoff_board.py --as-of 2026-09
+  python scripts/export_leadoff_board.py --via db       # force the SUPABASE_DB_URL path
 """
 from __future__ import annotations
 
@@ -27,45 +34,126 @@ from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services import leadoff_export as lx  # noqa: E402
-from services.leadoff_db import get_leadoff_client  # noqa: E402
+from services import leadoff_export as lx  # noqa: E402  (pure stdlib — safe anywhere)
 
+SCHEMA = "market_scanner"
 MASTER = "market_opportunity_master"
 MASTER_COLS = ("city_id,category_id,city_name,state_code,population,demand_vol,"
                "avg_top5_reviews,exact_cat_holders,opportunity_score_v3,"
                "low_coverage,last_updated")
+FQ_COLS = "city_id,category_id,rev_to_win,top5_rating,name_match"
 _TIER_COL = {"low": "cpl_low", "mid": "cpl_mid", "high": "cpl_high"}
 _PAGE = 1000
 
 
-def _read_all(make_query, page: int = _PAGE, cap: int = 2_000_000) -> list[dict]:
-    """Paginate a PostgREST query to completion. ``make_query`` returns a fresh
-    ordered query builder each call (so .range() is applied to a clean chain)."""
-    out: list[dict] = []
-    start = 0
-    while True:
-        rows = make_query().range(start, start + page - 1).execute().data or []
-        out.extend(rows)
-        if len(rows) < page:
-            return out
-        start += page
-        if start > cap:
-            raise RuntimeError(f"read cap {cap} exceeded — aborting")
+# ── Backends (each imports its own driver lazily) ─────────────────────────────
+
+class RestBackend:
+    """supabase-py / PostgREST (SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY)."""
+
+    name = "rest (supabase-py)"
+
+    def __init__(self) -> None:
+        from services.leadoff_db import get_leadoff_client
+        self.c = get_leadoff_client()
+
+    def _read_all(self, make_query, cap: int = 2_000_000) -> list[dict]:
+        out: list[dict] = []
+        start = 0
+        while True:
+            rows = make_query().range(start, start + _PAGE - 1).execute().data or []
+            out.extend(rows)
+            if len(rows) < _PAGE:
+                return out
+            start += _PAGE
+            if start > cap:
+                raise RuntimeError(f"read cap {cap} exceeded — aborting")
+
+    def latest_run(self) -> int:
+        rows = (self.c.table(MASTER).select("run_id").order("run_id", desc=True)
+                .limit(1).execute().data or [])
+        if not rows:
+            sys.exit(f"No rows in {MASTER} — nothing to export.")
+        return int(rows[0]["run_id"])
+
+    def read_master(self, run: int) -> list[dict]:
+        return self._read_all(lambda: self.c.table(MASTER).select(MASTER_COLS)
+                              .eq("run_id", run).eq("supply_measured", True)
+                              .order("city_id").order("category_id"))
+
+    def read_field_quality(self) -> list[dict]:
+        return self._read_all(lambda: self.c.table("field_quality").select(FQ_COLS)
+                              .order("city_id").order("category_id"))
+
+    def read_small(self, table: str, cols: str) -> list[dict]:
+        return self.c.table(table).select(cols).execute().data or []
+
+    def replace(self, table: str, rows: list[dict], match_col: str) -> None:
+        self.c.table(table).delete().gte(match_col, 0).execute()
+        for i in range(0, len(rows), 500):
+            self.c.table(table).insert(rows[i:i + 500]).execute()
 
 
-def _latest_run(c) -> int:
-    rows = (c.table(MASTER).select("run_id").order("run_id", desc=True)
-            .limit(1).execute().data or [])
-    if not rows:
-        sys.exit(f"No rows in {MASTER} — nothing to export.")
-    return int(rows[0]["run_id"])
+class SqlBackend:
+    """Direct Postgres via SQLAlchemy (SUPABASE_DB_URL). Replace is transactional."""
+
+    name = "db (SUPABASE_DB_URL)"
+
+    def __init__(self, db_url: str) -> None:
+        import sqlalchemy  # lazy: only the scanner env needs this
+        self._sa = sqlalchemy
+        self.engine = sqlalchemy.create_engine(db_url)
+
+    def _rows(self, sql: str, **params) -> list[dict]:
+        with self.engine.connect() as conn:
+            return [dict(r) for r in conn.execute(self._sa.text(sql), params).mappings()]
+
+    def latest_run(self) -> int:
+        r = self._rows(f"select max(run_id) as run from {SCHEMA}.{MASTER}")
+        if not r or r[0]["run"] is None:
+            sys.exit(f"No rows in {MASTER} — nothing to export.")
+        return int(r[0]["run"])
+
+    def read_master(self, run: int) -> list[dict]:
+        return self._rows(
+            f"select {MASTER_COLS} from {SCHEMA}.{MASTER} "
+            "where run_id=:run and supply_measured is true", run=run)
+
+    def read_field_quality(self) -> list[dict]:
+        return self._rows(f"select {FQ_COLS} from {SCHEMA}.field_quality")
+
+    def read_small(self, table: str, cols: str) -> list[dict]:
+        return self._rows(f"select {cols} from {SCHEMA}.{table}")
+
+    def replace(self, table: str, rows: list[dict], match_col: str) -> None:
+        # atomic: delete + insert in one transaction (no empty-board window)
+        cols = list(rows[0].keys()) if rows else []
+        insert = (f"insert into {SCHEMA}.{table} ({', '.join(cols)}) "
+                  f"values ({', '.join(':' + c for c in cols)})")
+        with self.engine.begin() as conn:
+            conn.execute(self._sa.text(f"delete from {SCHEMA}.{table}"))
+            for i in range(0, len(rows), 1000):
+                conn.execute(self._sa.text(insert), rows[i:i + 1000])
 
 
-def _write_replace(c, table: str, rows: list[dict], match_filter) -> None:
-    """Delete all rows then batch-insert (grant-preserving, no DDL)."""
-    match_filter(c.table(table).delete()).execute()
-    for i in range(0, len(rows), 500):
-        c.table(table).insert(rows[i:i + 500]).execute()
+def _select_backend(via: str) -> RestBackend | SqlBackend:
+    db_url = os.environ.get("SUPABASE_DB_URL")
+    has_rest = bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_SERVICE_ROLE_KEY"))
+    if via == "rest":
+        if not has_rest:
+            sys.exit("--via rest needs SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.")
+        return RestBackend()
+    if via == "db":
+        if not db_url:
+            sys.exit("--via db needs SUPABASE_DB_URL.")
+        return SqlBackend(db_url)
+    # auto: prefer REST creds (the app runtime); else the DB URL (the scanner box)
+    if has_rest:
+        return RestBackend()
+    if db_url:
+        return SqlBackend(db_url)
+    sys.exit("No credentials found. Set SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY, "
+             "or SUPABASE_DB_URL.")
 
 
 def main() -> None:
@@ -76,27 +164,25 @@ def main() -> None:
                     help="lead-value tier the stored grade uses (default mid)")
     ap.add_argument("--capture", type=float, default=lx.DEFAULT_CAPTURE,
                     help="search->lead capture the stored grade uses (default 0.10)")
+    ap.add_argument("--via", choices=["auto", "rest", "db"], default="auto",
+                    help="data access path (default auto: REST creds, else SUPABASE_DB_URL)")
     ap.add_argument("--min-rows", type=int, default=1000,
                     help="safety floor: refuse to replace the board with fewer rows")
     ap.add_argument("--dry-run", action="store_true", help="compute + summarize, no writes")
     a = ap.parse_args()
 
-    c = get_leadoff_client()
-    run = a.run if a.run is not None else _latest_run(c)
-    print(f"Exporting leadoff_board from {MASTER} run_id={run} "
+    be = _select_backend(a.via)
+    run = a.run if a.run is not None else be.latest_run()
+    print(f"Exporting leadoff_board from {MASTER} run_id={run} via {be.name} "
           f"(tier={a.tier}, capture={a.capture})", flush=True)
 
-    # --- read inputs (all already in Supabase) --------------------------------
-    master = _read_all(lambda: c.table(MASTER).select(MASTER_COLS)
-                       .eq("run_id", run).eq("supply_measured", True)
-                       .order("city_id").order("category_id"))
+    # --- read inputs ----------------------------------------------------------
+    master = be.read_master(run)
     if not master:
         sys.exit(f"No supply_measured rows for run_id={run}.")
-    fq_rows = _read_all(lambda: c.table("field_quality")
-                        .select("city_id,category_id,rev_to_win,top5_rating,name_match")
-                        .order("city_id").order("category_id"))
-    cats = c.table("categories").select("category_id,category_name").execute().data or []
-    lv_rows = c.table("lead_values").select(f"category_name,{_TIER_COL[a.tier]}").execute().data or []
+    fq_rows = be.read_field_quality()
+    cats = be.read_small("categories", "category_id,category_name")
+    lv_rows = be.read_small("lead_values", f"category_name,{_TIER_COL[a.tier]}")
 
     fq = {(int(r["city_id"]), str(r["category_id"])): r for r in fq_rows}
     cat_id_to_name = {r["category_id"]: r["category_name"] for r in cats}
@@ -131,9 +217,9 @@ def main() -> None:
 
     # --- write (grant-preserving delete + insert) -----------------------------
     print("writing leadoff_board…", flush=True)
-    _write_replace(c, "leadoff_board", board, lambda q: q.gte("city_id", 0))
+    be.replace("leadoff_board", board, match_col="city_id")
     print("writing exp_val_percentiles…", flush=True)
-    _write_replace(c, "exp_val_percentiles", pct, lambda q: q.gte("pct", 0))
+    be.replace("exp_val_percentiles", pct, match_col="pct")
     print(f"DONE: leadoff_board <- {len(board)} rows, exp_val_percentiles <- {len(pct)} rows "
           f"(run_id={run}, as_of={as_of}).", flush=True)
 
