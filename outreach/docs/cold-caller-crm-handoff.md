@@ -5,8 +5,10 @@ to work leads, dial, disposition, and book callbacks. NOT the scanning/scoring p
 sound; see `START-HERE.md`).
 
 **Status:** **Tiers 1 + 2 BUILT and MERGED to `main` (2026-09-17)** — the caller cockpit is done bar
-one deliberately-deferred item (T2.3). **Tier 3 is the current work order** (this doc drives it;
-§3/§5-Q4/§6/§7 below are the live parts — everything above §3 is background).
+one deliberately-deferred item (T2.3). **Tier 3 is in progress: T3.2 (script + rebuttal library)
+BUILT (this session, draft PR to `main`); T3.1 (click-to-call) STILL BLOCKED on §5 Q4 (vendor) —
+not started, ask the owner first.** This doc drives Tier 3 (§3/§5-Q4/§6/§7 below are the live
+parts — everything above §3 is background).
 
 - **Tier 1** (merged #1185 + #1188 → promotion #1190): T1.2/T1.3/T1.4 (structured disposition,
   one-step next action, callback time + timezone) and T1.1/T1.5 (`v_call_queue` / `v_overdue_actions`
@@ -205,15 +207,32 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
   (the only activity kind allowed to). Migration: likely a `call`/recording table + a `touch`
   provenance column. **Confirm the outreach `tick`/signed-order + per-user-budget model** if the
   provider bills per minute — a paid dial should be as auditable as a scan.
-- **T3.2 — Script + objection/rebuttal library.** The call hook is the opener only (one line); there
-  is no talk track past it. Build a per-call script + rebuttals, ideally **fed by the report data the
-  pipeline already produces** (competitor names, the MAPS/ORGANIC/paid-placement gaps, review
-  deltas) so a rebuttal can name the prospect's real situation rather than a generic line. Same
-  discipline as the hook: **deterministic + fact-grounded, never a fabricated competitor/number**
-  (outreach DECISIONS 2026-08-08 design-fork ruling); reuse `outreach_justification.py` /
-  `outreach_report.py` assembly rather than a fresh LLM guess. No vendor dependency. Migration:
-  probably none for a v1 (render from the existing report/justification), unless script templates
-  are persisted per market/category.
+- **T3.2 — Script + objection/rebuttal library.** ✅ **BUILT (this session, draft PR).** The call
+  hook is the opener only (one line); there is now a talk track past it plus rebuttals to what a
+  local-business owner says back, **fed by the report data the pipeline already produces**
+  (competitor names, the MAPS/ORGANIC/paid-placement gaps, review deltas) so a rebuttal names the
+  prospect's real situation. Same discipline as the hook: **deterministic + fact-grounded, never a
+  fabricated competitor/number** (outreach DECISIONS 2026-08-08 design-fork ruling). **No vendor
+  dependency. No migration** (renders from the existing report/justification).
+  - **As built:** pure assembler `writer/platform-api/services/outreach_script.py` —
+    `build_script(justification, signals)` produces a 5-part talk track (open → discovery →
+    evidence → value → close) + a fixed, ordered 9-objection rebuttal library
+    (`already_ranking`/`has_agency`/`already_ads`/`not_interested`/`too_busy`/`price`/`email_me`/
+    `tried_before`/`referral_only`). It **re-grounds nothing**: the opener is `justification.hook`
+    verbatim (shares the "Why call?" opener + its cached loss-framed phrasing pass), the evidence
+    section is its `talking_points` verbatim, the value line is the deterministic `valuation.line`.
+    Each grounded rebuttal uses ONLY numbers/names in the facts it was handed and carries those
+    `facts` (replayability); an absent fact degrades to a generic-but-honest line (never omitted,
+    never fabricated, never a promise). The paid `conversion_tag` claim is evidence-gated (I-099 —
+    a site tag never asserts a keyword bid).
+  - **I/O + route:** `services/outreach.prospect_script` reuses `prospect_report` as the single
+    source (so it can't disagree with the report/hook); `GET /outreach/prospects/{id}/script`.
+  - **UI:** `frontend/src/components/outreach/Script.tsx` + a "Script & rebuttals" toggle beside
+    "Why call?" in the lead drawer (`OutreachLeads.tsx`). Rebuttals are a click-to-expand accordion
+    with a "grounded" badge.
+  - **Tests:** `tests/test_outreach_script.py` (17, pure) — opener/evidence/value passthrough, the
+    fixed rebuttal set + ordering, deficit/competitor/review/organic grounding, the conversion-tag
+    evidence gate, and the unmeasured generic-fallback path. ruff + tsc + eslint + build all clean.
 
 ---
 
@@ -279,11 +298,13 @@ start until the owner picks Twilio vs Aircall vs none-for-now.
 4. ~~**T2.1 / T2.2 / T2.4** (cadence, scoreboard, filters) — read-only, low risk.~~ ✅ this session.
 5. ~~**T2.5** (link a manual lead to a scanned prospect, light path).~~ ✅ #1191. **T2.3 deferred**
    — solo caller (§5 Q3). **Tiers 1 + 2 complete** except deferred T2.3.
-6. **← NEXT — Tier 3, as separately-scoped projects:**
-   a. **T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
-      existing report/justification assembly; deterministic + fact-grounded.
-   b. **T3.1** (click-to-call + auto-`touch`) only after the owner answers §5 Q4 (vendor). Fit the
-      paid dial into the signed-order/per-user-budget model if it bills per minute.
+6. **Tier 3, as separately-scoped projects:**
+   a. ~~**T3.2** (script + objection/rebuttal library) first — no vendor dependency; reuses the
+      existing report/justification assembly; deterministic + fact-grounded.~~ ✅ BUILT (this
+      session, draft PR).
+   b. **← NEXT — T3.1** (click-to-call + auto-`touch`) only after the owner answers §5 Q4 (vendor).
+      Fit the paid dial into the signed-order/per-user-budget model if it bills per minute. **STILL
+      BLOCKED — ask the owner before starting.**
 
 Ship each tier behind the existing `/outreach/leads` surface; don't gate one on the next.
 

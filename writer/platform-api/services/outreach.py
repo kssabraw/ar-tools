@@ -3059,6 +3059,25 @@ def prospect_report(prospect_id: str, snapshot_id: str | None = None) -> dict[st
     )
 
 
+def prospect_script(prospect_id: str, snapshot_id: str | None = None) -> dict[str, Any]:
+    """Assemble the per-prospect call SCRIPT + objection/rebuttal library (Tier 3 / T3.2).
+
+    Read-only, spends nothing, writes nothing. Reuses `prospect_report` as the single source — so
+    the script's opener is the SAME hook the "Why call?" panel shows (one source of truth, and the
+    loss-framed phrasing pass runs once, cached per (prospect, snapshot)), the evidence section is
+    the report's talking points verbatim, and the organic rank that enriches a rebuttal comes from
+    the report's already-assembled organic signal. The script layer itself is pure deterministic
+    assembly (`outreach_script.build_script`) — never a fabricated fact, competitor, or number.
+    """
+    from services import outreach_script as osc
+
+    report = prospect_report(prospect_id, snapshot_id)
+    return osc.build_script(
+        justification=report.get("justification") or {},
+        signals=report.get("signals"),
+    )
+
+
 def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
     """Turn a scanned prospect into a lead, prefilled — the scan-results "Send to CRM" click.
 

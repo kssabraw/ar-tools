@@ -218,6 +218,26 @@ async def get_client_report_url(
     return _handle(outreach_service.latest_client_report_url, prospect_id)
 
 
+@router.get("/outreach/prospects/{prospect_id}/script")
+async def prospect_script(
+    prospect_id: str,
+    snapshot_id: Optional[str] = None,
+    auth: dict = Depends(require_outreach),
+) -> dict:
+    """The caller's talk track past line one (Tier 3 / T3.2): a structured call script
+    (open → discovery → evidence → value → close) plus an objection/rebuttal library keyed to what a
+    local-business owner actually says back — each rebuttal fed by this prospect's OWN measured facts
+    (its coverage deficit, the named competitor taking its searches, its paid/paying evidence, its
+    review deltas, its organic rank) so the answer names the real situation, not a generic line.
+
+    Deterministic and read-only: spends nothing, writes nothing, never a fabricated fact, competitor,
+    or number (same discipline as the "Why call?" hook it shares an opener with). Where a grounding
+    fact is absent — an unscanned area, a missing signal — a rebuttal degrades to a generic-but-honest
+    line rather than inventing one. `snapshot_id` pins a specific scan; omitted, the latest rolled-up
+    one for the prospect's submarket."""
+    return _handle(outreach_service.prospect_script, prospect_id, snapshot_id)
+
+
 # --- Lead CRM ----------------------------------------------------------------------------------
 
 
