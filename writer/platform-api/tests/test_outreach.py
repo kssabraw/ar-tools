@@ -368,3 +368,291 @@ def test_signal_scan_spend_routes_are_admin_gated_reads_are_not():
     ):
         head = source.split(f"async def {route}", 1)[1].split(") -> dict")[0]
         assert "require_outreach" in head, f"{route} should be readable by any authed staff"
+
+
+# --- Tier 2.4 sort whitelist --------------------------------------------------------------------
+
+
+def test_lead_sorts_whitelist_and_fallback():
+    # A stable token maps to (column, descending, nulls_last); `due` sinks un-dated leads.
+    assert svc._LEAD_SORTS["due"] == ("next_action_due", False, True)
+    assert svc._LEAD_SORTS["recent"] == ("created_at", True, False)
+    # An unknown token falls back to `recent` — never a raw column name from the caller.
+    assert svc._LEAD_SORTS.get("../etc", svc._LEAD_SORTS["recent"]) == ("created_at", True, False)
+
+
+# --- Tier 2.2 caller scoreboard -----------------------------------------------------------------
+
+from types import SimpleNamespace  # noqa: E402
+
+
+class _Q:
+    """A chainable fake of a supabase-py query that ignores every builder call and returns fixed
+    data on execute() — enough for the reads the scoreboard/cadence code makes."""
+
+    def __init__(self, data):
+        self._data = data
+
+    def select(self, *a, **k):
+        return self
+
+    def in_(self, *a, **k):
+        return self
+
+    def eq(self, *a, **k):
+        return self
+
+    def limit(self, *a, **k):
+        return self
+
+    def execute(self):
+        return SimpleNamespace(data=self._data)
+
+
+class _FakeClient:
+    def __init__(self, *, table_data=None, rpc_data=None):
+        self._table_data = table_data or []
+        self._rpc_data = rpc_data or []
+        self.last_rpc = None
+
+    def table(self, _name):
+        return _Q(self._table_data)
+
+    def rpc(self, name, params):
+        self.last_rpc = (name, params)
+        return _Q(self._rpc_data)
+
+
+def test_scoreboard_since_today_is_a_utc_instant_not_in_the_future():
+    from datetime import datetime, timezone
+
+    iso = svc._scoreboard_since(1, "America/Los_Angeles")
+    dt = datetime.fromisoformat(iso)
+    assert dt.tzinfo is not None
+    assert dt <= datetime.now(timezone.utc)
+
+
+def test_scoreboard_since_window_starts_earlier_as_days_grows():
+    from datetime import datetime
+
+    today = datetime.fromisoformat(svc._scoreboard_since(1, "America/Los_Angeles"))
+    week = datetime.fromisoformat(svc._scoreboard_since(7, "America/Los_Angeles"))
+    assert week < today
+    # ~6 local midnights earlier, DST-tolerant.
+    delta = (today - week).total_seconds()
+    assert 5.5 * 86400 <= delta <= 6.5 * 86400
+
+
+def test_scoreboard_since_bad_zone_degrades_to_utc_never_raises():
+    iso = svc._scoreboard_since(1, "Not/AZone")
+    assert iso.endswith("+00:00")
+
+
+def test_short_actor_uses_first_segment():
+    assert svc._short_actor("abcd1234-5678-90ab") == "abcd1234"
+    assert svc._short_actor(None) == "unknown"
+    assert svc._short_actor("") == "unknown"
+
+
+def test_caller_scoreboard_connect_rate_sorted_and_me(monkeypatch):
+    rows = [
+        {"actor_id": "u1", "dials": 10, "conversations": 3, "dm_reached": 1, "callbacks": 2,
+         "voicemails": 4, "not_interested": 1, "dnc": 0, "touches": 12, "last_touch_at": "t"},
+        {"actor_id": "u2", "dials": 4, "conversations": 2, "dm_reached": 0, "callbacks": 0,
+         "voicemails": 1, "not_interested": 0, "dnc": 1, "touches": 4, "last_touch_at": "t"},
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _FakeClient(rpc_data=rows))
+    monkeypatch.setattr(svc, "_resolve_actor_names", lambda ids: {"u1": "Alice", "u2": "Bob"})
+    out = svc.caller_scoreboard(days=7, actor_id="u2")
+    # Leaderboard sorted by dials desc.
+    assert [c["actor_id"] for c in out["callers"]] == ["u1", "u2"]
+    assert out["callers"][0]["connect_rate"] == 0.3
+    assert out["callers"][0]["name"] == "Alice"
+    # `me` is the requester's own row, not the top of the board.
+    assert out["me"]["actor_id"] == "u2" and out["me"]["name"] == "Bob"
+    assert out["window_days"] == 7
+
+
+def test_caller_scoreboard_synthesises_a_zero_row_for_a_caller_with_no_touches(monkeypatch):
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _FakeClient(rpc_data=[]))
+    monkeypatch.setattr(svc, "_resolve_actor_names", lambda ids: {"me": "Cara"})
+    out = svc.caller_scoreboard(days=30, actor_id="me")
+    assert out["callers"] == []
+    assert out["me"]["dials"] == 0 and out["me"]["connect_rate"] is None
+    assert out["me"]["name"] == "Cara"
+
+
+def test_caller_scoreboard_connect_rate_none_when_no_dials_and_no_me(monkeypatch):
+    rows = [{"actor_id": "u1", "dials": 0, "conversations": 0}]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _FakeClient(rpc_data=rows))
+    monkeypatch.setattr(svc, "_resolve_actor_names", lambda ids: {})
+    out = svc.caller_scoreboard(days=7, actor_id=None)
+    assert out["callers"][0]["connect_rate"] is None
+    assert out["callers"][0]["name"] == "u1"  # short-actor fallback
+    assert out["me"] is None  # no requester → no synthesised card
+
+
+def test_attach_cadence_merges_by_lead_id_and_leaves_untouched_leads_none(monkeypatch):
+    cad = [{"lead_id": "l1", "attempt_count": 3, "last_touched_at": "t", "last_disposition": "voicemail"}]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _FakeClient(table_data=cad))
+    out = svc._attach_cadence([{"id": "l1"}, {"id": "l2"}])
+    assert out[0]["cadence"]["attempt_count"] == 3
+    assert out[1]["cadence"] is None
+
+
+def test_attach_cadence_best_effort_on_lookup_failure(monkeypatch):
+    class _Boom:
+        def table(self, _n):
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _Boom())
+    rows = [{"id": "l1"}]
+    # A failed cadence read still yields a stable shape (cadence: None), never raises.
+    assert svc._attach_cadence(rows) == [{"id": "l1", "cadence": None}]
+
+
+# --- Tier 2.5 link a manual lead to a scanned prospect ------------------------------------------
+
+
+class _SeqClient:
+    """A fake client that returns queued responses in call order — enough for `link_lead_prospect`,
+    whose reads (lead / prospect / other-leads / update / activity-insert) happen in a fixed sequence."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self._i = 0
+
+    def _next(self):
+        r = self._responses[self._i] if self._i < len(self._responses) else []
+        self._i += 1
+        return r
+
+    def table(self, _name):
+        return _SeqClient._Q(self)
+
+    class _Q:
+        def __init__(self, parent):
+            self._p = parent
+
+        def select(self, *a, **k):
+            return self
+
+        def insert(self, *a, **k):
+            return self
+
+        def update(self, *a, **k):
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def is_(self, *a, **k):
+            return self
+
+        def limit(self, *a, **k):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=self._p._next())
+
+
+# Real UUIDs — link_lead_prospect now guards both ids against a uuid cast, so the fakes must look
+# real. Lead L, prospects P and PX.
+_LID = "11111111-1111-4111-8111-111111111111"
+_PID = "22222222-2222-4222-8222-222222222222"
+_PID2 = "33333333-3333-4333-8333-333333333333"
+
+
+def test_link_lead_prospect_sets_prospect_id(monkeypatch):
+    responses = [
+        [{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": None, "company_name": "Acme"}],
+        [{"id": _PID, "name": "Acme Plumbing"}],  # prospect exists
+        [],                                        # no other live lead owns it
+        [{"id": _LID}],                            # update wrote a row
+        [{}],                                      # activity note insert
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": _PID})
+    out = svc.link_lead_prospect(_LID, _PID, "actor")
+    assert out["already_linked"] is False
+    assert out["lead"]["prospect_id"] == _PID
+
+
+def test_link_lead_prospect_same_id_is_idempotent(monkeypatch):
+    responses = [[{"id": _LID, "source": "manual", "prospect_id": _PID, "deleted_at": None}]]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    monkeypatch.setattr(svc, "get_lead", lambda lid: {"id": lid, "prospect_id": _PID})
+    out = svc.link_lead_prospect(_LID, _PID, "actor")
+    assert out["already_linked"] is True
+
+
+def test_link_lead_prospect_refuses_relinking_a_different_prospect(monkeypatch):
+    responses = [[{"id": _LID, "source": "manual", "prospect_id": _PID2, "deleted_at": None}]]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect(_LID, _PID, "actor")
+    assert e.value.code == "lead_already_linked"
+
+
+def test_link_lead_prospect_refuses_when_prospect_owned_by_another_lead(monkeypatch):
+    responses = [
+        [{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": None}],
+        [{"id": _PID, "name": "Acme"}],  # prospect exists
+        [{"id": _PID2}],                 # another live lead already owns it
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect(_LID, _PID, "actor")
+    assert e.value.code == "prospect_already_linked"
+
+
+def test_link_lead_prospect_missing_lead(monkeypatch):
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient([[]]))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect(_LID, _PID, "actor")
+    assert e.value.code == "lead_not_found"
+
+
+def test_link_lead_prospect_rejects_soft_deleted_lead(monkeypatch):
+    responses = [[{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": "2026-01-01"}]]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect(_LID, _PID, "actor")
+    assert e.value.code == "lead_not_found"
+
+
+def test_link_lead_prospect_missing_prospect(monkeypatch):
+    responses = [
+        [{"id": _LID, "source": "manual", "prospect_id": None, "deleted_at": None}],
+        [],  # prospect not found
+    ]
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _SeqClient(responses))
+    with pytest.raises(OutreachError) as e:
+        svc.link_lead_prospect(_LID, _PID, "actor")
+    assert e.value.code == "prospect_not_found"
+
+
+def test_link_lead_prospect_rejects_malformed_ids_before_any_query(monkeypatch):
+    """A malformed lead_id or prospect_id is a named not-found, never a raw 500 from a uuid cast.
+    The guard fires before any client call, so a boom-on-use client is never reached."""
+    class _Boom:
+        def table(self, *_a, **_k):
+            raise AssertionError("must not query on a malformed id")
+
+    monkeypatch.setattr(svc, "get_outreach_client", lambda: _Boom())
+    with pytest.raises(OutreachError) as e1:
+        svc.link_lead_prospect("not-a-uuid", _PID, "actor")
+    assert e1.value.code == "lead_not_found"
+    with pytest.raises(OutreachError) as e2:
+        svc.link_lead_prospect(_LID, "", "actor")
+    assert e2.value.code == "prospect_not_found"
+
+
+def test_link_prospect_route_is_staff_gated():
+    import pathlib
+
+    source = (
+        pathlib.Path(svc.__file__).resolve().parents[1] / "routers" / "outreach.py"
+    ).read_text()
+    head = source.split("async def link_prospect", 1)[1].split(") -> dict")[0]
+    assert "require_staff" in head

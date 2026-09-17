@@ -23,11 +23,24 @@ seen everything. Never add an unbounded read to this file.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any, Optional
 
 from services.outreach_db import get_outreach_client
 
 logger = logging.getLogger(__name__)
+
+
+def _looks_like_uuid(value: Any) -> bool:
+    """True when `value` parses as a UUID. A guard for id path/body params before they reach a
+    `.eq("id", …)` on a uuid column: without it a malformed id (an empty string, a typo) makes
+    Postgres raise on the cast and PostgREST surface a raw 500, instead of the caller getting a
+    clean, named not-found."""
+    try:
+        uuid.UUID(str(value))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
 
 # --- Vocabularies -----------------------------------------------------------------------------
 #
@@ -520,6 +533,64 @@ def list_dispositions() -> dict[str, Any]:
     return oc.disposition_catalog()
 
 
+# Board sort options (T2.4). A whitelist mapping a stable token → (column, descending, nulls-last).
+# `due` is nulls-last so a lead with no due date sinks below the dated ones rather than jumping to
+# the top of a "soonest first" sort. An unknown token falls back to `recent` (never a raw column).
+_LEAD_SORTS: dict[str, tuple[str, bool, bool]] = {
+    "recent": ("created_at", True, False),
+    "oldest": ("created_at", False, False),
+    "updated": ("updated_at", True, False),
+    "due": ("next_action_due", False, True),
+    "name": ("company_name", False, True),
+}
+
+# v_lead_cadence projection (T2.1). lead_id + the three rollup fields the card shows.
+_CADENCE_COLUMNS = "lead_id,attempt_count,last_touched_at,last_disposition"
+# Chunk size for the cadence `.in_()`. A full board page is MAX_PAGE_SIZE (200) lead ids; 200 uuids
+# in one PostgREST `in.(…)` query string is ~7.5 KB and can brush a gateway URL limit, so the lookup
+# is batched (≤2 chunks at the page ceiling) rather than sent as one oversized filter.
+_CADENCE_BATCH = 100
+
+
+def _attach_cadence(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Attach a per-lead touch-cadence rollup (T2.1) to a page of lead rows.
+
+    The board reads the `lead` table (which has no touch aggregate), so cadence is looked up from
+    `v_lead_cadence` for exactly the page's lead ids (batched at `_CADENCE_BATCH`, so a maxed board
+    stays under the URL limit) and merged as `row["cadence"]` — never one query per lead. A lead with
+    no touches gets `None` — the card renders nothing rather than a fake "attempt 0". Best-effort: a
+    failed lookup leaves the page uncadenced, never errors.
+    """
+    # Set the key on every row first so the shape is stable (`cadence: null`) even if the lookup
+    # fails or a lead has no touches — the frontend types it as always-present.
+    for row in rows:
+        row["cadence"] = None
+    ids = [r["id"] for r in rows if r.get("id")]
+    if not ids:
+        return rows
+    by_lead: dict[str, Any] = {}
+    try:
+        client = get_outreach_client()
+        for start in range(0, len(ids), _CADENCE_BATCH):
+            chunk = ids[start:start + _CADENCE_BATCH]
+            cad = (
+                client.table("v_lead_cadence")
+                .select(_CADENCE_COLUMNS)
+                .in_("lead_id", chunk)
+                .execute()
+                .data
+                or []
+            )
+            for c in cad:
+                by_lead[c["lead_id"]] = c
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_cadence_attach_failed", extra={"error": str(exc)})
+        return rows
+    for row in rows:
+        row["cadence"] = by_lead.get(row.get("id"))
+    return rows
+
+
 def list_leads(
     *,
     stage: str | None = None,
@@ -527,14 +598,16 @@ def list_leads(
     owner_id: str | None = None,
     overdue: bool = False,
     search: str | None = None,
+    sort: str | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> dict[str, Any]:
-    """A page of live leads, newest first, with the exact total.
+    """A page of live leads with the exact total, filtered and sorted (T2.4).
 
     `overdue` implements crm-layer-spec §10's forcing function — a due date in the past on a lead
     that is neither won nor lost. That view is what makes manual reply capture work at all; a
-    pipeline nobody is prompted to touch silently stops being updated.
+    pipeline nobody is prompted to touch silently stops being updated. `sort` picks the order from a
+    whitelist (default newest-first); each row carries a touch-cadence rollup (T2.1).
     """
     size, start = clamp_page(limit, offset)
     query = (
@@ -562,9 +635,14 @@ def list_leads(
             f"company_name.ilike.%{term}%,contact_name.ilike.%{term}%,email.ilike.%{term}%"
         )
 
-    response = query.order("created_at", desc=True).range(start, start + size - 1).execute()
+    sort_col, sort_desc, sort_nulls_last = _LEAD_SORTS.get(sort or "recent", _LEAD_SORTS["recent"])
+    response = (
+        query.order(sort_col, desc=sort_desc, nullsfirst=not sort_nulls_last)
+        .range(start, start + size - 1)
+        .execute()
+    )
     return {
-        "leads": response.data or [],
+        "leads": _attach_cadence(response.data or []),
         "total": response.count or 0,
         "limit": size,
         "offset": start,
@@ -645,6 +723,120 @@ def list_overdue_actions(
     }
 
 
+# --- Caller scoreboard (T2.2) -----------------------------------------------------------------
+#
+# Per-caller dials / conversations / connect-rate / callbacks, aggregated server-side from touches
+# and their structured dispositions (the vocabulary T1.2 made countable). Owner ruling: BOTH a
+# per-caller card and a team leaderboard (a one-row table today, ready for a team). Names are
+# resolved app-side against the AR-Internal-Tools `profiles` table — a DIFFERENT Supabase project
+# from the Outreacher one this module otherwise reads, so the resolution is best-effort and a lookup
+# failure degrades to a short actor id rather than breaking the scoreboard.
+
+SCOREBOARD_MAX_DAYS = 90
+
+
+def _scoreboard_since(days: int, tz_name: str) -> str:
+    """The window start as a UTC ISO instant: local midnight `days-1` days ago, so `days=1` is
+    "today" in the caller's business timezone (not a rolling 24h, and not UTC midnight, which would
+    reset the day mid-afternoon in the US)."""
+    from datetime import datetime, timedelta, timezone
+    from zoneinfo import ZoneInfo
+
+    n = max(1, min(int(days), SCOREBOARD_MAX_DAYS))
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:  # noqa: BLE001
+        tz = timezone.utc
+    # Subtract on the calendar DATE, then build local midnight on it — so the window start is exact
+    # local midnight even across a DST transition. (Subtracting a timedelta from an aware datetime is
+    # naive 24h arithmetic and would drift an hour on the fall-back / spring-forward day.)
+    start_date = datetime.now(tz).date() - timedelta(days=n - 1)
+    start_local = datetime(start_date.year, start_date.month, start_date.day, tzinfo=tz)
+    return start_local.astimezone(timezone.utc).isoformat()
+
+
+def _resolve_actor_names(actor_ids: set[str]) -> dict[str, str]:
+    """Map suite user ids → display names from AR-Internal-Tools `profiles` (a different project).
+
+    Best-effort and isolated: the Outreacher `touch.actor_id` is a suite `profiles.id`, but the
+    profiles table lives in the OTHER project, so this crosses clients. A failure here must not sink
+    the scoreboard — it returns {} and callers fall back to a short id.
+    """
+    ids = [i for i in actor_ids if i]
+    if not ids:
+        return {}
+    try:
+        from db.supabase_client import get_supabase
+
+        rows = (
+            get_supabase().table("profiles").select("id, full_name").in_("id", ids).execute().data
+            or []
+        )
+        return {r["id"]: r["full_name"] for r in rows if r.get("full_name")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_scoreboard_names_failed", extra={"error": str(exc)})
+        return {}
+
+
+def _short_actor(actor_id: str | None) -> str:
+    """A fallback label for a caller whose profile name didn't resolve — the id's first segment."""
+    return (actor_id or "").split("-")[0] or "unknown"
+
+
+def caller_scoreboard(*, days: int = 7, actor_id: str | None = None) -> dict[str, Any]:
+    """The caller scoreboard (T2.2): a per-caller row for the window, plus the requester's own row.
+
+    Metrics come from `outreach_caller_scoreboard(since)` — one row per caller, aggregated in
+    Postgres so the read never truncates on touch volume. `connect_rate` is computed here (a ratio,
+    not a stored count). `me` is the requesting caller's row, synthesised as an all-zero row when
+    they logged nothing in the window (so the UI always has a card to show), never omitted.
+    """
+    from config import settings
+
+    n = max(1, min(int(days or 7), SCOREBOARD_MAX_DAYS))
+    since = _scoreboard_since(n, settings.outreach_default_timezone)
+    rows = (
+        get_outreach_client()
+        .rpc("outreach_caller_scoreboard", {"since": since})
+        .execute()
+        .data
+        or []
+    )
+
+    ids = {r["actor_id"] for r in rows if r.get("actor_id")}
+    if actor_id:
+        ids.add(actor_id)
+    names = _resolve_actor_names(ids)
+
+    def _row(r: dict[str, Any]) -> dict[str, Any]:
+        dials = r.get("dials") or 0
+        convos = r.get("conversations") or 0
+        aid = r.get("actor_id")
+        return {
+            **r,
+            "name": names.get(aid) or _short_actor(aid),
+            "connect_rate": round(convos / dials, 3) if dials else None,
+        }
+
+    callers = sorted(
+        (_row(r) for r in rows),
+        key=lambda c: (c.get("dials") or 0, c.get("conversations") or 0),
+        reverse=True,
+    )
+
+    me = next((c for c in callers if c.get("actor_id") == actor_id), None)
+    if me is None and actor_id:
+        me = {
+            "actor_id": actor_id,
+            "name": names.get(actor_id) or _short_actor(actor_id),
+            "dials": 0, "conversations": 0, "dm_reached": 0, "callbacks": 0,
+            "voicemails": 0, "not_interested": 0, "dnc": 0, "touches": 0,
+            "last_touch_at": None, "connect_rate": None,
+        }
+
+    return {"window_days": n, "since": since, "callers": callers, "me": me}
+
+
 def get_lead(lead_id: str) -> dict[str, Any]:
     """One lead with its full activity timeline.
 
@@ -669,6 +861,24 @@ def get_lead(lead_id: str) -> dict[str, Any]:
     )
     lead["activity"] = activity.data or []
     lead["activity_total"] = activity.count or 0
+
+    # Touch cadence (T2.1) — attempt count / last touch / last disposition for ANY lead, from
+    # v_lead_cadence. Distinct from the `outcome` rollup, which exists only for outbound leads; this
+    # lets the drawer show "attempt N of 5" on an inbound/referral lead too. Best-effort.
+    lead["cadence"] = None
+    try:
+        cad = (
+            client.table("v_lead_cadence")
+            .select(_CADENCE_COLUMNS)
+            .eq("lead_id", lead_id)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        lead["cadence"] = cad[0] if cad else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_lead_cadence_failed", extra={"error": str(exc)})
 
     lead["ranked"] = None
     if lead.get("prospect_id"):
@@ -2917,6 +3127,113 @@ def promote_prospect(prospect_id: str, actor_id: str) -> dict[str, Any]:
             return dict(raced[0], already_existed=True)
         raise
     return dict(lead, already_existed=False)
+
+
+def link_lead_prospect(lead_id: str, prospect_id: str, actor_id: str) -> dict[str, Any]:
+    """Attach a manual/inbound lead to an ALREADY-SCANNED prospect (T2.5, light-link path).
+
+    The reverse of `promote_prospect`: a hand-entered lead has no `prospect_id`, so its drawer shows
+    no call hook / report / heatmap / enrich (all keyed on the prospect). When the business was
+    already scanned, this links the two — a pure `prospect_id` write, NO paid call and no ingest (the
+    "ingestion is the Railway job's business" invariant is untouched; a business with no scan simply
+    won't be found to link).
+
+    `prospect_id` is otherwise immutable on a lead (excluded from LEAD_MUTABLE_FIELDS — it is the join
+    the scoring model rests on), so this is the ONE controlled path that sets it, and only from null:
+      * a lead already carrying a prospect (every `outbound_scan` lead does) is refused `lead_already_linked`
+        — re-pointing the model's join is not a caller action (same id → idempotent no-op);
+      * a prospect that already has any live lead is refused `prospect_already_linked` — that business is
+        already on the board, and a second lead for it would duplicate the promote flow's one-lead-per-prospect
+        assumption (the DB's UNIQUE(prospect_id, source) only stops a same-source duplicate).
+    The lead's `source` is left as-is: a linked `manual` lead gains the prospect's audit surface but stays
+    `manual`, so it never enters the outbound-only `outcome` substrate — consistent with the model rules.
+    """
+    # Both ids hit a `.eq("id", …)` on a uuid column below; a malformed one would make Postgres raise
+    # on the cast and surface a raw 500. Guard up front so a bad id is a clean, named not-found.
+    if not _looks_like_uuid(lead_id):
+        raise OutreachError("lead_not_found", "no such lead")
+    if not _looks_like_uuid(prospect_id):
+        raise OutreachError("prospect_not_found", "no such prospect")
+
+    client = get_outreach_client()
+    leads = (
+        client.table("lead")
+        .select("id, source, prospect_id, deleted_at, company_name")
+        .eq("id", lead_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not leads or leads[0].get("deleted_at"):
+        raise OutreachError("lead_not_found", "no such lead")
+    lead = leads[0]
+    if lead.get("prospect_id"):
+        if lead["prospect_id"] == prospect_id:
+            return {"lead": get_lead(lead_id), "already_linked": True}
+        raise OutreachError("lead_already_linked", "this lead is already linked to a prospect")
+
+    prospect = (
+        client.table("prospect")
+        .select("id, name")
+        .eq("id", prospect_id)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if not prospect:
+        raise OutreachError("prospect_not_found", "no such prospect")
+
+    other = (
+        client.table("lead")
+        .select("id")
+        .eq("prospect_id", prospect_id)
+        .is_("deleted_at", "null")
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if other:
+        raise OutreachError("prospect_already_linked", "another lead is already linked to this prospect")
+
+    try:
+        updated = (
+            client.table("lead")
+            .update({"prospect_id": prospect_id, "updated_by": actor_id})
+            .eq("id", lead_id)
+            .is_("deleted_at", "null")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as exc:  # noqa: BLE001
+        # The likeliest failure is the UNIQUE(prospect_id, source) key: a TRASHED lead can still hold
+        # (this prospect, this source) — the `other` guard above only sees live leads, but the
+        # constraint ignores deleted_at. Surface it as a named 422, not a raw 500.
+        logger.warning("outreach_link_prospect_update_failed", extra={"error": str(exc)})
+        raise OutreachError(
+            "prospect_already_linked", "this prospect is already tied to another lead"
+        ) from exc
+    if not updated:
+        raise OutreachError("link_failed", "the link was not written")
+
+    # A timeline note so the drawer explains why the lead suddenly has a scan behind it. Best-effort:
+    # a 'note' is human commentary (never a trigger-owned kind), and a failed note must not undo the link.
+    try:
+        client.table("lead_activity").insert(
+            {
+                "lead_id": lead_id,
+                "kind": "note",
+                "body": f"Linked to scanned prospect: {prospect[0].get('name') or prospect_id}.",
+                "actor_id": actor_id,
+            }
+        ).execute()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("outreach_link_prospect_note_failed", extra={"error": str(exc)})
+
+    return {"lead": get_lead(lead_id), "already_linked": False}
 
 
 # --- Emit + touch (Phase 3 — the learning substrate) -------------------------------------------
