@@ -442,6 +442,18 @@ class Settings(BaseSettings):
     scan_health_min_streak: int = 3      # consecutive failed scheduled runs to fire
     scan_health_min_days: int = 3        # ...the failing run must also span this many days
     scan_health_lookback_days: int = 21  # async_jobs history read per sweep
+    # Rank-data FRESHNESS watch — the dead-man's switch. scan_health above catches
+    # jobs that FAIL; this catches the more insidious case where jobs succeed but
+    # the data stops advancing (GSC returns 0 rows inside its lag window, a
+    # materialize bug freezes the axis, …) — the signature of both prior silent
+    # freezes. A daily DB-reads-only sweep alerts (Slack + in-app) when a client's
+    # tracker hasn't learned ANYTHING new for longer than its expected cadence,
+    # auto-resolving when data resumes, so reporting can never silently stall for
+    # days again without the team being paged within ~24h.
+    rank_freshness_enabled: bool = True
+    rank_freshness_gsc_stale_days: int = 5   # GSC-connected client: >this many days w/o new data = stale (GSC lag ~3)
+    rank_freshness_df_stale_days: int = 10   # DataForSEO-only client: weekly cadence, >this = a missed cycle
+    rank_freshness_portfolio_min: int = 3    # ≥this many stale clients at once → one loud portfolio alert (systemic outage)
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored

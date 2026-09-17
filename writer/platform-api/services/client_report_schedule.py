@@ -185,9 +185,57 @@ def _client_tracks_maps(supabase, client_id: str) -> bool:
     )
 
 
+def _rank_data_stale(supabase, client_id: str) -> bool:
+    """True when the freshness watch has this client flagged 'stale' — its rank
+    tracker has stopped receiving new data. Best-effort: any read error (or no
+    row yet) is treated as NOT stale, so a freshness-table hiccup never blocks a
+    report that would otherwise ship."""
+    try:
+        row = (
+            supabase.table("rank_freshness_status")
+            .select("status")
+            .eq("client_id", client_id)
+            .limit(1)
+            .execute()
+        ).data
+    except Exception as exc:
+        logger.warning("report_schedule.freshness_read_failed",
+                       extra={"client_id": client_id, "error": str(exc)})
+        return False
+    return bool(row) and row[0].get("status") == "stale"
+
+
+def _warn_report_held(client_id: str, now: datetime) -> None:
+    """Tell the team a scheduled client report was held because rank data is stale
+    (deduped once per client per day). Best-effort."""
+    from services import notifications
+
+    try:
+        notifications.emit(
+            client_id=client_id,
+            kind="report_held_stale_data",
+            title="Scheduled client report held — rank data is stale",
+            summary=(
+                "This client's scheduled report was NOT delivered this cycle because its "
+                "rank tracker has stopped receiving new data (see the rank-data-stale alert). "
+                "Fix the data pipeline; the next scheduled run will deliver once data resumes."
+            ),
+            severity="warning",
+            payload={"link": f"clients/{client_id}/rankings"},
+            dedupe_key=f"report_held_stale:{client_id}:{now.date().isoformat()}",
+        )
+    except Exception as exc:  # never break the sweep
+        logger.warning("report_schedule.held_warn_failed",
+                       extra={"client_id": client_id, "error": str(exc)})
+
+
 def enqueue_due_report_schedules() -> int:
     """Scheduler tick: enqueue a client_report (with delivery) for each schedule
-    whose next_run_at is due, then advance its clock. Returns the count."""
+    whose next_run_at is due, then advance its clock. Returns the count.
+
+    Client-facing reports are HELD (and the team warned) for any client whose rank
+    data is currently stale, so a silent tracker stall can never surface as a
+    client-delivered report of stale numbers presented as current."""
     from services.client_report import enqueue_client_report
 
     supabase = get_supabase()
@@ -211,6 +259,16 @@ def enqueue_due_report_schedules() -> int:
             "last_run_at": now.isoformat(),
             "next_run_at": next_run.isoformat() if next_run else None,
         }).eq("client_id", client_id).execute()
+
+        # GUARD: never auto-deliver a client-facing report built on silently-stale
+        # rank data. The freshness watch (scan_health.run_rank_freshness_sweep)
+        # flips this client to 'stale' when the tracker stops receiving new data;
+        # holding the scheduled report this cycle stops stale numbers reaching the
+        # client, and warns the team instead. The clock already advanced, so once
+        # the pipeline recovers the next cadence delivers normally.
+        if _rank_data_stale(supabase, client_id):
+            _warn_report_held(client_id, now)
+            continue
 
         report_type = "weekly" if sched["cadence"] == "weekly" else "monthly"
         period = sched.get("period") or "auto"

@@ -238,3 +238,67 @@ def test_producer_noop_when_disabled(monkeypatch):
          "streak": 9, "summary": "x"},
     ])
     assert created == [] and closed == []
+
+
+# ---------------------------------------------------------------------------
+# Rank-data freshness watch (the dead-man's switch for silent stalls)
+# ---------------------------------------------------------------------------
+from datetime import date  # noqa: E402
+
+_TODAY = date(2026, 9, 16)
+
+
+def test_freshness_threshold_gsc_vs_dataforseo():
+    assert sh.freshness_threshold(True, 5, 10) == 5    # GSC client: near-daily
+    assert sh.freshness_threshold(False, 5, 10) == 10  # DataForSEO-only: weekly
+
+
+def test_evaluate_freshness_fresh_gsc_not_stale():
+    v = sh.evaluate_freshness(date(2026, 9, 14), True, _TODAY, 5, 10)  # 2 days old
+    assert v["stale"] is False and v["days_stale"] == 2
+
+
+def test_evaluate_freshness_stalled_gsc_is_stale():
+    # 11 days with no new data on a GSC client (the WheelHouse case) → stale.
+    v = sh.evaluate_freshness(date(2026, 9, 5), True, _TODAY, 5, 10)
+    assert v["stale"] is True and v["days_stale"] == 11
+
+
+def test_evaluate_freshness_weekly_dataforseo_gets_longer_leash():
+    # 8 days old on a DataForSEO-only client is within its weekly cadence.
+    v = sh.evaluate_freshness(date(2026, 9, 8), False, _TODAY, 5, 10)
+    assert v["stale"] is False
+    # …but the same 8-day gap on a GSC client IS stale.
+    assert sh.evaluate_freshness(date(2026, 9, 8), True, _TODAY, 5, 10)["stale"] is True
+
+
+def test_evaluate_freshness_no_data_ever_never_alerts():
+    # A brand-new client with no data yet must not be flagged (setup, not regression).
+    v = sh.evaluate_freshness(None, True, _TODAY, 5, 10)
+    assert v["stale"] is False and v["no_data_ever"] is True
+
+
+def test_freshness_digest_severity_escalates_when_very_stale():
+    warn = sh.build_freshness_digest("Acme", 6, 5, date(2026, 9, 10), True)
+    crit = sh.build_freshness_digest("Acme", 12, 5, date(2026, 9, 4), True)
+    assert warn["severity"] == "warning"
+    assert crit["severity"] == "critical"       # ≥ 2× threshold
+    assert "Acme" in crit["title"]
+
+
+def test_freshness_episode_key_changes_with_stuck_date_and_week():
+    now = datetime(2026, 9, 16, 8, 0, tzinfo=timezone.utc)
+    k1 = sh.freshness_episode_key("c1", date(2026, 9, 5), now)
+    k2 = sh.freshness_episode_key("c1", date(2026, 9, 8), now)      # data advanced then re-stalled
+    later = datetime(2026, 9, 24, 8, 0, tzinfo=timezone.utc)        # a different ISO week
+    k3 = sh.freshness_episode_key("c1", date(2026, 9, 5), later)
+    assert k1 != k2 and k1 != k3
+
+
+def test_freshness_portfolio_digest_names_clients():
+    stale = [{"client_name": "Acme", "days_stale": 11}, {"client_name": "Beta", "days_stale": 9},
+             {"client_name": "Gamma", "days_stale": 7}]
+    d = sh.build_freshness_portfolio_digest(stale, NOW)
+    assert d["severity"] == "critical"
+    assert "3 clients" in d["title"]
+    assert "Acme" in d["summary"] and "Gamma" in d["summary"]

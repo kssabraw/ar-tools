@@ -673,7 +673,7 @@ async def gsc_scheduler() -> None:
     from services.content_gap import enqueue_due_content_gap_scans
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
-    from services.scan_health import run_scan_health_sweep
+    from services.scan_health import run_scan_health_sweep, run_rank_freshness_sweep
     from services.leadoff_calibration import (
         run_calibration_sweep as run_leadoff_calibration_sweep,
     )
@@ -789,6 +789,11 @@ async def gsc_scheduler() -> None:
                 # geo-grid / organic-rank data pulls keep failing, so a silent
                 # upstream outage can't starve the drop alerts unnoticed.
                 _safe("scan_health_sweep", run_scan_health_sweep)
+                # Daily rank-data FRESHNESS watch (the dead-man's switch): alert
+                # when a client's tracker stops receiving new data even though the
+                # collection jobs report success — the signature of both prior
+                # silent freezes. Self-gated on rank_freshness_enabled.
+                _safe("rank_freshness_sweep", run_rank_freshness_sweep)
                 # LeadOff calibration outcome checks (Phase 0 — read-only,
                 # $0; at most one check per prediction per ~28 days).
                 _safe("leadoff_calibration", run_leadoff_calibration_sweep)

@@ -69,3 +69,73 @@ def test_period_start_for_campaign_start():
     # every advertised choice resolves without raising
     for token in PERIOD_CHOICES:
         period_start_for(token, date(2025, 1, 1), today)
+
+
+# ---------------------------------------------------------------------------
+# Freshness guard: a scheduled client-facing report is HELD when rank data is
+# stale, and the team is warned instead of shipping stale numbers.
+# ---------------------------------------------------------------------------
+def test_stale_client_report_is_held_and_warned(monkeypatch):
+    import services.client_report_schedule as crs
+
+    class _Builder:
+        def __init__(self, table):
+            self.table = table
+            self._is_due_query = False
+
+        def select(self, *_a, **_k):
+            return self
+
+        def neq(self, *_a, **_k):
+            return self
+
+        def lte(self, *_a, **_k):
+            self._is_due_query = True
+            return self
+
+        def eq(self, *_a, **_k):
+            return self
+
+        def limit(self, *_a, **_k):
+            return self
+
+        def update(self, *_a, **_k):
+            return self
+
+        def execute(self):
+            if self.table == "client_report_settings" and self._is_due_query:
+                return type("R", (), {"data": [{
+                    "client_id": "c1", "cadence": "monthly", "day_of_week": None,
+                    "day_of_month": 1, "hour_utc": 8, "period": "auto",
+                    "ai_visibility_enabled": True, "maps_enabled": True,
+                    "last_run_at": None, "next_run_at": "2000-01-01T00:00:00+00:00",
+                }]})()
+            if self.table == "rank_freshness_status":
+                return type("R", (), {"data": [{"status": "stale"}]})()
+            return type("R", (), {"data": []})()
+
+    class _Fake:
+        def table(self, name):
+            return _Builder(name)
+
+    monkeypatch.setattr(crs, "get_supabase", lambda: _Fake())
+
+    enqueue_calls: list = []
+    monkeypatch.setattr(
+        "services.client_report.enqueue_client_report",
+        lambda *a, **k: enqueue_calls.append((a, k)),
+    )
+    emitted: list = []
+    monkeypatch.setattr(
+        "services.notifications.emit",
+        lambda **k: emitted.append(k),
+    )
+
+    crs.enqueue_due_report_schedules()
+
+    # Nothing was enqueued for the stale client…
+    assert enqueue_calls == []
+    # …and the team was warned exactly once, with the hold kind.
+    assert len(emitted) == 1
+    assert emitted[0]["kind"] == "report_held_stale_data"
+    assert emitted[0]["severity"] == "warning"

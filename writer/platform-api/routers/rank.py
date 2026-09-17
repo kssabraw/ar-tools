@@ -387,13 +387,32 @@ async def get_rank_summary(client_id: UUID, auth: dict = Depends(require_auth)) 
         supabase.table("clients").select("name").eq("id", str(client_id)).limit(1).execute()
     ).data
     client_name = client_row[0]["name"] if client_row else None
-    return rank_summary.build_rank_summary(
+    summary = rank_summary.build_rank_summary(
         [s.model_dump() for s in summaries],
         client_name=client_name,
         gsc_connected=_gsc_connected(supabase, str(client_id)),
         striking_min=settings.striking_distance_min,
         striking_max=settings.striking_distance_max,
     )
+    # Data-freshness verdict (the freshness watch) so the Overview can show a
+    # "data last updated / stalled" chip — visible staleness even absent an alert.
+    try:
+        fr = (
+            supabase.table("rank_freshness_status")
+            .select("status, last_data_at, days_stale")
+            .eq("client_id", str(client_id))
+            .limit(1)
+            .execute()
+        ).data
+        if fr:
+            summary["data_freshness"] = {
+                "stale": fr[0].get("status") == "stale",
+                "last_data_at": fr[0].get("last_data_at"),
+                "days_stale": fr[0].get("days_stale"),
+            }
+    except Exception:  # freshness is advisory — never fail the summary over it
+        pass
+    return summary
 
 
 @router.get("/clients/{client_id}/rank/brand-search", response_model=BrandSearchResponse)
