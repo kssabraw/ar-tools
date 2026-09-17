@@ -702,6 +702,21 @@ def test_is_work_item():
     assert not w("") and not w(None)
 
 
+def test_is_qa_marker():
+    q = task_service.is_qa_marker
+    # The real library's QA steps, both spellings.
+    assert q("Citations QA'd")
+    assert q("GBP Posts QA'd")
+    assert q("GBP Blast QA")
+    assert q("Map Embeds QA'd")
+    # Not a QA step.
+    assert not q("Citations Started")
+    assert not q("Sent For Approval")
+    assert not q("Roof Restoration In Melbourne")  # a work item mentioning nothing
+    assert not q("quality control review")          # 'qa' is not a standalone word
+    assert not q("") and not q(None)
+
+
 def test_parent_advance_target_rules():
     f = task_service.parent_advance_target
     work_done = [
@@ -718,10 +733,28 @@ def test_parent_advance_target_rules():
     assert f("not_started", False, some) == "in_progress"
     # Still working → no move for an in-progress task.
     assert f("in_progress", False, some) is None
-    # All-marker checklist (no work items) → Rule B can't judge; Rule A only.
-    markers = [{"name": "Blog Post QA'd", "completed": True}]
-    assert f("not_started", False, markers) == "in_progress"
-    assert f("in_progress", False, markers) is None
+    # Rule B2 — marker-only checklist (no work items): ticking the QA step is
+    # the ready-for-QA signal, so it advances to In QA (Rule B can't judge here
+    # because the checklist has no work items).
+    qa_ticked = [{"name": "Blog Post QA'd", "completed": True}]
+    assert f("in_progress", False, qa_ticked) == "in_qa"
+    assert f("not_started", False, qa_ticked) == "in_qa"   # skips in_progress
+    # QA step NOT ticked yet → Rule A only (Rule B2 needs the QA marker done).
+    pre_qa = [{"name": "Citations Started", "completed": True},
+              {"name": "Citations QA'd", "completed": False}]
+    assert f("not_started", False, pre_qa) == "in_progress"
+    assert f("in_progress", False, pre_qa) is None
+    # …then the QA step ticks → In QA.
+    assert f("in_progress", False,
+             [{"name": "Citations Started", "completed": True},
+              {"name": "Citations QA'd", "completed": True}]) == "in_qa"
+    # A checklist with real work items ignores Rule B2 while work is pending —
+    # a stale ticked QA marker must NOT short-circuit a For-Revision task whose
+    # Rework: items are still open.
+    rework_open = [{"name": "Rework: fix nap", "completed": False},
+                   {"name": "Citations QA'd", "completed": True}]
+    assert f("for_revision", False, rework_open) is None
+    assert f("in_progress", False, rework_open) is None
     # For Revision self-closing loop: ticking the last rework/work item re-enters
     # In QA (Rule B), but Rule A never fires from For Revision (a partial tick
     # keeps it parked for the reviser).

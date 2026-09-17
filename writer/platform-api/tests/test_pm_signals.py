@@ -140,6 +140,10 @@ def test_unacted_producer_task():
     assert S.is_unacted_producer_task({"source": "manual", "completed": False}, [{"kind": "created"}]) is False
     # Completed producer task → not surfaced.
     assert S.is_unacted_producer_task({"source": "rank_drop", "completed": True}, [{"kind": "created"}]) is False
+    # Newer producer sources are watched too (drift fix); director_seam is not.
+    assert S.is_unacted_producer_task({"source": "strategy_proposal", "completed": False}, [{"kind": "created"}]) is True
+    assert S.is_unacted_producer_task({"source": "scan_health", "completed": False}, []) is True
+    assert S.is_unacted_producer_task({"source": "director_seam", "completed": False}, [{"kind": "created"}]) is False
 
 
 def test_select_untriaged_grace_and_flags():

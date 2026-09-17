@@ -31,7 +31,16 @@ from db.supabase_client import get_supabase
 from services import task_service, task_workload
 
 # Producer sources whose auto-created tasks we watch for "unacted-on" (PRD §11).
-_PRODUCER_SOURCES = {"rank_drop", "maps_alert", "action_plan", "content_run"}
+# Must track task_producers.py's actual producer set (drift was silently
+# dropping newer producers from the chase): rank_drop / maps_alert / action_plan
+# / content_run / scan_health, plus approved SerMaStr proposals turned into
+# tasks (strategy_proposal). `director_seam` is deliberately excluded — DORA's
+# reconciliation tasks auto-close on the seam clearing and are DORA-managed, so
+# chasing them here would double-manage + flood the Chase Plan.
+_PRODUCER_SOURCES = {
+    "rank_drop", "maps_alert", "action_plan", "content_run",
+    "scan_health", "strategy_proposal",
+}
 # Activity kinds that reset the status clock (see module docstring).
 _CLOCK_RESET_KINDS = {"created", "status_changed", "reopened"}
 

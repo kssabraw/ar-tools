@@ -272,6 +272,16 @@ def auto_tick_subtasks(task_id: str, stage: Optional[int], *, actor_id: Optional
 #   * Rule B (work-done): when the last REAL WORK item on the checklist ticks
 #     (process markers and the deliverables-sheet reminder don't count), the
 #     task advances to In QA. Checklists become the steering wheel.
+#   * Rule B2 (QA-step ticked): the agency's real library checklists are almost
+#     entirely lifecycle MARKERS with no work items (e.g. GBP Posts =
+#     generated / sent / scheduled), so Rule B never fired for routine work and
+#     QA never auto-triggered. The team tracks a task by ticking its checklist,
+#     and every deliverable checklist has a "QA" step — so a marker-only task
+#     (no work items) advances to In QA the moment its QA step is ticked
+#     (is_qa_marker). Gated on "no work items" so Rule B stays authoritative
+#     when real work items exist — which is also what keeps a stale QA marker
+#     from short-circuiting the For-Revision rework loop (its Rework: subtasks
+#     ARE work items, so Rule B, not B2, governs there).
 # Guards: never backward, never from an exception status (blocked/in_review —
 # a human parked it there), never on completed tasks, top-level tasks only,
 # best-effort. Later stages have their own drivers: In QA → Sent to Client is
@@ -295,17 +305,34 @@ def is_work_item(name: Optional[str]) -> bool:
     return marker_tick_stage(low) is None
 
 
+def is_qa_marker(name: Optional[str]) -> bool:
+    """True when a subtask NAME is the checklist's QA step ('… QA'd', '… QA').
+    Ticking it is the "ready for QA" signal Rule B2 keys off for marker-only
+    checklists (the team tracks work by ticking the checklist, not the status
+    column). Matches the QA pattern marker_tick_stage uses. Pure."""
+    low = " ".join((name or "").casefold().split())
+    return bool(low) and bool(re.search(r"\bqa\b|qa'd|qa’d", low))
+
+
 def parent_advance_target(status_key: Optional[str], completed: bool,
                           subtasks: list[dict]) -> Optional[str]:
     """The status a parent should auto-advance to after a subtask tick, or None.
-    Rule B first (all work items done → in_qa), else Rule A (any tick on a
+    Rule B (all work items done → in_qa) first; else Rule B2 for a marker-only
+    checklist (its QA step ticked → in_qa); else Rule A (any tick on a
     not_started task → in_progress). Pure."""
     if completed or status_key not in _AUTO_ADVANCE_FROM:
         return None
     live = [s for s in subtasks if not s.get("deleted_at")]
     works = [s for s in live if is_work_item(s.get("name"))]
-    if works and all(s.get("completed") for s in works):
-        return "in_qa" if status_key != "in_qa" else None
+    if works:
+        if all(s.get("completed") for s in works):
+            return "in_qa" if status_key != "in_qa" else None
+    elif any(is_qa_marker(s.get("name")) and s.get("completed") for s in live):
+        # Marker-only checklist (no work items to gauge "done"): the human
+        # ticking the QA step is the ready-for-QA signal. Gated on `not works`,
+        # so a stale QA marker can't short-circuit a For-Revision task (whose
+        # Rework: subtasks are work items → the `works` branch governs).
+        return "in_qa"
     if status_key == "not_started" and any(s.get("completed") for s in live):
         return "in_progress"
     return None
