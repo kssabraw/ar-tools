@@ -235,6 +235,61 @@ def test_build_pulse_falls_back_to_bullets_on_narrative_failure(monkeypatch):
     assert body.startswith("Weekly update — Acme")  # the bullet fallback
 
 
+def test_save_pulse_updates_only_the_edited_view(monkeypatch):
+    # A staff edit to the Email view updates `body` and leaves `body_list` alone
+    # (no full rebuild — the manual text is kept verbatim).
+    state = {"updated": None}
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def order(self, *a, **k): return self
+
+        def update(self, payload, **k):
+            state["updated"] = payload
+            return self
+
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    class _SB:
+        def table(self, name):
+            # Current-week row exists (existence check) and is the latest row read back.
+            return _Q([{"id": "p1", "body": "old email", "body_list": "old list",
+                        "week_start": "2026-07-13", "created_at": "x"}])
+
+    monkeypatch.setattr(P, "get_supabase", lambda: _SB())
+    row = P.save_pulse("c1", body="new email", today=date(2026, 7, 15))
+    assert state["updated"] == {"body": "new email"}  # only the edited view
+    assert row and row["body"] == "old email"          # latest_pulse read echoed
+
+
+def test_save_pulse_no_fields_is_noop(monkeypatch):
+    # Nothing to save → return the latest row without issuing an update.
+    touched = {"updated": False}
+
+    class _Q:
+        def __init__(self, data): self._d = data
+        def select(self, *a, **k): return self
+        def eq(self, *a, **k): return self
+        def limit(self, *a, **k): return self
+        def order(self, *a, **k): return self
+
+        def update(self, *a, **k):
+            touched["updated"] = True
+            return self
+
+        def execute(self): return type("R", (), {"data": self._d})()
+
+    monkeypatch.setattr(P, "get_supabase", lambda: type("SB", (), {
+        "table": lambda self, name: _Q([{"body": "b", "body_list": "l"}]),
+    })())
+    row = P.save_pulse("c1")
+    assert row == {"body": "b", "body_list": "l"}
+    assert touched["updated"] is False
+
+
 def test_build_pulse_prefers_narrative_and_stores_both_views(monkeypatch):
     monkeypatch.setattr(P, "narrate_pulse", lambda facts: "Hi [First name],\n\nGreat week…")
     stored = {}

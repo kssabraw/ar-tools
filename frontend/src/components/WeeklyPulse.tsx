@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, Copy, RefreshCw, Send } from 'lucide-react'
+import { Check, Copy, RefreshCw, Save, Send } from 'lucide-react'
 import { api } from '../lib/api'
 
 // Weekly Pulse — the copy-paste client update ("done last week / on tap this
@@ -32,15 +32,28 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
     mutationFn: () => api.post<Pulse>(`/clients/${clientId}/pulse/regenerate`, {}),
     onSuccess: (fresh) => qc.setQueryData(['client-pulse', clientId], fresh),
   })
+  const save = useMutation({
+    mutationFn: () =>
+      api.put<Pulse>(`/clients/${clientId}/pulse`, view === 'list' ? { body_list: draft } : { body: draft }),
+    onSuccess: (fresh) => qc.setQueryData(['client-pulse', clientId], fresh),
+  })
 
   // The active view's text: List falls back to the narrative for pre-upgrade
   // rows (regenerate fills body_list). Copy follows whichever view is shown.
   const activeText = view === 'list' ? (data?.body_list || data?.body || '') : (data?.body || '')
 
+  // Editable draft, reseeded whenever the stored text or the view changes
+  // (a regenerate/save replaces the server copy → the editor follows it).
+  const [draft, setDraft] = useState('')
+  useEffect(() => {
+    setDraft(activeText)
+  }, [activeText])
+  const dirty = draft !== activeText
+
   const copy = async () => {
-    if (!activeText) return
+    if (!draft) return
     try {
-      await navigator.clipboard.writeText(activeText)
+      await navigator.clipboard.writeText(draft)
       setCopied(true)
       setTimeout(() => setCopied(false), 1800)
     } catch {
@@ -79,10 +92,24 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
                   </span>
                 )}
               </div>
-              <pre style={bodyBox}>{activeText}</pre>
-              <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+              <textarea
+                style={bodyBox}
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                spellCheck
+                aria-label="Weekly pulse text — edit before copying"
+              />
+              <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center', flexWrap: 'wrap' }}>
                 <button style={primaryBtn} onClick={copy}>
                   {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? 'Copied' : 'Copy to clipboard'}
+                </button>
+                <button
+                  style={dirty && !save.isPending ? saveBtn : saveBtnDisabled}
+                  disabled={!dirty || save.isPending}
+                  onClick={() => save.mutate()}
+                >
+                  {save.isSuccess && !dirty ? <Check size={14} /> : <Save size={14} />}{' '}
+                  {save.isPending ? 'Saving…' : save.isSuccess && !dirty ? 'Saved' : 'Save'}
                 </button>
                 <button style={ghostBtn} disabled={regen.isPending} onClick={() => regen.mutate()}>
                   <RefreshCw size={13} style={regen.isPending ? { animation: 'spin 1s linear infinite' } : undefined} />
@@ -90,7 +117,7 @@ export function WeeklyPulse({ clientId }: { clientId: string }) {
                 </button>
                 {data.week_start && (
                   <span style={{ fontSize: 11.5, color: '#94a3b8' }}>
-                    week of {data.week_start} · paste into your email &amp; personalize the greeting
+                    week of {data.week_start} · edit &amp; Save, or Copy into your email and personalize the greeting
                   </span>
                 )}
               </div>
@@ -114,12 +141,22 @@ const header: React.CSSProperties = {
 const bodyBox: React.CSSProperties = {
   margin: 0, padding: '12px 14px', background: '#f8fafc', border: '1px solid #e2e8f0',
   borderRadius: 10, fontSize: 12.5, lineHeight: 1.55, color: '#0f172a',
-  whiteSpace: 'pre-wrap', fontFamily: 'inherit', maxHeight: 320, overflowY: 'auto',
+  whiteSpace: 'pre-wrap', fontFamily: 'inherit',
+  width: '100%', boxSizing: 'border-box', minHeight: 180, maxHeight: 360,
+  resize: 'vertical', display: 'block',
 }
 const primaryBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px',
   fontSize: 12.5, fontWeight: 600, color: '#fff', background: '#4f46e5',
   border: 'none', borderRadius: 8, cursor: 'pointer',
+}
+const saveBtn: React.CSSProperties = {
+  display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px',
+  fontSize: 12.5, fontWeight: 600, color: '#fff', background: '#16a34a',
+  border: 'none', borderRadius: 8, cursor: 'pointer',
+}
+const saveBtnDisabled: React.CSSProperties = {
+  ...saveBtn, background: '#e2e8f0', color: '#94a3b8', cursor: 'default',
 }
 const ghostBtn: React.CSSProperties = {
   display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 12px',
