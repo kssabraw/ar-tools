@@ -1,5 +1,23 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff — Market Valuation Plan v1.0 written (draft PR [#1230](https://github.com/kssabraw/ar-tools/pull/1230); design phase, no grade code yet).**
+
+The valuation half of LeadOff, capturing the session's pricing discussion as a buildable spec: **`docs/modules/leadoff-valuation-plan-v1_0.md`**. The counterpart to the Enigma pilot plan.
+
+**The problem it fixes (verified in code):** LeadOff's grade lead-value is a **flat national hand-authored CPL** (`leadoff_actions.tryout_rows`: `value = leads × flat_CPL`), the grader pulls per-market **CPC and discards it** (so Manhattan == Mobile painting), and the manual CPLs are anchored to *shared-lead* (low) economics that undervalue the high-ticket emergency trades by multiples (water damage **$138** mid vs a real **exclusive** range **$500–2,250**; roofing $75 vs $85–550; HVAC $62 vs $65–325 — cross-checked against the owner's HomeAdvisor/networks pricing spec `lead_pricing_data_spec.md`).
+
+**The five owner decisions (2026-09-18), locked in the plan §2:** (1) **exclusive** lead model; (2) HomeAdvisor True Cost Guide scrape + network rate cards = the **national CPL anchor** (real exclusive prices + large-sample job values), replacing the manual `lead_values`, with a confidence-tiered fallback ladder (direct → formula-derived → cluster-inheritance → keep-manual-flagged → CPC-proxy) for the ~verticals it doesn't cover; (3) **`CPL = national_anchor × local_modifier`** (CPC ratio + census income + Enigma incumbent-revenue as a bounded, flag-gated, calibratable multiplier); (4) **Enigma is a top-down CHECK, not the source of truth** — card revenue undercounts insurance-paid trades, so total revenue is estimated **payment-agnostically** (review-velocity × job value; per-contractor permit valuations via a Shovels.ai-class source) with Enigma card-share as one *corrected* input; (5) print the **monetization models** (PPL-exclusive / rank-and-rent rent / PPL-shared + a flagged Enigma affordability ceiling = the owner's "cc rev × ~5%" idea, corrected) on the market brief, not new board columns.
+
+**Grounded in live code/data:** `tryout_rows` (flat CPL, CPC discarded), `market_scanner.lead_values` (~105 manual rows), `leadoff_permits` (city-level demand ONLY — per-contractor permit revenue is flagged new), `business_reviews`/`velocity_row` (per-business review velocity, in hand), `leadoff_income`/`census_demand` (built for the Placement Advisor). Honors the `market_scanner` reload-wipe rule (source of truth = `inputs/lead_values.csv`) and the `leadoff-calibration` "earn a grade weight through outcomes" governance.
+
+**Sequencing:** **v1 (no vendor, universal)** = exclusive CPL recalibration via the ladder + the CPC local modifier + the grounded monetization breakdown — the correctness win, fixes Manhattan≠Mobile with data already bought. v1.5 = fold in income/home-value. **v2 (gated on the Enigma pilot)** = composite revenue estimation (job-flow, then permit valuations) + the Enigma top-down estimator + card-share correction + affordability ceiling. v3 = full CPC→CPL self-calibration tuned via won-client closes.
+
+**State:** plan is a draft PR (docs-only, Netlify green, mergeable). **No code written.** Owner asked "build v1 or hold?" — **awaiting the go-ahead.** Open items the plan flags: request the raw 713-row HomeAdvisor CSV (sharpens the CPL ladder), calibrate `review_rate`, a Shovels.ai (per-contractor permits) eval, and the Enigma pilot result (which the plan scopes to also record card-share).
+
+**Also flagged (NOT done):** the **Little Rock ground-truth** the Enigma harness ships was pulled from `competitor_locations`; bucket B (revenue anchors) + the positive control are `#`-placeholder rows the owner fills before running the pilot.
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff — Enigma coverage-pilot harness BUILT (draft PR; owner runs it with a trial key).**
 
 The "agreed prep" from the Enigma entry below — now built. `writer/platform-api/scripts/enigma_coverage_pilot.py` + `scripts/leadoff_enigma_ground_truth.csv`: a standalone (stdlib + `httpx`, **no app import, no new dependency**) go/no-go harness (plan `docs/modules/leadoff-enigma-pilot-plan-v1_0.md` §4/§5/§6a). Reads `ENIGMA_API_KEY` + `ENIGMA_GRAPHQL_URL`, **refuses to run without a key** (exit 2), calls Enigma once per ground-truth business, writes a results CSV + a raw-envelope JSONL, and prints the §5 coverage/growth/lead-value scorecard + the §5.4 outcome cell. `--dry-run` validates the CSV + prints the GraphQL doc with **no key and no API calls**.
