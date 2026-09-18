@@ -103,6 +103,7 @@ class SocialFanoutRequest(BaseModel):
     format: str = "feed"
     include_image: bool = False
     include_hashtags: bool = True
+    slides: Optional[int] = None           # carousel: number of slides (2..max); None = default
 
 
 class SocialDraftResponse(BaseModel):

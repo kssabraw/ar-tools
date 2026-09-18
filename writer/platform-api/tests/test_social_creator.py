@@ -102,3 +102,28 @@ def test_build_copy_prompt_mentions_format_when_reel():
         client_context="Business: Acme", voice_block="",
     )
     assert "reel" in user.lower()
+
+
+def test_resolve_slide_count_clamps_and_defaults():
+    # request wins, clamped to [2, max]
+    assert creator.resolve_slide_count(5, 3, 10) == 5
+    assert creator.resolve_slide_count(1, 3, 10) == 2      # floor: a carousel needs ≥2
+    assert creator.resolve_slide_count(99, 3, 10) == 10    # cap at max
+    # unset (None/0) → default (itself clamped)
+    assert creator.resolve_slide_count(None, 3, 10) == 3
+    assert creator.resolve_slide_count(0, 3, 10) == 3
+    assert creator.resolve_slide_count(None, 1, 10) == 2   # default below floor → 2
+
+
+def test_sanitize_slide_descriptions_pads_and_caps():
+    # exactly count, keeping the model's non-empty items then padding a shortfall
+    out = creator.sanitize_slide_descriptions(["hook shot", "", "  ", "proof shot"], 4, "roof restoration")
+    assert len(out) == 4
+    assert out[0] == "hook shot" and out[1] == "proof shot"
+    # padded slides are deterministic fallbacks derived from the seed
+    assert "roof restoration" in out[2] and "roof restoration" in out[3]
+    # too many → capped
+    assert len(creator.sanitize_slide_descriptions(["a", "b", "c", "d"], 2, "seed")) == 2
+    # nothing usable → all fallbacks, still `count` of them
+    allfb = creator.sanitize_slide_descriptions(None, 3, "")
+    assert len(allfb) == 3 and all(s.strip() for s in allfb)
