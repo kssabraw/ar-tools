@@ -625,7 +625,10 @@ export function ContactCell({
   const body = (() => {
     if (best.kind === 'person') {
       const c = best.contact!
-      const dial = best.phone ?? mainLine
+      // `||` not `??`: an empty-string phone (not just null) must fall back to the business main
+      // line — otherwise a person with `phone: ""` would show no number at all. `directKnown`
+      // treats "" as "no direct line" for the same reason.
+      const dial = best.phone || mainLine
       const directKnown = !!best.phone
       return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
