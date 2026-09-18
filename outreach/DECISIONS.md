@@ -2675,3 +2675,36 @@ preserved in the handoff's §3 T3.1 bullet: dial from the queue/drawer, a comple
 an automatic `touch` (channel `phone`, actor = the caller) mapping the call back to its lead, the
 recording as a `call_note` carrying the `touch_id`, and the paid dial as an auditable signed order.
 The `touch`-is-authoritative / no-`call`-activity-kind invariant governs that future build.
+
+## 2026-09-18 — Startup worker-drift check (the daemon reverted to a one-shot cron, silently)
+
+The 2026-08-10 "always-on `tick-loop` worker" cutover moved the steady-state service off the
+5-minute cron (`OUTREACH_COMMAND=tick`) onto a continuous daemon (`OUTREACH_COMMAND=tick-loop`,
+`restartPolicyType=on_failure`). That config lives on the **Railway service dashboard, not in
+`railway.toml`**, so `railway.toml` cannot enforce it — and it **drifted back**: the production
+service was found running one-shot `tick` on the `*/5` cron again, so every signed order and every
+geogrid collection advanced only once per 5 minutes. From the `/outreach` UI that reads as "scans
+start and stop but eventually finish" (the user report that surfaced it). The `OUTREACH_BUILD`
+identity banner already printed `command=tick`, but an info line reads the same whether the command
+is right or wrong, so nothing flagged it.
+
+**Decision — detect it loudly at startup, advisory only.** `run_market.worker_drift_warning(command,
+env)` (pure) prints a distinct `OUTREACH_DRIFT` marker + a WARNING log beside the identity banner
+when the **production** service (`RAILWAY_ENVIRONMENT_NAME=production`) resolves to a non-daemon
+resting/heartbeat command (`tick` / `collect` / `filter`) instead of `tick-loop`. It names the
+remedy (set `OUTREACH_COMMAND=tick-loop` + `restartPolicyType=on_failure`, keep the `*/5` cron as
+the relaunch net).
+
+*Scope / why these lines:*
+- **Advisory, never blocking.** The process can't change its own Railway config, and the fix is a
+  dashboard edit; blocking a run would only make a misconfiguration worse. A greppable marker is the
+  right weight — same posture as the `OUTREACH_BUILD` banner and the `OUTREACH_RESULT` marker.
+- **Only `tick`/`collect`/`filter` are drift.** Paid one-shots (`ingest`/`run`/`scan`/…) are
+  deliberate ephemeral runs someone is actively driving and sets back — not the always-on worker —
+  so warning on them would be noise (and the spend gate already covers them). `filter` is included
+  because the unset-`OUTREACH_COMMAND` default resolves to it, and an unset command on the
+  production service means the daemon is not running.
+- **Production-gated** so a local or ephemeral one-shot `tick`/`collect` for debugging stays silent.
+
+Live fix applied the same day (Railway `outreach` service back to `tick-loop` + `on_failure`,
+verified: ticks resumed every ~8s). This check is the tripwire for the next silent reversion.

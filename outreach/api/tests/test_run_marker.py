@@ -118,9 +118,13 @@ import os  # noqa: E402
 
 from api.scripts.run_market import (  # noqa: E402
     PAID_COMMANDS,
+    STEADY_STATE_WORKER_COMMAND,
     resolve_command,
     spend_denial,
+    worker_drift_warning,
 )
+
+_PROD = {"RAILWAY_ENVIRONMENT_NAME": "production"}
 
 
 def test_absent_command_resolves_to_the_free_one():
@@ -168,6 +172,46 @@ def test_every_paid_command_refuses_without_a_token():
 def test_a_matching_token_authorizes():
     assert spend_denial("run", {"OUTREACH_CONFIRM_SPEND": "run"}) is None
     assert spend_denial("run", {"OUTREACH_CONFIRM_SPEND": " run "}) is None
+
+
+# --- worker drift (the always-on daemon reverted to a one-shot cron) -----------------------
+#
+# The daemon config lives on the Railway dashboard, not railway.toml, so it drifted silently once:
+# the service ran one-shot `tick` on a */5 cron, and every order/collection advanced only every 5
+# minutes. `worker_drift_warning` makes that state loud at startup instead of banner-invisible.
+
+
+def test_the_daemon_command_is_never_flagged_as_drift():
+    assert worker_drift_warning(STEADY_STATE_WORKER_COMMAND, _PROD) is None
+
+
+def test_a_one_shot_worker_command_on_production_is_flagged():
+    for command in ("tick", "collect", "filter"):
+        warning = worker_drift_warning(command, _PROD)
+        assert warning is not None, command
+        assert "WORKER DRIFT" in warning
+        # It must name the remedy so the reader can act without spelunking.
+        assert STEADY_STATE_WORKER_COMMAND in warning
+        assert "restartPolicyType=on_failure" in warning
+
+
+def test_resolve_command_drift_covers_the_unset_default():
+    # OUTREACH_COMMAND unset resolves to `filter` — the daemon is NOT running, which is drift.
+    assert worker_drift_warning(resolve_command(_PROD), _PROD) is not None
+
+
+def test_a_deliberate_paid_one_shot_is_not_drift():
+    # ingest/run/scan are ephemeral runs someone is actively driving and sets back — not the
+    # always-on worker. Warning on them would be noise (and the spend gate already covers them).
+    for command in ("ingest", "run", "scan", "score", "rollup"):
+        assert worker_drift_warning(command, _PROD) is None
+
+
+def test_drift_only_fires_on_production():
+    # A local or ephemeral one-shot `tick`/`collect` for debugging must stay silent.
+    assert worker_drift_warning("tick", {}) is None
+    assert worker_drift_warning("tick", {"RAILWAY_ENVIRONMENT_NAME": "staging"}) is None
+    assert worker_drift_warning("tick", {"RAILWAY_ENVIRONMENT_NAME": "PRODUCTION"}) is not None  # case-insensitive
 
 
 def test_a_token_for_a_DIFFERENT_command_does_not_authorize():
