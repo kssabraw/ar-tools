@@ -52,14 +52,25 @@ TYPE_LABELS: dict[str, str] = {
     "leadoff_ai_probe": "LeadOff AI probe",
     "ai_visibility_scan": "AI visibility scan",
     "ai_visibility_suggest": "AI visibility suggestions",
+    "keyword_research_llm": "Keyword research (LLM)",
+    "keyword_topic_llm": "Topic research (LLM)",
+    "sermastr_chat": "SerMaStr chat",
+    "pace_chat": "PACE chat",
+    "director_chat": "DORA chat",
 }
 _PAGE_TYPES = {
     "blog_post", "service_page", "location_page", "local_seo_page",
     "local_seo_reoptimize", "ecommerce_product", "ecommerce_collection",
     "ecommerce_reoptimize",
 }
-_RESEARCH_TYPES = {"keyword_research", "keyword_topic_research", "domain_intel"}
-_AGENT_TYPES = {"autonomy_run", "strategist_review", "qa_review"}
+_RESEARCH_TYPES = {
+    "keyword_research", "keyword_topic_research", "domain_intel",
+    "keyword_research_llm", "keyword_topic_llm",
+}
+_AGENT_TYPES = {
+    "autonomy_run", "strategist_review", "qa_review",
+    "sermastr_chat", "pace_chat", "director_chat",
+}
 _AI_VISIBILITY_TYPES = {"ai_visibility_scan", "ai_visibility_suggest"}
 
 # ── model presentation ─────────────────────────────────────────────────────────

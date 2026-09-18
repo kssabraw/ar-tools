@@ -137,6 +137,21 @@ def test_ai_visibility_label_and_group():
     assert ca.group_for("ai_visibility_suggest") == "AI visibility"
 
 
+def test_instrumented_source_labels_and_groups():
+    # KW-research LLM layers group under Research
+    assert ca.label_for("keyword_research_llm") == "Keyword research (LLM)"
+    assert ca.label_for("keyword_topic_llm") == "Topic research (LLM)"
+    assert ca.group_for("keyword_research_llm") == "Research"
+    assert ca.group_for("keyword_topic_llm") == "Research"
+    # conversational agents group under Agents
+    assert ca.label_for("sermastr_chat") == "SerMaStr chat"
+    assert ca.label_for("pace_chat") == "PACE chat"
+    assert ca.label_for("director_chat") == "DORA chat"
+    assert ca.group_for("sermastr_chat") == "Agents"
+    assert ca.group_for("pace_chat") == "Agents"
+    assert ca.group_for("director_chat") == "Agents"
+
+
 def test_aggregate_and_build_model_rows():
     events = [
         _ev("local_seo_page", 0.60, 100, 50, model="claude-sonnet-4-6"),

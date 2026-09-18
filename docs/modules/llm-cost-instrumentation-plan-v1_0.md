@@ -1,6 +1,6 @@
 # LLM cost instrumentation — capturing the unrecorded LLM spend
 
-**Status:** Increment 1 (foundation + AI Visibility) built 2026-09-18. Increments 2–3 pending.
+**Status:** Increments 1–3 built 2026-09-18 (foundation + AI Visibility + KW/Topic-research LLM layers + the conversational agents SerMaStr/PACE/DORA). Ancillary sources pending.
 
 ## Problem
 
@@ -64,10 +64,18 @@ recorded by platform-api. pipeline-api + platform-api both write the ledger.
 1. **AI Visibility (built).** `brand_scan.py` (6 engines + classifier), `brand_insights.py`
    (diagnose + suggestions). Job-level `usage_context`. DataForSEO records its exact
    `cost` field; token-only providers record tokens.
-2. **KW / Topic Research LLM layers.** report_llm usage threading + the topic-strategist
-   AsyncAnthropic loop.
-3. **Conversational agents** (FailoverAsyncAnthropic contextvar capture) + remaining
-   ancillary (website builder, brand guide, brand-voice/ICP, content-gap, narratives).
+2. **KW / Topic Research LLM layers (built).** `report_llm.py`'s 12 per-provider runners
+   record via `_rec` (gated by the ambient context); the KW-research + topic-research jobs
+   wrap their run in a `usage_context`; the topic-strategist's direct Anthropic loop records
+   each round.
+3. **Conversational agents (built).** `_one_llm_call` (the SerMaStr/PACE/DORA funnel) takes
+   an optional `usage_meta` and records per call (including each pause_turn continuation);
+   `interpret` / `interpret_portfolio` (SerMaStr), `interpret_pace` (PACE), and `interpret_dora`
+   (DORA) pass their source + client. Actor attribution for chat turns is a follow-up (the
+   brain functions don't currently receive the initiating profile).
+4. **Ancillary (pending).** Website Builder + Brand Guide generation, brand-voice/ICP scans,
+   content-gap, and the maps / rank-analysis narratives (the last are cheap now — they use
+   report_llm, so wrapping their generate calls in a `usage_context` records them).
 
 ## Open item — pricing for non-Anthropic models
 

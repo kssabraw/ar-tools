@@ -537,6 +537,7 @@ async def interpret_pace(question: str, client: Optional[dict], context: dict,
                 lambda c: _one_llm_call(
                     c, system, messages, [] if final else tools,
                     _kw(final), on_text if on_event else None,
+                    usage_meta={"source": "pace_chat", "client_id": drill_client_id},
                 ),
                 log_tag="pace_agent",
             )

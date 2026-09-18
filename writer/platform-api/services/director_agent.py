@@ -308,7 +308,8 @@ async def interpret_dora(question: str, model: dict, history: Optional[list[dict
     try:
         resp = await anthropic_failover.call_failover(
             clients,
-            lambda c: _one_llm_call(c, system, messages, [], kw, on_text if on_event else None),
+            lambda c: _one_llm_call(c, system, messages, [], kw, on_text if on_event else None,
+                                    usage_meta={"source": "director_chat"}),
             log_tag="director_agent",
         )
     except anthropic.APIStatusError as exc:
