@@ -88,6 +88,7 @@ from services.census_demand import run_placement_job as run_leadoff_placement_jo
 from services.leadoff_zip_demand import run_zip_demand_probe_job as run_leadoff_zip_demand_job
 from services.leadoff_finder import run_city_finder_job as run_leadoff_city_finder_job
 from services.leadoff_grade import run_grade_job as run_leadoff_grade_job
+from services.leadoff_grade_all import run_grade_all_job as run_leadoff_grade_all_job
 from services.local_relevance import run_local_relevance_job
 from services.page_structure_scraper import analyze_page_structure
 from services.silo_dedup import process_silo_dedup_job
@@ -1115,6 +1116,8 @@ async def _process_job(job: dict) -> None:
         await run_leadoff_city_finder_job(job)
     elif job_type == "leadoff_grade":
         await run_leadoff_grade_job(job)
+    elif job_type == "leadoff_grade_all":
+        await run_leadoff_grade_all_job(job)
     elif job_type == "domain_overview":
         await run_domain_overview_job(job)
     elif job_type == "keyword_gap":

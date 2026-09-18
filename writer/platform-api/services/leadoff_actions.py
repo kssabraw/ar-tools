@@ -374,6 +374,28 @@ def check_budget(user_id: str, est_cost: float) -> None:
             f"would be exceeded (spent ${spent_today(rows):.2f} today)")
 
 
+def grade_all_spent_today(user_id: str) -> float:
+    """Today's (UTC) recorded grade-all sweep spend for this user."""
+    day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0,
+                                                   microsecond=0)
+    rows = (get_supabase().table("leadoff_spend").select("est_cost")
+            .eq("user_id", user_id).eq("action", "grade_all")
+            .gte("created_at", day_start.isoformat()).execute().data or [])
+    return spent_today(rows)
+
+
+def check_budget_grade_all(user_id: str, est_cost: float) -> None:
+    """The grade-all sweep's own daily guard — sums only today's (UTC)
+    `action='grade_all'` spend against the dedicated
+    leadoff_grade_all_daily_budget_usd cap, so a sweep can be authorized without
+    touching the tight $5 single-grade leadoff_daily_budget_usd guard."""
+    already = grade_all_spent_today(user_id)
+    if already + est_cost > settings.leadoff_grade_all_daily_budget_usd:
+        raise BudgetExceeded(
+            f"daily grade-all budget ${settings.leadoff_grade_all_daily_budget_usd:.2f} "
+            f"would be exceeded (spent ${already:.2f} on sweeps today)")
+
+
 class BudgetExceeded(Exception):
     pass
 

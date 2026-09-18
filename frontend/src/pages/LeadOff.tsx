@@ -195,7 +195,7 @@ const compact = (n: number | null | undefined) =>
     : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
       : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k` : String(n)
 
-type View = 'board' | 'grade' | 'neighborhoods' | 'tryouts'
+type View = 'board' | 'grade' | 'grade-all' | 'neighborhoods' | 'tryouts'
 
 // Board columns + click-to-sort model. `key: null` = a non-sortable column
 // (the luck/permit icon strip). `num` picks the default first-click direction
@@ -422,6 +422,9 @@ export function LeadOff() {
           <TabButton active={view === 'grade'} onClick={() => setView('grade')}>
             <Gauge size={13} /> Grade a market
           </TabButton>
+          <TabButton active={view === 'grade-all'} onClick={() => setView('grade-all')}>
+            <Crosshair size={13} /> Rank cities
+          </TabButton>
           <TabButton active={view === 'neighborhoods'} onClick={() => setView('neighborhoods')}>
             <Compass size={13} /> Neighborhoods
           </TabButton>
@@ -431,6 +434,7 @@ export function LeadOff() {
         </div>
 
         {view === 'grade' && <GradeView />}
+        {view === 'grade-all' && <GradeAllView />}
         {view === 'neighborhoods' && <NeighborhoodsView />}
         {view === 'tryouts' && <TryoutsView />}
 
@@ -1510,6 +1514,288 @@ function GradeView() {
             outlier cities read hot). A planning number, not a promise.
           </div>
         </div>
+      )}
+    </>
+  )
+}
+
+// Rank cities: the board/cache-aware bulk sweep — "rank every city for a
+// service". Reaches the sub-30k + off-catalog cities the board can't sort by
+// grading the exact cells on demand (board/cache free, live for the remainder up
+// to a spend ceiling the user sets after a free estimate). The cross-city sort
+// the precomputed board can't do.
+interface GradeAllEstimate {
+  cities: number; on_board: number; cached: number; needs_live: number
+  est_cost: number; category: string; on_catalog: boolean
+  daily_budget_remaining: number
+}
+interface GradeAllRow {
+  city_id: number; city_name?: string; state_code?: string; population?: number | null
+  category?: string; grade?: string; exp_val?: number | null; value_mo?: number | null
+  rankab?: number | null; roi?: number | null; rev_win?: number | null
+  rating?: number | null; exact_open?: number | null; supply?: number | null
+  beatability?: number | null; beatability_band?: string | null
+  demand?: number | null; demand_basis?: 'observed' | 'regressed'
+  thin_demand?: boolean; source: 'board' | 'cache' | 'live'
+}
+interface GradeAllRun {
+  id: string; status: 'pending' | 'running' | 'complete' | 'partial' | 'failed'
+  category_name?: string; on_catalog?: boolean; max_spend?: number
+  results?: GradeAllRow[] | null; error?: string | null
+  result_meta?: {
+    cities: number; on_board: number; cached: number; needs_live: number
+    graded_live: number; budget_skipped: number; cost_spent: number
+    budget_reached: boolean; lead_value_used?: number; cpl_default?: boolean
+  } | null
+}
+
+const GRADE_ALL_ERRORS: Record<string, string> = {
+  invalid_service: 'Enter a service to rank (e.g. "roofing", "dumpster rental").',
+  no_candidate_cities: 'No gradeable cities matched — widen the population range or drop the state filter.',
+  invalid_pop_range: 'Max population must be ≥ min population.',
+  budget_exceeded: 'Daily grade-all budget reached — try tomorrow or lower the max spend.',
+  confirm_required: 'This sweep grades cities live — review the estimate, then run.',
+}
+
+function GradeAllView() {
+  const [service, setService] = useState('')
+  const [stateFilter, setStateFilter] = useState('')
+  const [minPop, setMinPop] = useState('10000')
+  const [maxPop, setMaxPop] = useState('')
+  const [maxSpend, setMaxSpend] = useState('')
+  const [est, setEst] = useState<GradeAllEstimate | null>(null)
+  const [estBusy, setEstBusy] = useState(false)
+  const [runBusy, setRunBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [runId, setRunId] = useState<string | null>(null)
+
+  const estParams = () => {
+    const p = new URLSearchParams({ service: service.trim(), min_pop: minPop || '10000' })
+    if (stateFilter.trim().length === 2) p.set('state', stateFilter.trim().toUpperCase())
+    if (maxPop.trim()) p.set('max_pop', maxPop.trim())
+    return p.toString()
+  }
+
+  const runEstimate = async () => {
+    if (!service.trim() || estBusy) return
+    setEstBusy(true); setError(null); setEst(null); setRunId(null)
+    try {
+      const res = await api.get<GradeAllEstimate>(`/leadoff/grade-all/estimate?${estParams()}`)
+      setEst(res)
+      // prefill the ceiling with what the estimate needs, capped by remaining budget
+      const suggested = Math.min(res.est_cost, Math.max(0, res.daily_budget_remaining))
+      setMaxSpend(String(Math.max(res.needs_live > 0 ? 0.06 : 0, Math.ceil(suggested * 100) / 100)))
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'estimate_failed'
+      setError(GRADE_ALL_ERRORS[msg] || msg)
+    } finally {
+      setEstBusy(false)
+    }
+  }
+
+  const runSweep = async () => {
+    if (!est || runBusy) return
+    setRunBusy(true); setError(null)
+    try {
+      const body: Record<string, unknown> = {
+        service: service.trim(), min_pop: Number(minPop || '10000'),
+        max_spend_usd: Number(maxSpend || '0'), confirm: true,
+      }
+      if (stateFilter.trim().length === 2) body.state = stateFilter.trim().toUpperCase()
+      if (maxPop.trim()) body.max_pop = Number(maxPop.trim())
+      const res = await api.post<{ run_id: string }>('/leadoff/grade-all', body)
+      setRunId(res.run_id)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'sweep_failed'
+      setError(GRADE_ALL_ERRORS[msg] || msg)
+    } finally {
+      setRunBusy(false)
+    }
+  }
+
+  const { data: run } = useQuery<GradeAllRun>({
+    queryKey: ['leadoff-grade-all', runId],
+    queryFn: () => api.get<GradeAllRun>(`/leadoff/grade-all/${runId}`),
+    enabled: !!runId,
+    refetchInterval: q => {
+      const s = q.state.data?.status
+      return s === 'complete' || s === 'partial' || s === 'failed' ? false : 5000
+    },
+  })
+  const rows = run?.results ?? []
+  const running = !!runId && (!run || run.status === 'pending' || run.status === 'running')
+
+  const exportCsv = () => {
+    if (!rows.length) return
+    const headers = ['rank', 'grade', 'city_name', 'state_code', 'population', 'category',
+      'exp_val', 'value_mo', 'rankab', 'roi', 'beatability', 'beatability_band',
+      'demand', 'demand_basis', 'rev_win', 'rating', 'exact_open', 'source']
+    downloadCsv('leadoff_rank_cities.csv', toCsv(headers,
+      rows.map((r, i) => [i + 1, r.grade ?? '', r.city_name ?? '', r.state_code ?? '',
+        r.population ?? '', r.category ?? '', r.exp_val ?? '', r.value_mo ?? '',
+        r.rankab ?? '', r.roi ?? '', r.beatability ?? '', r.beatability_band ?? '',
+        r.demand ?? '', r.demand_basis ?? '', r.rev_win ?? '', r.rating ?? '',
+        r.exact_open ?? '', r.source])))
+  }
+
+  const meta = run?.result_meta
+  const num = (v: number | null | undefined) => (v == null ? '—' : v.toLocaleString())
+
+  return (
+    <>
+      <p style={{ fontSize: 14, color: '#64748b', margin: '0 0 12px' }}>
+        Rank <b>every gradeable city</b> for one service — the cross-city sort the board can't do
+        (it reaches sub-30k + off-catalog cities). Cities already on the board or recently graded
+        are <b>free</b>; the rest grade live (~$0.06 each) up to a spend ceiling you set. Estimate
+        first — it's free and shows exactly how much is billable.
+      </p>
+      <div style={barStyle}>
+        <Field label="Service">
+          <input style={{ ...inputStyle, width: 200 }} value={service} placeholder="roofing contractor"
+            onChange={e => setService(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && runEstimate()} />
+        </Field>
+        <Field label="State (opt)">
+          <input style={{ ...inputStyle, width: 60 }} value={stateFilter} placeholder="all" maxLength={2}
+            onChange={e => setStateFilter(e.target.value.toUpperCase())} />
+        </Field>
+        <Field label="Min pop">
+          <input style={{ ...inputStyle, width: 90 }} value={minPop} inputMode="numeric"
+            onChange={e => setMinPop(e.target.value.replace(/[^0-9]/g, ''))} />
+        </Field>
+        <Field label="Max pop (opt)">
+          <input style={{ ...inputStyle, width: 90 }} value={maxPop} placeholder="none" inputMode="numeric"
+            onChange={e => setMaxPop(e.target.value.replace(/[^0-9]/g, ''))} />
+        </Field>
+        <button style={secondaryBtn} onClick={runEstimate} disabled={!service.trim() || estBusy}>
+          {estBusy ? <Loader2 size={14} className="spin" /> : <Search size={14} />} Estimate (free)
+        </button>
+      </div>
+
+      {error && <div style={errorBox}>{error}</div>}
+
+      {est && (
+        <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 14px',
+          marginBottom: 14, background: '#fff' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-end' }}>
+            <div>
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Service</div>
+              <div style={{ fontWeight: 700 }}>{est.category}
+                <span style={{ ...pill, marginLeft: 6,
+                  background: est.on_catalog ? '#e3f2ef' : '#fef3c7',
+                  color: est.on_catalog ? '#0e7d6f' : '#92400e' }}>
+                  {est.on_catalog ? 'catalog CPL' : 'default CPL'}
+                </span>
+              </div>
+            </div>
+            <KV k="Cities" v={num(est.cities)} />
+            <KV k="On board (free)" v={num(est.on_board)} />
+            <KV k="Cached (free)" v={num(est.cached)} />
+            <KV k="Need live grading" v={num(est.needs_live)} strong />
+            <KV k="Est. cost" v={`$${est.est_cost.toFixed(2)}`} strong />
+            <KV k="Budget left today" v={`$${est.daily_budget_remaining.toFixed(2)}`} />
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, marginTop: 12,
+            paddingTop: 12, borderTop: '1px solid #f1f5f9', flexWrap: 'wrap' }}>
+            <Field label="Max spend (USD)">
+              <input style={{ ...inputStyle, width: 90 }} value={maxSpend} inputMode="decimal"
+                onChange={e => setMaxSpend(e.target.value.replace(/[^0-9.]/g, ''))} />
+            </Field>
+            <button style={primaryBtn} onClick={runSweep}
+              disabled={runBusy || running || (est.needs_live > 0 && Number(maxSpend || '0') <= 0)}>
+              {runBusy || running ? <Loader2 size={14} className="spin" /> : <Crosshair size={14} />}
+              {est.needs_live > 0
+                ? ` Run sweep — grade ${Math.min(est.needs_live, Math.floor(Number(maxSpend || '0') / 0.06))} live (~$${Math.min(est.est_cost, Number(maxSpend || '0')).toFixed(2)})`
+                : ' Rank now (all free)'}
+            </button>
+            {est.needs_live > 0 && (
+              <span style={{ fontSize: 11, color: '#94a3b8' }}>
+                Live grading stops at the ceiling; any cities beyond it are skipped (re-run later — graded cells are then free).
+              </span>
+            )}
+          </div>
+        </div>
+      )}
+
+      {running && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', color: '#64748b',
+          fontSize: 13, marginBottom: 12 }}>
+          <Loader2 size={14} className="spin" /> Grading cities… (board + cache first, then live) — this can take a while for a big sweep; you can leave and come back.
+        </div>
+      )}
+
+      {run && (run.status === 'complete' || run.status === 'partial') && (
+        <>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap',
+            marginBottom: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>
+              {rows.length.toLocaleString()} cities ranked
+            </span>
+            {meta && (
+              <span style={{ fontSize: 12, color: '#64748b' }}>
+                {num(meta.on_board)} board · {num(meta.cached)} cached · {num(meta.graded_live)} graded live
+                {' · '}spent ${meta.cost_spent.toFixed(2)}
+                {meta.budget_reached && meta.budget_skipped > 0 &&
+                  ` · ${num(meta.budget_skipped)} skipped (budget)`}
+              </span>
+            )}
+            {run.status === 'partial' && (
+              <span style={{ ...pill, background: '#fef3c7', color: '#92400e' }}>partial — budget reached</span>
+            )}
+            <button style={secondaryBtn} onClick={exportCsv}><Download size={14} /> Export CSV</button>
+          </div>
+          <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 10 }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
+              <thead>
+                <tr>
+                  <th style={thStyle}>#</th>
+                  <th style={thStyle}>Grade</th>
+                  <th style={thStyle}>City</th>
+                  <th style={thStyle}>Pop</th>
+                  <th style={thStyle}>Exp. value</th>
+                  <th style={thStyle}>Value/mo</th>
+                  <th style={thStyle}>Rankability</th>
+                  <th style={thStyle}>Beatability</th>
+                  <th style={thStyle}>Demand</th>
+                  <th style={thStyle}>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r, i) => (
+                  <tr key={`${r.city_id}-${i}`}>
+                    <td style={tdStyle}>{i + 1}</td>
+                    <td style={{ ...tdStyle, fontWeight: 700 }}>{r.grade ?? '—'}</td>
+                    <td style={tdStyle}>{r.city_name}, {r.state_code}</td>
+                    <td style={tdStyle}>{num(r.population)}</td>
+                    <td style={tdStyle}>{num(r.exp_val)}</td>
+                    <td style={tdStyle}>{r.value_mo == null ? '—' : `$${num(r.value_mo)}`}</td>
+                    <td style={tdStyle}>{r.rankab ?? '—'}</td>
+                    <td style={tdStyle}>{r.beatability == null ? '—'
+                      : `${r.beatability}${r.beatability_band ? ` (${r.beatability_band})` : ''}`}</td>
+                    <td style={tdStyle}>{num(r.demand)}{r.thin_demand ? ' ⚠' : ''}
+                      <span style={{ color: '#cbd5e1', fontSize: 11 }}> {r.demand_basis === 'regressed' ? 'reg' : 'obs'}</span></td>
+                    <td style={tdStyle}>
+                      <span style={{ ...pill,
+                        background: r.source === 'board' ? '#eef2ff' : r.source === 'cache' ? '#f0fdf4' : '#fff7ed',
+                        color: r.source === 'board' ? '#4338ca' : r.source === 'cache' ? '#166534' : '#9a3412' }}>
+                        {r.source}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 10 }}>
+            Board rows use regressed demand (reg); live/cached use raw observed demand (obs), which reads
+            slightly hot for outlier-demand cities — the same reference the single-market grader uses.
+            Ranked by expected value. Planning numbers, not promises.
+          </div>
+        </>
+      )}
+
+      {run && run.status === 'failed' && (
+        <div style={errorBox}>Sweep failed: {run.error || 'unknown error'}</div>
       )}
     </>
   )

@@ -302,6 +302,13 @@ class Settings(BaseSettings):
         # for them.) Tier 4's slowness itself is a calibration item — bound the
         # planner fan-out — tracked in the coverage-audit handoff, not solved here.
         "coverage_audit": 120,
+        # LeadOff grade-all — a bulk sweep grading potentially thousands of
+        # city×service cells live at bounded concurrency; a full ~3-4k-city
+        # HVAC-style sweep runs well past the 30-min default. A requeue is CHEAP
+        # (each live grade is persisted to leadoff_grades, so a re-run finds
+        # graded cells cached = free and only finishes the remainder), so 180 min
+        # is a generous backstop, not a double-spend risk.
+        "leadoff_grade_all": 180,
         # A whole-client DataForSEO rank refresh fetches one live SERP per keyword
         # GSC can't cover — a client with ~100 keywords is a ~1h run at healthy
         # SERP latency, and a DataForSEO degradation (a burst of transient 40101
@@ -2764,6 +2771,14 @@ class Settings(BaseSettings):
     # (~$0.20/run) + scout (~$0.10–1/market, cache-cheapened). Every enqueue
     # records its estimate to leadoff_spend; the guard sums today's UTC rows.
     leadoff_daily_budget_usd: float = 5.0
+    # grade-all bulk sweep ("rank every city for a service" — reaches the
+    # sub-30k + off-catalog cities the board can't sort). Its own daily budget,
+    # SEPARATE from the tight $5 single-grade guard above, so a deliberate sweep
+    # can be authorized without loosening single-grade safety; the caller's
+    # per-run max_spend ceiling is the hard stop on live spend within it.
+    leadoff_grade_all_daily_budget_usd: float = 300.0
+    leadoff_grade_all_max_cities: int = 5000   # candidate-city cap per run (runaway guard)
+    leadoff_grade_all_concurrency: int = 16    # in-flight live grades per sweep
     # Calibration surface Phase 0 (leadoff-calibration-plan-v1_0.md):
     # prediction capture at create-client + the monthly outcome-check sweep
     # (DB reads only, $0). Read-only instrumentation — never touches scoring.

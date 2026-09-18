@@ -713,3 +713,51 @@ scorecard vs the plan's §5 thresholds; refuses to run without a key) + assemble
 ground-truth set — so the owner runs the pilot in one command once they have a trial key.
 Alternative the owner may pick instead: skip Enigma for lead-value and wire the
 won-client-close-data calibration path (no vendor).
+
+## LeadOff — grade-all bulk sweep ("Rank cities") (2026-09-18)
+
+**Context.** The single-cell grader answers "type a city + a service → grade";
+the board answers "rank cities for a service" but only for scanned categories on
+the ≥30k tier. Nothing ranked EVERY gradeable city (incl. sub-30k + off-catalog)
+for one service — the #2 open item from the 2026-09-18 grader entry, and the one
+flagged there as "the most natural next build."
+
+**DECIDED + BUILT (this session, green draft PR):**
+- **A board/cache-aware bulk sweep**, NOT a re-run of every cell: per candidate
+  city, board-first (free) → recent cache (free) → live (~$0.06). So a service
+  already precomputed on the board (HVAC = 723 free rows) only pays for the
+  ungraded remainder. Distinct from city-finder (which always pays + caps at
+  300); grade-all reaches all ~3,993 gradeable cities.
+- **Each live grade is persisted to `leadoff_grades`** — the sweep is
+  idempotent/resumable (a reaper requeue re-runs but finds graded cells cached =
+  free) and those cells are free for future single grades too. Paired with a
+  180-min stale-timeout override (cheap requeue, not a double-spend risk).
+- **Spend model — nothing spends without staff auth + confirm + a ceiling:** a
+  FREE estimate endpoint shows the board/cache-free split + the live cost; the
+  caller sets a required `max_spend_usd`; the job grades only as many live cities
+  as the RESERVED amount (`min(estimate, ceiling)`) covers (biggest markets
+  first), the rest `budget_skipped` → run `partial`. The reserved amount is
+  guarded + recorded, and the job's hard cap = the reservation, so a
+  candidate-set change between enqueue and run can never overspend.
+- **A DEDICATED daily budget** `leadoff_grade_all_daily_budget_usd` ($300),
+  SEPARATE from the tight $5 single-grade `leadoff_daily_budget_usd` — so a
+  deliberate sweep can be authorized without loosening single-grade safety.
+  Rationale: a sweep is a different, infrequent, staff-only action; conflating
+  its budget with single grades would either block sweeps or weaken the single
+  guard.
+- **Ranked by expected value** across all three sources; board rows carry the
+  regressed `xdem` demand, live/cache the raw observed `vol` — both surfaced with
+  `demand_basis` (the same board-vs-tryout apples-to-oranges the grader already
+  accepts, made transparent per row rather than hidden).
+- Migration `20260918200000` applied live (`leadoff_grade_all_runs` + the
+  `grade_all` spend action + the `leadoff_grade_all` job type, both rebuilt from
+  the verified live constraints). Frontend "Rank cities" tab (estimate → set
+  ceiling → run → ranked table + CSV).
+
+**Scout-from-grade (PR #1212) — MERGED** (`1ccd4df` on `main`); the prior entry's
+OPEN item #1 is closed.
+
+**Still OPEN (unchanged):** the 4-category board-add runbook (owner's scanner
+machine), a scout button on Tryout rows, a sub-10k geocode step, and the Enigma
+coverage pilot. The real DataForSEO sweep is worker-verified post-deploy (the
+sandbox is egress-blocked from DataForSEO).

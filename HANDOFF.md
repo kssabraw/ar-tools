@@ -1,5 +1,25 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff `grade-all` bulk sweep ("Rank cities") — BUILT (green draft PR, awaiting owner merge). Scout-from-grade (PR #1212) is now MERGED on `main`.**
+
+The cross-city sort the precomputed board can't do: **"rank every gradeable city for one service"**, reaching the sub-30k + off-catalog cities the board never scanned by grading the exact cells on demand. Owner-flagged as "the most natural next build" (the #2 open item). Branch `claude/leadoff-grading-continuation-2mcu6j`.
+
+**How it works (`services/leadoff_grade_all.py`, board/cache-aware):** for each candidate city it takes the cheapest path that answers it — **board-first (FREE)** if the exact city×category is on `leadoff_board`, else **cache (FREE)** if a recent live grade exists, else **live (PAID, ~$0.06)** — the single-cell grader's logic transposed to N cities. Each live grade is persisted to `leadoff_grades` (the single-cell cache), so the sweep is **idempotent/resumable** on a reaper requeue (a re-run finds those cells cached = free) and future lookups are free. Results are normalized across all three sources into one thin row (board = regressed `xdem` demand, live/cache = raw observed `vol` — both surfaced with `demand_basis`), ranked by expected value.
+
+**Spend is bounded three ways, nothing spends without staff auth + confirm + a ceiling:** (1) a **free estimate** (`GET /leadoff/grade-all/estimate`) shows candidate cities, the board/cache-free split, and the live cost of the remainder — no spend, no enqueue; (2) the caller sets a **`max_spend_usd` ceiling** (required) after seeing the estimate — the job pre-selects only as many live cities as the *reserved* amount (`min(est, ceiling)`) covers, biggest markets first, and marks the rest `budget_skipped` (run status `partial`); (3) a dedicated **`leadoff_grade_all_daily_budget_usd`** ($300 default) — SEPARATE from the tight $5 single-grade guard, so a deliberate sweep is authorizable without loosening single-grade safety. The reserved amount is what's guarded + recorded, and the job's hard cap = the reservation, so a candidate-set change between enqueue and run can never overspend.
+
+**Shipped (green draft PR):** migration `20260918200000_leadoff_grade_all.sql` **applied live** (`leadoff_grade_all_runs` + RLS; `'grade_all'` on `leadoff_spend`; `'leadoff_grade_all'` on `async_jobs`, both rebuilt from the VERIFIED live constraints); `services/leadoff_grade_all.py` (pure `estimate_cost`/`plan_live_budget`/`split_candidates`/`normalize_row`/`rank_rows` + impure reads + the async `leadoff_grade_all` job at concurrency `leadoff_grade_all_concurrency`=16); `leadoff_actions.check_budget_grade_all`/`grade_all_spent_today`; `POST /leadoff/grade-all` + `GET /leadoff/grade-all/estimate` + `GET /leadoff/grade-all/{run_id}` (`routers/leadoff.py`); `job_worker` dispatch; config (`leadoff_grade_all_daily_budget_usd`/`_max_cities`(5000)/`_concurrency` + a 180-min stale-timeout override — cheap requeue via the cache); **frontend "Rank cities" tab** on `pages/LeadOff.tsx` (`GradeAllView`: estimate → set ceiling → run → ranked table + per-source badges + **CSV export**); tests `tests/test_leadoff_grade_all.py` (16). Verified locally: 76 leadoff tests green, full suite collects (6676), ruff 0.16.5 (CI config) clean, `tsc -b` + `vite build` clean. **Live paid path (the actual DataForSEO sweep) is worker-verified post-deploy** (sandbox egress-blocked from DataForSEO). **HVAC-all-cities reference:** ~3,270 live cells after the 723 free board rows ≈ ~$195; set `max_spend_usd` to bound it.
+
+**OPEN ITEMS / next (LeadOff on-demand), updated:**
+1. ~~Merge PR #1212 (scout-from-grade)~~ — **MERGED** (`1ccd4df` on `main`).
+2. ~~`grade-all` bulk endpoint~~ — **BUILT this session** (green draft PR above; owner to merge). To run a real sweep, the `leadoff_grade_all_daily_budget_usd` ($300 default) is already generous; the per-run `max_spend_usd` is the operator's knob.
+3. **Apply the 4-category board-add runbook** (`docs/modules/leadoff-board-add-4-categories-runbook.md`, owner's scanner machine) — Fire damage / Dumpster rental / Carpenter / Dryer vent cleaning; Level A (~$0, real CPLs for the grader + grade-all) then Level B (~$80–90, board rows).
+4. **Scout button on Tryout rows** (NOT built) — scout is on the single-service grade card only.
+5. **Sub-10k geocode step** (NOT built) — to grade towns below the 10k `cities` floor.
+6. **Enigma coverage pilot** (better pricing/profit data — see the dedicated entry below).
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff on-demand grader + scout-from-grade — BUILT. Grader MERGED (PR #1204, live on `main`); scout-from-grade GREEN DRAFT (PR #1212, awaiting owner merge).**
 
 The "type a city + a service → get a grade" tool — the on-demand complement to the precomputed board that **dissolves the small-market/demand-gate debate** (below): you no longer precompute a whole tier to answer one market, you grade the exact cell someone asks for. Owner-approved 2026-09-18.
