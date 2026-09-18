@@ -1,5 +1,43 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff — small-market tier + demand-gate exploration (TABLED, decision pending; no code written, no scanner spend yet)**
+
+Owner and Claude explored extending LeadOff below the current **≥30k board** into small-market tiers (15–30k, and possibly up to 50k) for the rank-and-rent / pay-per-lead thesis (thin competition, cheap to rank). **Tabled by the owner 2026-09-18** — captured here so it can resume cold. Nothing built; no DataForSEO spend; the scanner has NOT been re-run.
+
+**Verified live state (Supabase `market_scanner`, 2026-09-18):** `leadoff_board` = **34,352 rows, ALL ≥30k** (min pop 30,020), `as_of` 2026-07. `market_opportunity_master` runs 1/2/3 are **all ≥30k** (min 30,000). **Nothing below 30k has ever been scanned** — the app plumbing for small tiers (population filter #1187, `export_leadoff_board.py` #1193) is merged and ready, but the *data* isn't there.
+
+**How the demand gate actually works (the crux of the whole discussion):** the paid step is the Maps **SERP** pull (competitors/reviews/supply). Search *volume* is cheap. So the pipeline prices demand first and only buys the SERP for markets that clear a floor:
+- Stage **04** prices every city×category combo's Google Ads volume in **two forms** — `"[service] [city]"` and `"[service] near me"`.
+- Stage **04b** builds the keeplist: **`max(base, near-me) ≥ KEEPLIST_MIN_VOL` (=20)**. `max()` because near-me often dwarfs the explicit form.
+- Stage **02** pulls a SERP **only for keeplist combos** → `supply_measured=true` → on the board. Below-gate combos are `supply_measured=false` and **excluded from the board**.
+- Google volume is **bucketed** (…0, 10, 20, 30, 50…; nothing 11–19), so "lower the gate to 10" = "also admit the demand-10 bucket." The board's **DEMAND column is regressed `xdemand`, NOT the raw volume the gate uses** (a board row showing DEMAND=56 cleared the gate on its raw ≥20 volume).
+
+**Key finding — gate=20 starves small cities** (demand≥20 qualification rate by city size, run 3): 30–35k **13.3%** · 35–40k 14.0% · 40–50k 17.2% · 50–75k 20.7% · 75–150k 27.5% · 150k+ 49.2%. **~70% of small-city combos sit at demand=10.** So a 15–30k tier at gate=20 comes back **~90% empty** — stripping out exactly the easy-to-rank small markets that are the point.
+
+**The value nuance:** the gate is **volume-only; it ignores lead VALUE**. A demand-10 market for a high-CPL service (water damage ~$140 CPL) ≈ **~$100+/mo gross** even at ~1 lead/mo in an easy-to-rank town; a demand-10 low-CPL service ≈ noise. The board's `exp_val` (leads × CPL × rankability) already sorts this — the gate pre-empts it. → argues for **gate=10 on small cities + let `exp_val`/`min_demand` filter do the quality sort** (owner was leaning this way when we tabled).
+
+**Cost estimates** (per-SERP **~$0.002**, derived from the docs' ungated 15–30k ~$390/160k; roughly **half** on the cheaper standard-queued SERP method; ALL within the current ~$800 DataForSEO balance):
+
+| Option | New SERP pulls | Cost @ ~$0.002 | Precision |
+|---|---|---|---|
+| 15–30k new tier @ gate 20 | ~16k | ~$32–70 | est (sparse — see above) |
+| 15–30k new tier @ gate 10 | ~128k | ~$256 | est |
+| **30–50k backfill (existing 643 cities, gate 20→10)** | **45,551** | **~$91** | **exact** — takes those cities ~15%→~86% covered (best value) |
+| 15–50k @ gate 10 (new 15–30k + 30–50k backfill) | ~174k | ~$347 | mixed |
+| gate-10 everywhere (all ≥15k) | ~225k | ~$450–550 | mixed |
+
+**Mechanical caveats to resolve BEFORE any run:**
+- **The DataForSEO $500/day limit is GONE** — owner confirmed with the vendor 2026-09-18. The `scanner-CLAUDE.md` / runbook note asserting it is **stale**; a big run can go in one pass (balance permitting). Only a per-minute *rate* limit affects wall-clock (~225k SERPs still takes hours).
+- **`MIN_POPULATION` is a FLOOR; there is no known population ceiling in `config.py`.** So `MIN_POPULATION=15000` + gate=10 sweeps **everything ≥15k** (= gate-10-everywhere, NOT a clean 15–50k slice). Scoping to ≤50k needs a `MAX_POPULATION` cap or a city-list — **Cowork must check `config.py`**.
+- **`field_quality` dependency:** the board export joins `market_scanner.field_quality` (`rev_to_win`/`top5_rating`/`name_match`) for the WPA columns (`rev_win`, ROI, `rating`, Beatability). It may be a **separate precompute** (`run_rankability.ps1`), not part of `04→02→06→07`. If it isn't regenerated for the new cities, those columns are **blank** even though the grade computes — confirm in the scanner CLAUDE.md.
+- **Publish step:** after the scanner loads a new run to `master`, run `scripts/export_leadoff_board.py` to publish to `leadoff_board`. Keep publish on the ar-tools/app side so `master` can be verified first (the "scanned but never published" gap #1193 closed).
+
+**Execution model:** the scanner runs on the owner's machine — drive it with **Cowork on that machine** (reads the scanner `CLAUDE.md` + auto-memory, sees the real `config.py`/runner scripts this repo does NOT contain). The ar-tools side (this repo/session) verifies `master`, runs/verifies the export, and verifies the board.
+
+**Open decisions (all TABLED, nothing committed):** (1) population floor — 15k vs 10k (owner said 15k, then explored "up to 50k"); (2) demand gate 20 vs 10 (owner leaning 10 for small cities after seeing the data); (3) scoped 15–50k vs gate-10-everywhere. Resume by picking these, then hand the scanner run to Cowork and the publish/verify to the app side.
+
+---
+
 ## ⏩ Update — 2026-09-17 · **LeadOff — 15k–30k population tier: board filter (MERGED) + repeatable leadoff_board export (built) + re-scan runbook** — PRs [#1187](https://github.com/kssabraw/ar-tools/pull/1187) (merged) / [#1193](https://github.com/kssabraw/ar-tools/pull/1193) (draft) (latest)
 
 Goal: let LeadOff cover **small-market (15k–30k population) cities** — the sweet spot for thin-competition rank-and-rent / pay-per-lead plays — instead of only the ≥30k board.
@@ -11,7 +49,7 @@ Goal: let LeadOff cover **small-market (15k–30k population) cities** — the s
 **Re-scan runbook (do this on the scanner machine — `C:\Users\kssab\OneDrive\Desktop\Projects\GBP Demographics Script\`):**
 1. **Read first:** that folder's `CLAUDE.md` + the auto-memory at `C:\Users\kssab\.claude\projects\C--Users-kssab-OneDrive-Desktop-Projects-GBP-Demographics-Script\memory\market-opportunity-scanner.md` (the authority). Data dir is `C:\Users\kssab\market-scanner-data\` (outside OneDrive).
 2. **Floor:** `MIN_POPULATION` is an **env var** (`config.py` default 0; `run_full.ps1` sets it to `30000`) — set it to **`15000`** and re-run. `cities.csv` already covers ≥10k; checkpoints mean ≥30k is not re-pulled. `run_full.ps1` strips `DRY_RUN`/`MAX_CITIES`, so dry-run a stage separately (`$env:DRY_RUN="true"`), not through it.
-3. **Cost:** `run_full.ps1` is the **ungated** path (SERP for every combo, ~$390 for this tier). The **demand-gated** path (`run_repull.ps1` logic: stage 04 CPC → `04b_make_keeplist` `vol≥20` → stage 02 honours `SERP_KEEPLIST`) is **~$150** — prefer it. Threshold curve: 30k+ = 1,728 cities, 20k+ = 2,620, 10k+ = 4,682 (so 15k–30k ≈ ~1,600). Pre-flight the **DataForSEO ~$500/day limit (resets midnight UTC ≈ 19:00 local)** + account balance before launching.
+3. **Cost:** `run_full.ps1` is the **ungated** path (SERP for every combo, ~$390 for this tier). The **demand-gated** path (`run_repull.ps1` logic: stage 04 CPC → `04b_make_keeplist` `vol≥20` → stage 02 honours `SERP_KEEPLIST`) is **~$150** — prefer it. Threshold curve: 30k+ = 1,728 cities, 20k+ = 2,620, 10k+ = 4,682 (so 15k–30k ≈ ~1,600). Pre-flight the account balance before launching. (**Correction, 2026-09-18:** the owner confirmed with DataForSEO there is **no $500/day money limit** on this account — earlier notes asserting one are stale; only a per-minute rate limit applies, so a large pull can run in one pass, balance permitting.)
 4. **Load:** stage 07 loads a new `run_id` to `market_opportunity_master`. Verify the new run holds both tiers (`select population range for the new run_id`).
 5. **PUBLISH TO THE APP (the make-or-break step):** run the export. It reads master + inputs from Supabase and replaces `leadoff_board` + `exp_val_percentiles` (delete+insert, **grant-preserving — no DDL**, so the `service_role` grants survive):
    ```
