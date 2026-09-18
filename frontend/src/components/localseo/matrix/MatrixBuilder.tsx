@@ -43,6 +43,8 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
   const [publishStatus, setPublishStatus] = useState<'draft' | 'publish'>('draft')
   const [linkServiceHub, setLinkServiceHub] = useState(true)
   const [hubPattern, setHubPattern] = useState('/{service}/')
+  const [linkLocationHub, setLinkLocationHub] = useState(false)
+  const [locationHubPattern, setLocationHubPattern] = useState('/{location}/')
   const [linkHome, setLinkHome] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -72,6 +74,8 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
         publish_status: publishStatus,
         link_to_service_hub: linkServiceHub,
         service_hub_pattern: linkServiceHub ? (hubPattern.trim() || '/{service}/') : null,
+        link_to_location_hub: linkLocationHub,
+        location_hub_pattern: linkLocationHub ? (locationHubPattern.trim() || '/{location}/') : null,
         link_to_home: linkHome,
       })
       onCreated(matrix)
@@ -149,6 +153,18 @@ export function MatrixBuilder({ clientId, onCreated, onCancel, initialServices, 
             <input style={{ ...input, maxWidth: 320 }} value={hubPattern} onChange={e => setHubPattern(e.target.value)} placeholder="/{service}/" disabled={saving} />
             <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>
               Where your service hub pages live — must contain <code>{'{service}'}</code>, no <code>{'{location}'}</code>. e.g. <code>/{'{service}'}/</code> → <code>/roof-restoration/</code>.
+            </p>
+          </div>
+        )}
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155' }}>
+          <input type="checkbox" checked={linkLocationHub} onChange={e => setLinkLocationHub(e.target.checked)} disabled={saving} />
+          To the top-level location page
+        </label>
+        {linkLocationHub && (
+          <div style={{ paddingLeft: 24 }}>
+            <input style={{ ...input, maxWidth: 320 }} value={locationHubPattern} onChange={e => setLocationHubPattern(e.target.value)} placeholder="/{location}/" disabled={saving} />
+            <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>
+              Where your location hub pages live — must contain <code>{'{location}'}</code>, no <code>{'{service}'}</code>. e.g. <code>/{'{location}'}/</code> → <code>/melbourne/</code>. Only turn on if these pages exist.
             </p>
           </div>
         )}

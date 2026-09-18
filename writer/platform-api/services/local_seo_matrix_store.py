@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 _MATRIX_COLS = (
     "id, client_id, name, location, location_code, services, locations, url_pattern, "
     "base_url, page_template_url, entity_provider, publish_destination, publish_status, "
-    "link_to_service_hub, service_hub_pattern, link_to_home, "
+    "link_to_service_hub, service_hub_pattern, link_to_location_hub, location_hub_pattern, link_to_home, "
     "release_enabled, release_mode, release_weekday, release_day_of_month, "
     "release_per_count, release_status, release_next_run_at, release_last_run_at, "
     "created_by, created_at, updated_at"
@@ -215,6 +215,20 @@ def _resolve_hub_pattern(pattern: Optional[str], *, require: bool) -> str:
     return p
 
 
+def _resolve_location_hub_pattern(pattern: Optional[str], *, require: bool) -> str:
+    """Normalize the location-hub pattern to a valid value. Same contract as
+    `_resolve_hub_pattern`: an invalid pattern is a 400 only when the location-hub
+    link is on; when off it is silently replaced with the default, so the stored
+    value is always valid and a matrix never rejects over a pattern it won't use."""
+    p = (pattern or "").strip() or core.DEFAULT_LOCATION_HUB_PATTERN
+    errors = core.validate_location_hub_pattern(p)
+    if errors:
+        if require:
+            raise HTTPException(status_code=400, detail=errors[0])
+        return core.DEFAULT_LOCATION_HUB_PATTERN
+    return p
+
+
 def _client_home_anchor(client_id: str) -> str:
     """The homepage link's anchor: the client's business name, else "Home".
     Best-effort with a targeted read — a failed or unexpected lookup never blocks
@@ -265,6 +279,10 @@ async def create_matrix(client_id: str, body: dict, user_id: str) -> dict:
         "service_hub_pattern": _resolve_hub_pattern(
             body.get("service_hub_pattern"), require=bool(body.get("link_to_service_hub", True))
         ),
+        "link_to_location_hub": bool(body.get("link_to_location_hub", False)),
+        "location_hub_pattern": _resolve_location_hub_pattern(
+            body.get("location_hub_pattern"), require=bool(body.get("link_to_location_hub", False))
+        ),
         "link_to_home": bool(body.get("link_to_home", True)),
         "created_by": user_id,
     }
@@ -302,7 +320,7 @@ async def update_matrix(matrix_id: str, client_id: str, body: dict) -> dict:
             patch[key] = (val.strip().rstrip("/") if key == "base_url" else val.strip()) if isinstance(val, str) else val
             if key in ("base_url", "page_template_url", "entity_provider") and not patch[key]:
                 patch[key] = None
-    for key in ("link_to_service_hub", "link_to_home"):
+    for key in ("link_to_service_hub", "link_to_location_hub", "link_to_home"):
         if body.get(key) is not None:
             patch[key] = bool(body[key])
     if body.get("service_hub_pattern") is not None:
@@ -314,6 +332,13 @@ async def update_matrix(matrix_id: str, client_id: str, body: dict) -> dict:
             else bool(matrix.get("link_to_service_hub", True))
         )
         patch["service_hub_pattern"] = _resolve_hub_pattern(body["service_hub_pattern"], require=hub_on)
+    if body.get("location_hub_pattern") is not None:
+        loc_hub_on = (
+            bool(body["link_to_location_hub"])
+            if body.get("link_to_location_hub") is not None
+            else bool(matrix.get("link_to_location_hub", False))
+        )
+        patch["location_hub_pattern"] = _resolve_location_hub_pattern(body["location_hub_pattern"], require=loc_hub_on)
 
     pattern = matrix["url_pattern"]
     if body.get("url_pattern") is not None:
@@ -502,6 +527,8 @@ def enqueue_cells(
             max_links=settings.local_seo_matrix_max_links,
             service_hub=matrix.get("link_to_service_hub", True),
             service_hub_pattern=matrix.get("service_hub_pattern") or core.DEFAULT_SERVICE_HUB_PATTERN,
+            location_hub=matrix.get("link_to_location_hub", False),
+            location_hub_pattern=matrix.get("location_hub_pattern") or core.DEFAULT_LOCATION_HUB_PATTERN,
             home=matrix.get("link_to_home", True),
             home_anchor=home_anchor,
         )

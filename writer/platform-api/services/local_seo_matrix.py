@@ -247,8 +247,12 @@ SAME_SERVICE = "same_service_other_location"
 # The "up" links every location page also carries (plan §4.1): its top-level
 # (location-agnostic) service page and the site root.
 SERVICE_HUB = "service_hub"
+# The "up" link to the top-level (service-agnostic) location page, e.g.
+# /melbourne/ — off by default since not every site has per-location hubs.
+LOCATION_HUB = "location_hub"
 HOME = "home"
 DEFAULT_SERVICE_HUB_PATTERN = "/{service}/"
+DEFAULT_LOCATION_HUB_PATTERN = "/{location}/"
 
 
 def service_hub_anchor(cell: dict) -> str:
@@ -257,6 +261,14 @@ def service_hub_anchor(cell: dict) -> str:
     if label:
         return f"{label[:1].upper()}{label[1:]}"
     return (cell.get("service_slug") or "").replace("-", " ").strip().title() or "Our services"
+
+
+def location_hub_anchor(cell: dict) -> str:
+    """"Melbourne" — the location name, no service."""
+    name = (cell.get("location_name") or "").strip()
+    if name:
+        return name
+    return (cell.get("location_slug") or "").replace("-", " ").strip().title() or "Areas we serve"
 
 
 def anchor_text(cell: dict) -> str:
@@ -364,6 +376,28 @@ def service_hub_url(service_slug: str, base_url: str = "", pattern: str = DEFAUL
     return f"{base}{path}" if base else path
 
 
+def validate_location_hub_pattern(pattern: str) -> list[str]:
+    """A location-hub pattern must contain ``{location}`` and must NOT contain
+    ``{service}`` — the top-level location page is service-agnostic."""
+    p = (pattern or "").strip()
+    errors: list[str] = []
+    if "{location}" not in p:
+        errors.append("location_hub_pattern_missing_location_token")
+    if "{service}" in p:
+        errors.append("location_hub_pattern_has_service_token")
+    return errors
+
+
+def location_hub_url(location_slug: str, base_url: str = "", pattern: str = DEFAULT_LOCATION_HUB_PATTERN) -> str:
+    """The URL of the top-level (service-agnostic) location page, e.g.
+    ``/melbourne/``. `pattern` carries a single ``{location}`` token."""
+    path = (pattern or DEFAULT_LOCATION_HUB_PATTERN).replace("{location}", (location_slug or "").strip("/"))
+    if not path.startswith("/"):
+        path = "/" + path
+    base = (base_url or "").strip().rstrip("/")
+    return f"{base}{path}" if base else path
+
+
 def home_url(base_url: str = "") -> str:
     """The site root."""
     base = (base_url or "").strip().rstrip("/")
@@ -376,20 +410,30 @@ def up_links(
     *,
     service_hub: bool = True,
     service_hub_pattern: str = DEFAULT_SERVICE_HUB_PATTERN,
+    location_hub: bool = False,
+    location_hub_pattern: str = DEFAULT_LOCATION_HUB_PATTERN,
     home: bool = True,
     home_anchor: str = "Home",
 ) -> list[dict]:
     """The "up" links a location page carries in addition to its siblings
-    (plan §4.1): the top-level service page (``service_hub``) and the site root
-    (``home``). Both are silo-spine links pointing above the cell in the site
-    hierarchy — the enhancement that makes ``/roof-restoration/melbourne/`` link
-    up to ``/roof-restoration/`` and ``/`` as well as across to its siblings."""
+    (plan §4.1): the top-level service page (``service_hub``), the top-level
+    location page (``location_hub``) and the site root (``home``). Each is a
+    silo-spine link pointing above the cell in the site hierarchy — the
+    enhancement that makes ``/roof-restoration/melbourne/`` link up to
+    ``/roof-restoration/``, ``/melbourne/`` and ``/`` as well as across to its
+    siblings. The location hub is off by default (not every site has one)."""
     out: list[dict] = []
     if service_hub:
         out.append({
             "anchor": service_hub_anchor(cell),
             "url": service_hub_url(cell.get("service_slug") or "", base_url, service_hub_pattern),
             "relation": SERVICE_HUB,
+        })
+    if location_hub:
+        out.append({
+            "anchor": location_hub_anchor(cell),
+            "url": location_hub_url(cell.get("location_slug") or "", base_url, location_hub_pattern),
+            "relation": LOCATION_HUB,
         })
     if home:
         out.append({
@@ -410,15 +454,19 @@ def plan_cell_links(
     coords: Optional[dict[str, tuple]] = None,
     service_hub: bool = True,
     service_hub_pattern: str = DEFAULT_SERVICE_HUB_PATTERN,
+    location_hub: bool = False,
+    location_hub_pattern: str = DEFAULT_LOCATION_HUB_PATTERN,
     home: bool = True,
     home_anchor: str = "Home",
 ) -> list[dict]:
     """Every internal link a cell page should carry: the up-links (service hub +
-    home) FIRST so they always survive the cap, then the siblings. Deduped by
-    URL path and never linking to the cell's own page; capped at `max_links`."""
+    location hub + home) FIRST so they always survive the cap, then the siblings.
+    Deduped by URL path and never linking to the cell's own page; capped at
+    `max_links`."""
     ups = up_links(
         cell, base_url,
         service_hub=service_hub, service_hub_pattern=service_hub_pattern,
+        location_hub=location_hub, location_hub_pattern=location_hub_pattern,
         home=home, home_anchor=home_anchor,
     )
     sibs = sibling_links(cell, cells, base_url, location_cap=location_cap, max_links=max_links, coords=coords)
