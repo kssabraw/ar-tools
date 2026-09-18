@@ -26,33 +26,37 @@ def _field(supply=8, avg5=40, rev_win=25, rating=4.6, namekw=1, holders=2):
 
 
 class TestResolveService:
-    def test_exact_catalog_match_is_on_catalog(self):
+    def test_exact_catalog_match_keeps_literal_keyword(self):
+        # keyword is ALWAYS the literal input; category_name is the catalog match
         r = resolve_service("Plumber", BOARD)
-        assert r == {"category_name": "Plumber", "on_catalog": True}
+        assert r == {"keyword": "Plumber", "category_name": "Plumber", "on_catalog": True}
 
-    def test_fuzzy_trade_word_resolves_on_catalog(self):
-        # "roofing" → "Roofing contractor" (stemmed roof↔roofing)
-        r = resolve_service("roofing", BOARD)
+    def test_fuzzy_trade_word_grades_literal_but_matches_catalog(self):
+        # "roofer" → graded as "roofer", CPL/board from "Roofing contractor"
+        r = resolve_service("roofer", BOARD)
+        assert r["keyword"] == "roofer"                    # the LITERAL term graded
+        assert r["category_name"] == "Roofing contractor"  # catalog match (CPL/board)
         assert r["on_catalog"] is True
-        assert r["category_name"] == "Roofing contractor"
 
-    def test_off_catalog_service_kept_verbatim(self):
-        # nothing overlaps → graded live as the typed service
+    def test_off_catalog_service_grades_literal_no_match(self):
+        # nothing overlaps → graded live as the typed term, no catalog category
         r = resolve_service("dumpster rental", BOARD)
-        assert r == {"category_name": "dumpster rental", "on_catalog": False}
+        assert r == {"keyword": "dumpster rental", "category_name": None,
+                     "on_catalog": False}
 
     def test_carpenter_is_off_catalog(self):
         r = resolve_service("carpenter", BOARD)
         assert r["on_catalog"] is False
-        assert r["category_name"] == "carpenter"
+        assert r["keyword"] == "carpenter"
+        assert r["category_name"] is None
 
     def test_whitespace_normalized(self):
         r = resolve_service("  dumpster   rental  ", BOARD)
-        assert r["category_name"] == "dumpster rental"
+        assert r["keyword"] == "dumpster rental"
 
     def test_empty_service(self):
         r = resolve_service("   ", BOARD)
-        assert r == {"category_name": "", "on_catalog": False}
+        assert r == {"keyword": "", "category_name": None, "on_catalog": False}
 
 
 class TestCacheKey:
@@ -92,12 +96,16 @@ class TestThinDemand:
 
 class TestBuildGradeRow:
     def test_composes_grade_and_tags(self):
+        # the literal keyword "roofer" is graded; the CPL/holders came from the
+        # catalog category, recorded as lead_category
         row = build_grade_row(
-            category_name="Roofing contractor", category_id="roofing_contractor",
+            keyword="roofer", category_id="roofing_contractor",
+            lead_category="Roofing contractor",
             vol=300, cpc=12.0, field=_field(), cpl=75.0, cpl_default=False,
             breakpoints=BREAKPOINTS, capture=0.10,
             competitors=[{"business_name": "ACME Roofing"}])
-        assert row["category"] == "Roofing contractor"
+        assert row["category"] == "roofer"                 # the literal keyword graded
+        assert row["lead_category"] == "Roofing contractor"  # CPL/holder source
         assert row["category_id"] == "roofing_contractor"
         assert "grade" in row and "exp_val" in row
         assert row["exp_val"] > 0                    # real demand + value → graded
@@ -108,12 +116,13 @@ class TestBuildGradeRow:
     def test_thin_demand_market_still_grades(self):
         # the whole point of on-demand: a below-gate cell is graded, not withheld
         row = build_grade_row(
-            category_name="Dryer vent cleaning service", category_id=None,
+            keyword="dryer vent cleaning", category_id=None, lead_category=None,
             vol=10, cpc=3.0, field=_field(), cpl=40.0, cpl_default=True,
             breakpoints=BREAKPOINTS, capture=0.10)
         assert row["thin_demand"] is True
         assert row["cpl_default"] is True
         assert row["category_id"] is None
+        assert row["lead_category"] is None
         assert "grade" in row                        # a grade was still produced
 
 
@@ -159,3 +168,17 @@ class TestGradeMarketComps:
     def test_empty_competitors_yield_empty_list(self):
         _market, comps = grade_market_comps(_grade_row(grade={"competitors": []}))
         assert comps == []
+
+    def test_scout_uses_lead_category_over_literal_keyword(self):
+        # a literal-keyword grade ("roofer") scouts against its catalog category
+        # (the scanner's Pass-2 caches are keyed by category, not the keyword)
+        row = _grade_row(category_name="roofer", category_id="roofing_contractor",
+                         grade={"lead_category": "Roofing contractor", "grade": "B",
+                                "competitors": [{"business_name": "ACME"}]})
+        market, _comps = grade_market_comps(row)
+        assert market["category"] == "Roofing contractor"
+
+    def test_scout_falls_back_to_category_name_without_lead_category(self):
+        # older rows carry no lead_category → the stored category_name is used
+        market, _comps = grade_market_comps(_grade_row())
+        assert market["category"] == "Plumber"

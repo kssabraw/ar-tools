@@ -97,6 +97,15 @@ class TestFieldStats:
         two = [_serp_item("A", 30), _serp_item("B", 8)]
         assert field_stats(two, "Locksmith")["rev_win"] == 8  # min(2, len-1)
 
+    def test_holder_category_decouples_holders_from_the_searched_keyword(self):
+        # a literal keyword ("key cutting") is graded on its own SERP, but the
+        # exact-holder count is matched against the catalog category
+        s = field_stats(self.ITEMS, "key cutting", holder_category="Locksmith")
+        assert s["holders"] == 5                 # holders from the catalog category
+        assert s["namekw"] == 0                  # namekw from the literal keyword
+        # supply/reviews are keyword-agnostic (the SERP is the SERP)
+        assert s["supply"] == 6 and s["rev_win"] == 36
+
 
 class TestTryoutEconomics:
     def test_grading_and_vetoes(self):

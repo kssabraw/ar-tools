@@ -1167,8 +1167,9 @@ interface GradeRow {
   thin_demand?: boolean
   cpl?: number
   cpl_default?: boolean
-  category?: string
+  category?: string              // the literal keyword graded (display)
   category_id?: string | null
+  lead_category?: string | null  // catalog category the CPL/holders came from
   beatability?: number | null
   beatability_band?: string | null
   monthly_profit?: number | null
@@ -1388,11 +1389,12 @@ function GradeView() {
 
           {/* caveats */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '10px 0 2px' }}>
-            {onCatalog && service.trim().toLowerCase() !== (resolvedCat ?? '').toLowerCase() && (
-              <CaveatLine tone="info">Graded as <b>{resolvedCat}</b> — the closest catalog category to "{service.trim()}".</CaveatLine>
+            {onCatalog && row.lead_category
+              && row.lead_category.toLowerCase() !== (resolvedCat ?? '').toLowerCase() && (
+              <CaveatLine tone="info">Graded on your keyword <b>"{resolvedCat}"</b> (its own volume + SERP); lead value borrowed from the closest catalog category, <b>{row.lead_category}</b>.</CaveatLine>
             )}
             {onCatalog === false && (
-              <CaveatLine tone="info">Off-catalog service — graded live with an estimated lead value.</CaveatLine>
+              <CaveatLine tone="info">Off-catalog service — graded live on your keyword with an estimated lead value.</CaveatLine>
             )}
             {row.thin_demand && (
               <CaveatLine tone="warn">Thin demand ({demand ?? '—'}/mo searches — below the ~20 gate the board uses). Graded anyway; treat the volume cautiously.</CaveatLine>
@@ -1526,7 +1528,8 @@ function GradeView() {
 // the precomputed board can't do.
 interface GradeAllEstimate {
   cities: number; on_board: number; cached: number; needs_live: number
-  est_cost: number; category: string; on_catalog: boolean
+  est_cost: number; category: string; keyword?: string
+  lead_category?: string | null; on_catalog: boolean
   daily_budget_remaining: number
 }
 interface GradeAllRow {
@@ -1679,14 +1682,23 @@ function GradeAllView() {
           marginBottom: 14, background: '#fff' }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-end' }}>
             <div>
-              <div style={{ fontSize: 11, color: '#94a3b8' }}>Service</div>
-              <div style={{ fontWeight: 700 }}>{est.category}
+              <div style={{ fontSize: 11, color: '#94a3b8' }}>Keyword graded</div>
+              <div style={{ fontWeight: 700 }}>{est.keyword ?? est.category}
                 <span style={{ ...pill, marginLeft: 6,
                   background: est.on_catalog ? '#e3f2ef' : '#fef3c7',
-                  color: est.on_catalog ? '#0e7d6f' : '#92400e' }}>
+                  color: est.on_catalog ? '#0e7d6f' : '#92400e' }}
+                  title={est.on_catalog
+                    ? `Live cells grade this exact keyword; lead value from the catalog category${est.lead_category ? ` "${est.lead_category}"` : ''}.`
+                    : 'Off-catalog keyword — graded live with the default lead value.'}>
                   {est.on_catalog ? 'catalog CPL' : 'default CPL'}
                 </span>
               </div>
+              {est.on_catalog && est.lead_category
+                && est.lead_category.toLowerCase() !== (est.keyword ?? est.category).toLowerCase() && (
+                <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                  lead value from <b>{est.lead_category}</b>
+                </div>
+              )}
             </div>
             <KV k="Cities" v={num(est.cities)} />
             <KV k="On board (free)" v={num(est.on_board)} />

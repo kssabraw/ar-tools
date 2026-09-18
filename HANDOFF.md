@@ -1,5 +1,13 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff grader — grade the LITERAL keyword, not the catalog category (fix, on PR #1217's branch).**
+
+Owner-reported flaw: a grade for "roofer" silently graded **"Roofing contractor"**. Root cause — `_stem` collapses `roofer→roof`, so `resolve_service` mapped the typed term to the catalog category and then pulled **both** the Google Ads volume **and** the Maps SERP on the *category*, discarding the user's actual keyword. The catalog mapping existed only to borrow a real CPL (lead value), but it overreached and hijacked the pulled keyword.
+
+**Fix — decouple the pulled keyword from the lead-value lookup** (single grader + grade-all, same branch/PR): the live volume + Maps SERP pull now **always uses the literal keyword** the user typed; the nearest catalog category is used ONLY for the CPL, the exact-category holder count (`field_stats(..., holder_category=)`), and the board/scout id — never as the pulled keyword. `resolve_service` now returns `{keyword (literal), category_name (catalog match or None), on_catalog}`; `build_grade_row(keyword=…, lead_category=…)` records both; the grade cache **keys on the literal keyword** (so "roofer" and "roofing contractor" cache distinctly); scout still keys on the catalog category (read from the grade's `lead_category`, fallback to the stored keyword for older rows). Board-first + cache-first are unchanged (a board hit is still the free precomputed *category* grade, transparently labeled); only the LIVE path (the Cypress case) changed. **Consequence:** on-catalog live grades now measure the literal keyword's SERP — grade numbers will shift, by design. Frontend caveats updated ("Graded on your keyword …; lead value from <category>"). Back-compat: an in-flight job enqueued before this ships still runs (payload `category_name` fallback). Tests updated + added (`test_leadoff_grade.py`, `test_leadoff_actions.py` holder-decouple, `test_leadoff_grade_all.py`); 386 leadoff/worker/activity green, ruff clean, `tsc`/`vite build` clean.
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff `grade-all` bulk sweep ("Rank cities") — BUILT (green draft PR, awaiting owner merge). Scout-from-grade (PR #1212) is now MERGED on `main`.**
 
 The cross-city sort the precomputed board can't do: **"rank every gradeable city for one service"**, reaching the sub-30k + off-catalog cities the board never scanned by grading the exact cells on demand. Owner-flagged as "the most natural next build" (the #2 open item). Branch `claude/leadoff-grading-continuation-2mcu6j`.

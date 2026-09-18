@@ -111,11 +111,18 @@ def demand_from_items(items: list[dict[str, Any]],
     return out
 
 
-def field_stats(items: list[dict[str, Any]], category_name: str) -> dict[str, Any]:
+def field_stats(items: list[dict[str, Any]], category_name: str,
+                holder_category: str | None = None) -> dict[str, Any]:
     """The per-category SERP field read (mirrors check_city.pull): supply,
     top-5 review avg / rev_win (3rd-highest) / rating / name-keyword count,
-    exact-category holders over ALL items."""
-    label = holder_label(category_name)
+    exact-category holders over ALL items.
+
+    `category_name` is the term that was searched (drives supply/reviews/namekw).
+    `holder_category`, when given, is the canonical GBP category the exact-holder
+    count is matched against — so a literal keyword ("roofer") can be graded on
+    its own SERP while still counting "Roofing contractor" holders. Defaults to
+    `category_name` (unchanged for every existing caller)."""
+    label = holder_label(holder_category or category_name)
     holders = sum(1 for it in items if norm(it.get("category") or "") == label)
     top5 = items[:5]
     revs = sorted((((it.get("rating") or {}).get("votes_count") or 0) for it in top5),

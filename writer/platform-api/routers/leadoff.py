@@ -556,35 +556,37 @@ async def grade_market(
     name_to_id = {c["category_name"]: c["category_id"] for c in cats}
     resolved = leadoff_grade.resolve_service(
         body.service, [c["category_name"] for c in cats])
-    category_name = resolved["category_name"]
-    if not category_name:
+    keyword = resolved["keyword"]            # the LITERAL term graded (live pull)
+    if not keyword:
         raise HTTPException(status_code=422, detail="invalid_service")
-    category_id = name_to_id.get(category_name) if resolved["on_catalog"] else None
+    lead_category = resolved["category_name"]  # nearest catalog match (CPL/board), or None
+    category_id = name_to_id.get(lead_category) if lead_category else None
 
-    # 1) board-first (free)
+    # 1) board-first (free) — the precomputed category grade, when the keyword
+    #    maps to a category that's on the board for this city.
     brief = leadoff_grade.board_hit(city_id, category_id)
     if brief is not None:
         return {"status": "complete", "source": "board", "grade": brief,
                 "city_name": city_row.get("name"),
                 "state_code": city_row.get("state_code"),
-                "category": category_name, "on_catalog": True}
+                "category": lead_category, "on_catalog": True}
 
-    # 2) recent cached live grade (free)
-    cached = leadoff_grade.fresh_cached(city_id, category_name)
+    # 2) recent cached live grade (free) — keyed on the literal keyword
+    cached = leadoff_grade.fresh_cached(city_id, keyword)
     if cached is not None:
         return {"status": "complete", "source": "cache",
                 "grade": cached.get("grade"), "grade_id": cached.get("id"),
                 "city_name": city_row.get("name"),
                 "state_code": city_row.get("state_code"),
-                "category": category_name, "on_catalog": resolved["on_catalog"]}
+                "category": keyword, "on_catalog": resolved["on_catalog"]}
 
-    # 3) live single-cell grade (paid, budget-guarded)
+    # 3) live single-cell grade of the LITERAL keyword (paid, budget-guarded)
     try:
         leadoff_actions.check_budget(auth["user_id"], leadoff_grade.COST_GRADE)
     except leadoff_actions.BudgetExceeded as exc:
         raise HTTPException(status_code=422, detail="budget_exceeded") from exc
     out = leadoff_grade.enqueue_grade(
-        auth["user_id"], city_row, category_name, category_id,
+        auth["user_id"], city_row, keyword, lead_category, category_id,
         resolved["on_catalog"], body.service, body.capture, body.lead_tier)
     leadoff_actions.record_spend(
         auth["user_id"], "grade", leadoff_grade.COST_GRADE,
@@ -594,7 +596,7 @@ async def grade_market(
             "grade_id": out["grade_id"], "job_id": out["job_id"],
             "city_name": city_row.get("name"),
             "state_code": city_row.get("state_code"),
-            "category": category_name, "on_catalog": resolved["on_catalog"],
+            "category": keyword, "on_catalog": resolved["on_catalog"],
             "est_cost": leadoff_grade.COST_GRADE}
 
 
@@ -624,29 +626,31 @@ class GradeAllRequest(BaseModel):
 
 
 def _resolve_grade_service(service: str) -> dict:
-    """Resolve the typed service to a (category_name, category_id, on_catalog,
-    cpl, cpl_default) bundle — shared by the estimate + POST. Raises 422 on an
-    empty/unresolvable service."""
+    """Resolve the typed service into the grade KEYWORD (the literal term the
+    sweep grades live) + the nearest catalog category (CPL/board id only) —
+    shared by the estimate + POST. Raises 422 on an empty/unresolvable service."""
     from services import leadoff_grade
     cats = leadoff_actions._categories()
     name_to_id = {c["category_name"]: c["category_id"] for c in cats}
     resolved = leadoff_grade.resolve_service(
         service, [c["category_name"] for c in cats])
-    category_name = resolved["category_name"]
-    if not category_name:
+    keyword = resolved["keyword"]
+    if not keyword:
         raise HTTPException(status_code=422, detail="invalid_service")
+    lead_category = resolved["category_name"]   # catalog match (CPL/board), or None
     on_catalog = resolved["on_catalog"]
-    category_id = name_to_id.get(category_name) if on_catalog else None
-    return {"category_name": category_name, "category_id": category_id,
-            "on_catalog": on_catalog}
+    category_id = name_to_id.get(lead_category) if lead_category else None
+    return {"keyword": keyword, "lead_category": lead_category,
+            "category_id": category_id, "on_catalog": on_catalog}
 
 
-def _grade_all_cpl(category_name: str, lead_tier: str) -> tuple[float, bool]:
-    """(cpl, is_default) for the sweep — the catalog CPL for the resolved
-    category at the chosen tier, else the flagged default (off-catalog)."""
+def _grade_all_cpl(lead_category: str | None, keyword: str,
+                   lead_tier: str) -> tuple[float, bool]:
+    """(cpl, is_default) for the sweep — the catalog CPL for the matched category
+    at the chosen tier, else the flagged default (off-catalog / no match)."""
     from services import leadoff_grade
     return leadoff_grade.resolve_cpl(
-        category_name, leadoff_actions._lead_values(lead_tier),
+        lead_category or keyword, leadoff_actions._lead_values(lead_tier),
         settings.leadoff_finder_default_lead_value)
 
 
@@ -663,12 +667,13 @@ async def grade_all_estimate(
     from services import leadoff_grade_all as ga
     svc = _resolve_grade_service(service)
     est = ga.estimate(
-        category_name=svc["category_name"], category_id=svc["category_id"],
+        keyword=svc["keyword"], category_id=svc["category_id"],
         on_catalog=svc["on_catalog"], state=state, min_pop=min_pop,
         max_pop=max_pop, limit=settings.leadoff_grade_all_max_cities)
     remaining = round(settings.leadoff_grade_all_daily_budget_usd
                       - leadoff_actions.grade_all_spent_today(auth["user_id"]), 2)
-    return {**est, "category": svc["category_name"], "on_catalog": svc["on_catalog"],
+    return {**est, "keyword": svc["keyword"], "category": svc["keyword"],
+            "lead_category": svc["lead_category"], "on_catalog": svc["on_catalog"],
             "daily_budget_remaining": remaining}
 
 
@@ -686,7 +691,7 @@ async def start_grade_all(
         raise HTTPException(status_code=422, detail="invalid_pop_range")
     svc = _resolve_grade_service(body.service)
     est = ga.estimate(
-        category_name=svc["category_name"], category_id=svc["category_id"],
+        keyword=svc["keyword"], category_id=svc["category_id"],
         on_catalog=svc["on_catalog"], state=body.state, min_pop=body.min_pop,
         max_pop=body.max_pop, limit=settings.leadoff_grade_all_max_cities)
     if est["cities"] == 0:
@@ -702,10 +707,11 @@ async def start_grade_all(
             leadoff_actions.check_budget_grade_all(auth["user_id"], to_spend)
         except leadoff_actions.BudgetExceeded as exc:
             raise HTTPException(status_code=422, detail="budget_exceeded") from exc
-    cpl, cpl_default = _grade_all_cpl(svc["category_name"], body.lead_tier)
+    cpl, cpl_default = _grade_all_cpl(svc["lead_category"], svc["keyword"], body.lead_tier)
     out = ga.enqueue_grade_all(
         auth["user_id"], service_query=body.service,
-        category_name=svc["category_name"], category_id=svc["category_id"],
+        keyword=svc["keyword"], lead_category=svc["lead_category"],
+        category_id=svc["category_id"],
         on_catalog=svc["on_catalog"], state=body.state, min_pop=body.min_pop,
         max_pop=body.max_pop, limit=settings.leadoff_grade_all_max_cities,
         capture=body.capture, lead_tier=body.lead_tier, cpl=cpl,
@@ -716,8 +722,9 @@ async def start_grade_all(
         max_spend=to_spend, est_cost=to_spend)
     if to_spend > 0:
         leadoff_actions.record_spend(auth["user_id"], "grade_all", to_spend,
-                                     category=svc["category_name"], state=body.state)
-    return {**out, "category": svc["category_name"], "on_catalog": svc["on_catalog"],
+                                     category=svc["keyword"], state=body.state)
+    return {**out, "keyword": svc["keyword"], "category": svc["keyword"],
+            "lead_category": svc["lead_category"], "on_catalog": svc["on_catalog"],
             "cities": est["cities"], "needs_live": est["needs_live"],
             "on_board": est["on_board"], "cached": est["cached"]}
 

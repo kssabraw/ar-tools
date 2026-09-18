@@ -158,11 +158,12 @@ def board_free_rows(category_id: Optional[str],
     return {r["city_id"]: r for r in rows if r.get("city_id") in city_ids}
 
 
-def cached_grade_rows(category_name: str, city_ids: set[int],
+def cached_grade_rows(keyword: str, city_ids: set[int],
                       now: Optional[datetime] = None) -> dict[int, dict[str, Any]]:
-    """Freshest complete live grade per candidate city for this service, keyed by
-    city_id. Matches on the cache_key's normalized-category suffix so a run picks
-    up cells graded by an earlier grade-all or single grade."""
+    """Freshest complete live grade per candidate city for this LITERAL keyword,
+    keyed by city_id. Matches on the cache_key's normalized-keyword suffix so a
+    run picks up cells graded by an earlier grade-all or single grade of the same
+    keyword."""
     if not city_ids:
         return {}
     now = now or datetime.now(timezone.utc)
@@ -170,7 +171,7 @@ def cached_grade_rows(category_name: str, city_ids: set[int],
     rows = (get_supabase().table("leadoff_grades")
             .select("city_id, city_name, state_code, grade, pulled_at")
             .eq("status", "complete").gte("pulled_at", cutoff)
-            .ilike("cache_key", f"%|{norm(category_name)}")
+            .ilike("cache_key", f"%|{norm(keyword)}")
             .order("pulled_at", desc=True).execute().data or [])
     out: dict[int, dict[str, Any]] = {}
     for r in rows:
@@ -180,15 +181,16 @@ def cached_grade_rows(category_name: str, city_ids: set[int],
     return out
 
 
-def estimate(*, category_name: str, category_id: Optional[str], on_catalog: bool,
+def estimate(*, keyword: str, category_id: Optional[str], on_catalog: bool,
              state: Optional[str], min_pop: int, max_pop: Optional[int],
              limit: int) -> dict[str, Any]:
     """Free preview: how many candidate cities, the board/cache-free split, and
-    the live cost of the remainder. No spend, no enqueue."""
+    the live cost of the remainder. No spend, no enqueue. Cache hits are keyed on
+    the literal keyword; board hits on the mapped category id."""
     cities = candidate_cities(state=state, min_pop=min_pop, max_pop=max_pop, limit=limit)
     ids = {c["city_id"] for c in cities}
     board_ids = set(board_free_rows(category_id if on_catalog else None, ids).keys())
-    cache_ids = set(cached_grade_rows(category_name, ids - board_ids).keys())
+    cache_ids = set(cached_grade_rows(keyword, ids - board_ids).keys())
     split = split_candidates(cities, board_ids, cache_ids)
     needs_live = len(split["needs_live"])
     return {
@@ -200,16 +202,19 @@ def estimate(*, category_name: str, category_id: Optional[str], on_catalog: bool
 
 # ── Enqueue + the async sweep ─────────────────────────────────────────────────
 
-def enqueue_grade_all(user_id: str, *, service_query: str, category_name: str,
-                      category_id: Optional[str], on_catalog: bool,
-                      state: Optional[str], min_pop: int, max_pop: Optional[int],
-                      limit: int, capture: float, lead_tier: str,
-                      cpl: float, cpl_default: bool, max_spend: float,
-                      est_cost: float) -> dict[str, Any]:
+def enqueue_grade_all(user_id: str, *, service_query: str, keyword: str,
+                      lead_category: Optional[str], category_id: Optional[str],
+                      on_catalog: bool, state: Optional[str], min_pop: int,
+                      max_pop: Optional[int], limit: int, capture: float,
+                      lead_tier: str, cpl: float, cpl_default: bool,
+                      max_spend: float, est_cost: float) -> dict[str, Any]:
+    """Create the run row + async job. The run's category_name is the LITERAL
+    keyword graded (display + cache); the catalog category (for CPL/holders)
+    rides in the payload as lead_category."""
     supabase = get_supabase()
     run = supabase.table("leadoff_grade_all_runs").insert({
         "requested_by": user_id, "service_query": service_query,
-        "category_name": category_name, "category_id": category_id,
+        "category_name": keyword, "category_id": category_id,
         "on_catalog": on_catalog, "state": (state.upper() if state else None),
         "min_pop": int(min_pop), "max_pop": (int(max_pop) if max_pop else None),
         "capture": capture, "lead_tier": lead_tier, "cpl": round(float(cpl), 2),
@@ -219,9 +224,9 @@ def enqueue_grade_all(user_id: str, *, service_query: str, category_name: str,
     job = supabase.table("async_jobs").insert({
         "job_type": "leadoff_grade_all", "entity_id": run["id"],
         "payload": {"run_id": run["id"], "user_id": user_id,
-                    "service_query": service_query, "category_name": category_name,
-                    "category_id": category_id, "on_catalog": on_catalog,
-                    "state": state, "min_pop": int(min_pop),
+                    "service_query": service_query, "keyword": keyword,
+                    "lead_category": lead_category, "category_id": category_id,
+                    "on_catalog": on_catalog, "state": state, "min_pop": int(min_pop),
                     "max_pop": (int(max_pop) if max_pop else None), "limit": int(limit),
                     "capture": capture, "lead_tier": lead_tier, "cpl": cpl,
                     "cpl_default": cpl_default, "max_spend": float(max_spend)},
@@ -230,14 +235,17 @@ def enqueue_grade_all(user_id: str, *, service_query: str, category_name: str,
 
 
 async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
-                          category_name: str, category_id: Optional[str],
+                          keyword: str, lead_category: Optional[str],
+                          category_id: Optional[str],
                           on_catalog: bool, service_query: str, cpl: float,
                           cpl_default: bool, breakpoints: list[float],
                           capture: float, lead_tier: str,
                           user_id: Optional[str]) -> Optional[dict[str, Any]]:
-    """Live-grade one city (mirrors leadoff_grade.run_grade_job's body), enrich,
-    persist to leadoff_grades (cache/resume), and return the normalized row.
-    Returns None on a per-city failure (dropped from results, like city-finder)."""
+    """Live-grade one city on the LITERAL keyword (mirrors
+    leadoff_grade.run_grade_job's body), enrich, persist to leadoff_grades
+    (cache/resume), and return the normalized row. Exact-category holders are
+    counted against the mapped catalog category (lead_category) when there is
+    one. Returns None on a per-city failure (dropped, like city-finder)."""
     now = datetime.now(timezone.utc)
     try:
         vol: Optional[float] = None
@@ -247,26 +255,26 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
             posted = await la._dfs_post(
                 client, "/keywords_data/google_ads/search_volume/task_post",
                 [{"location_code": lc, "language_name": "English",
-                  "keywords": [category_name, category_name + " near me"]}])
+                  "keywords": [keyword, keyword + " near me"]}])
             task = la._task0(posted)
             la._check_money_limit(task)
             result = await la._poll_task(
                 client, "/keywords_data/google_ads/search_volume/task_get",
                 task.get("id"), interval_s=10, attempts=40)
-            dem = la.demand_from_items(result or [], [category_name]).get(category_name, {})
+            dem = la.demand_from_items(result or [], [keyword]).get(keyword, {})
             vol, cpc = dem.get("vol"), dem.get("cpc")
 
         from services.leadoff_brand import top5_from_items
         coord = f"{city['latitude']},{city['longitude']},13z"
         d = await la._dfs_post(
             client, "/serp/google/maps/live/advanced",
-            [{"keyword": category_name, "location_coordinate": coord,
+            [{"keyword": keyword, "location_coordinate": coord,
               "language_code": "en", "device": "desktop", "os": "windows", "depth": 100}])
         t0 = la._task0(d)
         la._check_money_limit(t0)
         items = ([] if t0.get("status_code") == la._CODE_NO_RESULTS
                  else ((t0.get("result") or [{}])[0] or {}).get("items") or [])
-        field = la.field_stats(items, category_name)
+        field = la.field_stats(items, keyword, holder_category=lead_category)
         competitors = top5_from_items(items)
     except RuntimeError:
         raise                      # money-limit → abort the whole sweep
@@ -276,9 +284,9 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
         return None
 
     row = lg.build_grade_row(
-        category_name=category_name, category_id=category_id, vol=vol, cpc=cpc,
-        field=field, cpl=cpl, cpl_default=cpl_default, breakpoints=breakpoints,
-        capture=capture, competitors=competitors)
+        keyword=keyword, category_id=category_id, lead_category=lead_category,
+        vol=vol, cpc=cpc, field=field, cpl=cpl, cpl_default=cpl_default,
+        breakpoints=breakpoints, capture=capture, competitors=competitors)
     try:
         from services.leadoff_beatability import attach_beatability
         from services.leadoff_roi import attach_roi
@@ -292,9 +300,9 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
         get_supabase().table("leadoff_grades").insert({
             "requested_by": user_id, "city_id": city.get("city_id"),
             "city_name": city.get("city_name"), "state_code": city.get("state_code"),
-            "category_id": category_id, "category_name": category_name,
+            "category_id": category_id, "category_name": keyword,
             "service_query": service_query,
-            "cache_key": lg.cache_key(city.get("city_id"), category_name),
+            "cache_key": lg.cache_key(city.get("city_id"), keyword),
             "capture": capture, "lead_tier": lead_tier, "on_catalog": on_catalog,
             "cpl_default": cpl_default, "source": "live", "status": "complete",
             "grade": row, "pulled_at": now.isoformat(), "completed_at": "now()",
@@ -306,7 +314,7 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
     return normalize_row("live", {**row, "city_id": city.get("city_id"),
                                   "city_name": city.get("city_name"),
                                   "state_code": city.get("state_code")},
-                         category_name=category_name, population=city.get("population"))
+                         category_name=keyword, population=city.get("population"))
 
 
 async def run_grade_all_job(job: dict) -> None:
@@ -315,7 +323,12 @@ async def run_grade_all_job(job: dict) -> None:
     supabase = get_supabase()
     payload = job.get("payload") or {}
     run_id = payload["run_id"]
-    category_name = payload.get("category_name") or ""
+    # `keyword` is the literal term graded; `lead_category` the catalog category
+    # the CPL + exact-holder count come from (may be None). (Back-compat: a job
+    # enqueued before this change carries only `category_name`.)
+    keyword = payload.get("keyword") or payload.get("category_name") or ""
+    lead_category = payload.get("lead_category") or (
+        payload.get("category_name") if payload.get("category_id") else None)
     category_id = payload.get("category_id")
     on_catalog = bool(payload.get("on_catalog"))
     capture = float(payload.get("capture") or 0.10)
@@ -347,7 +360,7 @@ async def run_grade_all_job(job: dict) -> None:
             return
         ids = {c["city_id"] for c in cities}
         board_rows = board_free_rows(category_id if on_catalog else None, ids)
-        cache_rows = cached_grade_rows(category_name, ids - set(board_rows))
+        cache_rows = cached_grade_rows(keyword, ids - set(board_rows))
         split = split_candidates(cities, set(board_rows), set(cache_rows))
         needs_live = split["needs_live"]
 
@@ -361,13 +374,13 @@ async def run_grade_all_job(job: dict) -> None:
         results: list[dict[str, Any]] = []
         for c in split["on_board"]:
             results.append(normalize_row("board", board_rows[c["city_id"]],
-                                         category_name=category_name,
+                                         category_name=keyword,
                                          population=c.get("population")))
         for c in split["cached"]:
             g = cache_rows[c["city_id"]]
             inner = {**(g.get("grade") or {}), "city_id": c["city_id"],
                      "city_name": c.get("city_name"), "state_code": c.get("state_code")}
-            results.append(normalize_row("cache", inner, category_name=category_name,
+            results.append(normalize_row("cache", inner, category_name=keyword,
                                          population=c.get("population")))
 
         # live remainder (bounded concurrency)
@@ -379,8 +392,9 @@ async def run_grade_all_job(job: dict) -> None:
             async def one(c: dict[str, Any]) -> Optional[dict[str, Any]]:
                 async with sem:
                     return await _grade_one_live(
-                        client, c, category_name=category_name, category_id=category_id,
-                        on_catalog=on_catalog, service_query=payload.get("service_query") or "",
+                        client, c, keyword=keyword, lead_category=lead_category,
+                        category_id=category_id, on_catalog=on_catalog,
+                        service_query=payload.get("service_query") or "",
                         cpl=cpl, cpl_default=cpl_default, breakpoints=breakpoints,
                         capture=capture, lead_tier=lead_tier, user_id=user_id)
 

@@ -761,3 +761,40 @@ OPEN item #1 is closed.
 machine), a scout button on Tryout rows, a sub-10k geocode step, and the Enigma
 coverage pilot. The real DataForSEO sweep is worker-verified post-deploy (the
 sandbox is egress-blocked from DataForSEO).
+
+## LeadOff — grade the literal keyword, not the catalog category (2026-09-18)
+
+**Context.** Owner searched "roofer in cypress, ca" and got nothing. Diagnosis
+uncovered two things: (1) the Board search box is a filter over the precomputed
+board and has no live fallback (Cypress had no roofing board row → empty); and
+(2) the on-demand grader, when the typed term fuzzy-matched a catalog category
+(`roofer`→`Roofing contractor` via the `roof` stem), pulled the volume + Maps
+SERP on the CATEGORY, not the user's keyword — so it graded the wrong query.
+
+**DECIDED + BUILT (this session, on PR #1217's branch).** Decouple the pulled
+keyword from the lead-value lookup:
+- **The live pull (volume + Maps SERP) always uses the LITERAL keyword** the user
+  typed. "roofer" grades "roofer".
+- **The nearest catalog category is used ONLY** for the CPL (lead value, flagged),
+  the exact-category holder count, and the board/scout id — never as the pulled
+  keyword. Rationale: the catalog match is free accuracy for lead value; there's
+  no reason to throw it away, but it must not replace the keyword.
+- **The grade cache keys on the literal keyword**, so "roofer" and "roofing
+  contractor" (different SERPs) cache distinctly.
+- **Board-first and cache-first are unchanged**: a board hit is still the free
+  precomputed *category* grade (transparently labeled). Only the LIVE path — the
+  case the owner hit — changed. Forcing a live literal grade for every mapped
+  keyword would defeat the free board and cost money for no benefit.
+- **Consequence (accepted):** on-catalog live grades now measure the literal
+  keyword's SERP, so grade numbers shift vs before. Intended.
+
+Applies to the single-cell grader AND the grade-all sweep. `resolve_service`
+now returns `{keyword, category_name (catalog match or None), on_catalog}`;
+`field_stats` gained an optional `holder_category` so the literal keyword's SERP
+is graded while holders count against the catalog category.
+
+**Related UX gap (NOT yet built, proposed):** the Board search box silently
+returns nothing when it resolves a city+service with no board row, even though a
+live grade is one tab over. Proposed fix: an inline "Grade it live (~$0.06)?"
+handoff from the empty board-search state into the grade flow (offer a button,
+never auto-spend). Awaiting owner go-ahead.
