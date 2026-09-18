@@ -37,7 +37,7 @@ The owner set the **next build order** to these five, top-to-bottom:
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
-## Update (2026-09-18) — **P3 Manager BUILT (draft PR)** — Calendar / cadence / approval queue / policy write path (post-queue task 2; scope: `p3-manager-scope-v1_0.md`; plan: `p3-manager-plan-v1_0.md`)
+## Update (2026-09-18) — **P3 Manager BUILT + MERGED** (PR [#1235](https://github.com/kssabraw/ar-tools/pull/1235), squash `f326f196`) — Calendar / cadence / approval queue / policy write path (post-queue task 2; scope: `p3-manager-scope-v1_0.md`; plan: `p3-manager-plan-v1_0.md`)
 
 The second post-queue item. Scope-doc → **AskUserQuestion** → plan-doc → build, per the
 owner's confirm-forks-first preference. **Owner decisions (locked 2026-09-18):**
@@ -51,7 +51,16 @@ owner's confirm-forks-first preference. **Owner decisions (locked 2026-09-18):**
   (ceiling + image/text prompt templates + cadence; P4 planning fields deferred).
   **Q4 default ceiling = $100** (`social_monthly_ceiling_default_usd` 75 → 100).
 
-**What shipped (branch `claude/social-p3-manager`, draft PR):**
+**Merged to `main`** (squash `f326f196`), CI green (ruff/mypy/pytest ✅ + Netlify preview ✅). An
+adversarial self-review after the build found + fixed **3 real bugs** (all with regression tests):
+(1) `schedules.upsert_schedule` didn't range-validate `hour_local`/`day_of_week`/`day_of_month`, so a
+direct API call could 500 in `compute_next_run_at` (hour≥24) and a stored `day_of_month=31` could
+poison the sweep in a 30-day month → now 422-validated + the sweep self-deactivates an un-computable
+row instead of aborting the tick; (2) `publish.list_calendar` crashed comparing a naive `from`/`to`
+query bound to tz-aware timestamps → naive bounds now treated as UTC; (3) the Settings schedule editor
+could save with no account → defaults once accounts load.
+
+**What shipped:**
 - **Migration `20260918140000_social_post_schedules.sql`** (**applied live**) — the per-`(client,
   platform)` cadence table (GBP-literal clone). No `async_jobs` type (the drip reuses
   `social_publish` via `publish_existing_draft`); no `social_posts` status change; `social_drafts`
@@ -70,12 +79,19 @@ owner's confirm-forks-first preference. **Owner decisions (locked 2026-09-18):**
 - **Frontend** `SocialCompose.tsx`: **Calendar** + **Settings** tabs; Drafts tab gained
   "Publish all ready" + per-draft Add/Remove-from-queue + a `queued` badge. `errorGuidance` for the
   new codes. `tsc` + `eslint` clean (SocialCompose 0 problems).
-- **Tests** `tests/test_social_p3.py` (18) — decision matrix, slot routing, cancel/reschedule/edit
-  guards, batch partial-success, policy filter/validate. **98 social tests pass**; ruff clean.
+- **Tests** `tests/test_social_p3.py` (20) — decision matrix, slot routing, cancel/reschedule/edit
+  guards, batch partial-success, policy filter/validate, schedule range-validation, naive-calendar-bounds.
+  **103 social tests pass**; ruff clean.
 
-**Deployed-only (sandbox egress-blocked from PostForMe):** auto-fill's unattended publish is
-verifiable only on the deployed path. Ships dark — flip `SOCIAL_AUTO_PUBLISH_ENABLED=true` on
-PLATFORM to activate the drip (per-schedule `auto_fill` + a `queued` draft still required).
+**Deployed-only / open (sandbox egress-blocked from PostForMe):**
+- **To activate the drip:** flip **`SOCIAL_AUTO_PUBLISH_ENABLED=true`** on PLATFORM (config default
+  False — ships dark). Even then a post drips ONLY when its schedule has `auto_fill=true` AND a human
+  has explicitly `queued` an approved draft; empty/off → a suggest-nudge, never an unattended publish.
+- **Verify on the deployed path:** a live auto-fill drip (schedule due → queued draft publishes), and
+  the Calendar/approval-queue/policy surfaces against real accounts. Cadence + management + policy work
+  today with `SOCIAL_ENABLED` alone; only the unattended drip needs the extra flag.
+
+**Next:** P4 autonomy (owner c2, "discuss") / P5 video (c3) remain the module's discuss-first items.
 
 **Next:** P4 autonomy (owner c2, "discuss") / P5 video (c3). The deployed-only confidence checks
 below are unchanged.
