@@ -60,6 +60,41 @@ def resolve_aspect_ratio(platform: str, fmt: str) -> str:
     return "1:1"
 
 
+# A paid image must reserve a strictly-positive estimate: ``budget.reserve`` treats
+# ``amount <= 0`` as a no-op that SUCCEEDS, so a misconfigured $0/negative cost (env
+# SOCIAL_IMAGE_FLASH_COST_USD / SOCIAL_IMAGE_COST_USD = 0) would otherwise slip every
+# image past the fail-closed monthly cap. The floor is a last resort for the
+# pathological both-costs-zero case; the normal fallback is the other model's cost.
+_IMAGE_COST_FLOOR_USD = 0.05
+
+
+def select_image_model(
+    *,
+    use_flash: bool,
+    flash_model: str,
+    flash_cost: float,
+    pro_model: str,
+    pro_cost: float,
+) -> tuple[str, float]:
+    """Pick the image model + the USD cost to reserve for one social image (queue #5).
+
+    When the Flash lever is on (default), all social images render on **Nano Banana 2**
+    (``gemini-3.1-flash-image``) — it honors every aspect ratio via the same
+    ``imageConfig.aspectRatio`` API as Pro, at ~25% under Pro at 2K — so the routing
+    is model-only and aspect-ratio-agnostic (Nano Banana 2 covers 1:1 and non-square
+    alike). When the lever is off, or the Flash model id is unset, fall back to Pro
+    (the pre-#5 behavior). The returned cost is always **> 0** so a misconfigured $0
+    cost can't bypass the fail-closed budget (see ``_IMAGE_COST_FLOOR_USD``). Pure —
+    the single place the model choice is decided."""
+    if use_flash and (flash_model or "").strip():
+        model, cost = flash_model.strip(), flash_cost
+    else:
+        model, cost = pro_model, pro_cost
+    if cost <= 0:
+        cost = pro_cost if pro_cost > 0 else _IMAGE_COST_FLOOR_USD
+    return model, cost
+
+
 def ext_for_mime(mime: str) -> str:
     """Storage extension for a returned image mime type (default png). Pure."""
     return _MIME_EXT.get((mime or "").lower().split(";")[0].strip(), "png")
@@ -141,8 +176,9 @@ async def generate_image(
 ) -> dict:
     """Generate one platform-native social image and store it. Reserves the
     estimated cost against the client's monthly social budget FIRST (fail-closed),
-    then calls Nano Banana Pro and uploads the result to the media store. Returns
-    {"url", "type", "aspect_ratio", "cost_usd"}. Stateless.
+    then calls the selected Gemini image model (Nano Banana 2 by default, Pro as the
+    flag-off fallback — see ``select_image_model``) and uploads the result to the
+    media store. Returns {"url", "type", "aspect_ratio", "cost_usd"}. Stateless.
 
     ``client`` / ``policy_template`` let a caller (the fan-out) pass values it has
     already loaded so we don't re-read them per image; when omitted they're loaded.
@@ -173,8 +209,18 @@ async def generate_image(
     tmpl = policy_template if policy_template is not _UNSET else _policy_template(client_id)
     prompt = build_image_prompt(description, client, tmpl)
 
+    # Pick the model + the cost to reserve (queue #5 — the single decision point).
+    # Nano Banana 2 honors `ar` on the same imageConfig API as Pro, so this is a
+    # model-only choice; the resolved `ar` is passed unchanged either way.
+    model, est = select_image_model(
+        use_flash=settings.social_image_use_flash,
+        flash_model=settings.social_image_flash_model,
+        flash_cost=float(settings.social_image_flash_cost_usd),
+        pro_model=settings.nano_banana_pro_model,
+        pro_cost=float(settings.social_image_cost_usd),
+    )
+
     # Reserve the estimated cost before spending it (fail-closed backstop).
-    est = float(settings.social_image_cost_usd)
     cap = budget.ceiling_for_client(client_id)
     if not budget.reserve(client_id, est, cap=cap):
         raise HTTPException(status_code=402, detail="social_image_budget_exceeded")
@@ -183,7 +229,7 @@ async def generate_image(
     # never charges the client (the cap stays hard — we only ever reserved-then-refund).
     try:
         out = await nano_banana.generate_image_pro(
-            prompt, aspect_ratio=ar, image_size=settings.social_image_size
+            prompt, aspect_ratio=ar, image_size=settings.social_image_size, model=model
         )
         if not out:
             raise HTTPException(status_code=502, detail="social_image_generation_failed")
@@ -199,5 +245,8 @@ async def generate_image(
         logger.warning("social.image_store_failed", extra={"error": str(exc)[:200]})
         raise HTTPException(status_code=502, detail="social_image_generation_failed") from exc
 
-    logger.info("social.image_generated", extra={"client_id": client_id, "aspect_ratio": ar})
+    logger.info(
+        "social.image_generated",
+        extra={"client_id": client_id, "aspect_ratio": ar, "model": model},
+    )
     return {"url": url, "type": "image", "aspect_ratio": ar, "cost_usd": round(est, 4)}

@@ -93,16 +93,20 @@ async def generate_image_pro(
     *,
     aspect_ratio: Optional[str] = None,
     image_size: Optional[str] = None,
+    model: Optional[str] = None,
     timeout: float = 120.0,
 ) -> Optional[tuple[bytes, str]]:
-    """Generate one image via **Nano Banana Pro** (Gemini 3 Pro Image), passing a
+    """Generate one image via an **imageConfig-capable Gemini image model**, passing a
     per-platform ``aspectRatio`` (and optional ``imageSize``) through
-    ``generationConfig.imageConfig`` — the 2.5-Flash ``generate_image`` above can
-    only do 1:1. Returns (image bytes, mime_type), or None on any failure
-    (best-effort, never raises). A longer default timeout: Pro at 2K/4K is slower."""
+    ``generationConfig.imageConfig``. Defaults to **Nano Banana Pro**
+    (``nano_banana_pro_model``); pass ``model`` to run another model on the same API —
+    e.g. **Nano Banana 2** (``gemini-3.1-flash-image``), which honors every aspect
+    ratio just like Pro (the 2.5-Flash ``generate_image`` above can only do 1:1).
+    Returns (image bytes, mime_type), or None on any failure (best-effort, never
+    raises). A longer default timeout: 2K/4K generation is slower."""
     if not is_configured() or not (prompt or "").strip():
         return None
-    url = f"{_BASE}/{settings.nano_banana_pro_model}:generateContent"
+    url = f"{_BASE}/{model or settings.nano_banana_pro_model}:generateContent"
     gen_config: dict = {"responseModalities": ["TEXT", "IMAGE"]}
     image_config: dict = {}
     if aspect_ratio:
