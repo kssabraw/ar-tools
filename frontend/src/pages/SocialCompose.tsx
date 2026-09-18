@@ -685,7 +685,7 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
       )}
       {effectiveIncludeImage && (
         <p style={{ margin: '-6px 0 12px', fontSize: 11, color: '#94a3b8' }}>
-          Each image uses the client’s monthly social budget (~$0.13 each{isCarouselFmt ? ` · ~$${(0.13 * slides).toFixed(2)} per ${slides}-slide carousel` : ''}, per platform).
+          Each image uses the client’s monthly social budget (~$0.10 each{isCarouselFmt ? ` · ~$${(0.10 * slides).toFixed(2)} per ${slides}-slide carousel` : ''}, per platform).
         </p>
       )}
 
