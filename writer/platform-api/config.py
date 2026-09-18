@@ -559,6 +559,19 @@ class Settings(BaseSettings):
     rank_freshness_gsc_stale_days: int = 5   # GSC-connected client: >this many days w/o new data = stale (GSC lag ~3)
     rank_freshness_df_stale_days: int = 10   # DataForSEO-only client: weekly cadence, >this = a missed cycle
     rank_freshness_portfolio_min: int = 3    # ≥this many stale clients at once → one loud portfolio alert (systemic outage)
+    # GSC connection-health watch (Organic Rank Tracker M2). A GSC property that
+    # returns 403 flips to access_status='no_access' (gsc_ingest); the daily
+    # scheduler only enqueues 'ok' properties, so once access is lost the property
+    # NEVER retries and NEVER self-heals — and when the client also has the
+    # DataForSEO fallback its rank data stays fresh, so both scan_health (job
+    # failures stop accruing once enqueue stops) and rank_freshness (data recency)
+    # go silent while the GSC-only signals (clicks/impressions) quietly die. This
+    # daily sweep re-verifies each no_access property with one live test query —
+    # recovering it (→ ok, back-fill queued) the moment the service account is
+    # re-authorized — and, while still denied, emits ONE actionable gsc_access
+    # notification (re-nudged weekly) naming the client + the exact remedy.
+    gsc_access_monitor_enabled: bool = True
+    gsc_access_critical_days: int = 14   # a GSC blackout frozen ≥this long alerts at 'critical' rather than 'warning'
     # Auto-generate a new client's brand voice + ICP at creation (async, best-
     # effort) so the assets exist without a manual scan. Skips clients with no
     # website and no GBP (nothing to analyze). Never overrides user-authored
