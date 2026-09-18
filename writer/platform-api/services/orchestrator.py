@@ -1051,6 +1051,11 @@ async def _orchestrate_run_impl(run_id: str) -> None:
             run_id, "failed", error_stage="unknown",
             error_message=f"{exc} (run_id: {run_id})",
         )
+        # An unhandled orchestrator error is still a terminal failure the run's
+        # owner should hear about — notify on this path too, not only StageError.
+        # `run` may be unbound if the very first load raised; guard for it.
+        if "run" in locals() and isinstance(run, dict):
+            _notify_run_failed(run, "unknown", str(exc))
 
 
 def should_resume(run: dict, max_resumes: int) -> bool:
@@ -1131,25 +1136,39 @@ async def _schedule_retry(run_id: str, stage: str, cause: str, attempt: int) -> 
 def _notify_run_failed(run: dict, stage: str, cause: str) -> None:
     """Emit a warning notification when a run fails terminally, so a permanent
     failure (or one that exhausted its auto-retries) is never silently left for
-    a human to stumble on. Best-effort — `notifications.emit` never raises."""
+    a human to stumble on. Best-effort — `notifications.emit` never raises.
+
+    The summary is a plain-English explanation of WHAT failed and WHY (via
+    `run_failure.explain_failure`) with the raw error kept for grep-ability, and
+    the notification is targeted at the person who started the run
+    (`recipient_profile_id=created_by`) so it reaches their personal bell in
+    addition to the client feed."""
     try:
-        from services import notifications
+        from services import notifications, run_failure
 
         run_id = run.get("id")
         label = run.get("keyword") or run.get("service") or "content run"
         retries = int(run.get("retry_count") or 0)
-        retry_note = f" after {retries} auto-retry attempt(s)" if retries else ""
+        explanation = run_failure.explain_failure(stage, cause, retries)
+        short_cause = (cause or "").strip()[:300]
+        summary = f"{explanation} [Error: {short_cause}]" if short_cause else explanation
         # No dedupe_key: this sits in a code path that executes exactly once per
-        # terminal StageError (single-process orchestrator), and a permanent key
+        # terminal failure (single-process orchestrator), and a permanent key
         # like f"run_failed:{run_id}" would suppress the notification forever if
         # the run is manually resumed and fails again later.
         notifications.emit(
             client_id=run.get("client_id"),
             kind="run_failed",
             title=f"Content run failed: {label}",
-            summary=f"The {stage} stage failed{retry_note}. {cause}",
+            summary=summary,
             severity="warning",
-            payload={"link": f"runs/{run_id}"},
+            payload={
+                "link": f"runs/{run_id}",
+                "stage": stage,
+                "error": short_cause,
+                "reason": run_failure.failure_reason(cause),
+            },
+            recipient_profile_id=run.get("created_by"),
         )
     except Exception as exc:  # never let notification wiring break the run path
         logger.warning("run_failed_notify_error", extra={"error": str(exc)})

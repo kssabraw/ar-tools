@@ -33,6 +33,23 @@ class ScrapeResult:
     failure_reason: Optional[str] = None
 
 
+def _extract_html(data: dict) -> str:
+    """Pull the page HTML out of a ScrapeOwl 200 response body.
+
+    ScrapeOwl normally returns ``{"html": "<...>"}``, but has been observed to
+    answer a 200 whose ``html``/``body`` value is a *dict* (a structured
+    element/error payload) rather than a string. Only a non-empty **string** is
+    real HTML — anything else (dict, None, "") is treated as "no HTML", so a
+    non-string can never flow downstream into ``extract_zones()`` where
+    ``html.strip()`` would raise ``AttributeError`` and 500 the whole ``/sie``
+    call. Pure — unit-tested."""
+    for key in ("html", "body"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
 async def scrape(url: str, render_js: bool = True) -> ScrapeResult:
     """Fetch a single URL via ScrapeOwl. Returns ScrapeResult (success or
     populated failure_reason). Never raises."""
@@ -53,7 +70,7 @@ async def scrape(url: str, render_js: bool = True) -> ScrapeResult:
                 response = await client.post(SCRAPEOWL_URL, json=payload)
             if response.status_code == 200:
                 data = response.json()
-                html = data.get("html") or data.get("body") or ""
+                html = _extract_html(data)
                 if not html:
                     last_error = "empty_html"
                 else:

@@ -41,3 +41,11 @@ def test_extract_zones_survives_nested_role_chrome():
     assert zones is not None
     assert zones.h1 == ["Heading"]
     assert any("Real body content" in p for p in zones.paragraphs)
+
+
+def test_extract_zones_non_string_html_returns_none_not_crash():
+    # Belt-and-suspenders: even if a non-string html reaches extract_zones (the
+    # scraper is the primary guard), it must yield a handled empty-page rather
+    # than AttributeError: 'dict' object has no attribute 'strip'.
+    for bad in ({"error": "blocked"}, None, 123, ["<p>x</p>"]):
+        assert extract_zones("http://example.com", bad) is None  # type: ignore[arg-type]
