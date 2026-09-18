@@ -4,6 +4,33 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
+## Next priority (owner-set 2026-09-18) — the build queue, in order
+
+Everything through P2 + P1 is built/merged/live and the PostForMe swap is activated (below).
+The owner set the **next build order** to these five, top-to-bottom:
+
+1. **Instagram scope-out — Reels + Stories** (decision b1: BOTH). Extend the composer's
+   format set + the seeded IG platform spec to **Reels** and **Stories** (Stories is
+   **Business-account-only**, and has **no caption / no link stickers**). Small-to-medium
+   build; provider-agnostic (composer/spec work, unaffected by the PostForMe swap — but map
+   IG format fields through PostForMe's `platform_configurations` where required).
+2. **IG carousel Draft type** (decision b2: YES). A carousel Draft type — **≤10 items, one
+   shared aspect ratio**; each slide is another nano-banana Pro image (~$0.13/slide, so the
+   cost estimate must multiply per slide). Provider-agnostic.
+3. **YouTube poster** — **re-scope against PostForMe** (the old blocker was PostPeer's
+   YouTube docs; on PostForMe a YouTube post **requires a `title` via
+   `platform_configurations`**). Uploads existing videos, **not** generation.
+4. **Big-video direct-to-R2 (presign)** — the `POST …/social/media/presign` endpoint already
+   exists; the UI still uses server upload. Wiring the browser PUT needs an **R2 CORS policy**
+   allowing PUT from the Netlify origin to the R2 S3 endpoint. Provider-agnostic.
+5. **Mixed image path** (deferred cost optimization, owner: "later") — 2.5-Flash-for-square /
+   nano-banana-Pro-for-aspect-ratio, halves the dominant image cost. Lowest of the five.
+
+> These supersede the older "Remaining build" ordering further down this file. The two live
+> confidence checks (a real test post on the PostForMe path; a live P1 competitor-research
+> run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
+> happen whenever a real key + account are in place, independent of this queue.
+
 ## Update (2026-09-17) — **Posting provider swapped: PostForMe replaces PostPeer — MERGED + ACTIVATED + LIVE** (ADR-0006)
 
 The agency moved off PostPeer to **PostForMe** (api.postforme.dev). Built behind the existing
@@ -371,7 +398,10 @@ posts; feed image aspect ratio 4:5–1.91:1.
 3. **Owner scope decisions still open** (see "Open decisions" below) — IG Reels/Stories scope, IG carousel
    Draft type, default per-client monthly ceiling, autonomy rollout. (The **mixed image path** is DECIDED:
    Pro-only for now.)
-4. **Remaining build, roughly in order** (the repurpose-engine vision beyond P2):
+4. **Remaining build** — the owner-set order is now the **"Next priority" block at the top of
+   this file** (IG Reels/Stories → IG carousel → YouTube poster → big-video presign → mixed
+   image path). The list below is the fuller context for each; the top block is authoritative
+   on sequence.
    - **P1 Competitor research — ✅ BUILT + MERGED + LIVE (PR #1177, squash `3f07eda`; owner c1, Apify-ONLY,
      TwelveLabs dropped).** Analyze-in-place per ADR-0002 (public content, never re-hosted media). Extends
      `client_competitors` via the child `social_competitor_handles` table; output → `social_competitor_signals`
