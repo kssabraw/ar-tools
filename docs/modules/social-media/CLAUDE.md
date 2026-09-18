@@ -314,8 +314,8 @@ Creator exists.
   per-platform), so **no migration** was needed. (IG still has **no text-only posts** — an image-less IG
   Draft is `needs_image`.) Live-verify the placement + Business-account + carousel behavior on the
   deployed post path (sandbox egress-blocked from PostForMe + Gemini).
-- **Pinterest board is now FIRST-CLASS (BUILT 2026-09-18, post-queue task 1)** — don't
-  re-add raw-JSON board handling. A Pin carries a required `board_id` (Compose field + the
+- **Pinterest board is now FIRST-CLASS (BUILT + MERGED 2026-09-18, PR #1228, post-queue
+  task 1)** — don't re-add raw-JSON board handling. A Pin carries a required `board_id` (Compose field + the
   Pinterest Draft's Board ID field; validated by `validate_post`'s `pinterest_board_required`
   rule; a fan-out Pinterest draft lands `needs_board` until set). Stored module-internal as a
   single `platform_metadata.board_id`; the **adapter edge** (`map_pinterest_board`) maps it to

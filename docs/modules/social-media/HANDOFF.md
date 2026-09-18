@@ -37,9 +37,15 @@ The owner set the **next build order** to these five, top-to-bottom:
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
-## Update (2026-09-18) — **Pinterest board made first-class — BUILT** (post-queue task 1; scope: `pinterest-board-first-class-scope-v1_0.md`)
+## Update (2026-09-18) — **Pinterest board made first-class — BUILT + MERGED** (PR [#1228](https://github.com/kssabraw/ar-tools/pull/1228); post-queue task 1; scope: `pinterest-board-first-class-scope-v1_0.md`)
 
-The first of the two owner-set post-queue items (Pinterest → then P3 Manager). Pinterest
+The first of the two owner-set post-queue items (Pinterest → then P3 Manager) — **merged to
+`main`**. CI green (platform-api lint&typecheck ✅ + tests ✅ + Netlify preview ✅), and an
+adversarial self-review (re-read every touched file, traced flow, grepped call sites, re-ran
+ruff/mypy/pytest/tsc/eslint) found **no correctness bugs** — 117 social tests pass; the four
+findings were all LOW (intentional advanced-JSON precedence, a defensive unreachable
+errorGuidance entry, PostPeer provider-parity out of scope, and a cosmetically-`ready`
+Pinterest-carousel case that `too_many_images` blocks before publish) and left as-is. Pinterest
 was wired end-to-end EXCEPT the board — pure opaque passthrough (a board only reached the
 provider if a human typed raw JSON), so a boardless Pin failed at publish as a generic
 `postforme_invalid_request`. Board is now a **first-class, required, validated** field.
