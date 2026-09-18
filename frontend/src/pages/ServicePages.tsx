@@ -40,6 +40,10 @@ export function ServicePages() {
   const [planError, setPlanError] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [createdNote, setCreatedNote] = useState<string | null>(null)
+  // Optional "Mirror an existing page's structure" — applies to whichever create
+  // path the user triggers (manual list or the planner's bulk-create). Blank →
+  // the client's saved reference structure (or the default) is used.
+  const [referencePageUrl, setReferencePageUrl] = useState('')
 
   const BULK_MAX = 20
   // One service per line; trimmed, de-duped (case-insensitive), capped.
@@ -76,6 +80,7 @@ export function ServicePages() {
         client_id: id,
         content_type: 'service_page',
         keywords,
+        reference_page_url: referencePageUrl.trim() || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['service-page-runs', id] })
@@ -130,7 +135,10 @@ export function ServicePages() {
 
   const createSelected = useMutation({
     mutationFn: (keywords: string[]) =>
-      api.post<{ created: number }>('/runs/bulk', { client_id: id, content_type: 'service_page', keywords }),
+      api.post<{ created: number }>('/runs/bulk', {
+        client_id: id, content_type: 'service_page', keywords,
+        reference_page_url: referencePageUrl.trim() || undefined,
+      }),
     onSuccess: (res, keywords) => {
       qc.invalidateQueries({ queryKey: ['service-page-runs', id] })
       // Deselect only what was just created — anything beyond the 20-cap stays
@@ -218,6 +226,23 @@ export function ServicePages() {
         <ReoptimizePanel adapter={serviceAdapter(id ?? '')} />
       ) : (
       <>
+      {/* Mirror an existing page's structure — applies to both the planner's
+          bulk-create and the manual list below. */}
+      <div style={{ margin: '0 0 16px' }}>
+        <label style={fieldLabelStyle}>Mirror an existing page’s structure (optional)</label>
+        <input
+          className="input"
+          value={referencePageUrl}
+          onChange={(e) => setReferencePageUrl(e.target.value)}
+          placeholder="https://example.com/a-service-page-to-mirror"
+          style={{ ...inputStyle, width: '100%' }}
+        />
+        <div style={{ fontSize: 12, color: '#94a3b8', marginTop: 6 }}>
+          New pages will follow this page’s section layout. Leave blank to use the
+          client’s saved reference structure (Setup page) or the standard layout.
+        </div>
+      </div>
+
       {/* Planner */}
       <div style={plannerCardStyle}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -445,6 +470,7 @@ export function ServicePages() {
 }
 
 const backLinkStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, color: '#6366f1', textDecoration: 'none', fontSize: 13 }
+const fieldLabelStyle: React.CSSProperties = { display: 'block', fontSize: 13, fontWeight: 600, color: '#334155', margin: '0 0 6px' }
 const inputStyle: React.CSSProperties = { flex: 1, fontSize: 14, padding: '9px 12px', border: '1px solid #e2e8f0', borderRadius: 8, outline: 'none' }
 const btnStyle: React.CSSProperties = { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 14, padding: '9px 16px', border: '1px solid #e2e8f0', borderRadius: 8, background: '#fff', color: '#334155', cursor: 'pointer', fontWeight: 600 }
 const linkBtnStyle: React.CSSProperties = { background: 'none', border: 'none', color: '#6366f1', fontSize: 13, cursor: 'pointer', padding: 0, fontWeight: 600 }

@@ -91,6 +91,56 @@ def test_build_writer_payload_no_gain_guidance_is_byte_identical():
 
 
 # ----------------------------------------------------------------------
+# Per-run reference-page mirror override
+# ----------------------------------------------------------------------
+
+async def test_reference_override_no_url_leaves_snapshot_untouched():
+    snap = {"page_structures": {"service": {"status": "complete", "analysis": {}}}}
+    with patch("services.page_structure_scraper.scrape_reference_structure",
+               new=AsyncMock()) as scrape:
+        await orch._apply_reference_page_override({"id": "r1", "content_type": "service_page"}, snap)
+    scrape.assert_not_awaited()
+    assert snap["page_structures"] == {"service": {"status": "complete", "analysis": {}}}
+
+
+async def test_reference_override_service_page_replaces_service_slot():
+    snap = {"page_structures": {"service": {"old": True}, "location": {"keep": True}}}
+    entry = {"status": "complete", "analysis": {"outline": [{"h": 1}]}}
+    run = {"id": "r1", "content_type": "service_page",
+           "reference_page_url": "https://example.com/mirror"}
+    with patch("services.page_structure_scraper.scrape_reference_structure",
+               new=AsyncMock(return_value=entry)) as scrape:
+        await orch._apply_reference_page_override(run, snap)
+    # Scraped with the service page_type; only the service slot is overridden.
+    assert scrape.await_args.args == ("https://example.com/mirror", "service")
+    assert snap["page_structures"]["service"] == entry
+    assert snap["page_structures"]["location"] == {"keep": True}
+
+
+async def test_reference_override_location_page_uses_location_slot():
+    snap = {"page_structures": {}}
+    entry = {"status": "complete", "analysis": {"outline": [{"h": 1}]}}
+    run = {"id": "r1", "content_type": "location_page",
+           "reference_page_url": "https://example.com/loc"}
+    with patch("services.page_structure_scraper.scrape_reference_structure",
+               new=AsyncMock(return_value=entry)) as scrape:
+        await orch._apply_reference_page_override(run, snap)
+    assert scrape.await_args.args[1] == "location"
+    assert snap["page_structures"]["location"] == entry
+
+
+async def test_reference_override_failed_scrape_leaves_snapshot_untouched():
+    # A failed / empty scrape returns None → keep the client's stored reference.
+    snap = {"page_structures": {"service": {"stored": True}}}
+    run = {"id": "r1", "content_type": "service_page",
+           "reference_page_url": "https://example.com/bot-blocked"}
+    with patch("services.page_structure_scraper.scrape_reference_structure",
+               new=AsyncMock(return_value=None)):
+        await orch._apply_reference_page_override(run, snap)
+    assert snap["page_structures"] == {"service": {"stored": True}}
+
+
+# ----------------------------------------------------------------------
 # orchestrate_run branching
 # ----------------------------------------------------------------------
 

@@ -317,6 +317,7 @@ async def create_run(
         sie_force_refresh=body.sie_force_refresh,
         brief_force_refresh=body.brief_force_refresh,
         writer_notes=(body.writer_notes or "").strip() or None,
+        reference_page_url=body.reference_page_url,
         content_writer_provider=body.content_writer_provider,
         created_by=auth["user_id"],
     )
@@ -377,6 +378,7 @@ async def create_runs_bulk(
             client=client,
             keyword=kw,
             content_type=body.content_type,
+            reference_page_url=body.reference_page_url,
             created_by=auth["user_id"],
         )
         background_tasks.add_task(orchestrate_run, run_id)

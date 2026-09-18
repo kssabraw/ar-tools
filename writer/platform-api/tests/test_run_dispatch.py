@@ -139,6 +139,32 @@ def test_no_source_ref_never_dedupes():
     assert inserts["runs"][0]["source_ref"] is None
 
 
+def test_create_run_and_snapshot_persists_reference_page_url():
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd.brand_voice_service, "resolve_brand_guide_text", return_value="B"), \
+         patch.object(rd.icp_service, "resolve_icp_text", return_value="I"), \
+         patch.object(rd, "detect_format", return_value="text"):
+        rd.create_run_and_snapshot(
+            client={"id": "c1"}, keyword="kw", content_type="service_page",
+            reference_page_url="  https://example.com/mirror-me  ",
+        )
+    # Trimmed and stored on the run so the orchestrator can scrape it later.
+    assert inserts["runs"][0]["reference_page_url"] == "https://example.com/mirror-me"
+
+
+def test_create_run_and_snapshot_blank_reference_page_url_is_none():
+    inserts: dict = {}
+    client = _supabase_recording(inserts)
+    with patch.object(rd, "get_supabase", return_value=client), \
+         patch.object(rd.brand_voice_service, "resolve_brand_guide_text", return_value="B"), \
+         patch.object(rd.icp_service, "resolve_icp_text", return_value="I"), \
+         patch.object(rd, "detect_format", return_value="text"):
+        rd.create_run_and_snapshot(client={"id": "c1"}, keyword="kw", reference_page_url="   ")
+    assert inserts["runs"][0]["reference_page_url"] is None
+
+
 def test_create_run_and_snapshot_blog_service_is_none():
     inserts: dict = {}
     client = _supabase_recording(inserts)

@@ -53,6 +53,9 @@ export function LocationPages() {
   // The editable services list (one row per service). Prefilled from the site
   // scan once, then fully user-owned (add / edit / remove / rescan-to-replace).
   const [services, setServices] = useState<string[]>([])
+  // Optional "Mirror an existing page's structure" — blank → the client's saved
+  // reference structure (or the default layout) is used, as before.
+  const [referencePageUrl, setReferencePageUrl] = useState('')
   const prefilled = useRef(false)
   const rescanRequested = useRef(false)
 
@@ -114,6 +117,7 @@ export function LocationPages() {
         location: location.trim(),
         location_code: locationCode,
         services: cleanServices,
+        reference_page_url: referencePageUrl.trim() || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['location-page-runs', id] })
@@ -245,6 +249,20 @@ export function LocationPages() {
           No services yet — add them manually, or rescan the site to detect them.
         </div>
       )}
+
+      {/* Mirror an existing page's structure (optional) */}
+      <label style={{ ...labelStyle, margin: '20px 0 6px' }}>Mirror an existing page’s structure (optional)</label>
+      <input
+        className="input"
+        value={referencePageUrl}
+        onChange={(e) => setReferencePageUrl(e.target.value)}
+        placeholder="https://example.com/a-location-page-to-mirror"
+        style={{ ...inputStyle, flex: 'unset', width: '100%' }}
+      />
+      <div style={{ fontSize: 12.5, color: '#94a3b8', marginTop: 6 }}>
+        The new page will follow this page’s section layout. Leave blank to use the
+        client’s saved reference structure (Setup page) or the standard layout.
+      </div>
 
       {/* Generate */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '20px 0 6px' }}>

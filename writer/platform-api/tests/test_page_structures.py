@@ -6,8 +6,11 @@ create/update URL-diff that decides which pages to (re)scrape.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock, patch
+
+import services.page_structure_scraper as pss
 from services.page_structure_render import render_reference_structure
-from services.page_structure_scraper import PAGE_TYPES, strip_chrome
+from services.page_structure_scraper import PAGE_TYPES, scrape_reference_structure, strip_chrome
 
 
 # ── strip_chrome ────────────────────────────────────────────────────────────
@@ -1172,3 +1175,49 @@ def test_render_uses_scaled_targets_not_reference_length():
     # without a target it still renders the raw reference (back-compat)
     raw = render_reference_structure(entry, "local_landing")
     assert raw is not None and "3177" in raw
+
+
+# ── scrape_reference_structure (ad-hoc per-run "mirror this page") ────────────
+
+async def test_scrape_reference_rejects_non_http_url():
+    # No network call for a blank / non-http value.
+    with patch("services.website_scraper.scrapeowl_fetch", new=AsyncMock()) as fetch:
+        assert await scrape_reference_structure("not-a-url", "service") is None
+        assert await scrape_reference_structure("", "service") is None
+    fetch.assert_not_awaited()
+
+
+async def test_scrape_reference_rejects_unknown_page_type():
+    with patch("services.website_scraper.scrapeowl_fetch", new=AsyncMock()) as fetch:
+        assert await scrape_reference_structure("https://ex.com/p", "nonsense") is None
+    fetch.assert_not_awaited()
+
+
+async def test_scrape_reference_happy_path_returns_store_shaped_entry():
+    analysis = {"outline": [{"level": "H2", "heading": "Service"}], "structure_summary": "s", "elements": {}}
+    with patch("services.website_scraper.scrapeowl_fetch", new=AsyncMock(return_value="<html>ok</html>")), \
+         patch.object(pss, "analyze_page_structure", new=AsyncMock(return_value=analysis)):
+        entry = await scrape_reference_structure("  https://ex.com/service  ", "service")
+    assert entry is not None
+    assert entry["status"] == "complete"
+    assert entry["url"] == "https://ex.com/service"   # trimmed
+    assert entry["analysis"] is analysis
+    assert entry["empty"] is False
+    # The entry is exactly what the renderer treats as a usable reference.
+    assert render_reference_structure(entry, "service") is not None
+
+
+async def test_scrape_reference_empty_outline_returns_none():
+    # Zero sections isn't a usable reference (premium fallback off).
+    empty = {"outline": [], "structure_summary": "", "elements": {}}
+    with patch("services.website_scraper.scrapeowl_fetch", new=AsyncMock(return_value="<html></html>")), \
+         patch.object(pss, "analyze_page_structure", new=AsyncMock(return_value=empty)), \
+         patch.object(pss.settings, "page_structure_premium_fallback", False):
+        assert await scrape_reference_structure("https://ex.com/blank", "service") is None
+
+
+async def test_scrape_reference_fetch_error_returns_none():
+    # Best-effort: a fetch failure never raises out of run creation/orchestration.
+    with patch("services.website_scraper.scrapeowl_fetch",
+               new=AsyncMock(side_effect=RuntimeError("boom"))):
+        assert await scrape_reference_structure("https://ex.com/x", "location") is None

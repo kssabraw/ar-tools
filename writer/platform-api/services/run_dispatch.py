@@ -54,6 +54,7 @@ def create_run_and_snapshot(
     reoptimize_source_url: Optional[str] = None,
     reoptimize_source_html: Optional[str] = None,
     writer_notes: Optional[str] = None,
+    reference_page_url: Optional[str] = None,
     content_writer_provider: Optional[str] = None,
     created_by: Optional[str] = None,
     source_ref: Optional[str] = None,
@@ -101,6 +102,10 @@ def create_run_and_snapshot(
             "reoptimize_source_url": reoptimize_source_url,
             "reoptimize_source_html": reoptimize_source_html,
             "writer_notes": writer_notes,
+            # Per-run "mirror an existing page's structure" URL (service/location
+            # pages). The service-page orchestrator scrapes it and overrides the
+            # client's saved reference for this run only; blank ⇒ client default.
+            "reference_page_url": (reference_page_url or "").strip() or None,
             # Resolve the draft-prose provider once, at creation, so EVERY path
             # (interactive, bulk, rerun, fanout, reoptimize) inherits the client
             # default without each caller re-implementing the fallback. The run
