@@ -26,13 +26,51 @@ The owner set the **next build order** to these five, top-to-bottom:
    (`social_presign_expiry_seconds`) for slow multi-GB uploads. **⚠️ Prerequisite still open (owner
    infra, deployed-only): apply the R2 bucket CORS policy** (below) — until then the big-video PUT fails
    its preflight (surfaced as a clear error); small videos + images are unaffected. Provider-agnostic.
-5. **Mixed image path** (deferred cost optimization, owner: "later") — **⬅ NEXT (the only unbuilt queue
-   item).** 2.5-Flash-for-square / nano-banana-Pro-for-aspect-ratio, halves the dominant image cost.
+5. **Mixed image path** — **✅ BUILT + MERGED (PR [#1216](https://github.com/kssabraw/ar-tools/pull/1216),
+   squash `cf9ffa0`).** All social images now render on **Nano Banana 2** (`gemini-3.1-flash-image`) at 2K
+   (~25% under Pro; it honors every aspect ratio, so the original "2.5-Flash-for-square" premise was
+   obsolete), behind `social_image_use_flash` (default ON, Pro the flag-off fallback). See the 2026-09-18
+   update below. **This was the last unbuilt queue item — the build queue is now fully built.**
 
 > These supersede the older "Remaining build" ordering further down this file. The two live
 > confidence checks (a real test post on the PostForMe path; a live P1 competitor-research
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
+
+## Update (2026-09-18) — **Queue #5 (mixed image path) BUILT + MERGED — the build queue is COMPLETE** (PR [#1216](https://github.com/kssabraw/ar-tools/pull/1216))
+
+**#5 mixed image path — MERGED** (squash `cf9ffa0`). **Scope evolved when grounded against current
+models (owner-confirmed before build):** the queued "route squares to 2.5-Flash, keep Pro for
+non-square" premise was obsolete — the latest Flash tier, **Nano Banana 2** (`gemini-3.1-flash-image`),
+honors EVERY aspect ratio via the identical `generationConfig.imageConfig.aspectRatio` API as Pro, at
+~$0.101 at 2K (~25% under Pro's $0.134). So **all** social images now route to Nano Banana 2 at 2K (not
+just squares); Pro is a flag-gated fallback. The cost saver hits the whole dominant image line, not
+only square posts.
+
+- **`services/social/image.py`** — new pure **`select_image_model`** is the single decision point
+  (composer + fan-out + carousel all flow through `generate_image`); returns `(model_id, cost)` and
+  **guarantees a strictly-positive reserved cost** so a misconfigured `$0` cost can't slip a paid image
+  past the fail-closed budget (`budget.reserve(amount<=0)` is a no-op that *succeeds* — the budget-bypass
+  guard; a zeroed model cost falls back to the other model's cost, else a `$0.05` floor).
+- **`services/nano_banana.py`** — `generate_image_pro` gained an optional `model` param (Pro + Nano
+  Banana 2 share the imageConfig API, so the Flash branch returns `(bytes, mime)` symmetrically). The Pro
+  default and the old 2.5-Flash `generate_image` (GBP posts / illustration) are **untouched**.
+- **Config:** `social_image_use_flash` (default **True**, flip off → Pro-only, no deploy),
+  `social_image_flash_model` (`gemini-3.1-flash-image`, env-overridable), `social_image_flash_cost_usd`
+  ($0.101 at 2K). `social_image_cost_usd`/`nano_banana_pro_model`/`social_image_size` unchanged. **No
+  migration; no new env** (reuses the already-set `GEMINI_API_KEY`; flash is ON by default).
+- **Also folded in (owner-requested follow-ups after the review pass):** the budget-bypass guard above,
+  and a **SocialCompose eslint cleanup** (6 pre-existing `react-hooks` v7 problems → 0 — four
+  `set-state-in-effect` derived-state syncs → React's adjust-state-during-render pattern, `accounts`
+  wrapped in `useMemo`, and the schedule-min `Date.now()` moved out of render into a run-once `useState`
+  initializer). Behavior preserved (server-side `_ensure_future_iso` still enforces future publish times).
+- Tests: 40 social tests pass; ruff/mypy clean; frontend `tsc`/`eslint` clean.
+
+**Deployed-only follow-up (sandbox egress-blocked from Gemini):** on the first live generation, confirm
+the model id `gemini-3.1-flash-image` (GA) vs a `-preview` id — override via `SOCIAL_IMAGE_FLASH_MODEL`
+if Google only exposes the preview id; verify a real non-square render (IG 4:5 / Reels 9:16) comes back
+at that ratio and the `cost_usd` line drops. Rollback lever if quality disappoints:
+`SOCIAL_IMAGE_USE_FLASH=false` (Pro-only, no deploy).
 
 ## Update (2026-09-18) — **Queue #3 (YouTube poster) + #4 (big-video presign) BUILT + MERGED**
 
@@ -487,8 +525,9 @@ posts; feed image aspect ratio 4:5–1.91:1.
 
 ## Open decisions for the owner
 
-- ~~**Mixed image path**~~ — **DECIDED: Pro-only for now.** The 2.5-Flash-for-square /
-  Pro-for-aspect-ratio cost-saver (halves the dominant image cost) is a future option, not built.
+- ~~**Mixed image path**~~ — **✅ BUILT + MERGED (PR #1216, queue #5).** All social images route to
+  Nano Banana 2 (`gemini-3.1-flash-image`) at 2K, ~25% under Pro; behind `social_image_use_flash`
+  (default ON, Pro the fallback). Supersedes the earlier "Pro-only for now" ruling.
 - ~~**v1 Instagram scope**~~ — **DECIDED (b1): BOTH** — feed + Reels + Stories. (Not built yet — the
   composer's format set + the seeded IG spec need extending to Reels/Stories; Stories is
   Business-account-only, no caption/link stickers.)
@@ -541,8 +580,9 @@ posts; feed image aspect ratio 4:5–1.91:1.
    - **P4 autonomy/agents** (a domain executor reusing `autonomy_policy`/`autonomy_budget`/tiers/freeze/
      DORA veto — the orchestration loop itself is new code), **P5 video production** (Reels/Shorts, cobalt
      self-host) — later phases from the PRD.
-   - **Mixed image path** (2.5-Flash-for-square / Pro-for-aspect-ratio, halves the dominant image cost) — a
-     deferred cost optimization, owner-decided as "later."
+   - **Mixed image path** — ✅ BUILT + MERGED (PR #1216, squash `cf9ffa0`). All social images → Nano
+     Banana 2 (`gemini-3.1-flash-image`) at 2K (~25% under Pro), behind `social_image_use_flash`
+     (default ON). See the 2026-09-18 update at the top of this file.
 
 ## Gotchas discovered during design (don't re-learn these)
 
