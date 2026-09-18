@@ -531,11 +531,10 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
     () => Array.from(new Set(accounts.map((a) => a.platform.toLowerCase())))
       .filter((p) => p !== 'youtube'), [accounts])
 
-  // Formats valid for every selected platform; reset a now-invalid choice.
+  // Formats valid for every selected platform; reset a now-invalid choice during
+  // render (React's adjust-state-when-a-prop-changes pattern — no effect, no cascade).
   const formatOptions = useMemo(() => formatsForMany(platforms), [platforms])
-  React.useEffect(() => {
-    if (!formatOptions.includes(format)) setFormat(formatOptions[0])
-  }, [formatOptions, format])
+  if (formatOptions.length > 0 && !formatOptions.includes(format)) setFormat(formatOptions[0])
   // A Story needs media (and carries no caption) and a Carousel is images — always
   // generate images for those. A carousel fans out N slides (each a paid image).
   const isStoryFmt = format === 'story'
@@ -708,7 +707,8 @@ function DraftRow({ draft, accounts, onChanged }: {
   const [acct, setAcct] = useState('')
   const [error, setError] = useState<string | null>(null)
   const platAccounts = accounts.filter((a) => a.platform.toLowerCase() === draft.platform.toLowerCase())
-  React.useEffect(() => { if (!acct && platAccounts.length) setAcct(platAccounts[0].account_id) }, [platAccounts, acct])
+  // Default the draft's account once its platform accounts load (adjust-during-render).
+  if (!acct && platAccounts.length) setAcct(platAccounts[0].account_id)
   const voiceWarn = draft.voice_verdict?.warnings ?? []
   const image = draft.image_urls?.[0] || draft.media?.find((m) => m.type === 'image')?.url
 
@@ -1174,7 +1174,7 @@ export function SocialCompose() {
     },
   })
 
-  const accounts = accountsQ.data ?? []
+  const accounts = useMemo(() => accountsQ.data ?? [], [accountsQ.data])
   const [tab, setTab] = useState<'compose' | 'create' | 'drafts' | 'competitors'>('compose')
   // Compose + Create need a connected account; Drafts + Competitors don't.
   const needsAccounts = tab === 'compose' || tab === 'create'
@@ -1191,9 +1191,8 @@ export function SocialCompose() {
   const [format, setFormat] = useState('feed')
   // Formats the selected account's platform supports; reset a now-invalid choice.
   const formatOptions = useMemo(() => formatsFor(platform), [platform])
-  React.useEffect(() => {
-    if (!formatOptions.includes(format)) setFormat(formatOptions[0])
-  }, [formatOptions, format])
+  // Reset a now-invalid format during render (adjust-state-when-a-prop-changes).
+  if (formatOptions.length > 0 && !formatOptions.includes(format)) setFormat(formatOptions[0])
   // Stories carry no caption / link stickers (Business-account-only); Reels are a
   // single video (no images); Carousels are 2–10 images, one shared shape. These
   // drive the format-aware compose rules below.
@@ -1205,6 +1204,9 @@ export function SocialCompose() {
   const isYouTube = platform === 'youtube'
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
   const [scheduledLocal, setScheduledLocal] = useState('')
+  // Min selectable schedule time (~now + 1 min), computed once at mount so render
+  // stays pure (no Date.now() during render).
+  const [scheduleMin] = useState(() => new Date(Date.now() + 60000).toISOString().slice(0, 16))
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [platformSpecificText, setPlatformSpecificText] = useState('')
 
@@ -1213,10 +1215,8 @@ export function SocialCompose() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
 
-  // Default the account selection once accounts load.
-  React.useEffect(() => {
-    if (!accountId && accounts.length) setAccountId(accounts[0].account_id)
-  }, [accounts, accountId])
+  // Default the account selection once accounts load (adjust-during-render).
+  if (!accountId && accounts.length) setAccountId(accounts[0].account_id)
 
   async function uploadFiles(files: FileList, expect: 'image' | 'video') {
     setUploadError(null)
@@ -1551,7 +1551,7 @@ export function SocialCompose() {
             </div>
             {scheduleMode === 'later' && (
               <input type="datetime-local" style={{ ...input, maxWidth: 260 }} value={scheduledLocal}
-                min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                min={scheduleMin}
                 onChange={(e) => setScheduledLocal(e.target.value)} />
             )}
           </div>
