@@ -18,22 +18,39 @@ The owner set the **next build order** to these five, top-to-bottom:
    which forces only the `public` privacy default; `validate_post` YouTube rule; fanout excludes YT;
    migration `20260918130000` fixed the seeded spec). Deployed-only: verify the `privacy_status` field
    name + one live end-to-end post. Uploads existing videos, **not** generation.
-4. **Big-video direct-to-R2 (presign)** — **✅ BUILT (PR pending), needs the R2 CORS policy applied +
-   live verify.** The composer now routes a video **over the 200 MB server cap** (up to a 2 GB advisory
-   client cap) through the existing `POST …/social/media/presign` → a browser `fetch` PUT straight to R2
-   → `public_url`; images + videos ≤ 200 MB keep the server path (no CORS dependency). Presign expiry
-   bumped to 2 h (`social_presign_expiry_seconds`) for slow multi-GB uploads. **Prerequisite (owner
+4. **Big-video direct-to-R2 (presign)** — **✅ BUILT + MERGED (PR
+   [#1213](https://github.com/kssabraw/ar-tools/pull/1213), squash `069d618`).** The composer routes a
+   video **over the 200 MB server cap** (up to a 2 GB advisory client cap) through the existing
+   `POST …/social/media/presign` → a browser `fetch` PUT straight to R2 → `public_url`; images + videos
+   ≤ 200 MB keep the server path (no CORS dependency). Presign expiry bumped to 2 h
+   (`social_presign_expiry_seconds`) for slow multi-GB uploads. **⚠️ Prerequisite still open (owner
    infra, deployed-only): apply the R2 bucket CORS policy** (below) — until then the big-video PUT fails
-   its preflight (surfaced as a clear error). Provider-agnostic.
-5. **Mixed image path** (deferred cost optimization, owner: "later") — 2.5-Flash-for-square /
-   nano-banana-Pro-for-aspect-ratio, halves the dominant image cost. Lowest of the five.
+   its preflight (surfaced as a clear error); small videos + images are unaffected. Provider-agnostic.
+5. **Mixed image path** (deferred cost optimization, owner: "later") — **⬅ NEXT (the only unbuilt queue
+   item).** 2.5-Flash-for-square / nano-banana-Pro-for-aspect-ratio, halves the dominant image cost.
 
 > These supersede the older "Remaining build" ordering further down this file. The two live
 > confidence checks (a real test post on the PostForMe path; a live P1 competitor-research
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
-## Update (2026-09-18) — **Queue #4 (big-video direct-to-R2 presign) BUILT** (PR pending) — needs the R2 CORS policy applied
+## Update (2026-09-18) — **Queue #3 (YouTube poster) + #4 (big-video presign) BUILT + MERGED**
+
+**#3 YouTube poster — MERGED** (PR [#1211](https://github.com/kssabraw/ar-tools/pull/1211), squash
+`44c5e06`). A YouTube post = a video + a **required `title`** via `platform_configurations.youtube`
+(first-class request field → `publish.build_youtube_config`, which forces only the `public` privacy
+default; `made_for_kids`/tags/category ride the advanced-JSON passthrough). `validate_post` gained a
+YouTube rule (exactly one video, no images, non-empty 2–100-char title); fanout **excludes** YouTube
+(video-only, Compose-only); migration `20260918130000` fixed the seeded `youtube` spec row (`max_images`
+1→0). **Deployed-only follow-up:** verify the `privacy_status` field name takes effect + one live
+end-to-end YouTube post (sandbox egress-blocked from PostForMe).
+
+**#4 big-video presign — MERGED** (PR [#1213](https://github.com/kssabraw/ar-tools/pull/1213), squash
+`069d618`) — details below. **⚠️ Its one open prerequisite is the R2 CORS policy (next section).**
+
+Next queue item is **#5 (mixed image path)**, still "later" per the owner.
+
+## Update (2026-09-18) — **Queue #4 (big-video direct-to-R2 presign) — MERGED** (PR #1213) — ⚠️ needs the R2 CORS policy applied
 
 The composer now uploads a **video over the 200 MB server multipart cap** (up to a **2 GB** advisory
 client cap; R2's real single-PUT limit is ~5 GB) **straight to R2** via the pre-existing

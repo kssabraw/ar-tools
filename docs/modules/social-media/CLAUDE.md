@@ -45,17 +45,20 @@
 > Apify-ONLY — TwelveLabs is DROPPED** (c1, BUILT). Owner-confirmed P1 platform scope: Instagram, Facebook,
 > X, YouTube, Pinterest (LinkedIn deferred). Still to discuss: default per-client monthly ceiling (b3),
 > the P4 autonomy build (c2), the P5 Video Studio (c3).
-> **Next build queue (owner-set 2026-09-18), in order:** (1) **IG Reels + Stories** scope-out (b1 — Stories
-> is Business-account-only, no caption/link stickers) — **✅ BUILT + MERGED (PR #1206)**; (2) **IG carousel
-> Draft type** (b2 — ≤10 items, one aspect ratio, ~$0.13/slide) — **✅ BUILT + MERGED (same PR #1206)**;
-> **next up → (3) YouTube poster** (re-scope against PostForMe — a YT post needs a `title`
-> via `platform_configurations`; uploads existing videos, not generation); (4) **big-video direct-to-R2
-> presign** (endpoint exists; needs the browser PUT wired + an R2 CORS policy for the Netlify origin);
-> (5) **mixed image path** (2.5-Flash-for-square cost-saver, "later"). Then **P4 autonomy** + **P5
-> video/YouTube** remain the longer-horizon phases. The `HANDOFF.md` **"Next priority" block** (top of that
-> file) is authoritative on this order. Non-build confidence steps, independent of the queue: a **live test
-> post** on the PostForMe path, and a **live P1 research run** (both deployed-only — the sandbox is
-> egress-blocked from PostForMe and Apify). See `HANDOFF.md` (this folder) for the live state — start there.
+> **Next build queue (owner-set 2026-09-18), in order:** (1) **IG Reels + Stories** — **✅ BUILT + MERGED
+> (PR #1206)**; (2) **IG carousel Draft type** — **✅ BUILT + MERGED (same PR #1206)**; (3) **YouTube
+> poster** — **✅ BUILT + MERGED (PR #1211, squash `44c5e06`)** — a YT post = video + required `title` via
+> `platform_configurations.youtube` (`publish.build_youtube_config` forces only the `public` privacy
+> default), `validate_post` YouTube rule, fanout excludes YT; (4) **big-video direct-to-R2 presign** —
+> **✅ BUILT + MERGED (PR #1213, squash `069d618`)** — video >200 MB PUTs straight to R2 via the presign
+> endpoint (`presignAndPutVideo`), presign expiry bumped to 2 h; **⚠️ still needs the R2 bucket CORS
+> policy applied (owner infra, deployed-only) before big-video upload works — see `HANDOFF.md`**;
+> **next up → (5) mixed image path** (2.5-Flash-for-square cost-saver — the only unbuilt queue item, owner
+> "later"). Then **P4 autonomy** + **P5 video/YouTube** remain the longer-horizon phases. The `HANDOFF.md`
+> **"Next priority" block** (top of that file) is authoritative on this order. Deployed-only follow-ups
+> (independent of the queue): apply the **R2 CORS policy** (#4); the first **live YouTube post** (#3);
+> a **live test post** on the PostForMe path; a **live P1 research run** (sandbox is egress-blocked from
+> PostForMe, R2, and Apify). See `HANDOFF.md` (this folder) for the live state — start there.
 
 ## What this module is
 
@@ -280,8 +283,10 @@ Creator exists.
 - **P3 Manager + publish** — the publish lifecycle is built; Calendar / Cadence / a richer approval
   queue are ⬜ not built (the compose screen has schedule-for-later + a recent-posts list, not a calendar).
 - **P4 Agents, autonomy, analytics** — ⬜ not built.
-- **P5 Deferred** — video production (Reels/Shorts/**YouTube** — waiting on PostPeer's YouTube doc);
-  big-video direct-to-R2 presign (needs R2 CORS); cobalt self-host.
+- **P5 Deferred** — **YouTube poster ✅ BUILT + MERGED** (PR #1211, re-scoped against PostForMe — a YT
+  post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
+  (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end). Still deferred: full video
+  production (Reels/Shorts generation), cobalt self-host, the mixed 2.5-Flash/Pro image cost lever.
 
 ## Things NOT to do (module-specific)
 
