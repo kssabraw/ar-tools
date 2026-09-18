@@ -654,6 +654,7 @@ async def gsc_scheduler() -> None:
     )
     from services.gbp_profile_service import enqueue_due_gbp_profile_syncs
     from services.social.publish import enqueue_due_social_posts
+    from services.social.schedules import enqueue_due_social_schedules
     from services.social.competitor_research import enqueue_due_social_competitor_research
     from services.gbp_monitor import enqueue_due_gbp_profile_monitor
     from services.client_report_schedule import enqueue_due_report_schedules
@@ -1119,6 +1120,10 @@ async def gsc_scheduler() -> None:
             _safe("gbp_scheduled_posts", enqueue_due_gbp_scheduled_posts)
             # Social Media — one-off scheduled publishes (per-post scheduled_at).
             _safe("social_scheduled_posts", enqueue_due_social_posts)
+            # Social Media — recurring cadence (per (client, platform) next_run_at):
+            # drips a queued approved draft (auto_fill, gated) or emits a suggest-nudge.
+            # Evaluated every tick so slots fire near their local time. No-op until enabled.
+            _safe("social_schedules", enqueue_due_social_schedules)
             # GBP Profile Editor — the pending-review reconciler. Backoff lives on
             # the edit row (next_sync_at); the worker claims by scheduled_at with
             # no <=now gate, so a per-cycle sweep is what honours the ladder (the

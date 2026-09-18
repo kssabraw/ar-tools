@@ -308,6 +308,10 @@ async def run_fanout_job(job: dict) -> None:
         from services.social import image as social_image
 
         policy_template = social_image._policy_template(client_id)
+    # Load the client's copy-gen steering template ONCE (reused for every platform's copy).
+    from services.social import policy as social_policy
+
+    text_template = social_policy.text_prompt_template(client_id)
 
     pending = (
         sb.table("social_drafts").select("id, platform, format")
@@ -331,6 +335,7 @@ async def run_fanout_job(job: dict) -> None:
                     source_text=source_text, angle=angle, tone=tone,
                     include_hashtags=include_hashtags,
                     card=card, voice_block=voice_block, client_context=client_context,
+                    text_template=text_template,
                 )
             except Exception as exc:  # noqa: BLE001 — one draft failing doesn't abort the set
                 logger.warning("social.fanout_draft_failed",
@@ -541,6 +546,77 @@ def publish_existing_draft(
     _sb().table("social_drafts").update({"status": "published", "updated_at": "now()"}) \
         .eq("id", draft_id).execute()
     return post
+
+
+def enqueue_draft(draft_id: str) -> dict:
+    """Enroll a ready Draft in the cadence drip queue (status ``ready`` → ``queued``). A
+    ``queued`` draft is 'approved and waiting for its next cadence slot' — the schedule
+    sweep drips the oldest queued draft for a platform. Only a ``ready`` draft can be
+    queued (idempotent if already queued). ``queued`` is free-text (no migration)."""
+    _assert_enabled()
+    draft = get_draft(draft_id)
+    if draft.get("status") == "queued":
+        return draft
+    if draft.get("status") != "ready":
+        raise HTTPException(status_code=409, detail="social_draft_not_queueable")
+    row = (
+        _sb().table("social_drafts").update({"status": "queued", "updated_at": "now()"})
+        .eq("id", draft_id).execute()
+    ).data
+    return row[0] if row else get_draft(draft_id)
+
+
+def dequeue_draft(draft_id: str) -> dict:
+    """Remove a Draft from the cadence queue (status ``queued`` → ``ready``)."""
+    _assert_enabled()
+    draft = get_draft(draft_id)
+    if draft.get("status") != "queued":
+        raise HTTPException(status_code=409, detail="social_draft_not_queued")
+    row = (
+        _sb().table("social_drafts").update({"status": "ready", "updated_at": "now()"})
+        .eq("id", draft_id).execute()
+    ).data
+    return row[0] if row else get_draft(draft_id)
+
+
+def next_queued_draft(client_id: str, platform: str) -> Optional[dict]:
+    """The oldest ``queued`` Draft for a (client, platform) — the next one a cadence drip
+    would publish. None if the queue is empty."""
+    rows = (
+        _sb().table("social_drafts").select("*")
+        .eq("client_id", client_id).eq("platform", (platform or "").lower())
+        .eq("status", "queued").order("created_at", desc=False).limit(1).execute()
+    ).data or []
+    return rows[0] if rows else None
+
+
+def publish_drafts_batch(client_id: str, items: list) -> list[dict]:
+    """Approve & publish/schedule multiple Drafts at once — the approval queue's batch
+    action (PACE's 'approve 1,3'). Each item carries ``draft_id`` / ``account_id`` /
+    optional ``scheduled_at``; each is published independently via
+    ``publish_existing_draft`` so one item's failure never sinks the batch (partial
+    success). Returns a per-item result list."""
+    _assert_enabled()
+    results: list[dict] = []
+    for item in items or []:
+        draft_id = str(getattr(item, "draft_id", ""))
+        account_id = str(getattr(item, "account_id", "") or "")
+        scheduled_at = getattr(item, "scheduled_at", None)
+        try:
+            draft = get_draft(draft_id)
+            if str(draft.get("client_id")) != str(client_id):
+                raise HTTPException(status_code=403, detail="social_draft_wrong_client")
+            post = publish_existing_draft(draft_id, account_id, scheduled_at)
+            results.append({"draft_id": draft_id, "ok": True, "post_id": post["id"], "error": None})
+        except HTTPException as exc:
+            results.append({"draft_id": draft_id, "ok": False, "post_id": None,
+                            "error": str(getattr(exc, "detail", exc))})
+        except Exception as exc:  # noqa: BLE001 — one item failing never sinks the batch
+            logger.warning("social.batch_publish_item_failed",
+                           extra={"draft_id": draft_id, "error": str(exc)[:200]})
+            results.append({"draft_id": draft_id, "ok": False, "post_id": None,
+                            "error": "internal_error"})
+    return results
 
 
 def get_fanout_job(job_id: str) -> dict:

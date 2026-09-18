@@ -145,10 +145,14 @@ def build_copy_prompt(
     include_hashtags: bool,
     client_context: str,
     voice_block: str,
+    text_template: Optional[str] = None,
 ) -> tuple[str, str]:
     """Assemble the (system, user) prompt for one platform's copy. Pure. The
     voice block, when present, is appended LAST so it wins on expression (the
-    late-high-priority-block pattern used across the suite's writers)."""
+    late-high-priority-block pattern used across the suite's writers). The client's
+    Social Policy ``text_template`` (copy-gen steering), when set, is a mid-priority
+    block placed before the voice block — it steers within the brand voice, never over
+    it. ``None`` → the prompt is byte-identical to before this build."""
     ask: list[str] = [platform_guidance(platform, spec, include_hashtags)]
     if fmt and fmt not in ("feed", "pin"):
         ask.append(f"This is for a {fmt}.")
@@ -168,6 +172,9 @@ def build_copy_prompt(
         ask.append(f"Topic: {source_title}")
 
     user = client_context + "\n\n" + "\n".join(ask)
+    tmpl = (text_template or "").strip()
+    if tmpl:
+        user += "\n\nClient copy guidance (steer WITHIN the brand voice, never over it):\n" + tmpl
     if voice_block:
         user += "\n\n" + voice_block
     return _SYSTEM_PROMPT, user
@@ -311,17 +318,19 @@ async def draft_platform_copy(
     card: dict,
     voice_block: str,
     client_context: str,
+    text_template: Optional[str] = None,
 ) -> tuple[str, list[str], list[str]]:
     """Generate + voice-enforce copy for ONE platform from an already-loaded source
     and voice context. Returns (copy, voice_warnings, spec_warnings). The reusable
-    core of both the single-copy draft and the fan-out. Raises HTTPException(502)
-    when the model call fails outright."""
+    core of both the single-copy draft and the fan-out. ``text_template`` is the
+    client's Social Policy copy-gen steering (loaded once by the caller; None → no-op).
+    Raises HTTPException(502) when the model call fails outright."""
     from services import gbp_posts_service
 
     system, user = build_copy_prompt(
         platform=platform, spec=spec, source_title=source_title, source_text=source_text,
         angle=angle, tone=tone, fmt=fmt, include_hashtags=include_hashtags,
-        client_context=client_context, voice_block=voice_block,
+        client_context=client_context, voice_block=voice_block, text_template=text_template,
     )
     try:
         text = await _copy_llm(system, user)
@@ -591,11 +600,14 @@ async def generate_copy(client_id: str, req, user_id: Optional[str] = None) -> d
         notes.append("no_source_content")
 
     card, voice_block, client_context = await resolve_voice_context(_client_row(client_id), user_id)
+    from services.social import policy as social_policy
+
     text, voice_warnings, spec_warnings = await draft_platform_copy(
         platform=platform, spec=spec, fmt=(req.format or "feed"),
         source_title=source_title, source_text=source_text, angle=req.angle, tone=req.tone,
         include_hashtags=bool(getattr(req, "include_hashtags", True)),
         card=card, voice_block=voice_block, client_context=client_context,
+        text_template=social_policy.text_prompt_template(client_id),
     )
     if voice_warnings:
         notes.append("voice_uncorrected")

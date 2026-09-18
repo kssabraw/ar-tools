@@ -481,6 +481,102 @@ def list_posts(client_id: str, limit: int = 100) -> list[dict]:
     ).data or []
 
 
+def list_calendar(
+    client_id: str,
+    frm: Optional[datetime] = None,
+    to: Optional[datetime] = None,
+    limit: int = 500,
+) -> list[dict]:
+    """Posts for the Calendar view: the client's recent posts, optionally filtered to
+    a window by ``scheduled_at`` (upcoming) OR ``published_at`` (history). Read-only,
+    cross-platform. Fetches the recent N and filters in Python — robust against
+    PostgREST OR/timestamp-filter fragility and fine for per-client post volumes."""
+    rows = (
+        _sb().table("social_posts").select("*").eq("client_id", client_id)
+        .order("created_at", desc=True).limit(limit).execute().data or []
+    )
+    if frm is None and to is None:
+        return rows
+
+    def _in_window(ts: Optional[str]) -> bool:
+        if not ts:
+            return False
+        try:
+            dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        except ValueError:
+            return False
+        if frm is not None and dt < frm:
+            return False
+        if to is not None and dt > to:
+            return False
+        return True
+
+    return [r for r in rows if _in_window(r.get("scheduled_at")) or _in_window(r.get("published_at"))]
+
+
+def cancel_post(post_id: str) -> dict:
+    """Cancel a scheduled social post. Only a not-yet-published ``scheduled`` post can be
+    cancelled (409 ``social_post_not_cancellable`` otherwise); if a publish job is already
+    in flight, 409 ``social_post_publishing`` (never cancel mid-publish). Sets
+    ``status='cancelled'`` — the due sweep queries ``status='scheduled'``, so a cancelled
+    post is simply skipped."""
+    _assert_enabled()
+    post = get_post(post_id)
+    if post.get("status") != "scheduled":
+        raise HTTPException(status_code=409, detail="social_post_not_cancellable")
+    if _has_active_publish_job(str(post["client_id"]), post_id):
+        raise HTTPException(status_code=409, detail="social_post_publishing")
+    row = (
+        _sb().table("social_posts").update(
+            {"status": "cancelled", "status_detail": None, "updated_at": "now()"}
+        ).eq("id", post_id).execute()
+    ).data
+    return row[0] if row else get_post(post_id)
+
+
+def reschedule_post(post_id: str, scheduled_at: datetime) -> dict:
+    """Move a scheduled post to a new future time (422 ``scheduled_in_past`` if not future).
+    Only a ``scheduled`` post with no in-flight publish job. The due sweep publishes it at
+    the new slot."""
+    _assert_enabled()
+    post = get_post(post_id)
+    if post.get("status") != "scheduled":
+        raise HTTPException(status_code=409, detail="social_post_not_reschedulable")
+    if _has_active_publish_job(str(post["client_id"]), post_id):
+        raise HTTPException(status_code=409, detail="social_post_publishing")
+    scheduled_iso = _ensure_future_iso(scheduled_at)
+    row = (
+        _sb().table("social_posts").update(
+            {"scheduled_at": scheduled_iso, "updated_at": "now()"}
+        ).eq("id", post_id).execute()
+    ).data
+    return row[0] if row else get_post(post_id)
+
+
+def edit_scheduled_post(
+    post_id: str,
+    *,
+    copy: Optional[str] = None,
+    image_urls: Optional[list[str]] = None,
+) -> dict:
+    """Edit a scheduled post's content (its draft's copy and/or images) before it
+    publishes. Only a ``scheduled`` post; routes to the post's draft via
+    ``fanout.update_draft`` (only provided fields change — a copy-only edit leaves any
+    video intact; passing ``image_urls`` replaces the images). The publish job
+    re-validates against the Platform Spec, so an edit can't ship an invalid post."""
+    _assert_enabled()
+    post = get_post(post_id)
+    if post.get("status") != "scheduled":
+        raise HTTPException(status_code=409, detail="social_post_not_editable")
+    draft_id = post.get("draft_id")
+    if not draft_id:
+        raise HTTPException(status_code=409, detail="social_post_no_draft")
+    from services.social import fanout
+
+    fanout.update_draft(str(draft_id), copy=copy, image_urls=image_urls)
+    return get_post(post_id)
+
+
 def create_post(
     client_id: str,
     platform: str,

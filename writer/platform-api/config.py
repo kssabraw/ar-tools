@@ -103,7 +103,14 @@ class Settings(BaseSettings):
     social_postforme_result_poll_attempts: int = 6     # /social-post-results polls after create
     social_postforme_result_poll_interval_secs: float = 5.0   # ~30s total ceiling
     social_enabled: bool = False                # SOCIAL_ENABLED — module master gate
-    social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
+    social_monthly_ceiling_default_usd: float = 100.0   # per-client fail-closed default (PRD §11)
+    # P3 cadence auto-fill (drip): the sweep publishes an explicitly-queued, human-approved
+    # draft on the schedule's rhythm, UNATTENDED. This crosses the PRD's auto-publish line, so
+    # it ships DARK behind this global gate AND requires a per-schedule auto_fill=true opt-in
+    # AND an explicitly `queued` draft — all three must hold before anything drips. Flip
+    # SOCIAL_AUTO_PUBLISH_ENABLED=true on PLATFORM to activate. (P4 will additionally consult
+    # social_policy.autonomy_tier; until then these three gates are stricter than a tier check.)
+    social_auto_publish_enabled: bool = False   # SOCIAL_AUTO_PUBLISH_ENABLED
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
     social_max_upload_mb: float = 200.0   # server multipart upload cap (video-sized)
     # Big-video direct-to-R2 (queue #4): videos over social_max_upload_mb are PUT
