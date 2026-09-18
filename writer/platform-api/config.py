@@ -2966,6 +2966,27 @@ class Settings(BaseSettings):
     leadoff_cpc_modifier_min: float = 0.7     # a cold ad-market caps the discount here
     leadoff_cpc_modifier_max: float = 1.5     # a hot ad-market caps the premium here
     leadoff_cpc_modifier_min_cpc: float = 0.5  # below this (market or national) the ratio is noise → ×1.0
+    # (2b) Per-market INCOME local modifier on CPL (plan §3, v1.5): a SECOND
+    #      bounded signal blended with the CPC modifier — a city ABOVE the national
+    #      median household income gets a premium, BELOW a discount (ratio
+    #      city_income ÷ national_median, clamped). Data: public.city_household_income
+    #      (the leadoff_income ACS-B19013 backfill, live for ~3.7k cities). Blends
+    #      with CPC as a renormalizing weighted-deviation average, so CPC-only stays
+    #      byte-identical when income is absent/disabled; ×1.0 on any missing/thin
+    #      income. Bounded + conservative + calibration-tunable (leadoff_scoring
+    #      precedent). Applied on the LIVE grade paths (tryout / grade / grade-all).
+    leadoff_income_modifier_enabled: bool = True
+    leadoff_income_modifier_min: float = 0.85   # a below-median metro caps the discount here
+    leadoff_income_modifier_max: float = 1.2    # an above-median metro caps the premium here
+    leadoff_income_modifier_min_income: int = 20000  # below this the value is noise/bad ACS → absent
+    # National reference median household income (≈ US ACS 5-yr median; the
+    # board-city median measured 2026-09-18 was $78,921). Calibratable — refresh
+    # from the ACS as the leadoff_income backfill advances its year.
+    leadoff_income_national_median: int = 78921
+    # Blend weights (renormalized over the present signals): CPC is the primary
+    # scaler, income the always-on secondary (plan §3 signal table).
+    leadoff_local_modifier_weight_cpc: float = 0.7
+    leadoff_local_modifier_weight_income: float = 0.3
     # (3) Monetization print (plan §7): three grounded models on the grade card +
     #     market brief (NOT board columns). Same lead flow, different billing —
     #     not independent streams. Constants calibratable.

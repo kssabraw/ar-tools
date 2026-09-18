@@ -278,8 +278,16 @@ Constants to pin (config, calibratable): `capture` (already exists),
      Fixes Manhattan ≠ Mobile for every market with data already in hand.
   3. Add the **monetization breakdown** (the three grounded models) to the market
      brief / grade card.
-- **v1.5 —** fold the **income / home-value ratio** into the modifier (free,
-  already computed for the Placement Advisor).
+- **v1.5 — BUILT 2026-09-18 (income-only).** Fold the income ratio into the
+  modifier (`services/leadoff_income_modifier.py`): a city's median household
+  income ÷ the national median, clamped, **blended** with the v1 CPC modifier as
+  a renormalizing weighted-deviation average (CPC-only stays byte-identical when
+  income is absent). Data is the already-live `public.city_household_income` (the
+  `leadoff_income` ACS-B19013 backfill — 3,731 cities). **Home value was NOT
+  folded in:** it is not captured anywhere (`census_demand` has no B25077 and is
+  block-group data cached only where a Placement scan ran, not board-wide), so a
+  board-wide home-value fetch is a deferred follow-up. Flag
+  `leadoff_income_modifier_enabled` (default True), bounded + calibratable.
 - **v2 — revenue keystone + Enigma, gated on the coverage pilot.**
   1. **Composite revenue estimation:** job-flow reconstruction first (no vendor),
      then per-contractor **permit valuations** (Shovels.ai eval) for the

@@ -1320,8 +1320,9 @@ interface GradeRow {
   supply?: number
   thin_demand?: boolean
   cpl?: number                   // effective (market-adjusted) exclusive $/lead
-  cpl_base?: number | null       // the flat exclusive anchor before the CPC modifier
-  cpl_modifier?: number | null   // per-market CPC multiplier applied to the anchor
+  cpl_base?: number | null       // the flat exclusive anchor before the local modifier
+  cpl_modifier?: number | null   // per-market multiplier applied to the anchor (CPC + income)
+  cpl_modifier_detail?: { cpc?: number | null; income?: number | null } | null  // which signals fed it
   cpl_default?: boolean
   monetization?: Monetization | null
   category?: string              // the literal keyword graded (display)
@@ -1346,21 +1347,27 @@ interface ScoutBlock {
 // Monetization print (valuation plan §7) — the three grounded ways to make money
 // in a market, shared by the grade card and the market brief. Same lead flow,
 // different billing — NOT independent streams.
-function MonetizationBlock({ m, cpl, cplBase, cplModifier }: {
+function MonetizationBlock({ m, cpl, cplBase, cplModifier, cplModifierDetail }: {
   m?: Monetization | null; cpl?: number | null
   cplBase?: number | null; cplModifier?: number | null
+  cplModifierDetail?: { cpc?: number | null; income?: number | null } | null
 }) {
   // Hide entirely when there's no exclusive value to show (a category with no
   // CPL on file grades F and has nothing to monetize) — avoids an all-"—" block.
   if (!m || m.ppl_exclusive_mo == null) return null
   const modified = cplModifier != null && Math.abs(cplModifier - 1) > 0.001
+  // Name which local signals actually moved the anchor (valuation plan §3).
+  const parts: string[] = []
+  if (cplModifierDetail?.cpc != null) parts.push(`ad-market cost ${cplModifierDetail.cpc}×`)
+  if (cplModifierDetail?.income != null) parts.push(`household income ${cplModifierDetail.income}×`)
+  const signals = parts.length ? parts.join(' + ') : "this market's ad-market cost (CPC)"
   return (
     <>
       <SectionTitle>Monetization</SectionTitle>
       {cpl != null && (
         <KV k="Exclusive lead value" v={`${usd(cpl)}/lead`}
           hint={modified && cplBase != null
-            ? `Anchor ${usd(cplBase)} × ${cplModifier}× for this market's ad-market cost (CPC).`
+            ? `Anchor ${usd(cplBase)} × ${cplModifier}× for this market (${signals}).`
             : 'The exclusive $/lead the market value is built on.'} />
       )}
       <KV k="Pay-per-lead (exclusive)"
@@ -1667,7 +1674,8 @@ function GradeView({ prefill, onConsumed }: {
           {/* monetization (valuation plan §7) */}
           <div style={{ margin: '12px 0' }}>
             <MonetizationBlock m={row.monetization} cpl={row.cpl}
-              cplBase={row.cpl_base} cplModifier={row.cpl_modifier} />
+              cplBase={row.cpl_base} cplModifier={row.cpl_modifier}
+              cplModifierDetail={row.cpl_modifier_detail} />
           </div>
 
           {/* field forensics */}
