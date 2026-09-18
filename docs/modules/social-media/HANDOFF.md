@@ -9,14 +9,9 @@
 Everything through P2 + P1 is built/merged/live and the PostForMe swap is activated (below).
 The owner set the **next build order** to these five, top-to-bottom:
 
-1. **Instagram scope-out — Reels + Stories** (decision b1: BOTH). Extend the composer's
-   format set + the seeded IG platform spec to **Reels** and **Stories** (Stories is
-   **Business-account-only**, and has **no caption / no link stickers**). Small-to-medium
-   build; provider-agnostic (composer/spec work, unaffected by the PostForMe swap — but map
-   IG format fields through PostForMe's `platform_configurations` where required).
-2. **IG carousel Draft type** (decision b2: YES). A carousel Draft type — **≤10 items, one
-   shared aspect ratio**; each slide is another nano-banana Pro image (~$0.13/slide, so the
-   cost estimate must multiply per slide). Provider-agnostic.
+1. **Instagram scope-out — Reels + Stories** (decision b1: BOTH) — **✅ BUILT + MERGED (PR
+   [#1206](https://github.com/kssabraw/ar-tools/pull/1206))**, see the 2026-09-18 update below.
+2. **IG carousel Draft type** (decision b2: YES) — **✅ BUILT + MERGED (same PR #1206)**, see below.
 3. **YouTube poster** — **re-scope against PostForMe** (the old blocker was PostPeer's
    YouTube docs; on PostForMe a YouTube post **requires a `title` via
    `platform_configurations`**). Uploads existing videos, **not** generation.
@@ -30,6 +25,61 @@ The owner set the **next build order** to these five, top-to-bottom:
 > confidence checks (a real test post on the PostForMe path; a live P1 competitor-research
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
+
+## Update (2026-09-18) — **Queue #1 (Reels + Stories) + #2 (IG carousel) BUILT + MERGED** (PR [#1206](https://github.com/kssabraw/ar-tools/pull/1206))
+
+Both built + merged to `main` in ONE PR (they share the format/spec/composer/validator/adapter
+groundwork). Owner-confirmed data-flow first: format→placement threaded as a new `fmt` param on
+`adapter.post()`, **mapped only at the PostForMe adapter edge**; strict format-aware validator; one PR.
+**Next queue item is #3 (YouTube poster).** The live confidence checks below (a real Reel + Story on
+IG/FB; a carousel fan-out) are deployed-only (sandbox egress-blocked from PostForMe + Gemini).
+
+**#1 Reels + Stories.** The composer already offered Reel/Story and `social_drafts.format` already
+allowed them, but the stored `format` **was never threaded to the adapter** — so a Reel/Story published
+as an ordinary feed post. Now wired end-to-end:
+- **Adapter** (`postforme_adapter.py`): `placement_config(platform, fmt)` maps `reel`/`story` on
+  **Instagram + Facebook** → `platform_configurations.{platform}.placement` = `reels`/`stories` (else
+  default `timeline`); `build_post_payload`/`post` merge it into any user config block. The ABC
+  `SocialPostingAdapter.post()` gains `fmt="feed"`; PostPeer accepts + ignores it (dormant fallback).
+- **Publish** (`publish.py`/`fanout.py`): `run_publish_job` reads the draft format → `adapter.post(fmt)`
+  and **drops the caption for Stories** at that choke point (Stories carry no caption / link stickers).
+  `validate_post` is format-aware: **Reel = one video, no images**; **Story = media required, caption
+  ignored** (never `empty_post`/`over_char_limit` for a caption-less Story; works for Facebook too).
+  Fan-out skips the discarded copy generation for Story drafts.
+- **Composer** (`SocialCompose.tsx`): Story hides the caption + AI-copy panel, sends empty copy, shows a
+  Business-account / no-caption-or-link-stickers note, and forces image generation in fan-out. Reel
+  disables image controls (single video) with format-aware hints. **Fan-out omits Reel** (no AI video in
+  v1 — Reels are for manual Compose with an uploaded video).
+
+**#2 IG/FB carousel Draft type.** `format='carousel'` (already in the CHECK), ≤10 items, one shared
+aspect ratio:
+- **Validator:** carousel → ≥2 media items (`carousel_needs_multiple`); the per-spec `max_images` still
+  caps at ≤10. Placement stays default `timeline` (a carousel is just multiple media items).
+- **Fan-out multi-slide gen:** `SocialFanoutRequest.slides` (2–`social_carousel_max_slides`=10, default
+  `social_carousel_default_slides`=3). `creator.carousel_slide_descriptions` plans N distinct slide
+  visuals from the source/angle (one bounded LLM call, deterministic per-slide fallback on failure);
+  `fanout._generate_carousel_images` generates one Pro image per slide at the platform's single carousel
+  aspect ratio. **Each slide is a separate paid image reserved individually against the fail-closed
+  budget — the cost multiplies per slide** (~$0.13/slide). A carousel draft is `ready` only with ≥2
+  slides (new `draft_status(enough_media=…)`), else `needs_image`.
+- **Composer:** carousel format on IG/FB + a **Slides** count (2–10) in the Create-with-AI tab, image
+  generation forced on, an N× cost note; Compose carousel = the existing multi-image UI + a ≥2-item hint.
+- **Config:** `social_carousel_max_slides` (10) / `_default_slides` (3) / `_slides_max_tokens` (900).
+
+**No migration** for either — the `social_drafts.format` CHECK already allows `reel`/`story`/`carousel`,
+`image_urls` is already an array, and the IG platform spec is per-platform (format rules live in code).
+
+**Live-verification flags (deployed-only — sandbox egress-blocked from PostForMe + Gemini):**
+- Placement keys/values (`platform_configurations.instagram.placement` = `reels`/`stories`; same for
+  `facebook`) are confirmed from PostForMe's public docs (postforme.dev/resources/posting-reels-and-stories).
+  The exact Stories caption/link-sticker + **Business-account** behavior is provider-enforced — verify on a
+  real test Reel + Story on IG/FB.
+- A live carousel fan-out (N slides generated + published as a carousel) needs a real Gemini key +
+  PostForMe account — verify per-slide budget reservation + the timeline carousel post on the deployed path.
+
+Tests: format-aware `validate_post` (reel/story/carousel) + `placement_config`/payload mapping +
+`resolve_slide_count`/`sanitize_slide_descriptions` + `draft_status(enough_media)` — 92 social tests pass;
+ruff clean; frontend `tsc -b` passes (eslint introduces zero new problems).
 
 ## Update (2026-09-17) — **Posting provider swapped: PostForMe replaces PostPeer — MERGED + ACTIVATED + LIVE** (ADR-0006)
 

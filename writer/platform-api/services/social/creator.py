@@ -476,6 +476,102 @@ async def propose_angles(client_id: str, req, user_id: Optional[str] = None) -> 
     return sanitize_angles(out.get("angles"), count)
 
 
+# ── carousel slide descriptions (image prompts, one per slide) ────────────────
+
+_CAROUSEL_SLIDES_SYSTEM = (
+    "You are a social media designer planning an Instagram/Facebook CAROUSEL. Given "
+    "source material, an angle, and a slide count N, describe the VISUAL for each of the "
+    "N slides — what the image shows, one slide per item, in reading order. Make them a "
+    "coherent sequence (an opening hook slide, value/proof slides, a closing call-to-action "
+    "slide) that shares one consistent look so they read as a set. Describe imagery only — "
+    "not the caption text. Ground every slide in the source; never invent facts, offers, "
+    "prices, or claims. Keep each description concise (one or two sentences)."
+)
+
+_CAROUSEL_SLIDES_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "slides": {
+            "type": "array",
+            "items": {"type": "string", "description": "The visual for one slide (imagery only)."},
+        }
+    },
+    "required": ["slides"],
+}
+
+
+def resolve_slide_count(requested: Optional[int], default: int, maximum: int) -> int:
+    """The number of carousel slides to generate: the request clamped to [2, maximum]
+    (a carousel needs ≥2), falling back to ``default`` when unset. Pure."""
+    hi = max(2, int(maximum))
+    n = int(requested) if requested else int(default)
+    return max(2, min(hi, n))
+
+
+def _fallback_slide(base: str, i: int, n: int) -> str:
+    """A deterministic per-slide description when the LLM under-delivers. Pure."""
+    seed = (base or "").strip() or "brand social media image"
+    return f"{seed} — carousel slide {i} of {n}."
+
+
+def sanitize_slide_descriptions(raw, count: int, fallback_seed: str) -> list[str]:
+    """Exactly ``count`` non-empty slide descriptions: keep the model's, then pad any
+    shortfall with deterministic fallbacks so a carousel always gets its full set. Pure."""
+    out: list[str] = []
+    for s in (raw or []):
+        text = (s if isinstance(s, str) else "").strip()
+        if text:
+            out.append(text[:600])
+        if len(out) >= count:
+            break
+    for i in range(len(out), count):
+        out.append(_fallback_slide(fallback_seed, i + 1, count))
+    return out[:count]
+
+
+async def carousel_slide_descriptions(
+    *,
+    source_title: Optional[str],
+    source_text: str,
+    angle: Optional[str],
+    count: int,
+    client_context: str,
+    voice_block: str,
+) -> list[str]:
+    """N distinct per-slide visual descriptions for a carousel (one image prompt each),
+    grounded in the source + angle. Best-effort: any LLM failure degrades to deterministic
+    per-slide fallbacks (a carousel never hard-fails because slide planning failed)."""
+    seed = (angle or source_title or "").strip()
+    parts = [client_context, f"\nPlan the visuals for a {count}-slide carousel."]
+    if angle:
+        parts.append(f"Angle: {angle}")
+    src = (source_text or "").strip()
+    if src:
+        parts.append(f"Source title: {source_title or 'n/a'}.\n--- SOURCE ---\n{src}\n--- END SOURCE ---")
+    elif source_title:
+        parts.append(f"Topic: {source_title}")
+    user = "\n".join(parts)
+    if voice_block:
+        user += "\n\n" + voice_block
+
+    from services import report_llm
+
+    try:
+        out = await report_llm.run_forced_tool(
+            provider="anthropic", model=settings.social_copy_model,
+            system=_CAROUSEL_SLIDES_SYSTEM, user=user,
+            tool_name="emit_slides", tool_description="Return the per-slide visual descriptions.",
+            input_schema=_CAROUSEL_SLIDES_SCHEMA,
+            max_tokens=int(settings.social_carousel_slides_max_tokens),
+            log_tag="social_carousel_slides",
+        )
+        raw = out.get("slides")
+    except Exception as exc:  # noqa: BLE001 — slide planning is best-effort
+        logger.info("social.carousel_slides_failed", extra={"error": str(getattr(exc, 'detail', exc))[:200]})
+        raw = None
+    return sanitize_slide_descriptions(raw, count, seed)
+
+
 async def generate_copy(client_id: str, req, user_id: Optional[str] = None) -> dict:
     """Draft platform-native copy for the composer. Loads the source, resolves the
     client's voice card, generates one bounded Sonnet completion, runs a corrective

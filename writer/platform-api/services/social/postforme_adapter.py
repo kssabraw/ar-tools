@@ -66,6 +66,14 @@ _PAGE_LIMIT = 100  # max per list page (offset/limit)
 _TO_PFM = {"twitter": "x"}
 _FROM_PFM = {"x": "twitter"}
 
+# Module post format → PostForMe placement value. Instagram + Facebook route
+# Reels/Stories via ``platform_configurations.{platform}.placement`` (confirmed from
+# PostForMe's docs — values are "reels"/"stories"/"timeline"). Any other format
+# (feed / carousel / pin / …) is the default timeline, so no placement key is sent.
+_PLACEMENT_BY_FORMAT = {"reel": "reels", "story": "stories"}
+# Platforms whose placement PostForMe honours (the two the composer offers reel/story for).
+_PLACEMENT_PLATFORMS = frozenset({"instagram", "facebook"})
+
 # A created post in any of these states was accepted for delivery (vs an outright failure).
 _ACCEPTED_STATUSES = {"scheduled", "processing", "processed", "published"}
 
@@ -145,6 +153,18 @@ def parse_accounts_page(body: dict) -> tuple[list[Integration], Optional[int]]:
     )
 
 
+def placement_config(platform: str, fmt: str) -> dict:
+    """The ``platform_configurations`` fragment that routes a post to Reels/Stories.
+    Returns ``{"placement": "reels"|"stories"}`` for a reel/story on Instagram or
+    Facebook, else ``{}`` (default timeline). Pure — the provider-shaped mapping kept
+    at this adapter edge."""
+    p = (platform or "").lower()
+    if p not in _PLACEMENT_PLATFORMS:
+        return {}
+    val = _PLACEMENT_BY_FORMAT.get((fmt or "feed").lower())
+    return {"placement": val} if val else {}
+
+
 def build_post_payload(
     account_id: str,
     platform: str,
@@ -152,17 +172,21 @@ def build_post_payload(
     media: Optional[list[dict]] = None,
     platform_specific: Optional[dict] = None,
     external_id: Optional[str] = None,
+    fmt: str = "feed",
 ) -> dict:
     """Body for ``POST /social-posts`` targeting exactly ONE account. ``scheduled_at`` is
     always omitted (publish now — we schedule from our own sweep). ``platform_specific``,
-    when given, is passed as this platform's ``platform_configurations`` block (opaque
-    passthrough, e.g. a YouTube ``title``)."""
+    when given, is this platform's ``platform_configurations`` block (opaque passthrough,
+    e.g. a YouTube ``title``); a Reel/Story ``placement`` derived from ``fmt`` is merged
+    into that same block (the format the composer already carries drives the routing)."""
     payload: dict = {"caption": caption or "", "social_accounts": [account_id]}
     items = normalize_media(media)
     if items:
         payload["media"] = items
-    if platform_specific:
-        payload["platform_configurations"] = {to_pfm_platform(platform): platform_specific}
+    config_block = dict(platform_specific or {})
+    config_block.update(placement_config(platform, fmt))
+    if config_block:
+        payload["platform_configurations"] = {to_pfm_platform(platform): config_block}
     if external_id:
         payload["external_id"] = external_id
     return payload
@@ -353,9 +377,10 @@ class PostForMeAdapter(SocialPostingAdapter):
         content: str,
         media: Optional[list[dict]] = None,
         platform_specific: Optional[dict] = None,
+        fmt: str = "feed",
         publish_now: bool = True,
     ) -> PostResult:
-        payload = build_post_payload(account_id, platform, content, media, platform_specific)
+        payload = build_post_payload(account_id, platform, content, media, platform_specific, fmt=fmt)
         with httpx.Client(timeout=_TIMEOUT) as client:
             resp = client.post(f"{self._base}/social-posts", headers=self._headers(), json=payload)
             self._raise_for(resp)
