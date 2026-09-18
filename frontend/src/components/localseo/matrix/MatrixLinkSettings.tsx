@@ -19,14 +19,18 @@ interface Props {
 export function MatrixLinkSettings({ clientId, matrix, onChanged }: Props) {
   const [hub, setHub] = useState(matrix.link_to_service_hub)
   const [pattern, setPattern] = useState(matrix.service_hub_pattern || '/{service}/')
+  const [locHub, setLocHub] = useState(matrix.link_to_location_hub)
+  const [locPattern, setLocPattern] = useState(matrix.location_hub_pattern || '/{location}/')
   const [home, setHome] = useState(matrix.link_to_home)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   const dirty =
     hub !== matrix.link_to_service_hub ||
+    locHub !== matrix.link_to_location_hub ||
     home !== matrix.link_to_home ||
-    (hub && (pattern.trim() || '/{service}/') !== (matrix.service_hub_pattern || '/{service}/'))
+    (hub && (pattern.trim() || '/{service}/') !== (matrix.service_hub_pattern || '/{service}/')) ||
+    (locHub && (locPattern.trim() || '/{location}/') !== (matrix.location_hub_pattern || '/{location}/'))
 
   const save = async () => {
     setSaving(true)
@@ -35,6 +39,8 @@ export function MatrixLinkSettings({ clientId, matrix, onChanged }: Props) {
       await matrixApi.update(clientId, matrix.id, {
         link_to_service_hub: hub,
         service_hub_pattern: hub ? (pattern.trim() || '/{service}/') : null,
+        link_to_location_hub: locHub,
+        location_hub_pattern: locHub ? (locPattern.trim() || '/{location}/') : null,
         link_to_home: home,
       })
       onChanged()
@@ -52,7 +58,7 @@ export function MatrixLinkSettings({ clientId, matrix, onChanged }: Props) {
           <Link2 size={15} /> Internal linking
         </h3>
         <p style={{ fontSize: 12, color: '#64748b', margin: '4px 0 0' }}>
-          Pages always interlink with their siblings. They can also link <strong>up</strong> to the top-level service page and the home page.
+          Pages always interlink with their siblings. They can also link <strong>up</strong> to the top-level service page, the top-level location page, and the home page.
           Changes apply to pages generated from now on.
         </p>
       </div>
@@ -65,6 +71,18 @@ export function MatrixLinkSettings({ clientId, matrix, onChanged }: Props) {
           <input style={{ ...input, maxWidth: 320 }} value={pattern} onChange={e => setPattern(e.target.value)} placeholder="/{service}/" disabled={saving} />
           <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>
             Must contain <code>{'{service}'}</code>, no <code>{'{location}'}</code>. e.g. <code>/{'{service}'}/</code> → <code>/roof-restoration/</code>.
+          </p>
+        </div>
+      )}
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#334155' }}>
+        <input type="checkbox" checked={locHub} onChange={e => setLocHub(e.target.checked)} disabled={saving} />
+        Link up to the top-level location page
+      </label>
+      {locHub && (
+        <div style={{ paddingLeft: 24 }}>
+          <input style={{ ...input, maxWidth: 320 }} value={locPattern} onChange={e => setLocPattern(e.target.value)} placeholder="/{location}/" disabled={saving} />
+          <p style={{ fontSize: 12, color: '#94a3b8', margin: '4px 0 0' }}>
+            Must contain <code>{'{location}'}</code>, no <code>{'{service}'}</code>. e.g. <code>/{'{location}'}/</code> → <code>/melbourne/</code>. Only turn on if these pages exist.
           </p>
         </div>
       )}

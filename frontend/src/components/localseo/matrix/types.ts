@@ -62,6 +62,8 @@ export interface MatrixSummary {
   publish_status: 'draft' | 'publish'
   link_to_service_hub: boolean
   service_hub_pattern?: string | null
+  link_to_location_hub: boolean
+  location_hub_pattern?: string | null
   link_to_home: boolean
   release_enabled: boolean
   release_mode: 'daily' | 'weekly' | 'monthly'
@@ -112,6 +114,8 @@ export interface MatrixCreateBody {
   publish_status?: 'draft' | 'publish'
   link_to_service_hub?: boolean
   service_hub_pattern?: string | null
+  link_to_location_hub?: boolean
+  location_hub_pattern?: string | null
   link_to_home?: boolean
 }
 

@@ -459,6 +459,56 @@ def test_plan_cell_links_up_links_first_then_siblings_deduped_and_capped():
     assert all(lk["relation"] in (m.SAME_LOCATION, m.SAME_SERVICE) for lk in sib_only)
 
 
+def test_location_hub_url_and_validate():
+    assert m.location_hub_url("melbourne", "https://x.com") == "https://x.com/melbourne/"
+    assert m.location_hub_url("melbourne") == "/melbourne/"
+    assert m.location_hub_url("melbourne", "https://x.com", "/areas-we-serve/{location}/") == "https://x.com/areas-we-serve/melbourne/"
+    assert m.validate_location_hub_pattern("/{location}/") == []
+    assert m.validate_location_hub_pattern("/areas-we-serve/{location}/") == []
+    assert m.validate_location_hub_pattern("/no-token/") == ["location_hub_pattern_missing_location_token"]
+    assert m.validate_location_hub_pattern("/{service}/{location}/") == ["location_hub_pattern_has_service_token"]
+
+
+def test_location_hub_anchor():
+    cell = _uplink_cells()[0]  # Roof restoration, Melbourne
+    assert m.location_hub_anchor(cell) == "Melbourne"
+    assert m.location_hub_anchor({"location_slug": "st-kilda"}) == "St Kilda"
+
+
+def test_up_links_location_hub_is_off_by_default_and_sits_between_service_hub_and_home():
+    cell = _uplink_cells()[0]  # Roof restoration, Melbourne
+    # Off by default: only service hub + home.
+    default = m.up_links(cell, "https://fcr.com.au")
+    assert [lk["relation"] for lk in default] == [m.SERVICE_HUB, m.HOME]
+    # Turned on: service hub → location hub → home, in hierarchy order.
+    on = m.up_links(cell, "https://fcr.com.au", location_hub=True)
+    assert on == [
+        {"anchor": "Roof restoration", "url": "https://fcr.com.au/roof-restoration/", "relation": m.SERVICE_HUB},
+        {"anchor": "Melbourne", "url": "https://fcr.com.au/melbourne/", "relation": m.LOCATION_HUB},
+        {"anchor": "Home", "url": "https://fcr.com.au/", "relation": m.HOME},
+    ]
+    # A custom pattern is honoured.
+    assert m.up_links(cell, "https://x.com", service_hub=False, home=False, location_hub=True,
+                      location_hub_pattern="/areas-we-serve/{location}/") == [
+        {"anchor": "Melbourne", "url": "https://x.com/areas-we-serve/melbourne/", "relation": m.LOCATION_HUB},
+    ]
+
+
+def test_plan_cell_links_location_hub_survives_the_cap_ahead_of_siblings():
+    cells = _uplink_cells()
+    me = cells[0]  # Roof restoration Melbourne
+    links = m.plan_cell_links(me, cells, "https://fcr.com.au", location_hub=True)
+    # All three up-links come first, in hierarchy order.
+    assert [lk["relation"] for lk in links[:3]] == [m.SERVICE_HUB, m.LOCATION_HUB, m.HOME]
+    # The location hub is deduped against the cell's own path (it never links to itself).
+    urls = [lk["url"] for lk in links]
+    assert "https://fcr.com.au/roof-restoration-melbourne/" not in urls
+    assert "https://fcr.com.au/melbourne/" in urls
+    # Up-links (incl. the location hub) survive the overall cap ahead of siblings.
+    capped = m.plan_cell_links(me, cells, "https://fcr.com.au", location_hub=True, max_links=3)
+    assert [lk["relation"] for lk in capped] == [m.SERVICE_HUB, m.LOCATION_HUB, m.HOME]
+
+
 def test_render_links_block_renders_up_links_so_the_guarantee_keeps_them():
     links = [
         {"anchor": "Roof restoration", "url": "https://x.com/roof-restoration/", "relation": m.SERVICE_HUB},
