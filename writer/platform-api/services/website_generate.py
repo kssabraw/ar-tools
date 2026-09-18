@@ -29,7 +29,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import job_priority
+from services import job_priority, llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -305,12 +305,13 @@ async def _generate_core_page(*, page: dict, website: dict, supabase) -> dict:
         .execute()
     ).data or []
 
-    content = await website_core_pages.generate_core_page(
-        page_kind=page_type,
-        client=client[0],
-        website=website,
-        pages=site_pages,
-    )
+    with llm_usage.usage_context(source="website_builder", client_id=website.get("client_id")):
+        content = await website_core_pages.generate_core_page(
+            page_kind=page_type,
+            client=client[0],
+            website=website,
+            pages=site_pages,
+        )
 
     # Home is hero-eligible; about/contact are not, so this is None for them.
     hero = await _hero_for(page, client[0], website)

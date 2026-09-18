@@ -25,6 +25,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import llm_usage
 from services import maps_analytics, maps_geocode, maps_image, maps_octants
 from services.google_docs import GoogleDocError, create_google_doc
 from services.markdown_html import markdown_to_html
@@ -687,7 +688,9 @@ async def run_maps_report_job(job: dict) -> None:
         async def _gen_one(result_row: dict):
             async with sem:
                 try:
-                    return result_row, await generate_report_for_result(client, scan_row, result_row), None
+                    # Record the per-keyword narrative LLM spend to the shared ledger.
+                    with llm_usage.usage_context(source="maps_report", client_id=client.get("id")):
+                        return result_row, await generate_report_for_result(client, scan_row, result_row), None
                 except Exception as exc:  # noqa: BLE001 — isolate per-keyword failure
                     return result_row, None, exc
 

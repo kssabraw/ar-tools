@@ -34,7 +34,7 @@ from bs4 import BeautifulSoup
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import dataforseo_labs, serp_snapshot
+from services import dataforseo_labs, llm_usage, serp_snapshot
 from services.dataforseo_rank import extract_domain
 from services.forecasting import ctr_for_position
 from services.page_structure_eval import (
@@ -1390,6 +1390,13 @@ async def _deep_dimensions(
         )
         if score_result is None:
             unavailable.append("onpage_score")
+        else:
+            # Record the nlp /score-page Claude spend (source/client from the job context).
+            _tu = score_result.get("token_usage") or {}
+            llm_usage.record(provider="anthropic", model=_tu.get("model") or "claude-sonnet-4-6",
+                             operation="content_gap_score",
+                             input_tokens=_tu.get("input_tokens") or 0,
+                             output_tokens=_tu.get("output_tokens") or 0)
     else:
         unavailable.append("onpage_score_no_client_url")
 
@@ -1563,20 +1570,21 @@ async def run_content_gap_scan_job(job: dict) -> None:
                 n = estimate_deep_calls(len(competitors), page_traffic_enabled)
                 if _reserve(n):
                     domain_rows = _snapshot_domain_rows(supabase, snap["id"])
-                    gap, onpage_diff = await _deep_dimensions(
-                        keyword=keyword,
-                        client_url=page_url,
-                        client_domain=client_domain,
-                        business=business,
-                        competitors=competitors,
-                        result_rows=result_rows,
-                        domain_rows=domain_rows,
-                        aio_present=aio_present,
-                        aio_sources=aio_sources,
-                        location_code=snap.get("location_code"),
-                        entity_provider=entity_provider,
-                        page_traffic_enabled=page_traffic_enabled,
-                    )
+                    with llm_usage.usage_context(source="content_gap", client_id=client_id):
+                        gap, onpage_diff = await _deep_dimensions(
+                            keyword=keyword,
+                            client_url=page_url,
+                            client_domain=client_domain,
+                            business=business,
+                            competitors=competitors,
+                            result_rows=result_rows,
+                            domain_rows=domain_rows,
+                            aio_present=aio_present,
+                            aio_sources=aio_sources,
+                            location_code=snap.get("location_code"),
+                            entity_provider=entity_provider,
+                            page_traffic_enabled=page_traffic_enabled,
+                        )
                     deep_analyzed += 1
                 else:
                     budget_limited += 1

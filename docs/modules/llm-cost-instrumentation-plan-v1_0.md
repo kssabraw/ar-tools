@@ -1,6 +1,6 @@
 # LLM cost instrumentation — capturing the unrecorded LLM spend
 
-**Status:** Increments 1–3 built 2026-09-18 (foundation + AI Visibility + KW/Topic-research LLM layers + the conversational agents SerMaStr/PACE/DORA). Ancillary sources pending.
+**Status:** Increments 1–4 built 2026-09-18 (foundation + AI Visibility + KW/Topic-research LLM layers + the conversational agents + the ancillary sources: maps/rank-analysis narratives, Brand Guide generation, Content Gap, Website Builder theme+core-pages). Brand-voice/ICP scans deferred (need an nlp-api change to return usage).
 
 ## Problem
 
@@ -73,9 +73,19 @@ recorded by platform-api. pipeline-api + platform-api both write the ledger.
    `interpret` / `interpret_portfolio` (SerMaStr), `interpret_pace` (PACE), and `interpret_dora`
    (DORA) pass their source + client. Actor attribution for chat turns is a follow-up (the
    brain functions don't currently receive the initiating profile).
-4. **Ancillary (pending).** Website Builder + Brand Guide generation, brand-voice/ICP scans,
-   content-gap, and the maps / rank-analysis narratives (the last are cheap now — they use
-   report_llm, so wrapping their generate calls in a `usage_context` records them).
+4. **Ancillary (built, platform-side).** Each wraps its generate call in a `usage_context`
+   so the report_llm calls record (maps/rank narratives, Brand Guide synthesis, Website
+   Builder theme `assign_roles` + `generate_core_page`); the Brand Guide **vibe** read is a
+   direct Anthropic call recorded explicitly; **Content Gap** records the nlp `/score-page`
+   `token_usage` it already receives. Sources: `maps_report`, `rank_analysis`, `brand_guide`,
+   `content_gap`, `website_builder`.
+5. **Deferred (need an nlp-api change).** The **brand-voice** (`/analyze-brand-voice`) and
+   **ICP** (`/analyze-business`) scans run 3 Claude calls *inside* nlp, whose responses don't
+   return token usage today (unlike `/score-page`). Capturing them means summing + returning
+   usage from those nlp handlers (a deploy of the critical nlp service) + recording platform-
+   side. Also deferred: recording the nlp page-generation usage for Website Builder's
+   service/location/matrix pages (it returns usage, same pattern as Content Gap). Both are
+   low-frequency / lower-priority.
 
 ## Open item — pricing for non-Anthropic models
 
