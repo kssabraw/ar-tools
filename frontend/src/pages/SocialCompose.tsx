@@ -91,7 +91,11 @@ const CAROUSEL_MIN_SLIDES = 2
 const YOUTUBE_TITLE_MAX = 100   // mirrors backend settings.social_youtube_title_max
 const CAROUSEL_MAX_SLIDES = 10  // mirrors settings.social_carousel_max_slides
 
-const MAX_UPLOAD_MB = 200 // mirrors settings.social_max_upload_mb
+const MAX_UPLOAD_MB = 200 // mirrors settings.social_max_upload_mb (server multipart cap)
+// Videos over the server cap upload straight to R2 via a presigned PUT (queue #4),
+// so multi-GB bytes never route through the API. Advisory client-side ceiling —
+// R2's real single-PUT limit is ~5 GB.
+const MAX_VIDEO_MB = 2048
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
 const VIDEO_TYPES = ['video/mp4', 'video/quicktime']
 
@@ -134,10 +138,39 @@ function validateFile(file: File, expect: 'image' | 'video'): string | null {
   if (!types.includes(file.type)) {
     return `Unsupported ${expect} type (${file.type || 'unknown'}). Allowed: ${types.join(', ')}.`
   }
-  if (file.size > MAX_UPLOAD_MB * 1024 * 1024) {
-    return `File is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the ${MAX_UPLOAD_MB} MB limit.`
+  // Videos over the server cap upload direct-to-R2 (presigned PUT), so allow up to
+  // MAX_VIDEO_MB; images still route through the server, capped at MAX_UPLOAD_MB.
+  const capMb = expect === 'video' ? MAX_VIDEO_MB : MAX_UPLOAD_MB
+  if (file.size > capMb * 1024 * 1024) {
+    return `File is ${(file.size / 1024 / 1024).toFixed(0)} MB — over the ${capMb} MB limit.`
   }
   return null
+}
+
+interface PresignResult { upload_url: string; public_url: string; type: string; headers: Record<string, string> }
+
+// Big video → straight to R2 via a presigned PUT: request the URL, then PUT the
+// file cross-origin (no auth header — the presigned URL carries the signature;
+// the exact Content-Type it was signed with must be sent back). Keeps multi-GB
+// bytes out of the API. Requires the R2 bucket CORS policy allowing PUT from this
+// origin (see docs/modules/social-media/HANDOFF.md) — a missing policy surfaces as
+// a failed preflight, reported clearly below.
+async function presignAndPutVideo(clientId: string, file: File): Promise<string> {
+  const signed = await api.post<PresignResult>(
+    `/clients/${clientId}/social/media/presign`, { content_type: file.type },
+  )
+  let res: Response
+  try {
+    res = await fetch(signed.upload_url, { method: 'PUT', headers: signed.headers, body: file })
+  } catch {
+    throw new Error(
+      'Direct upload to storage was blocked (likely the R2 CORS policy isn’t configured for large videos yet) — tell an admin.',
+    )
+  }
+  if (!res.ok) {
+    throw new Error(`Direct upload to storage failed (HTTP ${res.status}). Please try again, or tell an admin if it persists.`)
+  }
+  return signed.public_url
 }
 
 // ── AI copy drafting panel ────────────────────────────────────────────────────
@@ -1194,6 +1227,13 @@ export function SocialCompose() {
       for (const file of list) {
         const bad = validateFile(file, expect)
         if (bad) { setUploadError(bad); continue }
+        // A video over the server multipart cap goes straight to R2 via a presigned
+        // PUT; everything else (images, and videos ≤ the cap) keeps the server path,
+        // so the common case has no dependency on the R2 CORS policy.
+        if (expect === 'video' && file.size > MAX_UPLOAD_MB * 1024 * 1024) {
+          setVideo(await presignAndPutVideo(clientId, file))
+          continue
+        }
         const form = new FormData()
         form.append('file', file)
         const res = await api.upload<UploadResult>(`/clients/${clientId}/social/media`, form)
