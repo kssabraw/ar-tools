@@ -11,6 +11,7 @@ FB = {"platform": "facebook", "char_limit": 63206, "max_images": 10, "requires_i
 IG = {"platform": "instagram", "char_limit": 2200, "max_images": 10, "requires_image": True}
 X = {"platform": "twitter", "char_limit": 280, "max_images": 4, "requires_image": False}
 PIN = {"platform": "pinterest", "char_limit": 500, "max_images": 1, "requires_image": True}
+YT = {"platform": "youtube", "char_limit": 5000, "max_images": 0, "requires_image": False}
 
 
 def img(*urls):
@@ -95,6 +96,55 @@ def test_validate_carousel_needs_multiple_items():
     too_many = img(*[f"https://i/{n}.jpg" for n in range(11)])
     assert any(h.startswith("too_many_images")
                for h in publish.validate_post("instagram", "cap", too_many, IG, fmt="carousel")["hard"])
+
+
+def test_validate_youtube_video_and_title():
+    # A YouTube post = exactly one video, no images, a non-empty title (as description).
+    assert publish.validate_post("youtube", "desc", vid("https://v/a.mp4"), YT, title="My Video")["hard"] == []
+    # missing title → blocked
+    assert "youtube_title_required" in publish.validate_post("youtube", "desc", vid("https://v/a.mp4"), YT, title="  ")["hard"]
+    assert "youtube_title_required" in publish.validate_post("youtube", "desc", vid("https://v/a.mp4"), YT)["hard"]
+    # an image is not allowed on a YouTube post
+    v = publish.validate_post("youtube", "desc", vid("https://v/a.mp4") + img("https://i/a.jpg"), YT, title="T")
+    assert any(h.startswith("youtube_no_images") for h in v["hard"])
+    # no video (only a title/copy) → blocked
+    assert any(h.startswith("youtube_requires_one_video")
+               for h in publish.validate_post("youtube", "desc", [], YT, title="T")["hard"])
+    # two videos → blocked
+    assert any(h.startswith("youtube_requires_one_video")
+               for h in publish.validate_post("youtube", "desc", vid("a", "b"), YT, title="T")["hard"])
+
+
+def test_validate_youtube_title_too_long():
+    long_title = "x" * 101   # over the 100-char cap
+    v = publish.validate_post("youtube", "desc", vid("https://v/a.mp4"), YT, title=long_title)
+    assert any(h.startswith("youtube_title_too_long") for h in v["hard"])
+    assert publish.validate_post("youtube", "desc", vid("https://v/a.mp4"), YT, title="x" * 100)["hard"] == []
+
+
+def test_build_youtube_config_title_and_defaults():
+    # Defaults applied; the first-class title always present.
+    cfg = publish.build_youtube_config("  My Video  ", None, default_privacy="public", default_made_for_kids=False)
+    assert cfg == {"privacy_status": "public", "made_for_kids": False, "title": "My Video"}
+    # User advanced-JSON overrides the defaults, but the first-class title still wins.
+    cfg2 = publish.build_youtube_config(
+        "Real Title",
+        {"privacy_status": "unlisted", "tags": ["a"], "title": "ignored"},
+        default_privacy="public",
+        default_made_for_kids=False,
+    )
+    assert cfg2["privacy_status"] == "unlisted"   # user wins over default
+    assert cfg2["tags"] == ["a"]                  # passthrough preserved
+    assert cfg2["title"] == "Real Title"          # first-class title beats user JSON
+    assert cfg2["made_for_kids"] is False
+
+
+def test_build_youtube_config_uses_settings_defaults():
+    # With no explicit defaults it falls back to config (public / not-for-kids).
+    cfg = publish.build_youtube_config("T")
+    assert cfg["title"] == "T"
+    assert cfg["privacy_status"] == "public"
+    assert cfg["made_for_kids"] is False
 
 
 def test_validate_feed_default_unchanged():

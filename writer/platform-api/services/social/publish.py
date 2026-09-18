@@ -47,12 +47,46 @@ def build_media(
     return media
 
 
+def build_youtube_config(
+    title: Optional[str],
+    platform_specific: Optional[dict] = None,
+    default_privacy: Optional[str] = None,
+    default_made_for_kids: Optional[bool] = None,
+) -> dict:
+    """The ``platform_configurations.youtube`` block for a YouTube post (folded into
+    the draft's ``platform_metadata``; the adapter nests it under
+    ``platform_configurations.youtube`` at the edge). Pure.
+
+    A YouTube post REQUIRES a ``title`` (distinct from the caption, which the API
+    maps to the video description). ``title`` is the only first-class UI field;
+    ``privacy_status`` + ``made_for_kids`` are safe defaults so a title-only compose
+    still produces a working post. Precedence, low→high: the defaults, then anything
+    the user typed in the advanced per-platform JSON, then the first-class title
+    (always wins). Only ``title`` is confirmed against the vendor doc — the privacy/
+    kids field names are unverified against the live spec (flagged for the first
+    live post); they're passthrough, so a wrong name is ignored, not fatal."""
+    cfg: dict = {}
+    dp = default_privacy if default_privacy is not None else settings.social_youtube_default_privacy
+    if dp:
+        cfg["privacy_status"] = dp
+    dk = (
+        default_made_for_kids
+        if default_made_for_kids is not None
+        else settings.social_youtube_default_made_for_kids
+    )
+    cfg["made_for_kids"] = bool(dk)
+    cfg.update(platform_specific or {})   # user advanced JSON overrides the defaults
+    cfg["title"] = (title or "").strip()  # the first-class title always wins
+    return cfg
+
+
 def validate_post(
     platform: str,
     copy: str,
     media: Optional[list[dict]],
     spec: Optional[dict],
     fmt: str = "feed",
+    title: Optional[str] = None,
 ) -> dict:
     """Deterministic Platform-Spec check (PRD §6). {"hard": [...], "warnings": [...]}:
     a hard violation blocks approval/publish; a warning is advisory. ``fmt`` layers
@@ -65,10 +99,16 @@ def validate_post(
       never a violation, and a supplied caption is an advisory ``story_caption_ignored``.
     - ``carousel`` → require at least 2 media items (a one-item carousel is just a
       feed post); the per-spec ``max_images`` (≤10) still caps the count.
+
+    ``platform == "youtube"`` layers a platform-level rule (independent of ``fmt``):
+    a YouTube post is exactly ONE video, NO images, and a non-empty ``title``
+    (2–``social_youtube_title_max`` chars — distinct from the caption, which becomes
+    the video description).
     """
     copy = copy or ""
     media = media or []
     fmt = (fmt or "feed").lower()
+    platform = (platform or "").lower()
     images = [m for m in media if (m.get("type") or "image") == "image"]
     videos = [m for m in media if m.get("type") == "video"]
     hard: list[str] = []
@@ -94,6 +134,20 @@ def validate_post(
     elif fmt == "carousel":
         if len(media) < 2:
             hard.append(f"carousel_needs_multiple:{len(media)}")
+
+    # YouTube (platform-level, any fmt): a post is exactly one video, no images, and
+    # a required title. Uploads an existing video — no generation (queue #3 scope).
+    if platform == "youtube":
+        if images:
+            hard.append(f"youtube_no_images:{len(images)}")
+        if len(videos) != 1:
+            hard.append(f"youtube_requires_one_video:{len(videos)}")
+        t = (title or "").strip()
+        title_max = int(settings.social_youtube_title_max)
+        if not t:
+            hard.append("youtube_title_required")
+        elif len(t) > title_max:
+            hard.append(f"youtube_title_too_long:{len(t)}>{title_max}")
 
     if spec:
         char_limit = spec.get("char_limit")
@@ -403,10 +457,15 @@ def create_post(
     video_urls: Optional[list[str]] = None,
     platform_specific: Optional[dict] = None,
     fmt: str = "feed",
+    title: Optional[str] = None,
     scheduled_at: Optional[datetime] = None,
 ) -> dict:
     """Compose one platform-native post and publish it now, or schedule it for a
-    future time. Validates against the Platform Spec (hard violation → 422) first."""
+    future time. Validates against the Platform Spec (hard violation → 422) first.
+
+    ``title`` is the YouTube video title (required for YouTube, ignored elsewhere) —
+    a first-class field distinct from the caption; it's folded into the YouTube
+    ``platform_configurations`` block below and the adapter nests it at the edge."""
     _assert_enabled()
     # Compose-time gate: always enforce "profile is set" + a fast 403 when PostPeer
     # is reachable, but tolerate a PostPeer outage (require_live=False) so a blip
@@ -414,9 +473,15 @@ def create_post(
     _assert_account_allowed(client_id, account_id, require_live=False)
     platform = (platform or "").lower()
     media = build_media(image_urls, video_urls)
-    verdict = validate_post(platform, copy, media, _platform_spec(platform), fmt=fmt)
+    verdict = validate_post(platform, copy, media, _platform_spec(platform), fmt=fmt, title=title)
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
+
+    # Fold the first-class YouTube title (+ safe privacy/made-for-kids defaults) into
+    # the platform_specific block so it rides through to platform_configurations.youtube
+    # at the adapter edge. User advanced-JSON keys still win over the defaults.
+    if platform == "youtube":
+        platform_specific = build_youtube_config(title, platform_specific)
 
     scheduled_iso = _ensure_future_iso(scheduled_at) if scheduled_at else None
 

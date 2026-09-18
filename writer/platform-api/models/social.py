@@ -46,6 +46,7 @@ class SocialPostCreateRequest(BaseModel):
     video_urls: list[str] = Field(default_factory=list)
     platform_specific: Optional[dict] = None
     format: str = "feed"
+    title: Optional[str] = None   # YouTube video title (required for YouTube; ignored elsewhere)
     scheduled_at: Optional[datetime] = None   # future time to publish; omit = now
 
 

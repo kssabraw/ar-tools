@@ -62,6 +62,20 @@ def test_build_post_payload_shapes():
     }
 
 
+def test_build_post_payload_youtube_title_config():
+    # A YouTube post carries its title (+ config) under platform_configurations.youtube
+    # — the passthrough already nests it at the adapter edge (no youtube-specific code).
+    p = pfm.build_post_payload(
+        "spc_yt", "youtube", "video description",
+        media=[{"type": "video", "url": "https://v/a.mp4"}],
+        platform_specific={"title": "My Video", "privacy_status": "public", "made_for_kids": False},
+    )
+    assert p["media"] == [{"url": "https://v/a.mp4"}]
+    assert p["platform_configurations"] == {
+        "youtube": {"title": "My Video", "privacy_status": "public", "made_for_kids": False}
+    }
+
+
 def test_placement_config_reels_stories_ig_fb_only():
     # Instagram + Facebook route reel/story via placement; timeline is the default.
     assert pfm.placement_config("instagram", "reel") == {"placement": "reels"}

@@ -45,7 +45,7 @@ const SPECS: Record<string, Spec> = {
   facebook: { label: 'Facebook', charLimit: 63206, maxImages: 10, maxVideos: 1, requiresImage: false, enforced: true },
   instagram: { label: 'Instagram', charLimit: 2200, maxImages: 10, maxVideos: 1, requiresImage: true, note: 'Instagram requires at least one image or video.', enforced: true },
   pinterest: { label: 'Pinterest', charLimit: 500, maxImages: 1, maxVideos: 0, requiresImage: true, note: 'A pin requires exactly one image.', enforced: true },
-  youtube: { label: 'YouTube', charLimit: 5000, maxImages: 0, maxVideos: 1, requiresImage: true, enforced: true },
+  youtube: { label: 'YouTube', charLimit: 5000, maxImages: 0, maxVideos: 1, requiresImage: false, note: 'YouTube posts a video with a required title; the caption is the video description.', enforced: true },
   linkedin: { label: 'LinkedIn', charLimit: 3000, maxImages: 9, maxVideos: 1, requiresImage: false, note: 'Feed posts only; mentions org-only.', enforced: true },
   tiktok: { label: 'TikTok', charLimit: 2200, maxImages: 0, maxVideos: 1, requiresImage: true, enforced: false },
   threads: { label: 'Threads', charLimit: 500, maxImages: 10, maxVideos: 1, requiresImage: false, enforced: false },
@@ -88,6 +88,7 @@ const formatsForMany = (platforms: string[]): string[] => {
   return shared.length ? shared : ['feed']
 }
 const CAROUSEL_MIN_SLIDES = 2
+const YOUTUBE_TITLE_MAX = 100   // mirrors backend settings.social_youtube_title_max
 const CAROUSEL_MAX_SLIDES = 10  // mirrors settings.social_carousel_max_slides
 
 const MAX_UPLOAD_MB = 200 // mirrors settings.social_max_upload_mb
@@ -490,9 +491,12 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
   const [jobId, setJobId] = useState<string | null>(null)
   const [angleSetId, setAngleSetId] = useState<string | null>(null)
 
-  // Distinct platforms the client can actually publish to.
+  // Distinct platforms the client can actually publish to. YouTube is excluded from
+  // fan-out — it's video-only + Compose-only (fan-out has no AI video), so a YouTube
+  // account is used from the Compose tab, never fanned out (backend enforces too).
   const availablePlatforms = useMemo(
-    () => Array.from(new Set(accounts.map((a) => a.platform.toLowerCase()))), [accounts])
+    () => Array.from(new Set(accounts.map((a) => a.platform.toLowerCase())))
+      .filter((p) => p !== 'youtube'), [accounts])
 
   // Formats valid for every selected platform; reset a now-invalid choice.
   const formatOptions = useMemo(() => formatsForMany(platforms), [platforms])
@@ -1148,6 +1152,7 @@ export function SocialCompose() {
   const spec = specFor(platform)
 
   const [copy, setCopy] = useState('')
+  const [youtubeTitle, setYoutubeTitle] = useState('')
   const [images, setImages] = useState<string[]>([])
   const [video, setVideo] = useState<string | null>(null)
   const [format, setFormat] = useState('feed')
@@ -1162,6 +1167,9 @@ export function SocialCompose() {
   const isStory = format === 'story'
   const isReel = format === 'reel'
   const isCarousel = format === 'carousel'
+  // YouTube posts an existing video with a REQUIRED title (distinct from the caption,
+  // which becomes the video description). Compose-only — no AI video, no fan-out.
+  const isYouTube = platform === 'youtube'
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
   const [scheduledLocal, setScheduledLocal] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -1206,7 +1214,13 @@ export function SocialCompose() {
     const out: string[] = []
     const hasMedia = images.length > 0 || Boolean(video)
     const mediaCount = images.length + (video ? 1 : 0)
-    if (isReel) {
+    if (isYouTube) {
+      if (!video) out.push('A YouTube post needs a video — upload one to publish.')
+      if (images.length) out.push('YouTube posts don’t use images — just the video.')
+      const t = youtubeTitle.trim()
+      if (!t) out.push('A YouTube post needs a title.')
+      else if (t.length > YOUTUBE_TITLE_MAX) out.push(`Title is ${t.length} / ${YOUTUBE_TITLE_MAX} characters — over the YouTube limit.`)
+    } else if (isReel) {
       if (!video) out.push('A Reel needs a video — add one to publish.')
       if (images.length) out.push('Reels don’t support images — a Reel is a single video.')
     } else if (isStory) {
@@ -1223,7 +1237,7 @@ export function SocialCompose() {
       out.push(`${images.length} images — ${spec.label} allows at most ${spec.maxImages}.`)
     if (video && spec.maxVideos === 0) out.push(`${spec.label} doesn’t support video.`)
     return out
-  }, [copy, images, video, spec, isStory, isReel, isCarousel])
+  }, [copy, images, video, spec, isStory, isReel, isCarousel, isYouTube, youtubeTitle])
 
   const warnings = useMemo(() => {
     const out: string[] = []
@@ -1262,11 +1276,12 @@ export function SocialCompose() {
         video_urls: video ? [video] : [],
         platform_specific,
         format,
+        title: isYouTube ? youtubeTitle.trim() : undefined,   // YouTube video title (required)
         scheduled_at,
       })
     },
     onSuccess: () => {
-      setCopy(''); setImages([]); setVideo(null); setPlatformSpecificText('')
+      setCopy(''); setYoutubeTitle(''); setImages([]); setVideo(null); setPlatformSpecificText('')
       setScheduleMode('now'); setScheduledLocal(''); setFormat('feed')
       void qc.invalidateQueries({ queryKey: ['social-posts', clientId] })
     },
@@ -1348,6 +1363,27 @@ export function SocialCompose() {
             )}
           </div>
 
+          {/* YouTube title — REQUIRED, distinct from the caption (which becomes the
+              video description). Shown only for YouTube. */}
+          {isYouTube && (
+            <div style={{ marginBottom: 14 }}>
+              <label style={label}>Video title <span style={{ color: '#b91c1c' }}>*</span></label>
+              <input
+                style={input}
+                value={youtubeTitle}
+                onChange={(e) => setYoutubeTitle(e.target.value)}
+                placeholder="Your YouTube video title"
+                maxLength={YOUTUBE_TITLE_MAX}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>Required. The post caption below becomes the video description.</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: youtubeTitle.trim().length > YOUTUBE_TITLE_MAX ? '#b91c1c' : '#94a3b8' }}>
+                  {youtubeTitle.trim().length} / {YOUTUBE_TITLE_MAX}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* AI copy drafting — a Story has no caption, so no copy to draft. */}
           {!isStory && (
             <AiDraftPanel
@@ -1359,15 +1395,16 @@ export function SocialCompose() {
             />
           )}
 
-          {/* copy — hidden for Stories (they carry no caption / link stickers) */}
+          {/* copy — hidden for Stories (they carry no caption / link stickers).
+              For YouTube the caption is the video DESCRIPTION. */}
           {!isStory ? (
             <div style={{ marginBottom: 14 }}>
-              <label style={label}>Post copy</label>
+              <label style={label}>{isYouTube ? 'Video description' : 'Post copy'}</label>
               <textarea
                 style={{ ...input, minHeight: 120, resize: 'vertical' }}
                 value={copy}
                 onChange={(e) => setCopy(e.target.value)}
-                placeholder={`Write your ${spec.label} post…`}
+                placeholder={isYouTube ? 'Describe your video…' : `Write your ${spec.label} post…`}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
                 <span style={{ fontSize: 11, color: '#94a3b8' }}>{spec.note ?? ''}</span>
