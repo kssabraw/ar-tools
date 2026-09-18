@@ -117,6 +117,14 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
     }
 
     result = await _post_nlp("/analyze-business", payload, user_id=user_id)
+    # Record the nlp-side Claude spend (returned by /analyze-business) to the ledger.
+    _tu = (result or {}).get("token_usage") or {}
+    if _tu:
+        from services import llm_usage
+        llm_usage.record(provider="anthropic", model=_tu.get("model"),
+                         source="icp_scan", client_id=client_id, actor_id=user_id,
+                         input_tokens=_tu.get("input_tokens") or 0,
+                         output_tokens=_tu.get("output_tokens") or 0)
     icp = result.get("detected_icp") or {}
     diffs = result.get("differentiators") or []
 

@@ -252,6 +252,14 @@ async def scan(client_id: str, force: bool, user_id: str) -> dict:
     }
 
     result = await _post_nlp("/analyze-brand-voice", payload, user_id=user_id)
+    # Record the nlp-side Claude spend (returned by /analyze-brand-voice) to the ledger.
+    _tu = (result or {}).get("token_usage") or {}
+    if _tu:
+        from services import llm_usage
+        llm_usage.record(provider="anthropic", model=_tu.get("model"),
+                         source="brand_voice_scan", client_id=client_id, actor_id=user_id,
+                         input_tokens=_tu.get("input_tokens") or 0,
+                         output_tokens=_tu.get("output_tokens") or 0)
     engine = result.get("brand_voice") or {}
 
     # Preserve any user freeform brand guide (raw_text) — it still supersedes in

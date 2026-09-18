@@ -2999,6 +2999,8 @@ class BusinessAnalysisResponse(BaseModel):
     differentiators: List[dict]
     pages_crawled: int
     analysis_status: str   # "complete" | "partial" | "failed"
+    # Claude token usage for this ICP scan (platform-api records it in the cost ledger).
+    token_usage: Optional[dict] = None
 
 
 class BrandVoiceRequest(BaseModel):
@@ -3011,6 +3013,8 @@ class BrandVoiceRequest(BaseModel):
 class BrandVoiceResponse(BaseModel):
     brand_voice: Optional[dict]
     pages_sampled: int
+    # Claude token usage for this scan (platform-api records it in the cost ledger).
+    token_usage: Optional[dict] = None
 
 
 STATE_ABBREVS = {
@@ -3715,6 +3719,12 @@ Return only valid JSON, no markdown or explanation."""
             text = re.sub(r'^```(?:json)?\s*', '', text)
             text = re.sub(r'\s*```$', '', text.strip())
         result = _loads_lenient(text)
+        if isinstance(result, dict):
+            result["token_usage"] = {
+                "model": "claude-haiku-4-5-20251001",
+                "input_tokens": usage.input_tokens,
+                "output_tokens": usage.output_tokens,
+            }
         return result
 
     except Exception as e:
@@ -3816,6 +3826,11 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
     content_text = "\n\n---\n\n".join(page_contents) if page_contents else ""
 
     client = _anthropic_client(max_retries=ANTHROPIC_MAX_RETRIES)
+
+    # Accumulate Claude token usage across all (up to 3) calls so platform-api can
+    # record this scan's spend in the shared cost ledger.
+    _tok_in = 0
+    _tok_out = 0
 
     # Tool definitions force structured JSON output — Anthropic validates against
     # the schema server-side, so we can't hit a JSON parse error from unescaped
@@ -3935,6 +3950,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
                 messages=[{'role': 'user', 'content': prompt_recommended_no_site}],
             )
             u_rec = msg_rec.usage
+            _tok_in += u_rec.input_tokens; _tok_out += u_rec.output_tokens
             logger.info(f"Brand voice (no-site recommended) — input: {u_rec.input_tokens}, output: {u_rec.output_tokens}")
             recommended_voice = _extract_tool_input(msg_rec, "submit_brand_voice")
             current_voice = None  # No website — current voice cannot be analyzed
@@ -3963,6 +3979,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
                 messages=[{'role': 'user', 'content': prompt_current}],
             )
             u1 = msg1.usage
+            _tok_in += u1.input_tokens; _tok_out += u1.output_tokens
             logger.info(f"Brand voice call 1 (current) — input: {u1.input_tokens}, output: {u1.output_tokens}, est. cost: ${(u1.input_tokens * 0.0000008) + (u1.output_tokens * 0.000004):.5f}")
             current_voice = _extract_tool_input(msg1, "submit_brand_voice")
         except Exception as e:
@@ -3995,6 +4012,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
                 messages=[{'role': 'user', 'content': prompt_recommended}],
             )
             u2 = msg2.usage
+            _tok_in += u2.input_tokens; _tok_out += u2.output_tokens
             logger.info(f"Brand voice call 2 (recommended) — input: {u2.input_tokens}, output: {u2.output_tokens}, est. cost: ${(u2.input_tokens * 0.0000008) + (u2.output_tokens * 0.000004):.5f}")
             recommended_voice = _extract_tool_input(msg2, "submit_brand_voice")
         except Exception as e:
@@ -4022,6 +4040,7 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
             messages=[{'role': 'user', 'content': prompt_guide}],
         )
         u3 = msg3.usage
+        _tok_in += u3.input_tokens; _tok_out += u3.output_tokens
         logger.info(f"Brand voice call 3 (guide) — input: {u3.input_tokens}, output: {u3.output_tokens}, est. cost: ${(u3.input_tokens * 0.0000008) + (u3.output_tokens * 0.000004):.5f}")
         guide = _extract_tool_input(msg3, "submit_writer_execution_guide")
     except Exception as e:
@@ -4033,6 +4052,11 @@ async def analyze_brand_voice_with_anthropic(page_contents: List[str], business_
         "recommended_voice": recommended_voice,
         "recommended_accepted": None,   # null = not yet decided
         "writer_execution_guide": guide,
+        "token_usage": {
+            "model": "claude-haiku-4-5-20251001",
+            "input_tokens": _tok_in,
+            "output_tokens": _tok_out,
+        },
     }
 
 
@@ -4245,7 +4269,10 @@ async def run_brand_voice_analysis(body: BrandVoiceRequest) -> BrandVoiceRespons
             detail="Our AI analysis service encountered an error. Please try again.",
         )
 
-    return BrandVoiceResponse(brand_voice=brand_voice, pages_sampled=pages_sampled)
+    # Lift token_usage out of the voice blob so it's a clean response field and
+    # never persisted into the client's stored brand_voice.
+    token_usage = (brand_voice or {}).pop("token_usage", None) if isinstance(brand_voice, dict) else None
+    return BrandVoiceResponse(brand_voice=brand_voice, pages_sampled=pages_sampled, token_usage=token_usage)
 
 
 @app.post('/analyze-brand-voice', response_model=BrandVoiceResponse)
@@ -4423,6 +4450,7 @@ async def run_business_analysis(body: BusinessAnalysisRequest) -> BusinessAnalys
         differentiators=llm_result.get("differentiators", []),
         pages_crawled=len(pages),
         analysis_status=status,
+        token_usage=llm_result.get("token_usage"),
     )
 
 

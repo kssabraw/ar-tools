@@ -165,6 +165,11 @@ def test_ancillary_source_labels_and_groups():
     # content gap is research; website builder is content
     assert ca.group_for("content_gap") == "Research"
     assert ca.group_for("website_builder") == "Content pages"
+    # brand-voice / ICP scans (nlp round-trip) group under Research
+    assert ca.label_for("brand_voice_scan") == "Brand voice scan"
+    assert ca.label_for("icp_scan") == "ICP scan"
+    assert ca.group_for("brand_voice_scan") == "Research"
+    assert ca.group_for("icp_scan") == "Research"
 
 
 def test_aggregate_and_build_model_rows():
