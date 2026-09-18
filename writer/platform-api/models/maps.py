@@ -111,6 +111,10 @@ class MapsScanSummary(BaseModel):
     # show a real "N / M pins" bar so a multi-minute grid scan visibly advances
     # instead of looking stuck (which drove users to cancel + re-run it).
     pins_done: Optional[int] = None
+    # Pins DataForSEO gave up on (unrecoverable grid points). Surfaced so the UI
+    # can count settled pins (done + failed) — a bar that keeps advancing through
+    # the end-of-scan straggler tail instead of freezing at the last "done" pin.
+    pins_failed: Optional[int] = None
     pins_total: Optional[int] = None
 
 

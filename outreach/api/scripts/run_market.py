@@ -2027,6 +2027,46 @@ def resolve_command(env: "dict[str, str]") -> str:
     return (env.get("OUTREACH_COMMAND") or "").strip() or SAFE_COMMAND
 
 
+# The always-on worker command since the 2026-08-10 daemon cutover (DECISIONS.md "Always-on
+# tick-loop worker"). The production service runs THIS so signed orders and geogrid collection
+# drain in SECONDS; a one-shot `tick`/`collect`/`filter` there means the daemon reverted to the
+# pre-daemon 5-minute cron and everything advances in 5-minute bursts.
+STEADY_STATE_WORKER_COMMAND = "tick-loop"
+# The non-daemon "resting / heartbeat" commands that are a REGRESSION when left as the production
+# service command. Paid one-shots (ingest / run / scan / …) are deliberate ephemeral runs someone
+# is actively driving and sets back — NOT the always-on worker — so they are not drift.
+_WORKER_DRIFT_COMMANDS = frozenset({"tick", "collect", SAFE_COMMAND})
+
+
+def worker_drift_warning(command: str, env: "dict[str, str]") -> "str | None":
+    """A warning when the PRODUCTION always-on worker has drifted off the `tick-loop` daemon onto a
+    one-shot cron command, else None. Pure — env in, no I/O.
+
+    The config that runs the daemon (OUTREACH_COMMAND + restartPolicyType) lives on the Railway
+    service dashboard, NOT in railway.toml, so railway.toml cannot enforce it — and it drifted
+    silently once: the service ran a one-shot `tick` on a */5 cron for a stretch, so every order
+    and every geogrid collection advanced only once every 5 minutes ("scans start and stop but
+    eventually finish"). The build banner already prints the resolved command, but it reads the
+    same whether right or wrong; this raises the drift to a distinct WARNING line so it is greppable
+    rather than buried in an info banner.
+
+    Gated to Railway production (RAILWAY_ENVIRONMENT_NAME), so a deliberate local or ephemeral
+    one-shot `tick`/`collect`/`filter` for debugging never warns.
+    """
+    if (env.get("RAILWAY_ENVIRONMENT_NAME") or "").strip().lower() != "production":
+        return None
+    if command == STEADY_STATE_WORKER_COMMAND or command not in _WORKER_DRIFT_COMMANDS:
+        return None
+    return (
+        f"WORKER DRIFT: the production service is running one-shot {command!r}, but the steady "
+        f"state is the always-on {STEADY_STATE_WORKER_COMMAND!r} daemon (DECISIONS.md 2026-08-10). "
+        "Orders and geogrid collection then advance only on the 5-minute cron, not in seconds — "
+        f"the 'scans start and stop but eventually finish' symptom. Restore the daemon: set "
+        f"OUTREACH_COMMAND={STEADY_STATE_WORKER_COMMAND} and restartPolicyType=on_failure on the "
+        "Railway outreach service (keep the */5 cron as the relaunch net)."
+    )
+
+
 def spend_denial(
     command: str, env: "dict[str, str]", *, bills: "bool | None" = None
 ) -> "str | None":
@@ -2335,9 +2375,10 @@ def main() -> int:
 
     import os
 
+    env = dict(os.environ)
     print(
         build_identity(
-            dict(os.environ),
+            env,
             [
                 "seed", "ingest", "filter", "run", "calibrate", "verify-reviews",
                 "probe-dataforseo", "probe-ai-granularity", "scan", "scan-organic", "scan-ai", "scan-tech", "scan-names",
@@ -2348,6 +2389,15 @@ def main() -> int:
         ),
         flush=True,
     )
+
+    # Startup drift check: the daemon config lives on the Railway dashboard (not railway.toml), so
+    # it can revert silently — it did, running one-shot `tick` on a */5 cron. Print a distinct,
+    # greppable WARNING beside the identity banner so the next person sees it immediately, at both
+    # process log severity and as an OUTREACH_DRIFT marker. Advisory only — it never blocks the run.
+    _drift = worker_drift_warning(resolve_command(env), env)
+    if _drift:
+        print(f"OUTREACH_DRIFT {_drift}", flush=True)
+        logging.getLogger("outreach.startup").warning(_drift)
 
     parser = build_parser()
 

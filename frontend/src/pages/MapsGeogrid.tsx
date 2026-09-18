@@ -75,7 +75,9 @@ export function MapsGeogrid() {
   // indeterminate one — the missing signal that led users to cancel + re-run.
   const active = (scans ?? []).find(s => s.status === 'polling' || s.status === 'pending')
   const progress: ScanProgress | null =
-    active && active.pins_total ? { done: active.pins_done ?? 0, total: active.pins_total } : null
+    active && active.pins_total
+      ? { done: active.pins_done ?? 0, failed: active.pins_failed ?? 0, total: active.pins_total }
+      : null
 
   // Badge the "What changed" tab with the unread geo-grid alert count.
   const { data: alerts } = useQuery<MapsAlertsResponse>({
@@ -692,7 +694,7 @@ function RunScanControls({ runner, scanning }: { runner: ScanRunner; scanning: b
 }
 
 /** Live pin progress for an in-flight geo-grid scan. */
-type ScanProgress = { done: number; total: number }
+type ScanProgress = { done: number; failed: number; total: number }
 
 function InProgressBanner({ progress }: { progress?: ScanProgress | null }) {
   const [secs, setSecs] = useState(0)
@@ -705,17 +707,29 @@ function InProgressBanner({ progress }: { progress?: ScanProgress | null }) {
   // A determinate bar once the backend reports pin counts (DataForSEO grids);
   // otherwise the old indeterminate sweep while the first pins are still posting.
   const hasPct = !!(progress && progress.total > 0)
-  const pct = hasPct ? Math.min(99, Math.round(100 * progress!.done / progress!.total)) : null
+  // Count SETTLED pins (resolved + given-up) so the bar keeps climbing through
+  // the end-of-scan tail. A few outer grid points sometimes never return from
+  // the maps provider and are retried before being dropped; counting only the
+  // resolved ones froze the bar at ~86% for minutes and made a working scan look
+  // hung (which drove users to cancel + re-run it).
+  const settled = progress ? progress.done + progress.failed : 0
+  const remaining = progress ? Math.max(0, progress.total - settled) : 0
+  const pct = hasPct ? Math.min(99, Math.round(100 * settled / progress!.total)) : null
+  // Near-done tail: most points are in and only a few stragglers remain. Say so,
+  // so the slow finish reads as expected rather than stuck.
+  const inTail = hasPct && remaining > 0 && settled / progress!.total >= 0.85
   return (
     <div style={{ ...card, display: 'flex', alignItems: 'center', gap: 14, background: '#fffbeb', border: '1px solid #fde68a', marginBottom: 16 }}>
       <span className="ld-spin" style={{ width: 24, height: 24, borderRadius: 999, border: '3px solid #fcd34d', borderTopColor: '#d97706', flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e', display: 'flex', justifyContent: 'space-between' }}>
-          <span>Scan in progress…{hasPct ? ` ${progress!.done} / ${progress!.total} points (${pct}%)` : ''}</span>
+          <span>Scan in progress…{hasPct ? ` ${settled} / ${progress!.total} points (${pct}%)` : ''}</span>
           <span style={{ fontVariantNumeric: 'tabular-nums', color: '#b45309' }}>{mm}:{ss}</span>
         </div>
         <div style={{ fontSize: 13, color: '#b45309', margin: '2px 0 8px' }}>
-          Checking your Maps rank at every point on the grid — a large grid can take 10–15 minutes. The heatmap appears here automatically when it’s done; you can leave this page and it keeps running.
+          {inTail
+            ? `Resolving the final ${remaining} grid point${remaining === 1 ? '' : 's'} — some map areas are slow to return, so the last stretch can take a few extra minutes. The heatmap appears here automatically when it’s done.`
+            : 'Checking your Maps rank at every point on the grid — a large grid can take 10–15 minutes. The heatmap appears here automatically when it’s done; you can leave this page and it keeps running.'}
         </div>
         <div style={{ height: 6, borderRadius: 999, background: '#fde68a', overflow: 'hidden' }}>
           {hasPct ? (
