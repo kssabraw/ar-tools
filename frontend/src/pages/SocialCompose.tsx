@@ -412,7 +412,7 @@ function AiImagePanel({
             </span>
           </div>
           <p style={{ margin: '8px 0 0', fontSize: 11, color: '#94a3b8' }}>
-            One on-brand image via Nano Banana Pro. Uses the client’s monthly social budget
+            One on-brand image via Nano Banana. Uses the client’s monthly social budget
             {cost != null ? ` (last: ~$${cost.toFixed(2)})` : ''}.
           </p>
           {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}

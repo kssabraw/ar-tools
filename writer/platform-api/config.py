@@ -128,7 +128,17 @@ class Settings(BaseSettings):
     # against the fail-closed social budget before spending.
     nano_banana_pro_model: str = "gemini-3-pro-image-preview"   # NANO_BANANA_PRO_MODEL
     social_image_size: str = "2K"                # imageConfig.imageSize (1K/2K/4K)
-    social_image_cost_usd: float = 0.134         # est. USD per generated image (budget)
+    social_image_cost_usd: float = 0.134         # est. USD per Pro image at 2K (budget/fallback)
+    # Mixed image path (queue #5): render social images on **Nano Banana 2**
+    # (gemini-3.1-flash-image) instead of Pro. Nano Banana 2 honors EVERY aspect
+    # ratio via the same imageConfig.aspectRatio API as Pro (the older 2.5-Flash was
+    # 1:1-only), at ~25% under Pro at 2K — so it's the default for all social images
+    # while Pro stays the flag-off fallback. Flip social_image_use_flash=False to
+    # revert to Pro-only (the pre-#5 behavior) with no deploy. Model id is
+    # env-overridable when Google rotates the preview/GA id.
+    social_image_use_flash: bool = True          # SOCIAL_IMAGE_USE_FLASH (off ⇒ Pro-only)
+    social_image_flash_model: str = "gemini-3.1-flash-image"    # SOCIAL_IMAGE_FLASH_MODEL
+    social_image_flash_cost_usd: float = 0.101   # est. USD per Nano Banana 2 image at 2K (budget)
     # IG/Facebook carousel Draft type: ≤10 items, one shared aspect ratio. A fan-out
     # carousel generates N nano-banana Pro slides — each its own paid image (the cost
     # multiplies per slide, reserved individually against the fail-closed budget).

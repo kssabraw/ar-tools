@@ -28,6 +28,58 @@ def test_resolve_aspect_ratio_always_gemini_supported():
             assert image.resolve_aspect_ratio(p, f) in image.GEMINI_ASPECT_RATIOS
 
 
+def test_select_image_model_flash_on_routes_to_flash():
+    out = image.select_image_model(
+        use_flash=True, flash_model="gemini-3.1-flash-image", flash_cost=0.101,
+        pro_model="gemini-3-pro-image-preview", pro_cost=0.134,
+    )
+    assert out == ("gemini-3.1-flash-image", 0.101)
+
+
+def test_select_image_model_flash_off_falls_back_to_pro():
+    out = image.select_image_model(
+        use_flash=False, flash_model="gemini-3.1-flash-image", flash_cost=0.101,
+        pro_model="gemini-3-pro-image-preview", pro_cost=0.134,
+    )
+    assert out == ("gemini-3-pro-image-preview", 0.134)
+
+
+def test_select_image_model_blank_flash_model_falls_back_to_pro():
+    # A misconfigured/empty flash model id can never route away from a real model.
+    for bad in ("", "   ", None):
+        out = image.select_image_model(
+            use_flash=True, flash_model=bad, flash_cost=0.101,
+            pro_model="gemini-3-pro-image-preview", pro_cost=0.134,
+        )
+        assert out == ("gemini-3-pro-image-preview", 0.134)
+
+
+def test_select_image_model_strips_flash_model_whitespace():
+    out = image.select_image_model(
+        use_flash=True, flash_model="  gemini-3.1-flash-image  ", flash_cost=0.101,
+        pro_model="gemini-3-pro-image-preview", pro_cost=0.134,
+    )
+    assert out == ("gemini-3.1-flash-image", 0.101)
+
+
+def test_select_image_model_default_config_routes_to_flash():
+    # The shipped defaults (queue #5 ON) route every social image to Nano Banana 2.
+    from config import settings
+
+    assert settings.social_image_use_flash is True
+    model, cost = image.select_image_model(
+        use_flash=settings.social_image_use_flash,
+        flash_model=settings.social_image_flash_model,
+        flash_cost=float(settings.social_image_flash_cost_usd),
+        pro_model=settings.nano_banana_pro_model,
+        pro_cost=float(settings.social_image_cost_usd),
+    )
+    assert model == settings.social_image_flash_model
+    assert cost == float(settings.social_image_flash_cost_usd)
+    # Cheaper than the Pro fallback — the whole point of the mixed path.
+    assert cost < float(settings.social_image_cost_usd)
+
+
 def test_ext_for_mime():
     assert image.ext_for_mime("image/png") == "png"
     assert image.ext_for_mime("image/jpeg") == "jpg"
