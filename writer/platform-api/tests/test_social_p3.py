@@ -299,6 +299,45 @@ def test_upsert_policy_filters_and_validates_ceiling(monkeypatch):
     assert up["client_id"] == "c1"
 
 
+def test_upsert_schedule_rejects_out_of_range(monkeypatch):
+    monkeypatch.setattr(schedules, "_sb", lambda: _fake_sb({}))
+    monkeypatch.setattr(schedules.gbp_timezone, "resolve_client_timezone", lambda c: "UTC")
+    # hour ≥ 24 (would ValueError inside compute_next_run_at → 500)
+    with pytest.raises(HTTPException) as e:
+        schedules.upsert_schedule("c1", {"platform": "instagram", "cadence": "weekly", "hour_local": 25}, None)
+    assert e.value.status_code == 422 and e.value.detail == "social_schedule_invalid_hour"
+    # day_of_month ≥ 29 (would poison the sweep in a 30-day month)
+    with pytest.raises(HTTPException) as e:
+        schedules.upsert_schedule("c1", {"platform": "instagram", "cadence": "monthly", "day_of_month": 31}, None)
+    assert e.value.detail == "social_schedule_invalid_day"
+    # day_of_week > 6
+    with pytest.raises(HTTPException) as e:
+        schedules.upsert_schedule("c1", {"platform": "instagram", "cadence": "weekly", "day_of_week": 7}, None)
+    assert e.value.detail == "social_schedule_invalid_day"
+
+
+def test_upsert_schedule_valid_persists(monkeypatch):
+    store: dict = {}
+    monkeypatch.setattr(schedules, "_sb", lambda: _fake_sb(store))
+    monkeypatch.setattr(schedules.gbp_timezone, "resolve_client_timezone", lambda c: "UTC")
+    schedules.upsert_schedule("c1", {"platform": "Instagram", "cadence": "monthly", "day_of_month": 28, "hour_local": 9}, "u1")
+    up = store["upserts"][-1][1]
+    assert up["platform"] == "instagram" and up["day_of_month"] == 28 and up["next_run_at"]
+
+
+def test_list_calendar_naive_bounds_dont_crash(monkeypatch):
+    rows = [
+        {"id": "a", "scheduled_at": "2026-09-20T09:00:00+00:00", "published_at": None, "created_at": "2026-09-18T00:00:00+00:00"},
+        {"id": "b", "scheduled_at": None, "published_at": "2026-09-10T00:00:00+00:00", "created_at": "2026-09-10T00:00:00+00:00"},
+    ]
+    monkeypatch.setattr(publish, "_sb", lambda: _fake_sb({"rows": {"social_posts": rows}}))
+    # naive bounds (a datetime-local query with no tz) must not raise TypeError
+    frm = datetime(2026, 9, 19, 0, 0)   # naive
+    to = datetime(2026, 9, 21, 0, 0)    # naive
+    out = publish.list_calendar("c1", frm, to)
+    assert [r["id"] for r in out] == ["a"]   # 'a' scheduled in window; 'b' published before it
+
+
 def test_get_policy_defaults(monkeypatch):
     monkeypatch.setattr(settings, "social_monthly_ceiling_default_usd", 100.0)
     monkeypatch.setattr(policy, "_sb", lambda: _fake_sb({"rows": {"social_policy": []}}))

@@ -498,6 +498,13 @@ def list_calendar(
     if frm is None and to is None:
         return rows
 
+    # A naive `from`/`to` (a datetime-local query with no tz) would raise TypeError when
+    # compared to the tz-aware stored timestamps below — treat naive bounds as UTC.
+    if frm is not None and frm.tzinfo is None:
+        frm = frm.replace(tzinfo=timezone.utc)
+    if to is not None and to.tzinfo is None:
+        to = to.replace(tzinfo=timezone.utc)
+
     def _in_window(ts: Optional[str]) -> bool:
         if not ts:
             return False

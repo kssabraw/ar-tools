@@ -686,6 +686,16 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'The cadence must be Off, Weekly, Every 2 weeks, or Monthly.',
     steps: ['Pick a cadence from the list and save again.'],
   },
+  social_schedule_invalid_hour: {
+    title: 'That hour is out of range',
+    meaning: 'The posting hour must be 0–23 (the client’s local time).',
+    steps: ['Pick an hour between 0 and 23 and save again.'],
+  },
+  social_schedule_invalid_day: {
+    title: 'That day is out of range',
+    meaning: 'Day of week must be Mon–Sun; day of month must be 1–28 (so it exists every month).',
+    steps: ['Pick a day of month between 1 and 28, then save again.'],
+  },
   unsupported_media_type: {
     title: 'Unsupported file type',
     meaning: 'That file isn’t a supported image or video.',

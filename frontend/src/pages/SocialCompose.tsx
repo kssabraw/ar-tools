@@ -1493,6 +1493,9 @@ function ScheduleEditor({ clientId, platform, accounts, schedule, autoPublishEna
   const [autoFill, setAutoFill] = useState(schedule?.auto_fill ?? false)
   const platAccounts = accounts.filter((a) => a.platform.toLowerCase() === platform)
   const [acct, setAcct] = useState(schedule?.account_id ?? platAccounts[0]?.account_id ?? '')
+  // Default the account once its platform accounts load, if none was set (accounts can
+  // arrive after this editor mounts). Adjust-during-render, matching DraftRow.
+  if (!acct && platAccounts.length) setAcct(platAccounts[0].account_id)
   const [error, setError] = useState<string | null>(null)
 
   const saveMut = useMutation({

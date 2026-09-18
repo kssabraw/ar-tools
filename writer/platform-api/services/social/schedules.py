@@ -120,6 +120,17 @@ def upsert_schedule(client_id: str, req: dict, user_id: Optional[str]) -> dict:
         day_of_week = 0
     if cadence == "monthly" and day_of_month is None:
         day_of_month = 1
+    # Range-guard the fields compute_next_run_at feeds to datetime.replace(): an
+    # out-of-range hour (≥24) or day-of-month (≥29, which .replace(day=) rejects in
+    # short months) would raise ValueError → a 500 here, and a day_of_month=31 stored
+    # in a 31-day month would later poison the sweep in a 30-day month. Reject at the
+    # edge (the frontend already caps these; this defends the API).
+    if not (0 <= hour_local <= 23):
+        raise HTTPException(status_code=422, detail="social_schedule_invalid_hour")
+    if day_of_week is not None and not (0 <= int(day_of_week) <= 6):
+        raise HTTPException(status_code=422, detail="social_schedule_invalid_day")
+    if day_of_month is not None and not (1 <= int(day_of_month) <= 28):
+        raise HTTPException(status_code=422, detail="social_schedule_invalid_day")
     is_active = bool(req.get("is_active", True))
     auto_fill = bool(req.get("auto_fill", False))
     account_id = req.get("account_id") or None
@@ -171,10 +182,25 @@ def enqueue_due_social_schedules() -> int:
         # Advance the clock FIRST (self-clocked) so a failure below can't re-fire this slot.
         prev = _parse_dt(sched.get("next_run_at"))
         tz = gbp_timezone.resolve_client_timezone(cid)
-        next_run = resolve_next_run(
-            now, sched["cadence"], sched.get("day_of_week"),
-            sched.get("day_of_month"), sched["hour_local"], tz, prev=prev,
-        )
+        try:
+            next_run = resolve_next_run(
+                now, sched["cadence"], sched.get("day_of_week"),
+                sched.get("day_of_month"), sched["hour_local"], tz, prev=prev,
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad-config row must never sink the tick
+            # An un-computable next-run (e.g. a legacy/hand-edited day_of_month=31 row) would
+            # otherwise raise here and abort every remaining due schedule this tick. Deactivate
+            # the poison row so it drops out of the due query, and move on.
+            logger.warning("social.schedule_next_run_failed",
+                           extra={"client_id": cid, "platform": platform, "error": str(exc)[:200]})
+            try:
+                _sb().table("social_post_schedules").update(
+                    {"is_active": False, "next_run_at": None, "updated_at": "now()"}
+                ).eq("client_id", cid).eq("platform", platform).execute()
+            except Exception:  # noqa: BLE001 — best-effort deactivation
+                logger.warning("social.schedule_deactivate_failed",
+                               extra={"client_id": cid, "platform": platform})
+            continue
         _sb().table("social_post_schedules").update({
             "last_run_at": now.isoformat(),
             "next_run_at": next_run.isoformat() if next_run else None,
