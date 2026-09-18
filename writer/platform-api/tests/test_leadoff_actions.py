@@ -124,6 +124,8 @@ class TestTryoutEconomics:
         assert r["roi"] == round(r["exp_val"] / 36, 1)
         # no multiplier → flat CPL exposed, value unchanged (byte-identical path)
         assert r["cpl_base"] == 25.0 and r["cpl_modifier"] == 1.0 and r["cpl"] == 25.0
+        # leads exposed so the monetization print can size PPL-shared
+        assert r["est_leads_mo"] == 50
 
     def test_cpc_local_modifier_scales_cpl_and_value(self):
         field = {"Locksmith": {"supply": 20, "avg5": 60.0, "rev_win": 36,

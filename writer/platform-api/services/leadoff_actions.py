@@ -170,6 +170,7 @@ def tryout_rows(demand: dict[str, dict[str, Any]], field: dict[str, dict[str, An
         grade, pct = grade_for(percentile_of(ev, breakpoints), leads, rankab, eff)
         rows.append({
             "grade": grade, "natl_pct": pct, "exp_val": ev, "value_mo": value,
+            "est_leads_mo": leads,  # exposed so the monetization print can size PPL-shared
             "roi": round(ev / max(v["rev_win"], 10), 1), "rankab": rankab,
             "category": cat, "vol": vol, "supply": v["supply"],
             "rev_win": v["rev_win"], "rating": v["rating"],

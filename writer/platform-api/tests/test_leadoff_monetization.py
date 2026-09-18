@@ -35,6 +35,9 @@ def test_attach_is_best_effort_and_reads_row_fields():
     out = lm.attach(dict(row), value_mo_key="value_mo",
                     leads_key="est_leads_mo", cpl_key="cpl")
     assert out["monetization"]["ppl_exclusive_mo"] == 900
+    # PPL-shared needs est_leads_mo on the row (the tryout_rows regression) —
+    # a row with leads present must produce a shared figure, not None.
+    assert out["monetization"]["ppl_shared_mo"] is not None
     # a row missing everything still gets a monetization block (all None), never raises
     out2 = lm.attach({})
     assert "monetization" in out2

@@ -1350,7 +1350,9 @@ function MonetizationBlock({ m, cpl, cplBase, cplModifier }: {
   m?: Monetization | null; cpl?: number | null
   cplBase?: number | null; cplModifier?: number | null
 }) {
-  if (!m) return null
+  // Hide entirely when there's no exclusive value to show (a category with no
+  // CPL on file grades F and has nothing to monetize) — avoids an all-"—" block.
+  if (!m || m.ppl_exclusive_mo == null) return null
   const modified = cplModifier != null && Math.abs(cplModifier - 1) > 0.001
   return (
     <>
