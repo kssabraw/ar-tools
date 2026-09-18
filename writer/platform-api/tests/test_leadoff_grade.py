@@ -5,8 +5,10 @@ exercised here."""
 from services.leadoff_grade import (
     build_grade_row,
     cache_key,
+    grade_market_comps,
     resolve_cpl,
     resolve_service,
+    scoutable,
     thin_demand,
 )
 
@@ -113,3 +115,47 @@ class TestBuildGradeRow:
         assert row["cpl_default"] is True
         assert row["category_id"] is None
         assert "grade" in row                        # a grade was still produced
+
+
+def _grade_row(**over):
+    row = {"status": "complete", "on_catalog": True, "category_id": "plumber",
+           "city_id": 5368304, "category_name": "Plumber",
+           "city_name": "Los Alamitos", "state_code": "CA",
+           "grade": {"grade": "B", "competitors": [
+               {"business_name": "ACME Plumbing", "domain": "acme.com", "phone": "1"},
+               {"business_name": "Bob Pipes", "domain": "bob.com", "phone": "2"}]}}
+    row.update(over)
+    return row
+
+
+class TestScoutable:
+    def test_on_catalog_complete_with_comps_is_scoutable(self):
+        assert scoutable(_grade_row()) is None
+
+    def test_incomplete_grade_not_scoutable(self):
+        assert scoutable(_grade_row(status="running")) == "grade_not_ready"
+
+    def test_off_catalog_not_scoutable(self):
+        # scout keys on a real category_id — a free-text service has none
+        assert scoutable(_grade_row(on_catalog=False, category_id=None)) == "scout_requires_catalog"
+
+    def test_on_catalog_but_no_category_id_not_scoutable(self):
+        assert scoutable(_grade_row(category_id=None)) == "scout_requires_catalog"
+
+    def test_no_competitors_not_scoutable(self):
+        assert scoutable(_grade_row(grade={"grade": "B", "competitors": []})) == "no_competitors"
+
+
+class TestGradeMarketComps:
+    def test_builds_market_and_ranked_comps(self):
+        market, comps = grade_market_comps(_grade_row())
+        assert market == {"city_id": 5368304, "category_id": "plumber",
+                          "category": "Plumber", "city_name": "Los Alamitos",
+                          "state_code": "CA"}
+        assert [c["rank_position"] for c in comps] == [1, 2]
+        assert comps[0]["business_name"] == "ACME Plumbing"
+        assert comps[0]["domain"] == "acme.com"
+
+    def test_empty_competitors_yield_empty_list(self):
+        _market, comps = grade_market_comps(_grade_row(grade={"competitors": []}))
+        assert comps == []

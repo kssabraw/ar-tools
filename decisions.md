@@ -644,3 +644,72 @@ it — the offline reconstruction on the deployed 05:58 measure + the real index
 the faithful check. Post-deploy, delete Nova's `site_claim_index` row (or wait the
 30-day TTL) to force a clean re-crawl so the stale `price: 0.00` clears from the
 grounding fast-path too.
+
+---
+
+## LeadOff — on-demand grading + scout-from-grade + sort-by-service (2026-09-18)
+
+**Context.** LeadOff's precomputed board is ≥30k pop only (34,352 rows). The owner
+wanted to (a) reach the smaller cities (15k–30k) that were never scanned and (b) be
+able to "type a city + a service → get a grade." Rather than precompute a whole
+below-30k tier (the tabled small-market/demand-gate debate — see HANDOFF), the answer
+was an **on-demand grader** that grades the exact cell asked for.
+
+**DECIDED + BUILT (this session):**
+- **On-demand grader** (PR #1204, merged + live): board (free) → cache (free) → live
+  single-cell grade (~$0.06, cached), reusing `tryout_rows` scoped to one service.
+- **The live grade path does NOT apply the `vol≥20` demand gate** — grade the requested
+  cell regardless, *surface* `thin_demand`. Rationale: the gate only ever bounded
+  PRECOMPUTE cost; on demand the user asked for THIS cell.
+- **Off-catalog services still grade live**, with the CPL falling back to the flagged
+  default (`cpl_default`) — only the lead value needs the catalog; the keyword+SERP work
+  for any term.
+- **Staff-gated + per-user daily-budget guarded**, like Tryout.
+- **Scout-from-grade** (PR #1212, green mergeable draft): a "Scout this market" button
+  deepens a graded OFF-BOARD market by injecting the grade's stored top-5 into the same
+  `leadoff_scout` job (no new job/spend types). **Gated to on-catalog grades** (scout keys
+  on `category_id`).
+- **Sort-by-service uses the existing Board** (filter by category + sort by Opportunity/
+  Expected value) for scanned services on the ≥30k gated tier — no new build needed there.
+
+**DECIDED — the 4 categories to add to the catalog/board** (runbook written, owner runs on
+the scanner machine): Fire damage restoration service (75/138/200), Dumpster rental service
+(20/45/70), Carpenter (25/50/75), Dryer vent cleaning service (20/40/60). Level A (catalog,
+~$0) vs Level B (board precompute, ~$80–90).
+
+**OPEN — needs an owner decision / go-ahead:**
+1. **Merge PR #1212** (scout-from-grade). Green + mergeable; not merged (owner asked to
+   build, not merge).
+2. **`grade-all` bulk endpoint** — a cross-city "rank every city for a service" sweep that
+   reaches the sub-30k + off-catalog cities the Board sort can't (~$195–240 for HVAC across
+   all ~3,993 gradeable cities). Would batch the per-city grade + a ranked table + CSV.
+   NOT built — the most natural next build. Also needs the per-user `leadoff_daily_budget_usd`
+   ($5 default) raised for a sweep.
+3. **Scout button on Tryout rows** (not just the single-service grade card). NOT built.
+4. **Sub-10k geocode step** — to grade towns below the 10k `market_scanner.cities` floor.
+   NOT built.
+
+**DEFERRED — small-market board backfill / drop the demand gate to 10** (the tabled
+exploration): 30–50k backfill ~$91, gate-10-everywhere ~$450–550. Largely made optional by
+the on-demand grader; only matters if the owner wants that tier *browsable* on the board.
+
+## LeadOff — Enigma card-transaction pilot (better pricing/profit data) — NOT RUN (2026-09-18)
+
+**Status: OPEN / BLOCKED.** Owner asked (2026-09-18) to "run the coverage pilot on a trial
+key." It **cannot run from a Claude Code session**: no `ENIGMA_API_KEY` in the env, no Enigma
+HTTP client/host in platform-api (the only Enigma code is the *outreach* module's ordering/
+budget side, not a reusable LeadOff client), no LeadOff pilot script, and no sandbox egress to
+Enigma's API. Running it needs (a) an Enigma trial/eval key (a human signup step) and (b) a
+machine with egress (owner's machine or a Railway shell). Plan + go/no-go thresholds:
+`docs/modules/leadoff-enigma-pilot-plan-v1_0.md`. Working hypothesis: growth-signal is the
+salvageable use; lead-value calibration is risky (home-service jobs are insurance/invoice-paid
+→ card data undercounts → biases CPL down), and the better lead-value source may be the agency's
+own won-client close data via the existing `leadoff_calibration` loop.
+
+**AGREED PREP (not yet started, no vendor commit / no new dep):** build a runnable
+`scripts/enigma_coverage_pilot.py` (reads `ENIGMA_API_KEY` from env, takes a ~12 home-service-SAB
+ground-truth CSV, calls Enigma's Small Business API, prints the coverage + dollar-plausibility
+scorecard vs the plan's §5 thresholds; refuses to run without a key) + assemble the ~12-business
+ground-truth set — so the owner runs the pilot in one command once they have a trial key.
+Alternative the owner may pick instead: skip Enigma for lead-value and wire the
+won-client-close-data calibration path (no vendor).

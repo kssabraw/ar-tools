@@ -1174,6 +1174,12 @@ interface GradeRow {
   competitors?: Array<{ business_name?: string; rating?: number | null
     review_count?: number | null; domain?: string | null }>
 }
+interface ScoutBlock {
+  enrichment: Enrichment | null
+  competitors: Competitor[]
+  summary?: Record<string, unknown>
+  scouted_at?: string
+}
 interface GradeResponse {
   status: 'complete' | 'running' | 'failed'
   source: GradeSource
@@ -1187,9 +1193,11 @@ interface GradeResponse {
   on_catalog?: boolean
   est_cost?: number
   error?: string | null
+  scout?: ScoutBlock | null   // Pass-2 enrichment, stored after a scout pull
 }
 
 function GradeView() {
+  const qc = useQueryClient()
   const [city, setCity] = useState('')
   const [state, setState] = useState('')
   const [service, setService] = useState('')
@@ -1197,8 +1205,13 @@ function GradeView() {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<GradeResponse | null>(null)
   const [gradeId, setGradeId] = useState<string | null>(null)
+  // Scout (Pass-2 deepen) of the graded market — its own job + poll.
+  const [scoutJobId, setScoutJobId] = useState<string | null>(null)
+  const [scouting, setScouting] = useState(false)
+  const [scoutErr, setScoutErr] = useState<string | null>(null)
 
-  // Poll the live grade job (only when the POST returned status=running).
+  // Poll the grade row when we have an id (live job in flight, or to pick up a
+  // stored scout block). Stops once the grade is terminal AND no scout is running.
   const { data: polled } = useQuery<GradeResponse>({
     queryKey: ['leadoff-grade', gradeId],
     queryFn: () => api.get<GradeResponse>(`/leadoff/grade/${gradeId}`),
@@ -1218,16 +1231,42 @@ function GradeView() {
   const source: GradeSource | undefined = result?.source
   const onCatalog = polled?.on_catalog ?? result?.on_catalog
   const resolvedCat = row?.category ?? polled?.category_name ?? result?.category
+  const scout = polled?.scout ?? null
+  // Scout is offered for a persisted, on-catalog grade (board hits carry no
+  // grade_id and already show enrichment via the brief) with a competitor set.
+  const canScout = !!gradeId && !!onCatalog && !!row?.competitors?.length && !scout
+
+  // Poll the scout job; on completion refetch the grade row so its stored
+  // `scout` block renders.
+  useQuery<{ status: string; error: string | null }>({
+    queryKey: ['leadoff-grade-scout', scoutJobId],
+    queryFn: async () => {
+      const job = await api.get<{ status: string; error: string | null }>(`/leadoff/jobs/${scoutJobId}`)
+      if (job.status === 'complete' || job.status === 'failed') {
+        setScouting(false)
+        setScoutJobId(null)
+        if (job.status === 'failed') setScoutErr(job.error || 'scout_failed')
+        else qc.invalidateQueries({ queryKey: ['leadoff-grade', gradeId] })
+      }
+      return job
+    },
+    enabled: !!scoutJobId,
+    refetchInterval: q => {
+      const s = q.state.data?.status
+      return s === 'complete' || s === 'failed' ? false : 5000
+    },
+  })
 
   const submit = async () => {
     if (!city.trim() || state.trim().length !== 2 || !service.trim() || busy) return
     setBusy(true); setError(null); setResult(null); setGradeId(null)
+    setScoutJobId(null); setScouting(false); setScoutErr(null)
     try {
       const res = await api.post<GradeResponse>('/leadoff/grade', {
         city: city.trim(), state: state.trim().toUpperCase(), service: service.trim(),
       })
       setResult(res)
-      if (res.status === 'running' && res.grade_id) setGradeId(res.grade_id)
+      if (res.grade_id) setGradeId(res.grade_id)   // live OR cache — enables scout
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'grade_failed'
       setError(msg === 'city_not_found'
@@ -1237,6 +1276,29 @@ function GradeView() {
             : msg)
     } finally {
       setBusy(false)
+    }
+  }
+
+  const startScout = async () => {
+    if (!gradeId || scouting) return
+    setScouting(true); setScoutErr(null)
+    try {
+      const res = await api.post<{ job_id: string | null; fully_cached: boolean }>(
+        `/leadoff/grade/${gradeId}/scout`, {})
+      if (res.job_id) {
+        setScoutJobId(res.job_id)   // poll it
+      } else {
+        // fully cache-fresh — the enrichment was stored inline; refetch the row.
+        setScouting(false)
+        qc.invalidateQueries({ queryKey: ['leadoff-grade', gradeId] })
+      }
+    } catch (e) {
+      setScouting(false)
+      const msg = e instanceof Error ? e.message : 'scout_failed'
+      setScoutErr(msg === 'budget_exceeded'
+        ? 'Daily LeadOff budget reached — try tomorrow or raise the budget.'
+        : msg === 'scout_requires_catalog' ? 'Scout is available for catalog services only.'
+          : msg)
     }
   }
 
@@ -1381,6 +1443,65 @@ function GradeView() {
                   </div>
                 ))}
               </div>
+            </>
+          )}
+
+          {/* scout — Pass-2 deepen of THIS graded market */}
+          {(scout || scouting || scoutJobId || canScout || onCatalog === false) && (
+            <>
+              <SectionTitle>Scouting report</SectionTitle>
+              {scout ? (
+                scout.enrichment ? (
+                  <>
+                    <KV k="Links to win (true RD)"
+                      v={scout.enrichment.rd_min != null ? `~${scout.enrichment.rd_min * 10}` : '—'} strong
+                      hint="tool read ×10 per orchestrator rule" />
+                    <KV k="Field reviews 30d (vs prior)"
+                      v={scout.enrichment.field_vel30 != null
+                        ? `${scout.enrichment.field_vel30} vs ${scout.enrichment.field_prior30 ?? 0}` : '—'}
+                      hint={scout.enrichment.vel_matched != null
+                        ? `summed over ${scout.enrichment.vel_matched} of ${scout.competitors.length} top-5 competitors found in the review cache`
+                        : undefined} />
+                    <KV k="Momentum"
+                      v={scout.enrichment.momentum
+                        ?? (scout.enrichment.vel_matched ? 'thin data' : '—')} />
+                    <KV k="Newest field review" v={scout.enrichment.newest_review ?? '—'} />
+                    <KV k="Demand growth (YoY)"
+                      v={scout.enrichment.growth_yoy_ss != null
+                        ? `${scout.enrichment.growth_yoy_ss}×`
+                        : scout.enrichment.growth_yoy != null ? `${scout.enrichment.growth_yoy}× ⚠` : '—'}
+                      hint={scout.enrichment.growth_yoy_ss != null
+                        ? `same-month YoY (seasonality-cancelled)${scout.enrichment.peak_months ? ` · peaks: months ${scout.enrichment.peak_months}` : ''}`
+                        : '12-mo window — seasonal categories confound this'} />
+                  </>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                    Scouted — no cached RD / review-velocity / demand-trend signals landed
+                    for this field (the competitors may have no linked domains or reviews).
+                  </div>
+                )
+              ) : scouting || scoutJobId ? (
+                <div style={{ fontSize: 13, color: '#64748b' }}>
+                  <Loader2 size={14} className="spin" style={{ verticalAlign: -3 }} />{' '}
+                  Scouting the market — referring domains, review velocity, demand trend…
+                </div>
+              ) : canScout ? (
+                <>
+                  <button style={{ ...secondaryBtn, marginTop: 4 }} onClick={startScout}>
+                    <Binoculars size={14} /> Scout this market
+                  </button>
+                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 6 }}>
+                    Deepens the field: competitor referring domains, review velocity &amp;
+                    momentum, and the demand trend (~$0.10–1, cached).
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                  Scout (RD / review velocity / demand trend) is available for catalog
+                  services — this was graded as an off-catalog service.
+                </div>
+              )}
+              {scoutErr && <div style={{ ...errorBox, marginTop: 8 }}>{scoutErr}</div>}
             </>
           )}
 

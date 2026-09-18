@@ -573,17 +573,27 @@ async def run_tryout_job(job: dict) -> None:
 
 # ── Scout job ─────────────────────────────────────────────────────────────────
 
-def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
+def scout_market_state(city_id: int, category_id: str, *,
+                       market: dict[str, Any] | None = None,
+                       comps: list[dict[str, Any]] | None = None
+                       ) -> dict[str, Any] | None:
     """The market's competitors + which enrichment pieces are cache-misses
-    (90-day freshness) — drives both the cost estimate and the job itself."""
-    board = (_ms("leadoff_board").select("city_id,category_id,category,city_name,state_code")
-             .eq("city_id", city_id).eq("category_id", category_id)
-             .limit(1).execute().data or [])
-    if not board:
-        return None
-    comps = (_ms("serp_top5").select("rank_position,business_name,domain")
-             .eq("city_id", city_id).eq("category_id", category_id)
-             .order("rank_position").limit(5).execute().data or [])
+    (90-day freshness) — drives both the cost estimate and the job itself.
+
+    Board path (default): resolves the market from the precomputed board +
+    serp_top5. Off-board path (grader): the caller injects `market` (carrying
+    `category`/`city_name`/`state_code`) + `comps` (from a live grade's stored
+    top-5), so a city that never made the board can still be scouted."""
+    if market is None or comps is None:
+        board = (_ms("leadoff_board").select("city_id,category_id,category,city_name,state_code")
+                 .eq("city_id", city_id).eq("category_id", category_id)
+                 .limit(1).execute().data or [])
+        if not board:
+            return None
+        market = board[0]
+        comps = (_ms("serp_top5").select("rank_position,business_name,domain")
+                 .eq("city_id", city_id).eq("category_id", category_id)
+                 .order("rank_position").limit(5).execute().data or [])
     now = datetime.now(timezone.utc)
     cutoff = _fresh_cutoff(now)
     domains = sorted({str(c["domain"]).strip() for c in comps
@@ -599,7 +609,7 @@ def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
                  .execute().data or []) if biz else []
     vel_misses = {k: v for k, v in biz.items()
                   if k not in {r["biz_key"] for r in fresh_vel}}
-    trend_key = f"{city_id}|{norm(board[0].get('category') or '')}"
+    trend_key = f"{city_id}|{norm(market.get('category') or '')}"
     fresh_trend = (_ms("demand_trend").select("trend_key")
                    .eq("trend_key", trend_key).gte("pulled_at", cutoff)
                    .execute().data or [])
@@ -607,10 +617,10 @@ def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
     # scout is Pass-2, so every brand gets the search/unlinked/NAP treatment
     from services.leadoff_brand import footprint_state
     footprint = footprint_state(
-        [{**c, "category_name": board[0].get("category") or ""} for c in comps],
-        now, city_name=board[0].get("city_name") or "", deep=True)
+        [{**c, "category_name": market.get("category") or ""} for c in comps],
+        now, city_name=market.get("city_name") or "", deep=True)
     return {
-        "market": board[0], "competitors": comps,
+        "market": market, "competitors": comps,
         "rd_misses": rd_misses, "vel_misses": vel_misses,
         "trend_key": trend_key, "trend_miss": not fresh_trend,
         "site_misses": footprint["site_misses"],
@@ -622,15 +632,20 @@ def scout_market_state(city_id: int, category_id: str) -> dict[str, Any] | None:
 
 
 def enqueue_scout(user_id: str, city_id: int, category_id: str,
-                  est_cost: float) -> dict[str, Any]:
+                  est_cost: float, grade_id: str | None = None) -> dict[str, Any]:
     # entity_id is a uuid column — the market identity lives in the payload.
     # (The original f"{city_id}:{category_id}" here failed the insert, so no
     # scout had ever actually enqueued; caught in the first live validation.)
+    # grade_id, when set, routes run_scout_job through the grader's off-board
+    # path (competitors sourced from the grade row; enrichment stored back on it).
+    payload: dict[str, Any] = {"city_id": city_id, "category_id": category_id,
+                               "user_id": user_id, "est_cost": est_cost}
+    if grade_id:
+        payload["grade_id"] = grade_id
     job = get_supabase().table("async_jobs").insert({
         "job_type": "leadoff_scout",
         "entity_id": str(uuid.uuid4()),
-        "payload": {"city_id": city_id, "category_id": category_id,
-                    "user_id": user_id, "est_cost": est_cost},
+        "payload": payload,
     }).execute().data[0]
     return {"job_id": job["id"]}
 
@@ -641,8 +656,16 @@ async def run_scout_job(job: dict) -> None:
     payload = job.get("payload") or {}
     city_id = int(payload["city_id"])
     category_id = str(payload["category_id"])
+    grade_id = payload.get("grade_id")
     try:
-        state = scout_market_state(city_id, category_id)
+        if grade_id:
+            # Off-board grader path: competitors come from the live grade row,
+            # not the board's serp_top5 (which an off-board city has no row in).
+            from services import leadoff_grade
+            market, comps = leadoff_grade.grade_scout_inputs(grade_id)
+            state = scout_market_state(city_id, category_id, market=market, comps=comps)
+        else:
+            state = scout_market_state(city_id, category_id)
         if state is None:
             raise RuntimeError("market_not_found")
         city = (_ms("cities").select("*")
@@ -756,6 +779,16 @@ async def run_scout_job(job: dict) -> None:
                 _ms("demand_trend").insert([row]).execute()
                 summary["trend_pulled"] = 1
 
+        if grade_id:
+            # Store the freshly-cached enrichment back on the grade row so the
+            # grade card can render it (the off-board analogue of the brief's
+            # enrichment re-read). Best-effort — the pulls already committed.
+            try:
+                from services import leadoff_grade
+                leadoff_grade.store_scout_result(grade_id, summary)
+            except Exception:
+                logger.warning("leadoff_scout.grade_store_failed",
+                               extra={"grade_id": grade_id}, exc_info=True)
         supabase.table("async_jobs").update({
             "status": "complete", "completed_at": "now()", "result": summary,
         }).eq("id", job_id).execute()
