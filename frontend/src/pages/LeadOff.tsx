@@ -70,6 +70,20 @@ interface MarketRow {
     content_pages: number; links: number; links_rd: number; links_growth: number
     setup: number; ramp: number; deliverables: number
   } | null
+  // Monetization print (valuation plan §7) — the three grounded models on the
+  // brief + grade card (not a board column). cpl is the exclusive $/lead the
+  // market's value is computed from (market-adjusted on live grades).
+  cpl?: number | null
+  monetization?: Monetization | null
+}
+interface Monetization {
+  ppl_exclusive_mo: number | null
+  rank_and_rent_mo: number | null
+  ppl_shared_mo: number | null
+  shared_price: number | null
+  rent_discount: number
+  shared_price_ratio: number
+  n_buyers: number
 }
 interface BoardResponse {
   markets: MarketRow[]
@@ -799,6 +813,8 @@ export function LeadOff() {
                       : 'Construction-adjacent category — pipeline is a meaningful tailwind. Context only, never in the grade.')} />
               )}
 
+              <MonetizationBlock m={brief.monetization} cpl={brief.cpl} />
+
               <SectionTitle>Field forensics</SectionTitle>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '2px 0 6px' }}>
                 <span style={{ fontSize: 12, color: '#64748b' }}>Beatability</span>
@@ -1303,8 +1319,11 @@ interface GradeRow {
   namekw?: number
   supply?: number
   thin_demand?: boolean
-  cpl?: number
+  cpl?: number                   // effective (market-adjusted) exclusive $/lead
+  cpl_base?: number | null       // the flat exclusive anchor before the CPC modifier
+  cpl_modifier?: number | null   // per-market CPC multiplier applied to the anchor
   cpl_default?: boolean
+  monetization?: Monetization | null
   category?: string              // the literal keyword graded (display)
   category_id?: string | null
   lead_category?: string | null  // catalog category the CPL/holders came from
@@ -1322,6 +1341,39 @@ interface ScoutBlock {
   competitors: Competitor[]
   summary?: Record<string, unknown>
   scouted_at?: string
+}
+
+// Monetization print (valuation plan §7) — the three grounded ways to make money
+// in a market, shared by the grade card and the market brief. Same lead flow,
+// different billing — NOT independent streams.
+function MonetizationBlock({ m, cpl, cplBase, cplModifier }: {
+  m?: Monetization | null; cpl?: number | null
+  cplBase?: number | null; cplModifier?: number | null
+}) {
+  if (!m) return null
+  const modified = cplModifier != null && Math.abs(cplModifier - 1) > 0.001
+  return (
+    <>
+      <SectionTitle>Monetization</SectionTitle>
+      {cpl != null && (
+        <KV k="Exclusive lead value" v={`${usd(cpl)}/lead`}
+          hint={modified && cplBase != null
+            ? `Anchor ${usd(cplBase)} × ${cplModifier}× for this market's ad-market cost (CPC).`
+            : 'The exclusive $/lead the market value is built on.'} />
+      )}
+      <KV k="Pay-per-lead (exclusive)"
+        v={m.ppl_exclusive_mo != null ? `${usd(m.ppl_exclusive_mo)}/mo` : '—'} strong
+        hint="Leads/mo × exclusive CPL — the headline lead value." />
+      <KV k="Rank-and-rent (flat rent)"
+        v={m.rank_and_rent_mo != null ? `${usd(m.rank_and_rent_mo)}/mo` : '—'}
+        hint={`≈ ${Math.round(m.rent_discount * 100)}% of PPL-exclusive — one recurring buyer, ~zero ongoing sales effort. The same lead flow billed differently, not a second stream.`} />
+      <KV k="Pay-per-lead (shared)"
+        v={m.ppl_shared_mo != null ? `${usd(m.ppl_shared_mo)}/mo` : '—'}
+        hint={m.shared_price != null
+          ? `Leads/mo × ~${usd(m.shared_price)}/lead × ${m.n_buyers} buyers — more gross, more operational effort (the daylight is against shared).`
+          : undefined} />
+    </>
+  )
 }
 
 // The Pass-2 enrichment KVs for a scouted market — shared by the grade card and
@@ -1608,6 +1660,12 @@ function GradeView({ prefill, onConsumed }: {
             {row.payback_months !== undefined && (
               <KV k="Payback" v={paybackLabel(row.payback_months)} />
             )}
+          </div>
+
+          {/* monetization (valuation plan §7) */}
+          <div style={{ margin: '12px 0' }}>
+            <MonetizationBlock m={row.monetization} cpl={row.cpl}
+              cplBase={row.cpl_base} cplModifier={row.cpl_modifier} />
           </div>
 
           {/* field forensics */}

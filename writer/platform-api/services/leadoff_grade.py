@@ -89,24 +89,28 @@ def build_grade_row(*, keyword: str, category_id: Optional[str],
                     field: dict[str, Any], cpl: float, cpl_default: bool,
                     breakpoints: list[float], capture: float,
                     competitors: Optional[list[dict[str, Any]]] = None,
-                    lead_category: Optional[str] = None) -> dict[str, Any]:
+                    lead_category: Optional[str] = None,
+                    cpl_multiplier: float = 1.0) -> dict[str, Any]:
     """Compose the single grade row from measured demand + a SERP field read,
     reusing the tryout's economics/grade math (one keyword in, one row out).
     `keyword` is the LITERAL term graded (its own volume + SERP → row.category
     for display); `lead_category` is the catalog category the CPL + exact-holder
-    count came from (recorded for transparency, may be None). Pure — no I/O."""
+    count came from (recorded for transparency, may be None). `cpl_multiplier` is
+    the per-market CPC local modifier (valuation plan §3; 1.0 = flat CPL, the
+    default, so ``row['cpl']`` == the input CPL). Pure — no I/O."""
     rows = la.tryout_rows(
         demand={keyword: {"vol": vol, "cpc": cpc}},
         field={keyword: field},
         cpl={keyword: cpl},
         breakpoints=breakpoints,
         capture=capture,
+        cpl_multipliers={keyword: cpl_multiplier},
     )
     row = rows[0] if rows else {"category": keyword, "grade": "F", "exp_val": 0}
     row["category_id"] = category_id
     row["lead_category"] = lead_category
     row["thin_demand"] = thin_demand(vol)
-    row["cpl"] = round(float(cpl), 2)
+    # tryout_rows sets cpl_base / cpl_modifier / cpl (effective); don't clobber.
     row["cpl_default"] = cpl_default
     if competitors is not None:
         row["competitors"] = competitors
@@ -250,17 +254,25 @@ async def run_grade_job(job: dict) -> None:
         cpl, cpl_default = resolve_cpl(
             lead_category or keyword, la._lead_values(lead_tier),
             __import__("config").settings.leadoff_finder_default_lead_value)
+        # per-market CPC local modifier (valuation plan §3; keyed on the catalog
+        # category the CPL came from — the national baseline is per category —
+        # ×1.0 until the baseline is populated / on any thin CPC)
+        from services import leadoff_cpc, leadoff_monetization
+        cpl_mult = leadoff_cpc.modifier_for(
+            cpc, lead_category or keyword, leadoff_cpc.baseline_map(),
+            leadoff_cpc.bounds())
         row = build_grade_row(
             keyword=keyword, category_id=category_id, lead_category=lead_category,
             vol=vol, cpc=cpc, field=field, cpl=cpl, cpl_default=cpl_default,
             breakpoints=la._breakpoints(), capture=capture,
-            competitors=competitors)
+            competitors=competitors, cpl_multiplier=cpl_mult)
         try:
             from services.leadoff_beatability import attach_beatability
             from services.leadoff_roi import attach_roi
             row = [attach_roi(r) for r in attach_beatability([row])][0]
         except Exception:
             logger.warning("leadoff_grade.enrich_failed", exc_info=True)
+        leadoff_monetization.attach(row)  # PPL / rank-and-rent / shared print
 
         supabase.table("leadoff_grades").update({
             "status": "complete", "grade": row, "cpl_default": cpl_default,
