@@ -46,9 +46,9 @@
 > X, YouTube, Pinterest (LinkedIn deferred). Still to discuss: default per-client monthly ceiling (b3),
 > the P4 autonomy build (c2), the P5 Video Studio (c3).
 > **Next build queue (owner-set 2026-09-18), in order:** (1) **IG Reels + Stories** scope-out (b1 — Stories
-> is Business-account-only, no caption/link stickers) — **✅ BUILT (draft PR #1206)**; (2) **IG carousel
-> Draft type** (b2 — ≤10 items, one aspect ratio, ~$0.13/slide) — **✅ BUILT (same PR #1206)**; (3) **YouTube
-> poster** (re-scope against PostForMe — a YT post needs a `title`
+> is Business-account-only, no caption/link stickers) — **✅ BUILT + MERGED (PR #1206)**; (2) **IG carousel
+> Draft type** (b2 — ≤10 items, one aspect ratio, ~$0.13/slide) — **✅ BUILT + MERGED (same PR #1206)**;
+> **next up → (3) YouTube poster** (re-scope against PostForMe — a YT post needs a `title`
 > via `platform_configurations`; uploads existing videos, not generation); (4) **big-video direct-to-R2
 > presign** (endpoint exists; needs the browser PUT wired + an R2 CORS policy for the Netlify origin);
 > (5) **mixed image path** (2.5-Flash-for-square cost-saver, "later"). Then **P4 autonomy** + **P5
@@ -290,7 +290,7 @@ Creator exists.
 - **Don't couple module code to PostPeer** — go through the adapter interface.
 - **Don't download or re-host competitor media** — analyze-in-place (ADR-0002).
 - **Don't auto-publish by default** — top tier + explicit per-client opt-in only.
-- **IG/FB carousel + Reels/Stories are IN v1 scope AND BUILT** (owner b1+b2; draft PR #1206, see
+- **IG/FB carousel + Reels/Stories are IN v1 scope AND BUILT + MERGED** (owner b1+b2; PR #1206, see
   `HANDOFF.md` 2026-09-18). Reel/Story route via `postforme_adapter.placement_config` →
   `platform_configurations.{ig|fb}.placement`; the validator is format-aware (`validate_post(..., fmt=)`);
   a **Story drops its caption** at the publish choke point (no caption / link stickers; Business-account

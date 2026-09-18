@@ -9,9 +9,9 @@
 Everything through P2 + P1 is built/merged/live and the PostForMe swap is activated (below).
 The owner set the **next build order** to these five, top-to-bottom:
 
-1. **Instagram scope-out — Reels + Stories** (decision b1: BOTH) — **✅ BUILT (draft PR
+1. **Instagram scope-out — Reels + Stories** (decision b1: BOTH) — **✅ BUILT + MERGED (PR
    [#1206](https://github.com/kssabraw/ar-tools/pull/1206))**, see the 2026-09-18 update below.
-2. **IG carousel Draft type** (decision b2: YES) — **✅ BUILT (same PR #1206)**, see below.
+2. **IG carousel Draft type** (decision b2: YES) — **✅ BUILT + MERGED (same PR #1206)**, see below.
 3. **YouTube poster** — **re-scope against PostForMe** (the old blocker was PostPeer's
    YouTube docs; on PostForMe a YouTube post **requires a `title` via
    `platform_configurations`**). Uploads existing videos, **not** generation.
@@ -26,12 +26,13 @@ The owner set the **next build order** to these five, top-to-bottom:
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
-## Update (2026-09-18) — **Queue #1 (Reels + Stories) + #2 (IG carousel) BUILT** (draft PR [#1206](https://github.com/kssabraw/ar-tools/pull/1206))
+## Update (2026-09-18) — **Queue #1 (Reels + Stories) + #2 (IG carousel) BUILT + MERGED** (PR [#1206](https://github.com/kssabraw/ar-tools/pull/1206))
 
-Both built on branch `claude/social-media-reels-stories-carousel-gz1yrr` in ONE PR (they share the
-format/spec/composer/validator/adapter groundwork). Owner-confirmed data-flow first: format→placement
-threaded as a new `fmt` param on `adapter.post()`, **mapped only at the PostForMe adapter edge**; strict
-format-aware validator; one PR.
+Both built + merged to `main` in ONE PR (they share the format/spec/composer/validator/adapter
+groundwork). Owner-confirmed data-flow first: format→placement threaded as a new `fmt` param on
+`adapter.post()`, **mapped only at the PostForMe adapter edge**; strict format-aware validator; one PR.
+**Next queue item is #3 (YouTube poster).** The live confidence checks below (a real Reel + Story on
+IG/FB; a carousel fan-out) are deployed-only (sandbox egress-blocked from PostForMe + Gemini).
 
 **#1 Reels + Stories.** The composer already offered Reel/Story and `social_drafts.format` already
 allowed them, but the stored `format` **was never threaded to the adapter** — so a Reel/Story published
