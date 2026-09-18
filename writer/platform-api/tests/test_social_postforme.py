@@ -62,6 +62,39 @@ def test_build_post_payload_shapes():
     }
 
 
+def test_placement_config_reels_stories_ig_fb_only():
+    # Instagram + Facebook route reel/story via placement; timeline is the default.
+    assert pfm.placement_config("instagram", "reel") == {"placement": "reels"}
+    assert pfm.placement_config("instagram", "story") == {"placement": "stories"}
+    assert pfm.placement_config("facebook", "reel") == {"placement": "reels"}
+    assert pfm.placement_config("facebook", "story") == {"placement": "stories"}
+    # feed / carousel / other formats → no placement (default timeline)
+    assert pfm.placement_config("instagram", "feed") == {}
+    assert pfm.placement_config("instagram", "carousel") == {}
+    # platforms without placement support → never set it
+    assert pfm.placement_config("twitter", "reel") == {}
+    assert pfm.placement_config("pinterest", "story") == {}
+
+
+def test_build_post_payload_maps_format_to_placement():
+    # A reel with no extra platform config → placement-only block.
+    p = pfm.build_post_payload("spc_1", "instagram", "cap",
+                               media=[{"type": "video", "url": "v"}], fmt="reel")
+    assert p["platform_configurations"] == {"instagram": {"placement": "reels"}}
+    # A story merges placement INTO any user platform_specific block.
+    p2 = pfm.build_post_payload("spc_1", "instagram", "",
+                                platform_specific={"collaborators": ["x"]}, fmt="story")
+    assert p2["platform_configurations"] == {
+        "instagram": {"collaborators": ["x"], "placement": "stories"}
+    }
+    # A feed post carries no placement (unchanged from before).
+    p3 = pfm.build_post_payload("spc_1", "instagram", "cap",
+                                media=[{"type": "image", "url": "u"}], fmt="feed")
+    assert "platform_configurations" not in p3
+    # A reel on a platform without placement support (twitter) → no config block.
+    assert "platform_configurations" not in pfm.build_post_payload("spc_1", "twitter", "hi", fmt="reel")
+
+
 # ── account parsing ───────────────────────────────────────────────────────────
 
 def test_parse_account_maps_fields_and_reconnect():

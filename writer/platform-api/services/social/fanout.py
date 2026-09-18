@@ -260,22 +260,30 @@ async def run_fanout_job(job: dict) -> None:
     for draft in pending:
         platform = draft["platform"]
         spec = _platform_spec(platform)
-        d_fmt = draft.get("format") or fmt
+        d_fmt = (draft.get("format") or fmt or "feed").lower()
         update: dict = {"source_version": source_version, "updated_at": "now()"}
-        try:
-            copy, voice_warnings, spec_warnings = await creator.draft_platform_copy(
-                platform=platform, spec=spec, fmt=d_fmt, source_title=source_title,
-                source_text=source_text, angle=angle, tone=tone, include_hashtags=include_hashtags,
-                card=card, voice_block=voice_block, client_context=client_context,
-            )
-        except Exception as exc:  # noqa: BLE001 — one draft failing doesn't abort the set
-            logger.warning("social.fanout_draft_failed",
-                           extra={"draft_id": draft["id"], "error": str(getattr(exc, 'detail', exc))[:200]})
-            sb.table("social_drafts").update(
-                {"status": "generation_failed", "source_version": source_version, "updated_at": "now()"}
-            ).eq("id", draft["id"]).execute()
-            failed += 1
-            continue
+        # Stories have no caption — skip the (discarded) copy generation entirely and
+        # keep the draft caption empty so the Drafts UI + publish never show/post one.
+        if d_fmt == "story":
+            copy, voice_warnings, spec_warnings = "", [], []
+        else:
+            try:
+                copy, voice_warnings, spec_warnings = await creator.draft_platform_copy(
+                    platform=platform, spec=spec, fmt=d_fmt, source_title=source_title,
+                    source_text=source_text, angle=angle, tone=tone,
+                    include_hashtags=include_hashtags,
+                    card=card, voice_block=voice_block, client_context=client_context,
+                )
+            except Exception as exc:  # noqa: BLE001 — one draft failing doesn't abort the set
+                logger.warning("social.fanout_draft_failed",
+                               extra={"draft_id": draft["id"],
+                                      "error": str(getattr(exc, 'detail', exc))[:200]})
+                sb.table("social_drafts").update(
+                    {"status": "generation_failed", "source_version": source_version,
+                     "updated_at": "now()"}
+                ).eq("id", draft["id"]).execute()
+                failed += 1
+                continue
 
         image_url: Optional[str] = None
         if include_image:
@@ -393,9 +401,10 @@ def publish_existing_draft(
     )
 
     platform = draft["platform"]
+    fmt = (draft.get("format") or "feed").lower()
     media = draft.get("media") or publish.build_media(draft.get("image_urls"), None)
     copy = draft.get("copy") or ""
-    verdict = publish.validate_post(platform, copy, media, publish._platform_spec(platform))
+    verdict = publish.validate_post(platform, copy, media, publish._platform_spec(platform), fmt=fmt)
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
 

@@ -51,6 +51,45 @@ def test_validate_instagram_requires_media():
     assert publish.validate_post("instagram", "caption", vid("https://v/a.mp4"), IG)["hard"] == []
 
 
+def test_validate_reel_requires_one_video_no_images():
+    # A Reel is video-only: exactly one video, no images.
+    assert publish.validate_post("instagram", "cap", vid("https://v/a.mp4"), IG, fmt="reel")["hard"] == []
+    # no video (only an image) → blocked, and images aren't allowed on a Reel
+    v = publish.validate_post("instagram", "cap", img("https://i/a.jpg"), IG, fmt="reel")
+    assert any(h.startswith("reel_requires_one_video") for h in v["hard"])
+    assert any(h.startswith("reel_no_images") for h in v["hard"])
+    # an image alongside a video is still rejected
+    v2 = publish.validate_post("facebook", "cap", vid("https://v/a.mp4") + img("https://i/a.jpg"), FB, fmt="reel")
+    assert any(h.startswith("reel_no_images") for h in v2["hard"])
+    # zero media → needs a video (works for Facebook too, whose spec.requires_image is False)
+    assert any(h.startswith("reel_requires_one_video")
+               for h in publish.validate_post("facebook", "cap", [], FB, fmt="reel")["hard"])
+
+
+def test_validate_story_media_required_caption_ignored():
+    # A Story needs media but no caption: a caption-less Story with media is fine.
+    assert publish.validate_post("instagram", "", img("https://i/a.jpg"), IG, fmt="story")["hard"] == []
+    assert publish.validate_post("facebook", "", vid("https://v/a.mp4"), FB, fmt="story")["hard"] == []
+    # a caption-less Story is NEVER an empty_post
+    assert "empty_post" not in publish.validate_post("instagram", "", img("https://i/a.jpg"), IG, fmt="story")["hard"]
+    # no media → blocked, even for Facebook (spec.requires_image is False)
+    assert "story_requires_media" in publish.validate_post("facebook", "", [], FB, fmt="story")["hard"]
+    # a supplied caption is advisory only (dropped at publish), never a hard block
+    v = publish.validate_post("instagram", "this caption is dropped", img("https://i/a.jpg"), IG, fmt="story")
+    assert v["hard"] == [] and "story_caption_ignored" in v["warnings"]
+
+
+def test_validate_story_ignores_char_limit():
+    # A long "caption" on a Story never over_char_limits (it's dropped anyway).
+    v = publish.validate_post("instagram", "x" * 5000, img("https://i/a.jpg"), IG, fmt="story")
+    assert not any(h.startswith("over_char_limit") for h in v["hard"])
+
+
+def test_validate_feed_default_unchanged():
+    assert publish.validate_post("facebook", "hi", [], FB)["hard"] == []
+    assert publish.validate_post("facebook", "hi", [], FB, fmt="feed")["hard"] == []
+
+
 def test_validate_too_many_images_and_videos():
     assert any(h.startswith("too_many_images") for h in publish.validate_post("pinterest", "c", img("a", "b"), PIN)["hard"])
     assert any(h.startswith("too_many_videos") for h in publish.validate_post("facebook", "c", vid("a", "b"), FB)["hard"])

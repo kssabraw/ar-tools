@@ -110,12 +110,17 @@ class SocialPostingAdapter(abc.ABC):
         content: str,
         media: Optional[list[dict]] = None,
         platform_specific: Optional[dict] = None,
+        fmt: str = "feed",
         publish_now: bool = True,
     ) -> PostResult:
         """Publish ONE piece of content to ONE connected account. ``media`` is a
         list of typed items ``{"type": "image"|"video", "url": ...}`` (images for a
         single/carousel photo post, one video for a Facebook video / Instagram
-        Reel). The module's
+        Reel). ``fmt`` is the post format (``feed``/``carousel``/``reel``/``story``/…);
+        an adapter maps it to the provider's per-format routing where required (for
+        PostForMe, Instagram/Facebook ``reel``/``story`` → the ``placement`` field of
+        ``platform_configurations`` — a provider concern kept at the adapter edge, so
+        module code just passes the stored format). The module's
         data model is one Post per platform, so this sends exactly one platform
         per provider call to keep per-platform status independent. Publishing is
         always driven from OUR scheduler with ``publish_now`` — we never hand the

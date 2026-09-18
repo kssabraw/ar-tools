@@ -74,11 +74,14 @@ const FORMAT_LABELS: Record<string, string> = { feed: 'Feed post', reel: 'Reel',
 const formatsFor = (platform: string): string[] =>
   FORMATS_BY_PLATFORM[(platform || '').toLowerCase()] ?? ['feed']
 // Fan-out applies ONE format to every selected platform, so only offer a format
-// all of them support (feed always survives; empty selection → feed-only).
+// all of them support (feed always survives; empty selection → feed-only). Reel is
+// deliberately excluded here: fan-out generates copy + IMAGES (no video generation
+// in v1), and a Reel is video-only — offer Reels only in manual Compose.
+const FANOUT_FORMATS = ['feed', 'story']
 const formatsForMany = (platforms: string[]): string[] => {
   if (!platforms.length) return ['feed']
   const sets = platforms.map((p) => new Set(formatsFor(p)))
-  const shared = ['feed', 'reel', 'story'].filter((f) => sets.every((s) => s.has(f)))
+  const shared = FANOUT_FORMATS.filter((f) => sets.every((s) => s.has(f)))
   return shared.length ? shared : ['feed']
 }
 
@@ -491,6 +494,9 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
   React.useEffect(() => {
     if (!formatOptions.includes(format)) setFormat(formatOptions[0])
   }, [formatOptions, format])
+  // A Story needs media (and carries no caption) — always generate an image for it.
+  const isStoryFmt = format === 'story'
+  const effectiveIncludeImage = includeImage || isStoryFmt
 
   const anglesMut = useMutation({
     mutationFn: async () => { setError(null); return api.post<Angle[]>(`/clients/${clientId}/social/angles`, src.payload()) },
@@ -510,7 +516,7 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
         angle: activeAngle?.hook || activeAngle?.title,
         angle_title: activeAngle?.title,
         tone: tone.trim() || undefined,
-        platforms, format, include_image: includeImage, include_hashtags: true,
+        platforms, format, include_image: effectiveIncludeImage, include_hashtags: true,
       })
     },
     onSuccess: (r) => { setJobId(r.job_id); setAngleSetId(r.angle_set_id) },
@@ -603,12 +609,19 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
           <label style={label}>Tone (optional)</label>
           <input style={{ ...input, width: 180 }} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="upbeat, expert" />
         </div>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', paddingBottom: 9 }}>
-          <input type="checkbox" checked={includeImage} onChange={(e) => setIncludeImage(e.target.checked)} />
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: isStoryFmt ? 'not-allowed' : 'pointer', paddingBottom: 9, opacity: isStoryFmt ? 0.7 : 1 }}
+          title={isStoryFmt ? 'A Story needs media, so an image is always generated.' : undefined}>
+          <input type="checkbox" checked={effectiveIncludeImage} disabled={isStoryFmt}
+            onChange={(e) => setIncludeImage(e.target.checked)} />
           Also generate an image for each
         </label>
       </div>
-      {includeImage && (
+      {isStoryFmt && (
+        <p style={{ margin: '-6px 0 12px', fontSize: 11, color: '#94a3b8' }}>
+          Stories have no caption — each draft is a generated image only (no link stickers; Business account required).
+        </p>
+      )}
+      {effectiveIncludeImage && (
         <p style={{ margin: '-6px 0 12px', fontSize: 11, color: '#94a3b8' }}>
           Each image uses the client’s monthly social budget (~$0.13 each, per platform).
         </p>
@@ -1118,6 +1131,10 @@ export function SocialCompose() {
   React.useEffect(() => {
     if (!formatOptions.includes(format)) setFormat(formatOptions[0])
   }, [formatOptions, format])
+  // Stories carry no caption / link stickers (Business-account-only); Reels are a
+  // single video (no images). These drive the format-aware compose rules below.
+  const isStory = format === 'story'
+  const isReel = format === 'reel'
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
   const [scheduledLocal, setScheduledLocal] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -1155,19 +1172,28 @@ export function SocialCompose() {
     }
   }
 
-  // Client-side advisory hints (backend still enforces).
+  // Client-side advisory hints (backend still enforces). Format-aware: a Reel is a
+  // single video with no images; a Story needs media but no caption; a feed post
+  // needs copy or media.
   const hints = useMemo(() => {
     const out: string[] = []
     const hasMedia = images.length > 0 || Boolean(video)
-    if (!copy.trim() && !hasMedia) out.push('Add some copy or media — an empty post can’t publish.')
-    if (spec.charLimit && copy.length > spec.charLimit)
+    if (isReel) {
+      if (!video) out.push('A Reel needs a video — add one to publish.')
+      if (images.length) out.push('Reels don’t support images — a Reel is a single video.')
+    } else if (isStory) {
+      if (!hasMedia) out.push('A Story needs an image or video.')
+    } else {
+      if (!copy.trim() && !hasMedia) out.push('Add some copy or media — an empty post can’t publish.')
+      if (spec.requiresImage && !hasMedia) out.push(spec.note ?? `${spec.label} requires at least one image or video.`)
+    }
+    if (!isStory && spec.charLimit && copy.length > spec.charLimit)
       out.push(`Copy is ${copy.length} / ${spec.charLimit} characters — over the ${spec.label} limit.`)
-    if (spec.requiresImage && !hasMedia) out.push(spec.note ?? `${spec.label} requires at least one image or video.`)
     if (spec.maxImages != null && images.length > spec.maxImages)
       out.push(`${images.length} images — ${spec.label} allows at most ${spec.maxImages}.`)
     if (video && spec.maxVideos === 0) out.push(`${spec.label} doesn’t support video.`)
     return out
-  }, [copy, images, video, spec])
+  }, [copy, images, video, spec, isStory, isReel])
 
   const warnings = useMemo(() => {
     const out: string[] = []
@@ -1176,10 +1202,11 @@ export function SocialCompose() {
     return out
   }, [platform, copy])
 
+  // hints already encodes every empty/format-media requirement (incl. a Story/Reel
+  // needing media / a video), so a clean hints list means there's something to publish.
   const canPublish =
     Boolean(selected) &&
     !uploadingImage && !uploadingVideo &&
-    (copy.trim().length > 0 || images.length > 0 || Boolean(video)) &&
     hints.length === 0 &&
     (scheduleMode === 'now' || Boolean(scheduledLocal))
 
@@ -1200,7 +1227,7 @@ export function SocialCompose() {
       return api.post<SocialPost>(`/clients/${clientId}/social/posts`, {
         platform,
         account_id: selected!.account_id,
-        copy,
+        copy: isStory ? '' : copy,   // Stories carry no caption
         image_urls: images,
         video_urls: video ? [video] : [],
         platform_specific,
@@ -1291,31 +1318,40 @@ export function SocialCompose() {
             )}
           </div>
 
-          {/* AI copy drafting */}
-          <AiDraftPanel
-            clientId={clientId}
-            platform={platform}
-            disabled={!selected}
-            format={format}
-            onDraft={(text) => setCopy(text)}
-          />
-
-          {/* copy */}
-          <div style={{ marginBottom: 14 }}>
-            <label style={label}>Post copy</label>
-            <textarea
-              style={{ ...input, minHeight: 120, resize: 'vertical' }}
-              value={copy}
-              onChange={(e) => setCopy(e.target.value)}
-              placeholder={`Write your ${spec.label} post…`}
+          {/* AI copy drafting — a Story has no caption, so no copy to draft. */}
+          {!isStory && (
+            <AiDraftPanel
+              clientId={clientId}
+              platform={platform}
+              disabled={!selected}
+              format={format}
+              onDraft={(text) => setCopy(text)}
             />
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
-              <span style={{ fontSize: 11, color: '#94a3b8' }}>{spec.note ?? ''}</span>
-              <span style={{ fontSize: 11, fontWeight: 600, color: copy.length > spec.charLimit ? '#b91c1c' : '#94a3b8' }}>
-                {copy.length.toLocaleString()} / {spec.charLimit.toLocaleString()}
-              </span>
+          )}
+
+          {/* copy — hidden for Stories (they carry no caption / link stickers) */}
+          {!isStory ? (
+            <div style={{ marginBottom: 14 }}>
+              <label style={label}>Post copy</label>
+              <textarea
+                style={{ ...input, minHeight: 120, resize: 'vertical' }}
+                value={copy}
+                onChange={(e) => setCopy(e.target.value)}
+                placeholder={`Write your ${spec.label} post…`}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                <span style={{ fontSize: 11, color: '#94a3b8' }}>{spec.note ?? ''}</span>
+                <span style={{ fontSize: 11, fontWeight: 600, color: copy.length > spec.charLimit ? '#b91c1c' : '#94a3b8' }}>
+                  {copy.length.toLocaleString()} / {spec.charLimit.toLocaleString()}
+                </span>
+              </div>
             </div>
-          </div>
+          ) : (
+            <div style={{ marginBottom: 14, padding: '10px 12px', background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, fontSize: 12, color: '#475569' }}>
+              Stories publish with <strong>no caption and no link stickers</strong>, and require a
+              <strong> Business account</strong>. Just add one image or video below.
+            </div>
+          )}
 
           {/* media */}
           <div style={{ marginBottom: 14 }}>
@@ -1341,10 +1377,11 @@ export function SocialCompose() {
               )}
             </div>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-              <label style={{ ...btn('#fff', '#334155'), cursor: uploadingImage ? 'wait' : 'pointer' }}>
+              <label style={{ ...btn('#fff', '#334155'), cursor: uploadingImage ? 'wait' : (isReel ? 'not-allowed' : 'pointer'), opacity: isReel ? 0.5 : 1 }}
+                title={isReel ? 'A Reel is a single video — images aren’t supported.' : undefined}>
                 {uploadingImage ? <Loader2 size={14} className="spin" /> : <ImageIcon size={14} />}
                 {uploadingImage ? 'Uploading…' : 'Add image(s)'}
-                <input type="file" accept={IMAGE_TYPES.join(',')} multiple hidden disabled={uploadingImage}
+                <input type="file" accept={IMAGE_TYPES.join(',')} multiple hidden disabled={uploadingImage || isReel}
                   onChange={(e) => { if (e.target.files?.length) void uploadFiles(e.target.files, 'image'); e.target.value = '' }} />
               </label>
               <label style={{ ...btn('#fff', '#334155'), cursor: uploadingVideo ? 'wait' : (spec.maxVideos === 0 ? 'not-allowed' : 'pointer'), opacity: spec.maxVideos === 0 ? 0.5 : 1 }}>
@@ -1362,13 +1399,15 @@ export function SocialCompose() {
               clientId={clientId}
               platform={platform}
               format={format}
-              disabled={!selected || (spec.maxImages != null && images.length >= spec.maxImages)}
+              disabled={!selected || isReel || (spec.maxImages != null && images.length >= spec.maxImages)}
               disabledReason={
                 !selected
                   ? 'Select a connected account first — the image is sized for that platform.'
-                  : (spec.maxImages != null && images.length >= spec.maxImages)
-                    ? `${specFor(platform).label} allows at most ${spec.maxImages} image${spec.maxImages === 1 ? '' : 's'} — remove one to generate another.`
-                    : undefined
+                  : isReel
+                    ? 'A Reel is a single video — add a video instead (image generation isn’t used for Reels).'
+                    : (spec.maxImages != null && images.length >= spec.maxImages)
+                      ? `${specFor(platform).label} allows at most ${spec.maxImages} image${spec.maxImages === 1 ? '' : 's'} — remove one to generate another.`
+                      : undefined
               }
               onImage={(url) => setImages((prev) => [...prev, url])}
             />
@@ -1380,6 +1419,11 @@ export function SocialCompose() {
             <select style={input} value={format} onChange={(e) => setFormat(e.target.value)}>
               {formatOptions.map((f) => <option key={f} value={f}>{FORMAT_LABELS[f] ?? f}</option>)}
             </select>
+            {isReel && (
+              <p style={{ margin: '6px 0 0', fontSize: 11, color: '#94a3b8' }}>
+                A Reel is a single video (no images).
+              </p>
+            )}
           </div>
 
           {/* schedule */}
