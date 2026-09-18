@@ -160,6 +160,44 @@ export function serviceScoreAdapter(clientId: string): ScoreAdapter {
   }
 }
 
+// ── Location pages ───────────────────────────────────────────────────────────
+// Same run-free score job as the Service adapter, but locked to location_page
+// (this drives the Location Pages module, so there's no Service/Location switch)
+// and location-required, since a location page always scores against its area.
+export function locationScoreAdapter(clientId: string): ScoreAdapter {
+  return {
+    toolLabel: 'Location pages',
+    clientId,
+    storageKeyBase: `score:location:${clientId}`,
+    engineLabels: LOCALSEO_ENGINE_LABELS,
+    itemNoun: 'page',
+    requiresKeyword: true,
+    keywordLabel: 'Keyword',
+    keywordPlaceholder: 'e.g. plumber austin',
+    supportsPaste: true,
+    supportsLocation: true,
+    requiresLocation: true, // location pages score local — the area is needed
+    supportsEntityProvider: true,
+    introText: 'Point at a live location page (or paste its content) and check it against the local SEO/AEO engines — scored against the area. Nothing is rewritten.',
+    async start(t) {
+      const { job_id } = await scoreApi.serviceScoreExisting(clientId, {
+        keyword: t.keyword,
+        page_type: 'location_page',
+        page_url: t.url ?? null,
+        page_content: t.html ?? null,
+        location: t.location ?? null,
+        location_code: t.locationCode ?? null,
+        entity_provider: t.entityProvider ?? null,
+      })
+      return job_id
+    },
+    async poll(jobId) {
+      const st = await scoreApi.getJob(clientId, jobId)
+      return { status: st.status as ScoreJobPoll['status'], result: st.result ?? null, error: st.error ?? null }
+    },
+  }
+}
+
 // ── Blog ─────────────────────────────────────────────────────────────────────
 export function blogScoreAdapter(clientId: string): ScoreAdapter {
   return {
