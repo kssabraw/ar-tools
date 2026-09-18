@@ -675,6 +675,7 @@ async def gsc_scheduler() -> None:
     from services.trend_watch import run_trend_sweep
     from services.offpage_agent import run_offpage_sweep
     from services.scan_health import run_scan_health_sweep, run_rank_freshness_sweep
+    from services.gsc_health import run_gsc_access_sweep
     from services.leadoff_calibration import (
         run_calibration_sweep as run_leadoff_calibration_sweep,
     )
@@ -795,6 +796,13 @@ async def gsc_scheduler() -> None:
                 # collection jobs report success — the signature of both prior
                 # silent freezes. Self-gated on rank_freshness_enabled.
                 _safe("rank_freshness_sweep", run_rank_freshness_sweep)
+                # Daily GSC connection-health watch: re-verify each no_access
+                # property (self-heal → resume ingest the moment access returns)
+                # and alert on any still denied. Keyed on access_status — the one
+                # signal scan_health + rank_freshness both go blind to when the
+                # DataForSEO fallback masks a GSC blackout. A blocking Google test
+                # query per stuck property, so it runs off the event loop.
+                await _safe_async("gsc_access_monitor", asyncio.to_thread, run_gsc_access_sweep)
                 # LeadOff calibration outcome checks (Phase 0 — read-only,
                 # $0; at most one check per prediction per ~28 days).
                 _safe("leadoff_calibration", run_leadoff_calibration_sweep)
