@@ -10,6 +10,7 @@ import { Justification } from '../components/outreach/Justification'
 import { Script } from '../components/outreach/Script'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 import { LeadContacts } from '../components/outreach/Enrichment'
+import { ScorePill } from '../components/outreach/ScorePill'
 import { useAuth } from '../context/AuthContext'
 
 // ── Types (mirror the CRM half of routers/outreach.py) ───────────────────────
@@ -228,27 +229,6 @@ function todayPlusDays(days: number): string {
   const d = new Date()
   d.setDate(d.getDate() + days)
   return d.toISOString().slice(0, 10)
-}
-
-function fmtScore(s: number | string | null): string | null {
-  if (s == null) return null
-  const n = typeof s === 'string' ? Number(s) : s
-  return Number.isFinite(n) ? Math.round(n).toLocaleString() : null
-}
-
-// Score + decile pill (T1.5). A top-decile lead reads green; the number is the value model's.
-// Exported so the scan table (Outreach.tsx) can show the SAME priority badge (slice B moves this
-// into a shared component and repoints both). It reads as PRIORITY ORDER, never a win probability.
-export function ScorePill({ score, decile }: { score: number | string | null; decile: number | null }) {
-  const s = fmtScore(score)
-  if (s == null) return null
-  const strong = (decile ?? 0) >= 8
-  return (
-    <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
-      background: strong ? '#dcfce7' : '#f1f5f9', color: strong ? '#166534' : '#475569' }}>
-      {s}{decile != null ? ` · D${decile}` : ''}
-    </span>
-  )
 }
 
 // ── Work-the-queue list (T1.1 / T1.5) ─────────────────────────────────────────
@@ -878,11 +858,7 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
           {/* Priority signals (T1.5): the phone-track value score + decile + primary pitch. */}
           {lead.ranked && lead.ranked.score != null && (
             <div style={{ marginTop: 10, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
-              <ScorePill score={lead.ranked.score} decile={lead.ranked.decile} />
-              {lead.ranked.primary_pitch && (
-                <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: '#eff6ff',
-                  color: '#0369a1', fontWeight: 600 }}>{lead.ranked.primary_pitch}</span>
-              )}
+              <ScorePill score={lead.ranked.score} decile={lead.ranked.decile} pitch={lead.ranked.primary_pitch} />
             </div>
           )}
 
