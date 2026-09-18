@@ -140,8 +140,9 @@ class Settings(BaseSettings):
     social_image_flash_model: str = "gemini-3.1-flash-image"    # SOCIAL_IMAGE_FLASH_MODEL
     social_image_flash_cost_usd: float = 0.101   # est. USD per Nano Banana 2 image at 2K (budget)
     # IG/Facebook carousel Draft type: ≤10 items, one shared aspect ratio. A fan-out
-    # carousel generates N nano-banana Pro slides — each its own paid image (the cost
-    # multiplies per slide, reserved individually against the fail-closed budget).
+    # carousel generates N slides — each its own paid image on the selected image model
+    # (Nano Banana 2 by default, see select_image_model; the cost multiplies per slide,
+    # reserved individually against the fail-closed budget).
     social_carousel_max_slides: int = 10         # provider cap (≤10 items)
     social_carousel_default_slides: int = 3      # slides a carousel fan-out defaults to
     social_carousel_slides_max_tokens: int = 900 # slide-description LLM budget
