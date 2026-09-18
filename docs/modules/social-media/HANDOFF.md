@@ -37,6 +37,49 @@ The owner set the **next build order** to these five, top-to-bottom:
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
+## Update (2026-09-18) — **P3 Manager BUILT (draft PR)** — Calendar / cadence / approval queue / policy write path (post-queue task 2; scope: `p3-manager-scope-v1_0.md`; plan: `p3-manager-plan-v1_0.md`)
+
+The second post-queue item. Scope-doc → **AskUserQuestion** → plan-doc → build, per the
+owner's confirm-forks-first preference. **Owner decisions (locked 2026-09-18):**
+- **Q1 cadence behavior = Auto-fill (drip approved queue)** — the sweep publishes an
+  explicitly-`queued`, human-approved draft on the schedule's rhythm, UNATTENDED. Crosses the
+  PRD auto-publish line **on purpose**, kept safe by **three gates** (all must hold):
+  `social_auto_publish_enabled` (config, **default False — ships dark**) + the schedule's
+  `auto_fill=true` (per-client/platform opt-in) + an explicitly `queued` draft. Off/empty →
+  a suggest-nudge (`social_slot_due` / `social_slot_empty`). P4 will add the `autonomy_tier` gate.
+- **Q2 phasing = b → c → d+a** (management-first). **Q3 policy scope = consumer fields only**
+  (ceiling + image/text prompt templates + cadence; P4 planning fields deferred).
+  **Q4 default ceiling = $100** (`social_monthly_ceiling_default_usd` 75 → 100).
+
+**What shipped (branch `claude/social-p3-manager`, draft PR):**
+- **Migration `20260918140000_social_post_schedules.sql`** (**applied live**) — the per-`(client,
+  platform)` cadence table (GBP-literal clone). No `async_jobs` type (the drip reuses
+  `social_publish` via `publish_existing_draft`); no `social_posts` status change; `social_drafts`
+  gained a free-text `queued` status (no migration).
+- **(a) cadence** `services/social/schedules.py` — reuses `compute_next_run_at` verbatim;
+  `enqueue_due_social_schedules()` (pure `decide_slot` drip/empty/suggest, freeze-skipped, self-clocked
+  `next_run_at`) wired into `gsc_scheduler` per-tick beside `social_scheduled_posts`.
+- **(b) calendar/edit** `publish.list_calendar` / `cancel_post` / `reschedule_post` /
+  `edit_scheduled_post` (guarded to `scheduled`; 409 mid-publish) + routes; `SocialPostResponse`
+  gained `draft_id` (so the calendar can edit the draft copy).
+- **(c) approval queue** `fanout.publish_drafts_batch` (partial success) + `enqueue_draft`/
+  `dequeue_draft`/`next_queued_draft` + routes.
+- **(d) policy** `services/social/policy.py` (`monthly_ceiling_usd` + image/text templates;
+  `text_prompt_template` wired into `creator.draft_platform_copy` as a mid-priority steering block —
+  None → byte-identical) + routes.
+- **Frontend** `SocialCompose.tsx`: **Calendar** + **Settings** tabs; Drafts tab gained
+  "Publish all ready" + per-draft Add/Remove-from-queue + a `queued` badge. `errorGuidance` for the
+  new codes. `tsc` + `eslint` clean (SocialCompose 0 problems).
+- **Tests** `tests/test_social_p3.py` (18) — decision matrix, slot routing, cancel/reschedule/edit
+  guards, batch partial-success, policy filter/validate. **98 social tests pass**; ruff clean.
+
+**Deployed-only (sandbox egress-blocked from PostForMe):** auto-fill's unattended publish is
+verifiable only on the deployed path. Ships dark — flip `SOCIAL_AUTO_PUBLISH_ENABLED=true` on
+PLATFORM to activate the drip (per-schedule `auto_fill` + a `queued` draft still required).
+
+**Next:** P4 autonomy (owner c2, "discuss") / P5 video (c3). The deployed-only confidence checks
+below are unchanged.
+
 ## Update (2026-09-18) — **Pinterest board made first-class — BUILT + MERGED** (PR [#1228](https://github.com/kssabraw/ar-tools/pull/1228); post-queue task 1; scope: `pinterest-board-first-class-scope-v1_0.md`)
 
 The first of the two owner-set post-queue items (Pinterest → then P3 Manager) — **merged to

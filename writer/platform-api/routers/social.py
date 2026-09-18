@@ -8,9 +8,10 @@ Gated on ``settings.social_enabled`` (503 until flipped), like the other modules
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from starlette.concurrency import run_in_threadpool
 
 from middleware.auth import require_auth, require_staff
@@ -19,6 +20,8 @@ from models.social import (
     SocialAddHandleRequest,
     SocialAngle,
     SocialAnglesRequest,
+    SocialBatchPublishRequest,
+    SocialBatchPublishResult,
     SocialCompetitorHandle,
     SocialCompetitorResponse,
     SocialCompetitorSignalResponse,
@@ -29,18 +32,24 @@ from models.social import (
     SocialDraftPublishRequest,
     SocialDraftResponse,
     SocialDraftUpdateRequest,
+    SocialEditPostRequest,
     SocialFanoutRequest,
     SocialFanoutResponse,
     SocialGenerateImageRequest,
     SocialGenerateImageResponse,
     SocialJobStatusResponse,
     SocialMediaUploadResponse,
+    SocialPolicyResponse,
+    SocialPolicyUpdateRequest,
     SocialPostCreateRequest,
     SocialPostResponse,
     SocialPresignRequest,
     SocialPresignResponse,
     SocialProfileResponse,
+    SocialRescheduleRequest,
     SocialResearchTriggerResponse,
+    SocialScheduleUpsertRequest,
+    SocialSchedulesResponse,
     SocialSetCredentialRequest,
 )
 from services.freeze import assert_not_frozen
@@ -49,7 +58,9 @@ from services.social import competitor_research as social_research
 from services.social import creator as social_creator
 from services.social import fanout as social_fanout
 from services.social import image as social_image
+from services.social import policy as social_policy
 from services.social import publish as social_publish
+from services.social import schedules as social_schedules
 
 logger = logging.getLogger(__name__)
 
@@ -263,6 +274,124 @@ async def list_social_posts(client_id: UUID, auth: dict = Depends(require_auth))
 async def get_social_post(post_id: UUID, auth: dict = Depends(require_auth)):
     social_publish._assert_enabled()
     return social_publish.get_post(str(post_id))
+
+
+# ── P3 Manager: Calendar + edit / cancel / reschedule ─────────────────────────
+
+@router.get("/clients/{client_id}/social/calendar", response_model=list[SocialPostResponse])
+async def social_calendar(
+    client_id: UUID,
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = None,
+    auth: dict = Depends(require_auth),
+):
+    """The Calendar feed: scheduled + published posts, optionally windowed by
+    ``from``/``to`` (matches ``scheduled_at`` for upcoming or ``published_at`` for
+    history). Cross-platform, read-only."""
+    social_publish._assert_enabled()
+    return social_publish.list_calendar(str(client_id), from_, to)
+
+
+@router.post("/social/posts/{post_id}/cancel", response_model=SocialPostResponse)
+async def cancel_social_post(post_id: UUID, auth: dict = Depends(require_staff)):
+    """Cancel a scheduled post (only before it starts publishing)."""
+    social_publish._assert_enabled()
+    return social_publish.cancel_post(str(post_id))
+
+
+@router.post("/social/posts/{post_id}/reschedule", response_model=SocialPostResponse)
+async def reschedule_social_post(
+    post_id: UUID, body: SocialRescheduleRequest, auth: dict = Depends(require_staff)
+):
+    """Move a scheduled post to a new future time."""
+    social_publish._assert_enabled()
+    return social_publish.reschedule_post(str(post_id), body.scheduled_at)
+
+
+@router.patch("/social/posts/{post_id}", response_model=SocialPostResponse)
+async def edit_social_post(
+    post_id: UUID, body: SocialEditPostRequest, auth: dict = Depends(require_staff)
+):
+    """Edit a scheduled post's copy and/or images before it publishes (re-validated
+    against the Platform Spec at publish)."""
+    social_publish._assert_enabled()
+    return social_publish.edit_scheduled_post(
+        str(post_id), copy=body.copy, image_urls=body.image_urls
+    )
+
+
+# ── P3 Manager: approval queue (batch publish + cadence queue enroll) ─────────
+
+@router.post(
+    "/clients/{client_id}/social/drafts/publish-batch",
+    response_model=list[SocialBatchPublishResult],
+)
+async def publish_social_drafts_batch(
+    client_id: UUID, body: SocialBatchPublishRequest, auth: dict = Depends(require_staff)
+):
+    """Approve & publish/schedule several Drafts at once (partial success — each item
+    is independent). Freeze-gated."""
+    social_publish._assert_enabled()
+    assert_not_frozen(str(client_id))
+    return social_fanout.publish_drafts_batch(str(client_id), body.items)
+
+
+@router.post("/social/drafts/{draft_id}/queue", response_model=SocialDraftResponse)
+async def queue_social_draft(draft_id: UUID, auth: dict = Depends(require_staff)):
+    """Enroll a ready Draft in the cadence drip queue (approved, waiting for its slot)."""
+    social_publish._assert_enabled()
+    return social_fanout.enqueue_draft(str(draft_id))
+
+
+@router.post("/social/drafts/{draft_id}/unqueue", response_model=SocialDraftResponse)
+async def unqueue_social_draft(draft_id: UUID, auth: dict = Depends(require_staff)):
+    """Remove a Draft from the cadence queue (queued → ready)."""
+    social_publish._assert_enabled()
+    return social_fanout.dequeue_draft(str(draft_id))
+
+
+# ── P3 Manager: Social Policy + cadence schedules ─────────────────────────────
+
+@router.get("/clients/{client_id}/social/policy", response_model=SocialPolicyResponse)
+async def get_social_policy(client_id: UUID, auth: dict = Depends(require_auth)):
+    social_publish._assert_enabled()
+    return social_policy.get_policy(str(client_id))
+
+
+@router.put("/clients/{client_id}/social/policy", response_model=SocialPolicyResponse)
+async def put_social_policy(
+    client_id: UUID, body: SocialPolicyUpdateRequest, auth: dict = Depends(require_staff)
+):
+    """Set the Social Policy consumer fields (ceiling + prompt templates). Only fields
+    present in the request change (an explicit null clears)."""
+    social_publish._assert_enabled()
+    return social_policy.upsert_policy(str(client_id), body.model_dump(exclude_unset=True))
+
+
+@router.get("/clients/{client_id}/social/schedule", response_model=SocialSchedulesResponse)
+async def get_social_schedules(client_id: UUID, auth: dict = Depends(require_auth)):
+    social_publish._assert_enabled()
+    return social_schedules.get_schedules(str(client_id))
+
+
+@router.put("/clients/{client_id}/social/schedule", response_model=SocialSchedulesResponse)
+async def put_social_schedule(
+    client_id: UUID, body: SocialScheduleUpsertRequest, auth: dict = Depends(require_staff)
+):
+    """Create/replace one platform's cadence schedule (recomputes next_run_at)."""
+    social_publish._assert_enabled()
+    return social_schedules.upsert_schedule(
+        str(client_id), body.model_dump(), auth.get("user_id")
+    )
+
+
+@router.delete("/clients/{client_id}/social/schedule", response_model=SocialSchedulesResponse)
+async def delete_social_schedule(
+    client_id: UUID, platform: str, auth: dict = Depends(require_staff)
+):
+    """Remove a platform's cadence schedule."""
+    social_publish._assert_enabled()
+    return social_schedules.delete_schedule(str(client_id), platform)
 
 
 # ── P1 competitor research (analyze-in-place; ADR-0002) ───────────────────────

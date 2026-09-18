@@ -189,6 +189,7 @@ class SocialPresignResponse(BaseModel):
 class SocialPostResponse(BaseModel):
     id: UUID
     client_id: UUID
+    draft_id: Optional[UUID] = None
     platform: str
     account_id: Optional[str] = None
     status: str
@@ -248,3 +249,80 @@ class SocialCompetitorSignalResponse(BaseModel):
 class SocialResearchTriggerResponse(BaseModel):
     job_id: UUID
     already_running: bool = False
+
+
+# ── P3 Manager: calendar / edit / approval queue / policy / schedules ─────────
+
+class SocialRescheduleRequest(BaseModel):
+    scheduled_at: datetime
+
+
+class SocialEditPostRequest(BaseModel):
+    copy: Optional[str] = None
+    image_urls: Optional[list[str]] = None
+
+
+class SocialBatchPublishItem(BaseModel):
+    draft_id: UUID
+    account_id: str
+    scheduled_at: Optional[datetime] = None   # future time; omit = publish now
+
+
+class SocialBatchPublishRequest(BaseModel):
+    items: list[SocialBatchPublishItem] = Field(default_factory=list)
+
+
+class SocialBatchPublishResult(BaseModel):
+    draft_id: str
+    ok: bool
+    post_id: Optional[str] = None
+    error: Optional[str] = None
+
+
+class SocialPolicyResponse(BaseModel):
+    monthly_ceiling_usd: Optional[float] = None
+    image_prompt_template: Optional[str] = None
+    text_prompt_template: Optional[str] = None
+    effective_ceiling_usd: float
+    default_ceiling_usd: float
+
+
+class SocialPolicyUpdateRequest(BaseModel):
+    """PUT the Social Policy consumer fields (owner Q3). Only fields present in the
+    request are changed; an explicit null clears that field. Unset fields are untouched."""
+    monthly_ceiling_usd: Optional[float] = None
+    image_prompt_template: Optional[str] = None
+    text_prompt_template: Optional[str] = None
+
+
+class SocialScheduleItem(BaseModel):
+    id: Optional[UUID] = None
+    platform: str
+    account_id: Optional[str] = None
+    cadence: str = "disabled"
+    day_of_week: Optional[int] = None
+    day_of_month: Optional[int] = None
+    hour_local: int = 9
+    is_active: bool = False
+    auto_fill: bool = False
+    next_run_at: Optional[datetime] = None
+    last_run_at: Optional[datetime] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialSchedulesResponse(BaseModel):
+    timezone: Optional[str] = None
+    auto_publish_enabled: bool = False
+    schedules: list[SocialScheduleItem] = Field(default_factory=list)
+
+
+class SocialScheduleUpsertRequest(BaseModel):
+    platform: str
+    account_id: Optional[str] = None
+    cadence: str = "disabled"                # disabled | weekly | biweekly | monthly
+    day_of_week: Optional[int] = None        # 0=Mon (weekly/biweekly)
+    day_of_month: Optional[int] = None       # 1..28 (monthly)
+    hour_local: int = 9
+    is_active: bool = True
+    auto_fill: bool = False                  # drip queued drafts (gated + opt-in)

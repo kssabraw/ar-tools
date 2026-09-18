@@ -288,8 +288,14 @@ Creator exists.
     composer page is now tabbed **Compose / Create with AI / Drafts**. Config: `social_angles_count` (4) /
     `_max_tokens`. **The P2 Creator is functionally complete** (copy + image + angle fan-out + draft
     review/publish); competitor-signal grounding of angles rides P1.
-- **P3 Manager + publish** — the publish lifecycle is built; Calendar / Cadence / a richer approval
-  queue are ⬜ not built (the compose screen has schedule-for-later + a recent-posts list, not a calendar).
+- **P3 Manager + publish** — ✅ **BUILT (draft PR #1235, branch `claude/social-p3-manager`)**: a
+  Calendar tab (cross-platform scheduled + published, with edit/cancel/reschedule), the **cadence
+  engine** (`social_post_schedules` + `enqueue_due_social_schedules`, GBP-literal clone; **auto-fill
+  drips an explicitly-`queued` approved draft**, three-gated + ships dark behind
+  `social_auto_publish_enabled`), an **approval queue** (batch publish + a cadence queue), and the
+  **`social_policy` write path** (Settings tab: ceiling + image/text prompt templates). See
+  `HANDOFF.md` (2026-09-18 P3 entry) + `p3-manager-plan-v1_0.md`. Auto-fill's unattended publish is
+  deployed-only (sandbox egress-blocked from PostForMe).
 - **P4 Agents, autonomy, analytics** — ⬜ not built.
 - **P5 Deferred** — **YouTube poster ✅ BUILT + MERGED** (PR #1211, re-scoped against PostForMe — a YT
   post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
