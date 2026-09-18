@@ -1,4 +1,4 @@
-import { Fragment, useState, useEffect, useMemo } from 'react'
+import { Fragment, useState, useEffect, useMemo, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2, RefreshCw, Crosshair, Gauge } from 'lucide-react'
@@ -170,11 +170,15 @@ interface CategoryMatch {
   category: string | null
   label: string
   confidence: number
-  // location extracted from the same query (independent of the category match)
+  // location + literal service extracted from the same query (independent of
+  // the category match — `service` powers the "Grade it live" handoff)
   city?: string | null
   state?: string | null
   county?: string | null
+  service?: string | null
 }
+
+interface GradePrefill { city: string; state: string; service: string }
 
 type Sort = 'v3' | 'build' | 'profit' | 'payback' | 'expected' | 'value' | 'leads' | 'demand'
 type Tier = 'low' | 'mid' | 'high'
@@ -264,6 +268,9 @@ export function LeadOff() {
   const [searchText, setSearchText] = useState('')
   const [searchResult, setSearchResult] = useState<CategoryMatch | null>(null)
   const [searching, setSearching] = useState(false)
+  // Board-search → "Grade it live" handoff: when a resolved city+service has no
+  // board row, offer an on-demand live grade prefilled into the Grade tab.
+  const [gradePrefill, setGradePrefill] = useState<GradePrefill | null>(null)
   const [page, setPage] = useState(0)
   const PAGE_SIZE = 50
 
@@ -370,6 +377,18 @@ export function LeadOff() {
     const rows = board?.markets ?? []
     return colSort ? sortMarkets(rows, colSort) : rows
   }, [board, colSort])
+  // When the board search resolved a city + a service but the board has no such
+  // row, we can grade that exact cell on demand — offer the live-grade handoff.
+  const gradeHandoff = useMemo<GradePrefill | null>(() => {
+    if (isLoading || displayRows.length) return null
+    const city = (applied.city || searchResult?.city || '').trim()
+    const st = (applied.state || searchResult?.state || '').trim().toUpperCase()
+    // grade the LITERAL keyword the user typed (falls back to the mapped
+    // category only if the parser didn't isolate the service phrase)
+    const service = (searchResult?.service || searchResult?.category || '').trim()
+    if (!city || st.length !== 2 || !service) return null
+    return { city, state: st, service }
+  }, [isLoading, displayRows.length, applied.city, applied.state, searchResult])
   const pageCount = Math.max(1, Math.ceil(displayRows.length / PAGE_SIZE))
   const safePage = Math.min(page, pageCount - 1)
   const pageRows = displayRows.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
@@ -433,7 +452,8 @@ export function LeadOff() {
           </TabButton>
         </div>
 
-        {view === 'grade' && <GradeView />}
+        {view === 'grade' && <GradeView prefill={gradePrefill}
+          onConsumed={() => setGradePrefill(null)} />}
         {view === 'grade-all' && <GradeAllView />}
         {view === 'neighborhoods' && <NeighborhoodsView />}
         {view === 'tryouts' && <TryoutsView />}
@@ -656,6 +676,19 @@ export function LeadOff() {
                     No markets match.{applied.maxPop && Number(applied.maxPop) <= 30000
                       ? ' The board currently covers ≥30k population — sub-30k markets appear once the scanner is rerun at a lower floor.'
                       : ''}
+                    {gradeHandoff && (
+                      <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column',
+                        alignItems: 'center', gap: 8 }}>
+                        <div style={{ fontSize: 13, color: '#475569' }}>
+                          Nothing precomputed for <b>{gradeHandoff.service}</b> in{' '}
+                          <b>{gradeHandoff.city}, {gradeHandoff.state}</b> — but you can grade it on demand.
+                        </div>
+                        <button style={primaryBtn}
+                          onClick={() => { setGradePrefill(gradeHandoff); setView('grade') }}>
+                          <Gauge size={14} /> Grade it live (~$0.06)
+                        </button>
+                      </div>
+                    )}
                   </td></tr>
                 )}
               </tbody>
@@ -1201,11 +1234,15 @@ interface GradeResponse {
   scout?: ScoutBlock | null   // Pass-2 enrichment, stored after a scout pull
 }
 
-function GradeView() {
+function GradeView({ prefill, onConsumed }: {
+  prefill?: GradePrefill | null; onConsumed?: () => void
+} = {}) {
   const qc = useQueryClient()
-  const [city, setCity] = useState('')
-  const [state, setState] = useState('')
-  const [service, setService] = useState('')
+  // Prefill from a board-search "Grade it live" handoff (fields seeded once on
+  // mount; the grade auto-runs below).
+  const [city, setCity] = useState(prefill?.city ?? '')
+  const [state, setState] = useState(prefill?.state ?? '')
+  const [service, setService] = useState(prefill?.service ?? '')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<GradeResponse | null>(null)
@@ -1306,6 +1343,20 @@ function GradeView() {
           : msg)
     }
   }
+
+  // Arrived via the board-search handoff → the "Grade it live (~$0.06)?" click
+  // was the deliberate spend action, so run the grade once (fields already
+  // seeded from prefill) and clear the parent's prefill so it can't re-fire.
+  const didAutoRun = useRef(false)
+  useEffect(() => {
+    if (prefill && !didAutoRun.current) {
+      didAutoRun.current = true
+      onConsumed?.()
+      submit()
+    }
+    // run once on mount; prefill is a mount-time handoff, not a live input
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const demand = row?.vol ?? row?.xdem ?? null
 

@@ -798,3 +798,24 @@ returns nothing when it resolves a city+service with no board row, even though a
 live grade is one tab over. Proposed fix: an inline "Grade it live (~$0.06)?"
 handoff from the empty board-search state into the grade flow (offer a button,
 never auto-spend). Awaiting owner go-ahead.
+
+## LeadOff — Board-search "Grade it live?" handoff (2026-09-18)
+
+**Status: DECIDED + BUILT** (the "Related UX gap" from the prior entry — owner
+gave the go-ahead). When the Board smart-search resolves a city + service but the
+precomputed board has no such row, the empty state now offers **"Grade it live
+(~$0.06)"**, which hands off to the Grade tab (prefilled) and auto-runs the grade.
+
+Decisions:
+- **Offer, then auto-run on the click** — the "Grade it live (~$0.06)?" button IS
+  the deliberate spend action (cost named on it), so landing on the Grade tab and
+  requiring a second click would be redundant. Auto-runs once (guarded by a ref;
+  the parent prefill is cleared on consume so a later manual visit can't re-fire).
+  Grading stays staff- + budget-gated like any grade.
+- **Grades the literal keyword**, consistent with the same-day keyword-decoupling
+  fix: `leadoff_category_match` now extracts the literal `service` phrase (its own
+  tool-schema field, independent of the mapped category), and the handoff seeds
+  the Grade form with it (fallback to the mapped category only if the parser
+  didn't isolate the service).
+- **Board search stays a free filter** — no live call is made from the search box
+  itself; the handoff is a one-click bridge to the paid Grade flow.

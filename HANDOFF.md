@@ -1,5 +1,11 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff — Board-search "Grade it live?" handoff (built, on PR #1217's branch).**
+
+The Board search box is a filter over the precomputed board with no live fallback, so "roofer in cypress, ca" dead-ended silently even though an on-demand live grade is one tab over. Now, when the smart-search resolves a **city + a service** but the board returns **0 rows**, the empty state offers **"Grade it live (~$0.06)"** — a button that hands off to the Grade tab, prefilled, and auto-runs the grade (the button click is the deliberate spend action; it's staff- + budget-gated like any grade). It grades the **literal keyword** the user typed: the category-search (`leadoff_category_match`) now also extracts the literal `service` phrase (a new tool-schema field + `resolve_location` passthrough — independent of the mapped category), and the handoff seeds the Grade form with `service` (fallback to the mapped category only if the parser didn't isolate it). Frontend: a `gradeHandoff` memo + `gradePrefill` state on `pages/LeadOff.tsx`; `GradeView` gained `prefill`/`onConsumed` props (seed fields on mount, auto-run once via a `didAutoRun` ref, then clear the parent prefill so it can't re-fire). Backend `service` extraction unit-tested (`test_leadoff_category_match.py`); `tsc`/`vite build` clean; **zero new eslint errors** (the file's 4 are pre-existing). Closes the "why didn't it just pull it" gap end-to-end.
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff grader — grade the LITERAL keyword, not the catalog category (fix, on PR #1217's branch).**
 
 Owner-reported flaw: a grade for "roofer" silently graded **"Roofing contractor"**. Root cause — `_stem` collapses `roofer→roof`, so `resolve_service` mapped the typed term to the catalog category and then pulled **both** the Google Ads volume **and** the Maps SERP on the *category*, discarding the user's actual keyword. The catalog mapping existed only to borrow a real CPL (lead value), but it overreached and hijacked the pulled keyword.

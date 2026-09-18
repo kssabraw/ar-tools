@@ -97,8 +97,10 @@ async def category_search(
     auth: dict = Depends(require_auth),
 ) -> dict:
     """Map a free-text search to a scanned category via one forced Sonnet call.
-    Returns {matched, category, label, confidence}; below the confidence
-    threshold (or no real match) label is "No Data Provided"."""
+    Returns {matched, category, label, confidence, city, state, county, service}
+    — the location + literal service phrase are extracted independently of the
+    category match (service powers the board-search "Grade it live" handoff);
+    below the confidence threshold (or no real match) label is "No Data Provided"."""
     from services import leadoff_category_match
     cats = leadoff_service.list_categories()
     return await leadoff_category_match.match_category(body.query, cats)

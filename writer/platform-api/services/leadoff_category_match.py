@@ -57,6 +57,14 @@ _TOOL_SCHEMA = {
                            "'County'/'Parish' (e.g. 'Cuyahoga'). Empty string if "
                            "no county is mentioned.",
         },
+        "service": {
+            "type": "string",
+            "description": "The business type / service the user described, in "
+                           "THEIR OWN words, with any location removed (e.g. "
+                           "'roofer', 'tree guys'). This is the literal phrase, "
+                           "NOT the mapped category. Empty string if the query is "
+                           "location-only.",
+        },
     },
     "required": ["category", "confidence"],
 }
@@ -102,11 +110,13 @@ def normalize_state(raw: Any) -> str | None:
 
 
 def resolve_location(result: dict[str, Any] | None) -> dict[str, Any]:
-    """Extract {city, state, county} from the model result. State is normalized
-    to a 2-letter code (else None); city/county are trimmed strings (else None).
-    Pure — location applies INDEPENDENTLY of the category match/threshold, so a
-    pure-location query ('Cuyahoga County Ohio') still filters even when no
-    service category is present."""
+    """Extract {city, state, county, service} from the model result. State is
+    normalized to a 2-letter code (else None); city/county/service are trimmed
+    strings (else None). Pure — location + the literal service phrase apply
+    INDEPENDENTLY of the category match/threshold, so a pure-location query
+    ('Cuyahoga County Ohio') still filters, and the literal service ('roofer')
+    is available for an on-demand grade handoff even when it maps to a category
+    that isn't on the board."""
     r = result or {}
 
     def _clean(key: str) -> str | None:
@@ -119,7 +129,7 @@ def resolve_location(result: dict[str, Any] | None) -> dict[str, Any]:
         return v or None
 
     return {"city": _clean("city"), "state": normalize_state(r.get("state")),
-            "county": _clean("county")}
+            "county": _clean("county"), "service": _clean("service")}
 
 
 def _no_data(confidence: float = 0.0, **extra: Any) -> dict[str, Any]:
