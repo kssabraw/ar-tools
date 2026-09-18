@@ -31,6 +31,7 @@ from services import (
     dataforseo_labs,
     keyword_research,
     keyword_research_audience,
+    llm_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -307,6 +308,9 @@ async def run_topic_strategy(client_id: str, ctx: dict, evidence: dict) -> Optio
             ),
             log_tag="keyword_topic_strategist",
         )
+        _it, _ot = llm_usage.anthropic_usage(resp)
+        llm_usage.record(provider="anthropic", model=settings.keyword_topic_model,
+                         operation="topic_strategist", input_tokens=_it, output_tokens=_ot)
         tool_uses = [b for b in resp.content if getattr(b, "type", None) == "tool_use"]
         emit_block = next((b for b in tool_uses if b.name == "emit_topic_plan"), None)
         if emit_block is not None:

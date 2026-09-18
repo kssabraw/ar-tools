@@ -40,6 +40,7 @@ from services import (
     keyword_research_audience,
     keyword_research_seeds,
     keyword_research_topics,
+    llm_usage,
 )
 
 logger = logging.getLogger(__name__)
@@ -464,13 +465,19 @@ def enqueue_topic_research(
 async def run_topic_research_job(job: dict) -> None:
     payload = job.get("payload") or {}
     supabase = get_supabase()
+    client_id = payload.get("client_id") or job.get("entity_id")
     try:
-        result = await run_topic_research(
-            payload.get("client_id") or job.get("entity_id"),
-            payload.get("seeds") or [],
-            location_code=payload.get("location_code"),
-            language_code=payload.get("language_code"),
-        )
+        # Record the topic-research LLM spend (evidence gathering + the SerMaStr
+        # topic-strategist reasoning loop) to the shared usage ledger.
+        with llm_usage.usage_context(
+            source="keyword_topic_llm", client_id=client_id, actor_id=payload.get("user_id"),
+        ):
+            result = await run_topic_research(
+                client_id,
+                payload.get("seeds") or [],
+                location_code=payload.get("location_code"),
+                language_code=payload.get("language_code"),
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job["id"]).execute()

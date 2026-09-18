@@ -42,7 +42,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import dataforseo_labs, keyword_research_serp
+from services import dataforseo_labs, keyword_research_serp, llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -1466,13 +1466,19 @@ async def run_keyword_research_job(job: dict) -> None:
     """async_jobs handler for keyword_research."""
     payload = job.get("payload") or {}
     supabase = get_supabase()
+    client_id = payload.get("client_id") or job.get("entity_id")
     try:
-        result = await run_keyword_research(
-            payload.get("client_id") or job.get("entity_id"),
-            payload.get("seeds") or [],
-            location_code=payload.get("location_code"),
-            language_code=payload.get("language_code"),
-        )
+        # Record the LLM layers' token spend (intent fan-out, audience ICP, seed
+        # suggestions, blog topics — all via report_llm) to the shared ledger.
+        with llm_usage.usage_context(
+            source="keyword_research_llm", client_id=client_id, actor_id=payload.get("user_id"),
+        ):
+            result = await run_keyword_research(
+                client_id,
+                payload.get("seeds") or [],
+                location_code=payload.get("location_code"),
+                language_code=payload.get("language_code"),
+            )
         supabase.table("async_jobs").update(
             {"status": "complete", "result": result, "completed_at": "now()"}
         ).eq("id", job["id"]).execute()
