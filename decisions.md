@@ -706,13 +706,23 @@ salvageable use; lead-value calibration is risky (home-service jobs are insuranc
 → card data undercounts → biases CPL down), and the better lead-value source may be the agency's
 own won-client close data via the existing `leadoff_calibration` loop.
 
-**AGREED PREP (not yet started, no vendor commit / no new dep):** build a runnable
-`scripts/enigma_coverage_pilot.py` (reads `ENIGMA_API_KEY` from env, takes a ~12 home-service-SAB
-ground-truth CSV, calls Enigma's Small Business API, prints the coverage + dollar-plausibility
-scorecard vs the plan's §5 thresholds; refuses to run without a key) + assemble the ~12-business
-ground-truth set — so the owner runs the pilot in one command once they have a trial key.
-Alternative the owner may pick instead: skip Enigma for lead-value and wire the
-won-client-close-data calibration path (no vendor).
+**AGREED PREP — BUILT 2026-09-18 (owner picked this over the sub-10k/won-client alternatives).**
+`writer/platform-api/scripts/enigma_coverage_pilot.py` + `scripts/leadoff_enigma_ground_truth.csv`
+now exist: a standalone (stdlib + `httpx`, no app import, **no new dependency**) harness that reads
+`ENIGMA_API_KEY` + `ENIGMA_GRAPHQL_URL`, **refuses to run without a key**, calls Enigma once per
+ground-truth business, and prints the §5 coverage/growth/lead-value scorecard + the §5.4 outcome
+(deterministic verdicts, unit-tested 27 cases; §5.3 avg-ticket plausibility is an auto flag with an
+authoritative `plausible_human` column). It reuses the **outreach module's live-verified** Enigma
+GraphQL `search(searchInput)` shape (`outreach/api/services/enigma_graphql.py`) rather than guessing
+endpoints — the single `cardTransactions` connection + the `enigmaId: null`-on-match gotcha — and
+writes a raw-envelope JSONL so the real transaction-count slug is discoverable on the first run
+(`--count-quantity`). `--dry-run` validates the CSV + prints the query with no key/egress. **Bucket A
+is pre-filled** with the 5 real Little Rock water-damage competitors (from `competitor_locations`);
+**bucket B (revenue anchors) + the positive control are `#`-placeholder rows the owner fills.** Plan
+§6a documents the run command. **Still cannot RUN from a Claude Code session** (no trial key + no
+egress) — the owner runs `python scripts/enigma_coverage_pilot.py` once they have a key and pastes
+the scorecard into plan §8. The won-client-close-data calibration path remains the alternative
+lead-value source if the pilot's §5.3 fails (expected).
 
 ## LeadOff — grade-all bulk sweep ("Rank cities") (2026-09-18)
 
