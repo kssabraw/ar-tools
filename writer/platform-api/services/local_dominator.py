@@ -458,6 +458,16 @@ _POLL_BACKOFF: dict[str, tuple[float, int]] = {}
 _POLL_BACKOFF_BASE_SECONDS = 30.0
 _POLL_BACKOFF_CAP_SECONDS = 600.0
 
+# Scans currently being advanced by a poll tick, so the client-driven poll (the
+# UI hits /maps/poll every ~10s) and the 5-min scheduler tick can't run
+# poll_scan_dfs on the SAME scan at once. Both paths funnel through _poll_rows.
+# A tick fetching a large grid's outstanding pins can outlast the client's poll
+# interval, and overlapping ticks double-post the same errored pins to DataForSEO
+# (wasted paid task_post calls, an orphaned task, and racing attempt counters).
+# In-memory is correct: platform-api is a single process (numReplicas: 1) that
+# runs both the scheduler and the request handlers on one event loop.
+_POLLING_NOW: set[str] = set()
+
 
 def _poll_allowed(scan_id: str) -> bool:
     entry = _POLL_BACKOFF.get(scan_id)
@@ -570,9 +580,15 @@ def enqueue_completion_hooks(scan_id: str, trigger: Optional[str] = None) -> Non
 async def _poll_rows(rows: list[dict]) -> int:
     advanced = 0
     for scan_row in rows:
+        scan_id = scan_row.get("id")
         # Skip scans still inside their error-backoff window (see _POLL_BACKOFF).
-        if not _poll_allowed(scan_row.get("id")):
+        if not _poll_allowed(scan_id):
             continue
+        # Skip a scan another tick is already advancing (see _POLLING_NOW), so
+        # the client poll and the scheduler tick don't double-post its pins.
+        if scan_id in _POLLING_NOW:
+            continue
+        _POLLING_NOW.add(scan_id)
         try:
             # Route by the scan's OWN provider (not the config flag), so LD scans
             # in flight during the cutover finish on LD and DataForSEO scans on
@@ -584,7 +600,9 @@ async def _poll_rows(rows: list[dict]) -> int:
                 await poll_scan(scan_row)
             advanced += 1
         except Exception as exc:
-            logger.warning("maps_scan_poll_failed", extra={"scan_id": scan_row.get("id"), "error": str(exc)})
+            logger.warning("maps_scan_poll_failed", extra={"scan_id": scan_id, "error": str(exc)})
+        finally:
+            _POLLING_NOW.discard(scan_id)
     return advanced
 
 

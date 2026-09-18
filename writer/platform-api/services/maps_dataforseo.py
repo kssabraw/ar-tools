@@ -31,6 +31,7 @@ import asyncio
 import base64
 import logging
 import math
+from datetime import datetime, timezone
 from statistics import mean
 from typing import Optional
 
@@ -317,15 +318,36 @@ def timeout_completes(done: int, total: int) -> bool:
     return bool(total) and (done / total) >= 0.9
 
 
-def next_scan_state(total: int, non_terminal: int, done: int, past_timeout: bool) -> str:
+def straggler_finalizes(done: int, total: int, ratio: float) -> bool:
+    """Whether a near-done scan may finalize early on the straggler timeout: at
+    least `ratio` of its pins are done. Distinct from `timeout_completes` (the
+    full poll-timeout's 90% floor) so the two thresholds tune independently."""
+    return bool(total) and (done / total) >= ratio
+
+
+def next_scan_state(
+    total: int,
+    non_terminal: int,
+    done: int,
+    past_timeout: bool,
+    past_straggler: bool = False,
+    straggler_ratio: float = 0.85,
+) -> str:
     """Given a scan's pin status counts, the next state of the scan:
     'complete' (every pin terminal), 'timeout_complete' (timed out with ≥90%
-    done → keep partial data), 'failed' (timed out below that), or 'polling'.
-    Pure — the DB read + finalize/fail side effects live in poll_scan_dfs."""
+    done, OR past the shorter straggler timeout with ≥`straggler_ratio` done →
+    keep partial data), 'failed' (full timeout below the 90% floor), or
+    'polling'. Pure — the DB read + finalize/fail side effects live in
+    poll_scan_dfs."""
     if total and non_terminal == 0:
         return "complete"
     if past_timeout:
         return "timeout_complete" if timeout_completes(done, total) else "failed"
+    # Near-done early finalize: essentially finished except for unrecoverable
+    # stragglers → stop waiting on them well before the full timeout. Never fails
+    # a scan (below the ratio it just keeps polling until the real timeout).
+    if past_straggler and straggler_finalizes(done, total, straggler_ratio):
+        return "timeout_complete"
     return "polling"
 
 
@@ -644,7 +666,12 @@ async def poll_scan_dfs(scan_row: dict) -> str:
     # more non-terminal pins certainly remain, so the scan can't be complete and
     # we skip the scan-wide status read entirely (only the timeout still matters).
     past_timeout = _past_poll_timeout(scan_row)
-    if len(batch) >= settings.maps_dfs_poll_tasks_per_tick and not past_timeout:
+    past_straggler = _past_straggler_timeout(scan_row)
+    if (
+        len(batch) >= settings.maps_dfs_poll_tasks_per_tick
+        and not past_timeout
+        and not past_straggler
+    ):
         return "polling"
 
     all_pins = (
@@ -655,7 +682,11 @@ async def poll_scan_dfs(scan_row: dict) -> str:
     done = sum(1 for p in all_pins if p["status"] == "done")
     failed = sum(1 for p in all_pins if p["status"] == "failed")
 
-    state = next_scan_state(total, non_terminal, done, past_timeout)
+    state = next_scan_state(
+        total, non_terminal, done, past_timeout,
+        past_straggler=past_straggler,
+        straggler_ratio=settings.maps_dfs_straggler_min_done_ratio,
+    )
     if state == "complete":
         return await _finalize_scan(supabase, scan_row, our_place_id, failed)
     if state == "timeout_complete":
@@ -723,3 +754,14 @@ def _past_poll_timeout(scan_row: dict) -> bool:
     """Reuse the LD poll-timeout semantics (age since requested_at/created_at)."""
     from services.local_dominator import _past_poll_timeout as _ld_timeout
     return _ld_timeout(scan_row)
+
+
+def _past_straggler_timeout(scan_row: dict) -> bool:
+    """Whether the scan is older than the (shorter) straggler timeout — the age
+    gate for the near-done early finalize. Same clock as _past_poll_timeout."""
+    requested = scan_row.get("requested_at") or scan_row.get("created_at")
+    if not requested:
+        return False
+    started = datetime.fromisoformat(str(requested).replace("Z", "+00:00"))
+    age_min = (datetime.now(timezone.utc) - started).total_seconds() / 60
+    return age_min > settings.maps_dfs_straggler_timeout_minutes

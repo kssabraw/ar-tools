@@ -865,6 +865,8 @@ export interface MapsScanSummary {
   error: string | null
   /** Live pin progress for an in-flight DataForSEO scan (null otherwise). */
   pins_done?: number | null
+  /** Pins DataForSEO gave up on; counted with pins_done as "settled". */
+  pins_failed?: number | null
   pins_total?: number | null
 }
 

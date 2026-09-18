@@ -466,3 +466,43 @@ def test_enqueue_due_maps_scans_honors_client_timezone(monkeypatch):
     # UTC 13:00 = 09:00 EDT — past 8am local: due.
     count, enqueued, _s, _f = _run_sweep(monkeypatch, due_order=["nyc"], hour=13, **common)
     assert count == 1 and enqueued == ["nyc"]
+
+
+# ---------------------------------------------------------------------------
+# _poll_rows concurrency guard (_POLLING_NOW) — the client poll (~10s) and the
+# scheduler tick (5min) must not advance the same scan at once (double-posting
+# its pins to DataForSEO). Both paths funnel through _poll_rows.
+# ---------------------------------------------------------------------------
+import asyncio  # noqa: E402
+
+
+def test_poll_rows_skips_scan_already_being_polled(monkeypatch):
+    calls: list[str] = []
+
+    async def fake_poll(scan_row):
+        calls.append(scan_row["id"])
+        return "polling"
+
+    monkeypatch.setattr(local_dominator, "poll_scan", fake_poll)
+    # Simulate another tick already holding "busy".
+    local_dominator._POLLING_NOW.add("busy")
+    try:
+        rows = [{"id": "busy", "provider": "ld"}, {"id": "free", "provider": "ld"}]
+        advanced = asyncio.run(local_dominator._poll_rows(rows))
+    finally:
+        local_dominator._POLLING_NOW.discard("busy")
+
+    assert calls == ["free"]        # busy skipped, free polled once
+    assert advanced == 1
+    assert "free" not in local_dominator._POLLING_NOW  # released after the tick
+
+
+def test_poll_rows_releases_guard_on_error(monkeypatch):
+    async def boom(scan_row):
+        raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(local_dominator, "poll_scan", boom)
+    asyncio.run(local_dominator._poll_rows([{"id": "s1", "provider": "ld"}]))
+    # finally: clause clears the guard even when the poll raised, so the next
+    # tick can retry the scan instead of it being wedged out forever.
+    assert "s1" not in local_dominator._POLLING_NOW

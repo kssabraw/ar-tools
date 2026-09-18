@@ -275,6 +275,39 @@ def test_next_scan_state_decisions():
     assert m.next_scan_state(0, 0, 0, past_timeout=True) == "failed"
 
 
+def test_straggler_finalizes_threshold():
+    assert m.straggler_finalizes(85, 100, 0.85) is True
+    assert m.straggler_finalizes(84, 100, 0.85) is False
+    assert m.straggler_finalizes(0, 0, 0.85) is False  # no divide-by-zero
+
+
+def test_next_scan_state_straggler_early_finalize():
+    # Past the (shorter) straggler timeout with ≥ratio done and stragglers left →
+    # finalize early with partial data instead of waiting for the full timeout.
+    assert m.next_scan_state(
+        100, 13, 86, past_timeout=False, past_straggler=True, straggler_ratio=0.85,
+    ) == "timeout_complete"
+    # Past straggler timeout but BELOW the ratio (big scan still resolving) →
+    # keep polling; a straggler timeout must never fail a scan.
+    assert m.next_scan_state(
+        100, 40, 60, past_timeout=False, past_straggler=True, straggler_ratio=0.85,
+    ) == "polling"
+    # Not yet past the straggler timeout, even at a high done ratio → keep polling.
+    assert m.next_scan_state(
+        100, 13, 86, past_timeout=False, past_straggler=False, straggler_ratio=0.85,
+    ) == "polling"
+    # Full timeout still takes precedence (below its 90% floor → failed) even when
+    # the straggler window has also elapsed.
+    assert m.next_scan_state(
+        100, 50, 50, past_timeout=True, past_straggler=True, straggler_ratio=0.85,
+    ) == "failed"
+    # Straggler window elapsed but every pin already terminal → complete (the
+    # non_terminal==0 short-circuit wins over the straggler branch).
+    assert m.next_scan_state(
+        100, 0, 87, past_timeout=False, past_straggler=True, straggler_ratio=0.85,
+    ) == "complete"
+
+
 def test_competitor_summary_excludes_client_and_orders():
     out = m.build_competitor_summary_dfs(_dfs_pin_rows(), our_place_id="US")
     # A: positions across the 5 pins → ranks 1,2,2,1,3 (found 5, top3 5, avg 1.8)

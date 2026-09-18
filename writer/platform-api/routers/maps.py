@@ -276,7 +276,9 @@ async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> lis
             supabase.table("maps_scan_pins").select("scan_id, status")
             .in_("scan_id", polling_dfs).execute()
         ).data or []
-        progress: dict[str, dict[str, int]] = {sid: {"done": 0, "total": 0} for sid in polling_dfs}
+        progress: dict[str, dict[str, int]] = {
+            sid: {"done": 0, "failed": 0, "total": 0} for sid in polling_dfs
+        }
         for p in pins:
             g = progress.get(p.get("scan_id"))
             if g is None:
@@ -284,10 +286,17 @@ async def list_scans(client_id: UUID, auth: dict = Depends(require_auth)) -> lis
             g["total"] += 1
             if p.get("status") == "done":
                 g["done"] += 1
+            elif p.get("status") == "failed":
+                g["failed"] += 1
         for r in rows:
             g = progress.get(r["id"])
             if g and g["total"]:
-                r["pins_done"], r["pins_total"] = g["done"], g["total"]
+                # pins_failed lets the UI count SETTLED pins (done + failed) for a
+                # bar that keeps climbing through the end-of-scan tail instead of
+                # freezing at the last resolvable pin.
+                r["pins_done"], r["pins_failed"], r["pins_total"] = (
+                    g["done"], g["failed"], g["total"],
+                )
     return [MapsScanSummary(**r) for r in rows]
 
 

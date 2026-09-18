@@ -1022,7 +1022,27 @@ class Settings(BaseSettings):
     maps_dfs_poll_concurrency: int = 10
     # A pin task that comes back a DataForSEO error is reposted (fresh task) up
     # to this many attempts, then marked failed (a null hole in the grid).
-    maps_dfs_pin_max_attempts: int = 3
+    # Lowered 3→2 (2026-09-18): a grid point DataForSEO returns a task-level
+    # ERROR on is almost always a permanent Maps-coverage gap for that lat/lng
+    # (rural / edge-of-grid), not a transient the same repost fixes. Each attempt
+    # cycle waits minutes for DataForSEO to re-error the reposted task, so the
+    # extra attempt just lengthened the visible end-of-scan stall (observed ~8
+    # min for 13 unresolved pins) without recovering the pin. Transient failures
+    # (429/5xx/network from fetch_task_result) are handled separately and NOT
+    # counted against this cap, so this only trims dead-location reposts.
+    maps_dfs_pin_max_attempts: int = 2
+    # Near-done early finalize: once a scan has been polling this long AND at
+    # least `maps_dfs_straggler_min_done_ratio` of its pins are already DONE,
+    # stop waiting on the last stragglers — finalize with partial data (the
+    # remaining pins become null holes, exactly as the full poll timeout does).
+    # This bounds the "stuck at ~86% for many minutes" tail that made scans look
+    # hung and drove users to cancel + re-run. Deliberately well under
+    # maps_scan_poll_timeout_minutes (30) and gated on a high done-ratio so a big
+    # multi-keyword scan still legitimately resolving (below the ratio at this
+    # age) is never cut short — only a scan that has essentially finished except
+    # for a few unrecoverable points is finalized early.
+    maps_dfs_straggler_timeout_minutes: int = 12
+    maps_dfs_straggler_min_done_ratio: float = 0.85
     # Local Rank Analysis report (auto-generated per keyword when a scan completes).
     # Sonnet writes the client-facing narrative from the deterministic geo-grid
     # rollups + competitor data; Top-5 competitors are those rated >= this with
