@@ -266,6 +266,10 @@ async def _judge_vibe(image: bytes, media_type: str) -> Optional[dict]:
                 ],
             }],
         )
+        from services import llm_usage
+        _it, _ot = llm_usage.anthropic_usage(msg)
+        llm_usage.record(provider="anthropic", model=settings.brand_guide_vibe_model,
+                         operation="vibe", input_tokens=_it, output_tokens=_ot)
         for block in msg.content:
             if getattr(block, "type", None) == "tool_use" and block.name == _TOOL_NAME:
                 return dict(block.input or {})

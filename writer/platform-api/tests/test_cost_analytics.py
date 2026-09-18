@@ -152,6 +152,21 @@ def test_instrumented_source_labels_and_groups():
     assert ca.group_for("director_chat") == "Agents"
 
 
+def test_ancillary_source_labels_and_groups():
+    assert ca.label_for("maps_report") == "Maps report narrative"
+    assert ca.label_for("rank_analysis") == "Rank analysis narrative"
+    assert ca.label_for("brand_guide") == "Brand guide generation"
+    assert ca.label_for("content_gap") == "Content gap analysis"
+    assert ca.label_for("website_builder") == "Website builder"
+    # report narratives + brand guide group under Reports
+    assert ca.group_for("maps_report") == "Reports"
+    assert ca.group_for("rank_analysis") == "Reports"
+    assert ca.group_for("brand_guide") == "Reports"
+    # content gap is research; website builder is content
+    assert ca.group_for("content_gap") == "Research"
+    assert ca.group_for("website_builder") == "Content pages"
+
+
 def test_aggregate_and_build_model_rows():
     events = [
         _ev("local_seo_page", 0.60, 100, 50, model="claude-sonnet-4-6"),

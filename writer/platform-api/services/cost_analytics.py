@@ -57,6 +57,11 @@ TYPE_LABELS: dict[str, str] = {
     "sermastr_chat": "SerMaStr chat",
     "pace_chat": "PACE chat",
     "director_chat": "DORA chat",
+    "maps_report": "Maps report narrative",
+    "rank_analysis": "Rank analysis narrative",
+    "brand_guide": "Brand guide generation",
+    "content_gap": "Content gap analysis",
+    "website_builder": "Website builder",
 }
 _PAGE_TYPES = {
     "blog_post", "service_page", "location_page", "local_seo_page",
@@ -65,13 +70,15 @@ _PAGE_TYPES = {
 }
 _RESEARCH_TYPES = {
     "keyword_research", "keyword_topic_research", "domain_intel",
-    "keyword_research_llm", "keyword_topic_llm",
+    "keyword_research_llm", "keyword_topic_llm", "content_gap",
 }
 _AGENT_TYPES = {
     "autonomy_run", "strategist_review", "qa_review",
     "sermastr_chat", "pace_chat", "director_chat",
 }
 _AI_VISIBILITY_TYPES = {"ai_visibility_scan", "ai_visibility_suggest"}
+_REPORT_TYPES = {"maps_report", "rank_analysis", "brand_guide"}
+_WEBSITE_TYPES = {"website_builder"}
 
 # ── model presentation ─────────────────────────────────────────────────────────
 # The cost_events view emits a raw model id per event (or 'mixed' for the
@@ -139,6 +146,10 @@ def group_for(cost_type: str) -> str:
         return "Agents"
     if cost_type in _AI_VISIBILITY_TYPES:
         return "AI visibility"
+    if cost_type in _REPORT_TYPES:
+        return "Reports"
+    if cost_type in _WEBSITE_TYPES:
+        return "Content pages"
     return "Other"
 
 

@@ -25,7 +25,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import rank_analysis
+from services import llm_usage, rank_analysis
 from services.google_docs import GoogleDocError, create_google_doc
 from services.markdown_html import markdown_to_html
 
@@ -380,7 +380,9 @@ async def run_rank_keyword_report_job(job: dict) -> None:
     job_id = job["id"]
     supabase = get_supabase()
     try:
-        fields = await generate_report_for_keyword(client_id, keyword_id)
+        # Record the narrative LLM spend (report_llm forced-tool call) to the ledger.
+        with llm_usage.usage_context(source="rank_analysis", client_id=client_id):
+            fields = await generate_report_for_keyword(client_id, keyword_id)
         top_blockers = fields.pop("_top_blockers", None)
 
         client = (

@@ -34,6 +34,7 @@ from typing import Optional
 
 from config import settings
 from db.supabase_client import get_supabase
+from services import llm_usage
 from services import website_theme_fonts as fonts
 from services.website_theme_precompile import (
     Precompiled,
@@ -481,7 +482,8 @@ async def compile_design(data: bytes) -> tuple[dict[str, bytes], dict, Precompil
     except PrecompileError as exc:
         raise ThemeError(str(exc)) from exc
 
-    tokens = await assign_roles(pre)
+    with llm_usage.usage_context(source="website_builder"):
+        tokens = await assign_roles(pre)
 
     # Best-effort by construction: a font CDN outage degrades the theme to
     # naming its families, it does not fail the compile.

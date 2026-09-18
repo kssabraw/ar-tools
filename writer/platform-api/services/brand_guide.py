@@ -39,6 +39,7 @@ from typing import Optional
 from config import settings
 from db.supabase_client import get_supabase
 from services import brand_guide_extract as bg
+from services import llm_usage
 
 logger = logging.getLogger(__name__)
 
@@ -329,7 +330,8 @@ async def generate_brand_guide(
     if not source_url:
         census = bg.VisualCensus(notes=["No source URL — visual capture skipped; guide will rest on voice/ICP assets."])
         captured = {"pages": [], "page_count": 0, "no_source_url": True}
-        return await _finalize_guide(guide_id, client_id, "", census, captured, None)
+        with llm_usage.usage_context(source="brand_guide", client_id=client_id):
+            return await _finalize_guide(guide_id, client_id, "", census, captured, None)
 
     # 1. Homepage — the visual authority.
     home = await _capture_page(source_url, "homepage")
@@ -375,7 +377,8 @@ async def generate_brand_guide(
 
     # 5. Vibe read (Phase 1.5) → synthesis (Phase 2) → write the row — the shared
     #    finalize path (§4.3 / §4.5 / §5.4).
-    return await _finalize_guide(guide_id, client_id, source_url, census, captured, homepage_png)
+    with llm_usage.usage_context(source="brand_guide", client_id=client_id):
+        return await _finalize_guide(guide_id, client_id, source_url, census, captured, homepage_png)
 
 
 # --------------------------------------------------------------------------
