@@ -466,13 +466,17 @@ def update_draft(
 
     # Recompute status when the draft is in a reviewable state (don't resurrect a
     # generating/failed/published row). Generation already succeeded, so this only
-    # decides ready ↔ needs_image/needs_board — never generation_failed.
+    # decides ready ↔ needs_image/needs_board — never generation_failed. A ``queued``
+    # draft is re-validated too: it STAYS queued while still valid, but an edit that
+    # makes it invalid (image/board removed) drops it OUT of the drip queue rather than
+    # leaving the sweep to fail-and-retry it forever.
+    prev_status = draft.get("status")
     new_media = fields.get("media", draft.get("media") or [])
-    if draft.get("status") in ("ready", "needs_image", "needs_board"):
+    if prev_status in ("ready", "needs_image", "needs_board", "queued"):
         d_fmt = (draft.get("format") or "feed").lower()
         if d_fmt == "carousel":
             # A carousel always needs ≥2 slides, regardless of the platform spec.
-            fields["status"] = draft_status(
+            new_status = draft_status(
                 bool(new_media), True, generation_ok=True, enough_media=len(new_media) >= 2
             )
         else:
@@ -483,10 +487,14 @@ def update_draft(
                 and not publish._pinterest_board_id(new_metadata if new_metadata is not None
                                                      else draft.get("platform_metadata"))
             )
-            fields["status"] = draft_status(
+            new_status = draft_status(
                 bool(new_media), requires_image, generation_ok=True,
                 board_required_missing=board_missing,
             )
+        # An edit never silently dequeues a still-valid queued draft.
+        if prev_status == "queued" and new_status == "ready":
+            new_status = "queued"
+        fields["status"] = new_status
 
     row = (_sb().table("social_drafts").update(fields).eq("id", draft_id).execute()).data
     return row[0] if row else get_draft(draft_id)

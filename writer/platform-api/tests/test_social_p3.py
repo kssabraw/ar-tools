@@ -230,6 +230,31 @@ def test_dequeue_draft_only_from_queued(monkeypatch):
     assert e.value.detail == "social_draft_not_queued"
 
 
+def _queued_ig_draft():
+    return {"id": "d1", "status": "queued", "platform": "instagram", "format": "feed",
+            "media": [{"type": "image", "url": "u"}], "image_urls": ["u"], "platform_metadata": None}
+
+
+def test_edit_valid_queued_draft_stays_queued(monkeypatch):
+    store: dict = {}
+    monkeypatch.setattr(fanout, "get_draft", lambda did: _queued_ig_draft())
+    monkeypatch.setattr(publish, "_platform_spec", lambda p: {"requires_image": True})
+    monkeypatch.setattr(fanout, "_sb", lambda: _fake_sb(store))
+    fanout.update_draft("d1", copy="edited")  # media untouched → still valid
+    status = [f["status"] for t, f in store["updates"] if "status" in f]
+    assert status == ["queued"]
+
+
+def test_edit_queued_draft_removing_image_leaves_queue(monkeypatch):
+    store: dict = {}
+    monkeypatch.setattr(fanout, "get_draft", lambda did: _queued_ig_draft())
+    monkeypatch.setattr(publish, "_platform_spec", lambda p: {"requires_image": True})
+    monkeypatch.setattr(fanout, "_sb", lambda: _fake_sb(store))
+    fanout.update_draft("d1", image_urls=[])  # removes the required image → invalid
+    status = [f["status"] for t, f in store["updates"] if "status" in f]
+    assert status == ["needs_image"]
+
+
 def test_publish_drafts_batch_partial_success(monkeypatch):
     monkeypatch.setattr(fanout, "get_draft", lambda did: {"id": did, "client_id": "c1"})
 
