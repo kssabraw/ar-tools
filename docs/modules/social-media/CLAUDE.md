@@ -288,7 +288,7 @@ Creator exists.
     composer page is now tabbed **Compose / Create with AI / Drafts**. Config: `social_angles_count` (4) /
     `_max_tokens`. **The P2 Creator is functionally complete** (copy + image + angle fan-out + draft
     review/publish); competitor-signal grounding of angles rides P1.
-- **P3 Manager + publish** — ✅ **BUILT (draft PR #1235, branch `claude/social-p3-manager`)**: a
+- **P3 Manager + publish** — ✅ **BUILT + MERGED (PR #1235, squash `f326f196`)**: a
   Calendar tab (cross-platform scheduled + published, with edit/cancel/reschedule), the **cadence
   engine** (`social_post_schedules` + `enqueue_due_social_schedules`, GBP-literal clone; **auto-fill
   drips an explicitly-`queued` approved draft**, three-gated + ships dark behind
