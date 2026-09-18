@@ -262,3 +262,68 @@ async def run_grade_job(job: dict) -> None:
         logger.error("leadoff_grade.failed",
                      extra={"job_id": job_id, "error": str(exc)})
         _fail(str(exc))
+
+
+# ── Scout a graded (off-board) market ─────────────────────────────────────────
+# A live grade already pulled the market's top-5 competitors; scout deepens them
+# (RD / review velocity / demand trend / brand footprint) WITHOUT needing a board
+# row. Reuses the leadoff_scout job (grade_id in the payload); the enrichment is
+# stored back on the grade row's `scout` column for the grade card to render.
+
+def scoutable(grade_row: dict[str, Any]) -> Optional[str]:
+    """Error code if this grade row can't be scouted, else None (pure). Scout
+    keys on a real category_id (on-catalog) and needs the graded competitor set."""
+    if grade_row.get("status") != "complete":
+        return "grade_not_ready"
+    if not grade_row.get("on_catalog") or not grade_row.get("category_id"):
+        return "scout_requires_catalog"
+    if not (((grade_row.get("grade") or {}).get("competitors")) or []):
+        return "no_competitors"
+    return None
+
+
+def grade_market_comps(grade_row: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """(market, comps) for scout_market_state, built from a grade row's stored
+    top-5 — the off-board substitute for the board row + serp_top5 (pure)."""
+    g = grade_row.get("grade") or {}
+    market = {"city_id": grade_row.get("city_id"),
+              "category_id": grade_row.get("category_id"),
+              "category": grade_row.get("category_name"),
+              "city_name": grade_row.get("city_name"),
+              "state_code": grade_row.get("state_code")}
+    comps = [{"rank_position": i + 1, **c}
+             for i, c in enumerate(g.get("competitors") or [])]
+    return market, comps
+
+
+def grade_scout_inputs(grade_id: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load a grade row and return (market, comps) for the scout job. Raises when
+    the row is gone or unscoutable (surfaces as the job's failure reason)."""
+    row = (get_supabase().table("leadoff_grades").select("*")
+           .eq("id", grade_id).limit(1).execute().data or [None])[0]
+    if not row:
+        raise RuntimeError("grade_not_found")
+    err = scoutable(row)
+    if err:
+        raise RuntimeError(err)
+    return grade_market_comps(row)
+
+
+def store_scout_result(grade_id: str,
+                       summary: Optional[dict[str, Any]] = None) -> Optional[dict[str, Any]]:
+    """Read the now-fresh Pass-2 caches for the graded market and store the
+    enrichment on the grade row's `scout` column (the off-board analogue of the
+    brief's enrichment re-read). Best-effort — returns the stored block or None."""
+    from services import leadoff as leadoff_service
+    row = (get_supabase().table("leadoff_grades").select("*")
+           .eq("id", grade_id).limit(1).execute().data or [None])[0]
+    if not row:
+        return None
+    _market, comps = grade_market_comps(row)
+    scout = leadoff_service.scout_enrichment(
+        int(row["city_id"]), row.get("category_name") or "", comps)
+    payload = {"enrichment": scout["enrichment"], "competitors": scout["competitors"],
+               "summary": summary or {},
+               "scouted_at": datetime.now(timezone.utc).isoformat()}
+    get_supabase().table("leadoff_grades").update({"scout": payload}).eq("id", grade_id).execute()
+    return payload

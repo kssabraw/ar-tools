@@ -488,6 +488,46 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
                       rd_gap_true=rd_gap_from_enrichment(scored.get("enrichment")))
 
 
+def scout_enrichment(city_id: int, category_name: str,
+                     competitors: list[dict[str, Any]]) -> dict[str, Any]:
+    """Read the Pass-2 caches (RD / review velocity / demand trend + brand
+    footprint) for a graded market's competitors and assemble the enrichment
+    block — the off-board analogue of get_market_brief's enrichment read, used
+    to store a scout result on a leadoff_grades row. Best-effort throughout."""
+    comps = [dict(c) for c in (competitors or [])]
+    domains = [c["domain"] for c in comps if c.get("domain")]
+    rd_rows = ((_client().table("domain_backlinks")
+                .select("domain,referring_domains").in_("domain", domains)
+                .execute().data or []) if domains else [])
+    keys = [f"{_norm(c.get('business_name') or '')}|{city_id}" for c in comps]
+    review_rows = ((_client().table("business_reviews")
+                    .select("biz_key,last30,prior30,newest").in_("biz_key", keys)
+                    .execute().data or []) if keys else [])
+    trend = (_client().table("demand_trend")
+             .select("growth_yoy,growth_yoy_ss,peak_months")
+             .eq("trend_key", f"{city_id}|{_norm(category_name)}")
+             .limit(1).execute().data or [])
+    try:
+        from services.leadoff_brand import brand_key, footprint_lookups
+        site_lookup, mention_rows = footprint_lookups(comps)
+        for c in comps:
+            c["site_pages"] = site_lookup.get((c.get("domain") or "").strip())
+            m = mention_rows.get(brand_key(c.get("business_name") or "")) or {}
+            c["mentions"] = m.get("citations")
+            c["unlinked_mentions"] = m.get("unlinked_mentions")
+            c["nap_citations"] = m.get("nap_citations")
+            c["generic_name"] = m.get("generic_name")
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("leadoff.scout_footprint_failed",
+                                            exc_info=True)
+    return {
+        "enrichment": enrichment_from_caches(comps, rd_rows, review_rows,
+                                             trend[0] if trend else None, city_id),
+        "competitors": comps,
+    }
+
+
 def _enrich_brief_grade(brief: dict[str, Any], comps: list[dict[str, Any]],
                         city_id: int, category_id: str,
                         trend_row: dict[str, Any] | None) -> dict[str, Any]:

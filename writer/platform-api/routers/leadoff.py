@@ -607,6 +607,46 @@ async def get_grade(grade_id: str, auth: dict = Depends(require_auth)) -> dict:
     return rows[0]
 
 
+@router.post("/leadoff/grade/{grade_id}/scout", status_code=202)
+async def scout_grade(grade_id: str, auth: dict = Depends(require_staff)) -> dict:
+    """Deepen a graded (off-board) market: Pass-2 scout (RD + review velocity +
+    demand trend + competitor brand footprint) sourced from the grade's top-5,
+    with the enrichment stored back on the grade row. Poll GET /leadoff/jobs/
+    {job_id}, then re-read GET /leadoff/grade/{grade_id} for the `scout` block."""
+    from services import leadoff_grade
+    row = (get_supabase().table("leadoff_grades").select("*")
+           .eq("id", grade_id).limit(1).execute().data or [None])[0]
+    if not row:
+        raise HTTPException(status_code=404, detail="not_found")
+    err = leadoff_grade.scoutable(row)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+    market, comps = leadoff_grade.grade_market_comps(row)
+    city_id = int(row["city_id"])
+    category_id = str(row["category_id"])
+    state = leadoff_actions.scout_market_state(
+        city_id, category_id, market=market, comps=comps)
+    if state is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    # Fully cache-fresh → assemble + store the enrichment inline; no job, no spend.
+    if state["est_cost"] == 0 and not state["rd_misses"] \
+            and not state["vel_misses"] and not state["trend_miss"]:
+        leadoff_grade.store_scout_result(grade_id, {"fully_cached": True})
+        return {"job_id": None, "est_cost": 0.0, "fully_cached": True}
+    try:
+        leadoff_actions.check_budget(auth["user_id"], state["est_cost"])
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_actions.enqueue_scout(
+        auth["user_id"], city_id, category_id, state["est_cost"], grade_id=grade_id)
+    leadoff_actions.record_spend(
+        auth["user_id"], "scout", state["est_cost"],
+        city_id=city_id, category_id=category_id,
+        city_name=row.get("city_name"), state_code=row.get("state_code"))
+    return {"job_id": out["job_id"], "est_cost": state["est_cost"],
+            "fully_cached": False}
+
+
 class ScoutRequest(BaseModel):
     city_id: int
     category_id: str
