@@ -32,7 +32,7 @@
 > five `R2_*` vars, `GEMINI_API_KEY`, **`POSTPEER_API_KEY`**, and now **`APIFY_API_TOKEN` +
 > `SOCIAL_COMPETITOR_RESEARCH_ENABLED=true` are set** — nothing left to provision. What exists today is a
 > **manual composer → publish/schedule** flow (platform-general, Facebook-first) PLUS the full
-> **P2 Creator** — AI copy drafting, AI image generation (**nano-banana Pro, Pro-only** per owner ruling),
+> **P2 Creator** — AI copy drafting, AI image generation (**Nano Banana 2** default, nano-banana Pro fallback — queue #5, PR #1216),
 > and **Angle fan-out** (one source → one angle → per-platform Drafts, reviewed/edited/published from a
 > Drafts tab) PLUS **P1 Competitor research** (analyze-in-place, Apify-only — a Competitors tab: add per-platform
 > handles → Research now → per-`(client, competitor, platform)` signals that ground angle proposals).
@@ -53,8 +53,13 @@
 > **✅ BUILT + MERGED (PR #1213, squash `069d618`)** — video >200 MB PUTs straight to R2 via the presign
 > endpoint (`presignAndPutVideo`), presign expiry bumped to 2 h; **⚠️ still needs the R2 bucket CORS
 > policy applied (owner infra, deployed-only) before big-video upload works — see `HANDOFF.md`**;
-> **next up → (5) mixed image path** (2.5-Flash-for-square cost-saver — the only unbuilt queue item, owner
-> "later"). Then **P4 autonomy** + **P5 video/YouTube** remain the longer-horizon phases. The `HANDOFF.md`
+> (5) **mixed image path** — **✅ BUILT + MERGED (PR #1216, squash `cf9ffa0`)** — all social images now
+> render on **Nano Banana 2** (`gemini-3.1-flash-image`) at 2K (~25% under Pro; it honors every aspect
+> ratio, so the "2.5-Flash-for-square" premise was obsolete), behind `social_image_use_flash` (default ON,
+> Pro the fallback); the choice is the pure `services/social/image.py::select_image_model`. Also folded in:
+> a budget-bypass guard (a paid image always reserves a strictly-positive cost) + a SocialCompose eslint
+> cleanup (6→0). **The build queue is now fully built (all 5 items).** Then **P4 autonomy** +
+> **P5 video/YouTube** remain the longer-horizon phases. The `HANDOFF.md`
 > **"Next priority" block** (top of that file) is authoritative on this order. Deployed-only follow-ups
 > (independent of the queue): apply the **R2 CORS policy** (#4); the first **live YouTube post** (#3);
 > a **live test post** on the PostForMe path; a **live P1 research run** (sandbox is egress-blocked from
@@ -105,7 +110,7 @@ guardrails.
 | Purpose | Choice | Notes |
 |---|---|---|
 | Copy / Angle / self-critique | **Claude Sonnet 5** (`claude-sonnet-5`) | $2/1M in, $10/1M out. |
-| Image gen | **nano-banana Pro** (Gemini 3 Pro Image) | **BUILT** — `nano_banana.generate_image_pro` (`gemini-3-pro-image-preview`) passes `generationConfig.imageConfig.aspectRatio`; social wiring in `services/social/image.py`. (The 2.5-Flash `generate_image` stays 1:1-only.) ~$0.134/img. `GEMINI_API_KEY` set on PLATFORM. |
+| Image gen | **Nano Banana 2** (Gemini 3.1 Flash Image) default; **nano-banana Pro** fallback | **BUILT (queue #5, PR #1216)** — social images render on `gemini-3.1-flash-image` at 2K (~$0.101/img, ~25% under Pro) via `nano_banana.generate_image_pro(model=…)` (Nano Banana 2 + Pro share the `imageConfig.aspectRatio` API, both honor every ratio); the choice is `services/social/image.py::select_image_model`, behind `social_image_use_flash` (default ON, Pro the flag-off fallback). The old 2.5-Flash `generate_image` stays 1:1-only (GBP/illustration). `GEMINI_API_KEY` set on PLATFORM. |
 | Publish | **PostPeer** behind an adapter | Managed OAuth under its own reviewed apps (confirmed). **X link tax passed through: 5 credits plain / 50 with a URL; 1 credit elsewhere** (confirmed). **No SLA** (confirmed, accepted). Media by public URL; one platform per `POST /posts` call; `publishNow` from OUR scheduler, never `scheduledFor`. API facts: vendor-confirm doc §6. |
 | Competitor scrape | **Apify** (per-platform actors) | Public/logged-out content only. **P1 = Apify-only — BUILT + LIVE (`APIFY_API_TOKEN` set).** IG/FB/X/YouTube/Pinterest; env-overridable actor ids (`social_apify_actor_*`). |
 | ~~Competitor video analysis~~ | ~~TwelveLabs~~ | **DROPPED from v1 (owner c1, 2026-09-16)** — not analyzing full videos. Don't provision/build. |
@@ -257,17 +262,20 @@ Creator exists.
     + a corrective rewrite), and the composer's **"Draft with AI"** panel prefills the copy box.
     Config: `social_copy_model` (`claude-sonnet-5`) / `_max_tokens` / `_max_correction_passes` /
     `_source_max_chars`.
-  - **AI image generation (Pro-only)**: `services/nano_banana.py::generate_image_pro` (Gemini 3 Pro
-    Image, `gemini-3-pro-image-preview`, passes `generationConfig.imageConfig.aspectRatio`) +
+  - **AI image generation (Nano Banana 2 default, Pro fallback — queue #5, PR #1216)**: `services/nano_banana.py::generate_image_pro` (passes `generationConfig.imageConfig.aspectRatio`; runs the model `select_image_model` picks — `gemini-3.1-flash-image` by default, `gemini-3-pro-image-preview` as the flag-off fallback) +
     `services/social/image.py` + `POST /clients/{id}/social/generate-image` + the composer's
     **"Generate an image with AI"** panel. Per-platform aspect ratio via `resolve_aspect_ratio`
     (reel/story→9:16, Pinterest→2:3, IG→4:5, X/YouTube→16:9, else 1:1 — all Gemini-supported; the
     seeded specs' `1.91:1` is NOT, hence a deliberate mapping). Prompt = the Social Policy
     `image_prompt_template` (client-editable) + brand context. **Freeze-gated + fail-closed
-    budget-metered** (paid call — `budget.reserve` before spending, `social_image_cost_usd` ≈ $0.134,
-    the dominant cost line). Stored to R2 via `media_store` (`media_key(ext,"generated")`). Config:
-    `nano_banana_pro_model` / `social_image_size` (`2K`) / `social_image_cost_usd`. The **mixed
-    2.5-Flash-for-square path is deferred** (owner chose Pro-only for now).
+    budget-metered** (paid call — `budget.reserve` before spending; `select_image_model` guarantees a
+    strictly-positive reserved cost so a misconfigured `$0` cost can't slip a paid image past the cap).
+    Stored to R2 via `media_store` (`media_key(ext,"generated")`). Config: `social_image_use_flash`
+    (default ON) / `social_image_flash_model` (`gemini-3.1-flash-image`) / `social_image_flash_cost_usd`
+    ($0.101 at 2K) / `nano_banana_pro_model` / `social_image_size` (`2K`) / `social_image_cost_usd` (Pro
+    fallback). The **mixed image path is BUILT** (queue #5, PR #1216 — Nano Banana 2 honors every aspect
+    ratio, so all social images route to it; Pro stays the flag-off fallback), superseding the earlier
+    Pro-only ruling.
   - **Angle fan-out + Draft persistence (the full Creator loop)** — BUILT. `services/social/creator.py::propose_angles`
     (`POST …/social/angles` — 3–5 distinct editorial angles, grounded in source + voice/ICP) →
     `services/social/fanout.py` + `POST …/social/fan-out` fans ONE chosen angle across the selected
@@ -285,8 +293,9 @@ Creator exists.
 - **P4 Agents, autonomy, analytics** — ⬜ not built.
 - **P5 Deferred** — **YouTube poster ✅ BUILT + MERGED** (PR #1211, re-scoped against PostForMe — a YT
   post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
-  (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end). Still deferred: full video
-  production (Reels/Shorts generation), cobalt self-host, the mixed 2.5-Flash/Pro image cost lever.
+  (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end) and the **mixed image path
+  ✅ BUILT + MERGED** (PR #1216 — all social images → Nano Banana 2). Still deferred: full video
+  production (Reels/Shorts generation) + cobalt self-host.
 
 ## Things NOT to do (module-specific)
 
@@ -301,14 +310,16 @@ Creator exists.
   a **Story drops its caption** at the publish choke point (no caption / link stickers; Business-account
   is provider-enforced); **Reel = one video, no images** (manual Compose only — no AI video); carousel =
   ≥2 images, one aspect ratio, generated N slides in fan-out (`social_carousel_*` config, each slide a
-  budget-reserved ~$0.13 Pro image). Format rules live in **code** (the IG `social_platform_specs` row is
+  budget-reserved ~$0.10 Nano Banana 2 image — queue #5). Format rules live in **code** (the IG `social_platform_specs` row is
   per-platform), so **no migration** was needed. (IG still has **no text-only posts** — an image-less IG
   Draft is `needs_image`.) Live-verify the placement + Business-account + carousel behavior on the
   deployed post path (sandbox egress-blocked from PostForMe + Gemini).
 - **Don't hand PostPeer the schedule (`scheduledFor`)** — publish with `publishNow` from our own
   freeze-gated job so the inline account-health check + `source_changed` guard run first.
-- **Don't use nano-banana 2.5 Flash where a non-1:1 aspect ratio is required** (Pinterest/9:16) — it
-  can't produce it. Use the Pro renderer.
+- **Don't use the old 2.5-Flash `nano_banana.generate_image` for a non-1:1 ratio** (it's 1:1-only) —
+  social image gen goes through `generate_image_pro(model=…)` with **Nano Banana 2** (default) or Pro,
+  which honor every aspect ratio via `imageConfig.aspectRatio` (queue #5 — the choice is
+  `select_image_model`, behind `social_image_use_flash`).
 - **Don't copy the keyword_research budget pattern** (fail-open) for spend — use `autonomy_budget.reserve`.
 
 ## When stuck / ask the owner
@@ -317,5 +328,6 @@ Still open (owner "let's discuss" as of 2026-09-16): the **default per-client mo
 (b3); the **P4 autonomy build** (c2); the **P5 Video Studio** (c3); the mixed 2.5-Flash/Pro image cost
 lever (deferred). Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
 (b2), autonomy case-by-case (b4), PostPeer PAYG (b5), P1 = Apify-only / TwelveLabs dropped (c1, **BUILT +
-LIVE**), Pro-only images. The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
+LIVE**); the mixed image path is now **BUILT** (queue #5, PR #1216 — Nano Banana 2, superseding the
+earlier Pro-only ruling). The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
 open-items list + the 2026-09-16 update.
