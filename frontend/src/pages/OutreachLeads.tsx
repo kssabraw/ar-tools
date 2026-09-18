@@ -237,7 +237,9 @@ function fmtScore(s: number | string | null): string | null {
 }
 
 // Score + decile pill (T1.5). A top-decile lead reads green; the number is the value model's.
-function ScorePill({ score, decile }: { score: number | string | null; decile: number | null }) {
+// Exported so the scan table (Outreach.tsx) can show the SAME priority badge (slice B moves this
+// into a shared component and repoints both). It reads as PRIORITY ORDER, never a win probability.
+export function ScorePill({ score, decile }: { score: number | string | null; decile: number | null }) {
   const s = fmtScore(score)
   if (s == null) return null
   const strong = (decile ?? 0) >= 8

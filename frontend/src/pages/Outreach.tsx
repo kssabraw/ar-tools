@@ -6,7 +6,7 @@ import {
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import { useAuth } from '../context/AuthContext'
-import { Tabs } from './OutreachLeads'
+import { Tabs, ScorePill } from './OutreachLeads'
 import { Justification } from '../components/outreach/Justification'
 import { ProspectReportButtons } from '../components/outreach/ProspectReport'
 import { ContactCell, EnrichmentBar, NameScrapeBar, NameSearchBar, useEnrichment, useNameScrape, useNameSearch } from '../components/outreach/Enrichment'
@@ -839,6 +839,38 @@ function OrderProgress({ id }: { id: string }) {
 
 // ── Results ──────────────────────────────────────────────────────────────────
 
+// The lead-first default of the coverage table shows a Priority badge per row. When the submarket
+// has been scored, that's the CRM's model badge (score + decile). When it hasn't, priority is the
+// Maps coverage deficit — a higher gap is a more invisible business and so a stronger lead. Both
+// read as PRIORITY ORDER (most-worth-calling first), never a win probability. Deterministic, from
+// the coverage numbers already on the row — no new call, no fabricated figure.
+function CoveragePriorityBadge({ deficit }: { deficit: number | null }) {
+  if (deficit == null) return <span style={{ fontSize: 12, color: '#cbd5e1' }}>—</span>
+  const strong = deficit >= 67
+  return (
+    <span title="Priority order — most invisible (biggest coverage gap) first. Not a win probability."
+      style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, fontWeight: 700,
+        background: strong ? '#dcfce7' : '#f1f5f9', color: strong ? '#166534' : '#475569' }}>
+      {deficit.toFixed(0)}% gap
+    </span>
+  )
+}
+
+// The visible "Why it's a lead" one-liner. When scored, the model's primary pitch (promoted from a
+// hover title to a real column). Otherwise a deterministic sentence built from the row's measured
+// coverage — the same fact-grounded discipline as the "Why call?" hook, never an invented claim.
+function whyLead(s: PlaceholderScore): string {
+  if (s.model?.primary_pitch) return s.model.primary_pitch
+  const parts: string[] = []
+  if (s.coverage_deficit != null) {
+    parts.push(s.coverage_deficit >= 99
+      ? 'Invisible across the searched area'
+      : `Absent across ${s.coverage_deficit.toFixed(0)}% of the area`)
+  }
+  if (s.best_rank != null) parts.push(`best rank #${s.best_rank}`)
+  return parts.join(' · ') || 'Measured — open “Why call?” for the details'
+}
+
 // The ranked coverage table for ONE submarket — reused by the Coverage results card (with a
 // submarket picker) and by an onboard row's inline results (submarket fixed to that scan).
 function CoverageTable({ submarketId, submarketName }: { submarketId: string; submarketName?: string }) {
@@ -847,6 +879,10 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
   const [emitted, setEmitted] = useState<Record<string, { delivered: boolean; configured: boolean }>>({})
   const [openHook, setOpenHook] = useState<string | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  // Lead-first by default: show only Business · Priority · Why it's a lead · actions. The analyst
+  // detail (coverage/deficit/best-rank/drop-off + card revenue + the contact-enrichment tooling) is
+  // one click away, never gone. Deselect on hide so a hidden selection can't drive a bulk order.
+  const [showAnalyst, setShowAnalyst] = useState(false)
   const enrich = useEnrichment(submarketId)
   const nameScrape = useNameScrape(submarketId)
   const nameSearch = useNameSearch(submarketId)
@@ -856,7 +892,12 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
   const nameSearchBatchRunning = nameSearch.batch.running
   const enigmaBatchRunning = enigma.batch.running
   const toggle = (id: string) =>
-    setSelected(prev => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next })
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
   const promote = useMutation({
     mutationFn: (prospectId: string) =>
       api.post<{ lead: { id: string; already_existed: boolean } }>(
@@ -908,9 +949,20 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
     )
   }
   const visible = data.scores.filter(s => !s.excluded)
-  const allSelected = visible.length > 0 && visible.every(s => selected.has(s.prospect_id))
   const scored = !!data?.scored
-  const colSpan = 8 + (isAdmin ? 1 : 0) + 1 + (scored ? 1 : 0)  // + checkbox + contacts + card + (model score)
+  // Sort by Priority descending: the fitted reply score when scored, else the coverage deficit
+  // (a submarket is scored all-or-nothing, so the key is consistent within one table).
+  const sorted = [...visible].sort((a, b) =>
+    scored
+      ? (b.model?.reply_score ?? 0) - (a.model?.reply_score ?? 0)
+      : (b.coverage_deficit ?? 0) - (a.coverage_deficit ?? 0))
+  const allSelected = visible.length > 0 && visible.every(s => selected.has(s.prospect_id))
+  // Default view: Business · Priority · Why it's a lead · actions (4). The analyst columns
+  // (checkbox + phone + contacts + card + coverage + deficit + best-rank + drops-out-at) appear
+  // only when expanded. Kept in sync with the header/rows below so the "Why call?" expander spans.
+  const analystCols = showAnalyst ? 7 : 0
+  const checkboxCol = showAnalyst && isAdmin ? 1 : 0
+  const colSpan = 4 + analystCols + checkboxCol
 
   const exportCsv = () => {
     const by = contactsBatch?.by_prospect
@@ -974,33 +1026,42 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
           )}
         </p>
         {visible.length > 0 && (
-          <div style={{ marginLeft: 'auto', flexShrink: 0 }}>
+          <div style={{ marginLeft: 'auto', flexShrink: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
+            <button
+              onClick={() => { setShowAnalyst(v => !v); if (showAnalyst) setSelected(new Set()) }}
+              title={showAnalyst
+                ? 'Hide coverage metrics, card revenue and the contact-enrichment columns'
+                : 'Show coverage/deficit/best-rank/drop-off, card revenue and the contact-enrichment columns'}
+              style={{ fontSize: 12, border: '1px solid #e2e8f0', background: showAnalyst ? '#eff6ff' : '#fff',
+                borderRadius: 6, padding: '2px 8px', cursor: 'pointer', color: '#334155' }}>
+              {showAnalyst ? 'Hide analyst columns' : 'Show analyst columns'}
+            </button>
             <DownloadCsvButton onClick={exportCsv} title="Download this run's coverage (with contacts) as a CSV" />
           </div>
         )}
       </div>
-      {isAdmin && (
+      {isAdmin && showAnalyst && (
         <EnrichmentBar
           selectedIds={[...selected]}
           controller={enrich}
           onCleared={() => setSelected(new Set())}
         />
       )}
-      {isAdmin && (
+      {isAdmin && showAnalyst && (
         <NameScrapeBar
           selectedIds={[...selected]}
           controller={nameScrape}
           onCleared={() => setSelected(new Set())}
         />
       )}
-      {isAdmin && (
+      {isAdmin && showAnalyst && (
         <NameSearchBar
           selectedIds={[...selected]}
           controller={nameSearch}
           onCleared={() => setSelected(new Set())}
         />
       )}
-      {isAdmin && (
+      {isAdmin && showAnalyst && (
         <EnigmaBar
           selectedIds={[...selected]}
           controller={enigma}
@@ -1016,70 +1077,77 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
       <table style={{ width: 'max-content', fontSize: 13, borderCollapse: 'collapse' }}>
         <thead>
           <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
-            {isAdmin && (
+            {showAnalyst && isAdmin && (
               <th style={{ padding: '4px 8px', width: 24 }}>
                 <input type="checkbox" checked={allSelected}
                   title="Select all for enrichment"
                   onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map(s => s.prospect_id)))} />
               </th>
             )}
-            <th style={{ padding: '4px 8px' }}>Prospect</th>
-            {scored && <th style={{ padding: '4px 8px', textAlign: 'right' }} title="Fitted model reply score (organic + maps + reviews + tech). A strong prior, not a prediction.">Score</th>}
-            <th style={{ padding: '4px 8px' }}>Phone</th>
-            <th style={{ padding: '4px 8px' }}>Contacts</th>
-            <th style={{ padding: '4px 8px' }}>Card revenue</th>
-            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>
-            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>
-            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>
-            <th style={{ padding: '4px 8px', textAlign: 'right' }}>Drops out at</th>
+            <th style={{ padding: '4px 8px' }}>Business</th>
+            <th style={{ padding: '4px 8px' }}
+              title={scored
+                ? 'Priority order — highest fitted model reply score first. A strong prior, not a win probability.'
+                : 'Priority order — most invisible (biggest coverage gap) first. Not a win probability.'}>
+              Priority
+            </th>
+            <th style={{ padding: '4px 8px' }}>Why it&apos;s a lead</th>
+            {showAnalyst && <th style={{ padding: '4px 8px' }}>Phone</th>}
+            {showAnalyst && <th style={{ padding: '4px 8px' }}>Contacts</th>}
+            {showAnalyst && <th style={{ padding: '4px 8px' }}>Card revenue</th>}
+            {showAnalyst && <th style={{ padding: '4px 8px', textAlign: 'right' }}>Coverage</th>}
+            {showAnalyst && <th style={{ padding: '4px 8px', textAlign: 'right' }}>Deficit</th>}
+            {showAnalyst && <th style={{ padding: '4px 8px', textAlign: 'right' }}>Best rank</th>}
+            {showAnalyst && <th style={{ padding: '4px 8px', textAlign: 'right' }}>Drops out at</th>}
             <th style={{ padding: '4px 8px' }} />
           </tr>
         </thead>
         <tbody>
-          {visible.map(s => (
+          {sorted.map(s => (
             <Fragment key={s.prospect_id}>
               <tr style={{ borderTop: '1px solid #f1f5f9' }}>
-                {isAdmin && (
+                {showAnalyst && isAdmin && (
                   <td style={{ padding: '6px 8px' }}>
                     <input type="checkbox" checked={selected.has(s.prospect_id)}
                       onChange={() => toggle(s.prospect_id)} />
                   </td>
                 )}
                 <td style={{ padding: '6px 8px' }}>{s.name}</td>
-                {scored && (
-                  <td style={{ padding: '6px 8px', textAlign: 'right', whiteSpace: 'nowrap' }}
-                    title={s.model?.primary_pitch ? `Primary pitch: ${s.model.primary_pitch}` : undefined}>
-                    {s.model?.reply_score != null ? (
-                      <>
-                        <b>{Math.round(s.model.reply_score)}</b>
-                        {s.model.reply_decile != null && (
-                          <span style={{ fontSize: 11, color: '#94a3b8' }}> · d{s.model.reply_decile}</span>
-                        )}
-                      </>
-                    ) : '—'}
+                <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>
+                  {scored
+                    ? <ScorePill score={s.model?.reply_score ?? null} decile={s.model?.reply_decile ?? null} />
+                    : <CoveragePriorityBadge deficit={s.coverage_deficit} />}
+                </td>
+                <td style={{ padding: '6px 8px', color: '#334155', maxWidth: 320 }}>{whyLead(s)}</td>
+                {showAnalyst && <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>}
+                {showAnalyst && (
+                  <td style={{ padding: '6px 8px' }}>
+                    <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin} isStaff={isStaff}
+                      controller={enrich} batchRunning={batchRunning}
+                      nameController={nameScrape} nameBatchRunning={nameBatchRunning}
+                      nameSearchController={nameSearch} nameSearchBatchRunning={nameSearchBatchRunning}
+                      provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />
                   </td>
                 )}
-                <td style={{ padding: '6px 8px', whiteSpace: 'nowrap' }}>{s.phone ?? '—'}</td>
-                <td style={{ padding: '6px 8px' }}>
-                  <ContactCell prospectId={s.prospect_id} isAdmin={isAdmin} isStaff={isStaff}
-                    controller={enrich} batchRunning={batchRunning}
-                    nameController={nameScrape} nameBatchRunning={nameBatchRunning}
-                    nameSearchController={nameSearch} nameSearchBatchRunning={nameSearchBatchRunning}
-                    provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />
-                </td>
-                <td style={{ padding: '6px 8px' }}>
-                  <CardRevenueCell prospectId={s.prospect_id} isAdmin={isAdmin}
-                    controller={enigma} batchRunning={enigmaBatchRunning}
-                    provided={enigmaBatch?.by_prospect?.[s.prospect_id] ?? null} />
-                </td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
-                  {s.coverage_deficit?.toFixed(1)}%
-                </td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>
-                <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                  {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
-                </td>
+                {showAnalyst && (
+                  <td style={{ padding: '6px 8px' }}>
+                    <CardRevenueCell prospectId={s.prospect_id} isAdmin={isAdmin}
+                      controller={enigma} batchRunning={enigmaBatchRunning}
+                      provided={enigmaBatch?.by_prospect?.[s.prospect_id] ?? null} />
+                  </td>
+                )}
+                {showAnalyst && <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.coverage_pct?.toFixed(1)}%</td>}
+                {showAnalyst && (
+                  <td style={{ padding: '6px 8px', textAlign: 'right', fontWeight: 600 }}>
+                    {s.coverage_deficit?.toFixed(1)}%
+                  </td>
+                )}
+                {showAnalyst && <td style={{ padding: '6px 8px', textAlign: 'right' }}>{s.best_rank ?? '—'}</td>}
+                {showAnalyst && (
+                  <td style={{ padding: '6px 8px', textAlign: 'right' }}>
+                    {s.centroid_dist_at_loss != null ? `${s.centroid_dist_at_loss.toFixed(1)} mi` : '—'}
+                  </td>
+                )}
                 <td style={{ padding: '6px 8px' }}>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                     <ProspectReportButtons prospectId={s.prospect_id} compact />
@@ -1140,24 +1208,65 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
 
 function ResultsCard({ marketId }: { marketId: string }) {
   const [submarketId, setSubmarketId] = useState('')
+  // Track whether the user has picked a submarket by hand, so the just-scanned default only
+  // seeds the FIRST render and never fights a later manual choice.
+  const [touched, setTouched] = useState(false)
   const { data: subsData } = useQuery<{ submarkets: Submarket[] }>({
     queryKey: ['outreach-submarkets', marketId],
     queryFn: () => api.get(`/outreach/markets/${marketId}/submarkets`),
   })
   const submarkets = subsData?.submarkets ?? []
 
+  // Default to the submarket that was just scanned instead of a blank "Choose a submarket…" the
+  // user has to re-answer after picking it once in the scan form. Both order queues carry a
+  // snapshot_id + submarket_id + created_at; these share the cache with the order cards below, so
+  // this is a cheap read, not a new request. Newest scan whose submarket is in THIS market wins.
+  const { data: scanReqData } = useQuery<{ scan_requests: ScanRequest[] }>({
+    queryKey: ['outreach-scan-requests'],
+    queryFn: () => api.get('/outreach/scan-requests?limit=25'),
+  })
+  const { data: onboardData } = useQuery<{ onboard_requests: OnboardRequest[] }>({
+    queryKey: ['outreach-onboard-requests'],
+    queryFn: () => api.get('/outreach/onboard-requests?limit=25'),
+  })
+  const submarketIds = new Set(submarkets.map(s => s.id))
+  const justScannedId = findJustScanned(scanReqData?.scan_requests, onboardData?.onboard_requests, submarketIds)
+
+  // Derived, not synced through an effect: until the user picks one by hand, the view defaults to
+  // the just-scanned submarket (and updates reactively when that read lands). Once they've touched
+  // the picker their choice wins — including deliberately clearing it back to "Choose a submarket…".
+  const effectiveId = touched ? submarketId : (submarketId || justScannedId || '')
+  const pick = (id: string) => { setTouched(true); setSubmarketId(id) }
+
   return (
     <div style={{ marginTop: 16, padding: 16, border: '1px solid #e2e8f0', borderRadius: 12 }}>
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <div style={{ fontWeight: 600, fontSize: 14 }}>Coverage results</div>
-        <select value={submarketId} onChange={e => setSubmarketId(e.target.value)}
+        <span style={{ fontSize: 12, color: '#94a3b8' }}>Viewing:</span>
+        <select value={effectiveId} onChange={e => pick(e.target.value)}
           style={{ padding: '4px 10px', borderRadius: 8, border: '1px solid #e2e8f0', fontSize: 13 }}>
           <option value="">Choose a submarket…</option>
           {submarkets.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
       </div>
-      <CoverageTable submarketId={submarketId}
-        submarketName={submarkets.find(s => s.id === submarketId)?.name} />
+      <CoverageTable submarketId={effectiveId}
+        submarketName={submarkets.find(s => s.id === effectiveId)?.name} />
     </div>
   )
+}
+
+// Newest scanned submarket (has a snapshot) that belongs to this market, across both order queues.
+function findJustScanned(
+  scans: ScanRequest[] | undefined,
+  onboards: OnboardRequest[] | undefined,
+  submarketIds: Set<string>,
+): string | null {
+  const rows: { submarket_id: string; snapshot_id: string | null; created_at: string }[] = [
+    ...(scans ?? []),
+    ...(onboards ?? []),
+  ]
+  const best = rows
+    .filter(r => r.snapshot_id && submarketIds.has(r.submarket_id))
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())[0]
+  return best?.submarket_id ?? null
 }

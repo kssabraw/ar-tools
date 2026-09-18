@@ -2,7 +2,13 @@
 
 **Read this first, then `CLAUDE.md` → `START-HERE.md` → `ISSUES.md` → `DECISIONS.md`.**
 
-Status as of 2026-09-17 (**cold-caller CRM Tier 3 landed: T3.2 (call script + rebuttal library) MERGED; T3.1 (click-to-call) deferred by owner ruling** — everything below from 2026-08-27 and earlier still stands).
+Status as of 2026-09-18 (**outreach dashboard simplification — a UX/legibility pass on the caller-facing surfaces, shipped as three sequential draft PRs A → C → B; presentation-only, no scan/scoring/paid-call change** — everything from 2026-09-17 and earlier still stands).
+
+### 2026-09-18 session — dashboard simplification (A → C → B; frontend-only, presentation-only)
+
+The scan page (`frontend/src/pages/Outreach.tsx`) and the caller CRM (`OutreachLeads.tsx`) were "confusing" — two submarket dropdowns and an ~11-column horizontally-scrolling coverage table buried the lead-quality signal that already exists (`model.reply_score`/`reply_decile`/`primary_pitch`; `lead.ranked.*` on the CRM). Three slices, each its own draft PR to `main`, none touching `outcome`/`touch`/`lead_activity`, the scoring model, the scan pipeline, or generating any prospect-facing asset. No migration (all re-shape existing reads). Every added line is deterministic + fact-grounded (the 2026-08-08 design-fork ruling) — the priority badge reads as PRIORITY ORDER, never a win-probability %.
+
+- **A — scan page simplified (`Outreach.tsx`, frontend-only).** (1) The "Coverage results" card no longer opens on a blank "Choose a submarket…" — it **defaults to the just-scanned submarket** (newest order across both the scan + onboard queues whose submarket is in this market, a cheap cache-shared read; derived, not effect-synced) behind a compact "Viewing: ▾" switch; a manual pick still wins, including clearing it. (2) `CoverageTable` now defaults to **4 lead-first columns — Business · Priority · Why it's a lead · [actions]** — sorted by Priority descending (fitted `reply_score` when scored, else the coverage deficit). Priority reuses the CRM's `ScorePill` when scored, else a coverage-gap badge (`CoveragePriorityBadge`); "Why it's a lead" promotes `primary_pitch` from a hover title to a visible column (deterministic coverage-derived fallback when unscored, via the pure `whyLead`). (3) The analyst columns (Coverage / Deficit / Best rank / Drops-out-at / Card revenue) **plus** the contact-enrichment tooling (select-all checkbox + all four bulk bars + Phone + Contacts) sit behind a **"Show analyst columns" toggle**, hidden by default → no horizontal scroll in the default view, detail one click away. The scan/onboard flow, CSV export, and the Why-call?/Send-to-CRM/Emit actions are untouched. `ScorePill` was `export`ed from `OutreachLeads.tsx` for A to reuse (slice B extracts it to a shared component and repoints).
 
 ### 2026-09-17 session — cold-caller CRM Tier 3 / T3.2 (MERGED)
 
