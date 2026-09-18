@@ -51,31 +51,26 @@ def build_youtube_config(
     title: Optional[str],
     platform_specific: Optional[dict] = None,
     default_privacy: Optional[str] = None,
-    default_made_for_kids: Optional[bool] = None,
 ) -> dict:
     """The ``platform_configurations.youtube`` block for a YouTube post (folded into
     the draft's ``platform_metadata``; the adapter nests it under
     ``platform_configurations.youtube`` at the edge). Pure.
 
     A YouTube post REQUIRES a ``title`` (distinct from the caption, which the API
-    maps to the video description). ``title`` is the only first-class UI field;
-    ``privacy_status`` + ``made_for_kids`` are safe defaults so a title-only compose
-    still produces a working post. Precedence, low→high: the defaults, then anything
-    the user typed in the advanced per-platform JSON, then the first-class title
-    (always wins). Only ``title`` is confirmed against the vendor doc — the privacy/
-    kids field names are unverified against the live spec (flagged for the first
-    live post); they're passthrough, so a wrong name is ignored, not fatal."""
+    maps to the video description). ``title`` is the only first-class UI field, and
+    ``privacy_status`` is the one safe default (owner: "public") so a title-only
+    compose still publishes as intended. Everything else — ``made_for_kids``,
+    ``tags``, ``category_id``, … — is passthrough via the advanced per-platform JSON.
+    Precedence, low→high: the privacy default, then anything the user typed in the
+    advanced JSON (which may set/override ``privacy_status`` and add ``made_for_kids``
+    etc.), then the first-class title (always wins). Only ``title`` is confirmed
+    against the vendor doc; ``privacy_status`` is passthrough, so a wrong field name
+    is ignored, not fatal (flagged for the first live post)."""
     cfg: dict = {}
     dp = default_privacy if default_privacy is not None else settings.social_youtube_default_privacy
     if dp:
         cfg["privacy_status"] = dp
-    dk = (
-        default_made_for_kids
-        if default_made_for_kids is not None
-        else settings.social_youtube_default_made_for_kids
-    )
-    cfg["made_for_kids"] = bool(dk)
-    cfg.update(platform_specific or {})   # user advanced JSON overrides the defaults
+    cfg.update(platform_specific or {})   # user advanced JSON overrides/extends the default
     cfg["title"] = (title or "").strip()  # the first-class title always wins
     return cfg
 
@@ -457,8 +452,8 @@ def create_post(
     video_urls: Optional[list[str]] = None,
     platform_specific: Optional[dict] = None,
     fmt: str = "feed",
-    title: Optional[str] = None,
     scheduled_at: Optional[datetime] = None,
+    title: Optional[str] = None,
 ) -> dict:
     """Compose one platform-native post and publish it now, or schedule it for a
     future time. Validates against the Platform Spec (hard violation → 422) first.
@@ -477,9 +472,9 @@ def create_post(
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
 
-    # Fold the first-class YouTube title (+ safe privacy/made-for-kids defaults) into
+    # Fold the first-class YouTube title (+ the safe "public" privacy default) into
     # the platform_specific block so it rides through to platform_configurations.youtube
-    # at the adapter edge. User advanced-JSON keys still win over the defaults.
+    # at the adapter edge. User advanced-JSON keys still win over the default.
     if platform == "youtube":
         platform_specific = build_youtube_config(title, platform_specific)
 

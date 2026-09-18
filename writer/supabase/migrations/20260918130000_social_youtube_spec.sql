@@ -14,6 +14,6 @@
 -- Idempotent: an update, only when the row exists.
 update social_platform_specs
 set max_images = 0,
-    notes = 'YouTube: uploads an existing video (one video, no images); the caption maps to the video description (<=5000). A YouTube post REQUIRES a title via platform_configurations.youtube (distinct from the caption); privacy_status + made_for_kids default server-side, overridable via platform_metadata.',
+    notes = 'YouTube: uploads an existing video (one video, no images); the caption maps to the video description (<=5000). A YouTube post REQUIRES a title via platform_configurations.youtube (distinct from the caption); privacy_status defaults server-side (public); made_for_kids/tags/category via platform_metadata.',
     updated_at = now()
 where platform = 'youtube';

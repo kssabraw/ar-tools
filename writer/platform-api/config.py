@@ -132,14 +132,13 @@ class Settings(BaseSettings):
     # YouTube poster (Compose-only — uploads an EXISTING video; no generation). A
     # YouTube post REQUIRES a `title` via platform_configurations, distinct from the
     # caption (which maps to the video description). `title` is the only first-class
-    # field; privacy_status + made_for_kids are safe server-side defaults folded into
-    # the youtube config block (overridable via the advanced per-platform JSON).
-    # NOTE: only `title` is confirmed against the vendor doc (§5); the privacy/kids
-    # field names+values are from PostForMe docs (postforme.dev is egress-blocked here)
-    # and MUST be re-verified on the first live YouTube post.
+    # field; privacy_status is the one safe server-side default (owner: "public"),
+    # and made_for_kids/tags/category go via the advanced per-platform JSON.
+    # NOTE: only `title` is confirmed against the vendor doc (§5); the privacy field
+    # name+values are from PostForMe docs (postforme.dev is egress-blocked here) and
+    # MUST be re-verified on the first live YouTube post.
     social_youtube_title_max: int = 100          # YouTube title hard cap (2–100 chars)
     social_youtube_default_privacy: str = "public"       # privacy_status when unset (owner: Public)
-    social_youtube_default_made_for_kids: bool = False   # made_for_kids when unset (agency B2B)
     # Social media store (ADR-0004): Cloudflare R2 (S3 API, zero egress) when
     # all five are set, else the Supabase fallback (images only). Reuses the
     # suite's existing Cloudflare account.

@@ -122,29 +122,31 @@ def test_validate_youtube_title_too_long():
     assert publish.validate_post("youtube", "desc", vid("https://v/a.mp4"), YT, title="x" * 100)["hard"] == []
 
 
-def test_build_youtube_config_title_and_defaults():
-    # Defaults applied; the first-class title always present.
-    cfg = publish.build_youtube_config("  My Video  ", None, default_privacy="public", default_made_for_kids=False)
-    assert cfg == {"privacy_status": "public", "made_for_kids": False, "title": "My Video"}
-    # User advanced-JSON overrides the defaults, but the first-class title still wins.
+def test_build_youtube_config_title_and_default():
+    # The privacy default is applied; the first-class title is always present. Only
+    # privacy_status is forced — made_for_kids/tags come via the advanced JSON.
+    cfg = publish.build_youtube_config("  My Video  ", None, default_privacy="public")
+    assert cfg == {"privacy_status": "public", "title": "My Video"}
+    # User advanced-JSON overrides the default + adds passthrough fields (incl.
+    # made_for_kids), but the first-class title still wins.
     cfg2 = publish.build_youtube_config(
         "Real Title",
-        {"privacy_status": "unlisted", "tags": ["a"], "title": "ignored"},
+        {"privacy_status": "unlisted", "made_for_kids": True, "tags": ["a"], "title": "ignored"},
         default_privacy="public",
-        default_made_for_kids=False,
     )
     assert cfg2["privacy_status"] == "unlisted"   # user wins over default
+    assert cfg2["made_for_kids"] is True          # passthrough only when supplied
     assert cfg2["tags"] == ["a"]                  # passthrough preserved
     assert cfg2["title"] == "Real Title"          # first-class title beats user JSON
-    assert cfg2["made_for_kids"] is False
 
 
-def test_build_youtube_config_uses_settings_defaults():
-    # With no explicit defaults it falls back to config (public / not-for-kids).
+def test_build_youtube_config_uses_settings_default():
+    # With no explicit default it falls back to config (public). made_for_kids is
+    # NOT forced — it only appears when supplied via the advanced JSON.
     cfg = publish.build_youtube_config("T")
     assert cfg["title"] == "T"
     assert cfg["privacy_status"] == "public"
-    assert cfg["made_for_kids"] is False
+    assert "made_for_kids" not in cfg
 
 
 def test_validate_feed_default_unchanged():
