@@ -16,6 +16,40 @@ The scan page (`frontend/src/pages/Outreach.tsx`) and the caller CRM (`OutreachL
 
 **All three slices shipped as sequential PRs (A [#1207](https://github.com/kssabraw/ar-tools/pull/1207) → C [#1208](https://github.com/kssabraw/ar-tools/pull/1208) → B [#1209](https://github.com/kssabraw/ar-tools/pull/1209)) and MERGED to `main` in that order (squash `a2220878` → `c11f9bc` → `f22c3263`). Adversarial-review follow-ups folded into A and C before merge: `whyLead` no longer renders the contradictory "Absent across 0% of the area" for a fully-covered unscored prospect; the best-contact click-to-dial uses `||` so an empty-string phone falls back to the business main line.**
 
+### 2026-09-18 — Enigma (outreach card-revenue) STATUS CLARIFICATION (no code change)
+
+Recording the actual state, because it's easy to misread (a prior session's chat did): the
+**outreach Enigma card-revenue drain is BUILT, WIRED END-TO-END, and has RUN ONCE successfully** —
+it is not unbuilt or "not run". Verified against the live Outreacher DB 2026-09-18: **1
+`enigma_request` order · 1 `prospect_enigma` row carrying a real `card_revenue_12m` · 1 `a7_enigma`
+`cost_ledger` event.** So `OUTREACH_ENIGMA_API_KEY` is set on the Railway `outreach` service, the
+migration (`20260828120000_prospect_enigma.sql`) is applied, and the GraphQL `search` path returns
+card data. The chain: `EnigmaCards.tsx` order UI → platform-api `/outreach/enigma/*` (admin-gated;
+the order row is the spend confirmation) → signed `enigma_request` → `tick` drains via
+`enigma_queue.drain` → `enigma_graphql.lookup_many` (the GraphQL path, **not** the REST match/ID path,
+which returned no card data on the eval key) → 1m/3m/12m `card_revenue_amount` windows stored in
+`prospect_enigma`. Drain budgets: `enigma_orders_per_tick`=3, `enigma_per_tick`=24, stuck-order reaper
+(I-118/I-119 discipline).
+
+**Do NOT mistake "the mechanism works" for "in routine use / validated".** What is true today:
+- **On-demand only.** There is **no auto-enqueue** — unlike organic (`enqueue_for_snapshot` +
+  `organic_auto_enabled`) and `scan-tech` (per-tick backlog), Enigma has no `enigma_auto_enabled`
+  path; an admin must place an order. Nothing produces card data without a click.
+- **Post-2026-09-18, the Enigma order UI (`EnigmaBar`/`CardRevenueCell`) sits behind the coverage
+  table's "Show analyst columns" toggle** (the dashboard-simplification A slice). It's one toggle
+  deeper, not gone.
+- **Exercised at n=1.** The pilot's ~20-prospect match-rate / dollar-plausibility check
+  (`docs/enigma-integration-scoping-v0_1.md`) was never run, and `enigma_cost_per_lookup_cents`=50 is
+  a placeholder (I-111) — real per-lookup cost unconfirmed. Validate at ~20 before scaling spend.
+- **Not a scoring input.** Card revenue is captured + displayed only; folding it into the Phase 4
+  scorecard waits on the same 0-`outcome` validation gap as the rest of scoring.
+- **`probe-enigma` (REST) + `probe-enigma-graphql`** remain the PAID, confirm-gated shape/cost probes.
+- **Distinct from the LeadOff Enigma pilot** (`docs/modules/leadoff-enigma-pilot-plan-v1_0.md` —
+  incumbent-revenue for market selection), which genuinely is proposed-and-not-run. Two different
+  Enigma uses; don't conflate them.
+
+Owner decision 2026-09-18: **leave it as-is** — no auto-enqueue build, no validation run kicked off.
+
 ### 2026-09-17 session — cold-caller CRM Tier 3 / T3.2 (MERGED)
 
 - **T3.2 — CALL SCRIPT + OBJECTION/REBUTTAL LIBRARY — BUILT + MERGED (#1196 → squash `2098547`;
