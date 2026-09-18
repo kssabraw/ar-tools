@@ -864,9 +864,10 @@ function whyLead(s: PlaceholderScore): string {
   if (s.model?.primary_pitch) return s.model.primary_pitch
   const parts: string[] = []
   if (s.coverage_deficit != null) {
-    parts.push(s.coverage_deficit >= 99
-      ? 'Invisible across the searched area'
-      : `Absent across ${s.coverage_deficit.toFixed(0)}% of the area`)
+    if (s.coverage_deficit >= 99) parts.push('Invisible across the searched area')
+    // Only claim a gap when it rounds to ≥1% — a fully-covered prospect must not read the
+    // contradictory "Absent across 0% of the area"; it falls through to its best rank instead.
+    else if (Math.round(s.coverage_deficit) >= 1) parts.push(`Absent across ${s.coverage_deficit.toFixed(0)}% of the area`)
   }
   if (s.best_rank != null) parts.push(`best rank #${s.best_rank}`)
   return parts.join(' · ') || 'Measured — open “Why call?” for the details'

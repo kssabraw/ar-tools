@@ -30,6 +30,11 @@ def test_draft_status():
     assert fanout.draft_status(has_media=False, requires_image=True, generation_ok=True) == "needs_image"
     assert fanout.draft_status(has_media=True, requires_image=True, generation_ok=False) == "generation_failed"
     assert fanout.draft_status(has_media=False, requires_image=False, generation_ok=False) == "generation_failed"
+    # enough_media (carousel): media present but <2 slides is still needs_image
+    assert fanout.draft_status(has_media=True, requires_image=True, generation_ok=True, enough_media=False) == "needs_image"
+    assert fanout.draft_status(has_media=True, requires_image=True, generation_ok=True, enough_media=True) == "ready"
+    # enough_media only matters when media is required (default True keeps old behaviour)
+    assert fanout.draft_status(has_media=True, requires_image=False, generation_ok=True, enough_media=False) == "ready"
 
 
 def test_image_description_for_angle_fallback_chain():

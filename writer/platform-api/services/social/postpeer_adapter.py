@@ -269,8 +269,12 @@ class PostPeerAdapter(SocialPostingAdapter):
         content: str,
         media: Optional[list[dict]] = None,
         platform_specific: Optional[dict] = None,
+        fmt: str = "feed",
         publish_now: bool = True,
     ) -> PostResult:
+        # ``fmt`` (reel/story routing) is a PostForMe concern; PostPeer is the dormant
+        # fallback provider and has no per-format placement mapping, so it's accepted
+        # for contract compatibility and ignored.
         payload = build_post_payload(
             platform, account_id, content, media, platform_specific, publish_now
         )

@@ -14,7 +14,7 @@ The scan page (`frontend/src/pages/Outreach.tsx`) and the caller CRM (`OutreachL
 
 - **B — shared lead-quality badge (`components/outreach/ScorePill.tsx`).** The CRM's `ScorePill` was extracted into a shared component (colour-banded decile grade + an optional `pitch` chip, `fmtScore` moved with it) and both screens now read it: the scan table's Priority column (slice A's temporary `export` from `OutreachLeads.tsx` is gone) and the CRM queue/board/drawer. The drawer's separate primary-pitch chip folds into the badge's `pitch` prop; the queue keeps its pitch in its own meta line (passes no `pitch`). Framing is priority-order (a shared tooltip: "Priority order (value/reply model) — not a win probability"), never a win %. Frontend-only, no behaviour change beyond the shared render.
 
-**All three slices are shipped as sequential draft PRs (A #1207 → C #1208 → B) stacked so each PR's diff shows only its own slice; none gates the next's development, and the intended merge order is A → C → B.**
+**All three slices shipped as sequential PRs (A #1207 → C #1208 → B #1209) and merged to `main` in that order.**
 
 ### 2026-09-17 session — cold-caller CRM Tier 3 / T3.2 (MERGED)
 

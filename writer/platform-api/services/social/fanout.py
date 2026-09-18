@@ -72,14 +72,17 @@ def build_source_ref(source_type: str, source_id: Optional[str], url: Optional[s
     return {"type": "topic"}
 
 
-def draft_status(has_media: bool, requires_image: bool, generation_ok: bool) -> str:
+def draft_status(
+    has_media: bool, requires_image: bool, generation_ok: bool, enough_media: bool = True
+) -> str:
     """The Draft's status after generation. Pure:
     generation_failed → the copy call failed;
-    needs_image → the platform needs an image and none was produced;
+    needs_image → the platform needs media and none/too-few was produced (a carousel
+      passes enough_media=False until it has ≥2 slides);
     ready → good to review/publish."""
     if not generation_ok:
         return "generation_failed"
-    if requires_image and not has_media:
+    if requires_image and (not has_media or not enough_media):
         return "needs_image"
     return "ready"
 
@@ -140,6 +143,7 @@ def enqueue_fanout(client_id: str, req, user_id: Optional[str] = None) -> dict:
                     "angle_title": angle_title, "tone": getattr(req, "tone", None), "format": fmt,
                     "include_image": bool(getattr(req, "include_image", False)),
                     "include_hashtags": bool(getattr(req, "include_hashtags", True)),
+                    "slides": getattr(req, "slides", None),
                     "source_type": req.source_type, "source_id": req.source_id, "url": req.url,
                     "text": req.text, "user_id": user_id,
                 },
@@ -188,6 +192,44 @@ async def _maybe_generate_image(
     except Exception as exc:  # noqa: BLE001 — image is best-effort
         logger.info("social.fanout_image_error", extra={"platform": platform, "error": str(exc)[:160]})
         return None
+
+
+async def _generate_carousel_images(
+    client_id: str, platform: str, descriptions: list[str], user_id: Optional[str],
+    *, client: dict, policy_template: Optional[str],
+) -> list[str]:
+    """Generate one image per carousel slide description, all at the platform's single
+    (carousel) aspect ratio so the slides share one shape. Each slide is a separate paid
+    image — the cost multiplies per slide, reserved individually against the fail-closed
+    budget inside ``generate_image``. Best-effort per slide: a slide that fails to
+    generate (e.g. budget exhausted) is skipped, so a partial carousel still ships what
+    it produced (and lands ``needs_image`` if it can't reach 2 slides)."""
+    from services.social import image as social_image
+
+    urls: list[str] = []
+    for desc in descriptions:
+        req = SimpleNamespace(platform=platform, format="carousel", description=desc, aspect_ratio=None)
+        try:
+            out = await social_image.generate_image(
+                client_id, req, user_id=user_id, client=client, policy_template=policy_template
+            )
+        except HTTPException as exc:
+            # Budget exhaustion (402) or a missing image config (503) won't clear on the
+            # next slide, so stop reserving; a transient per-slide generation failure
+            # (502, or an unexpected 4xx) is worth trying the remaining slides for.
+            if getattr(exc, "status_code", 0) in (402, 503):
+                logger.info("social.carousel_slides_stopped",
+                            extra={"platform": platform, "detail": str(exc.detail)[:120]})
+                break
+            logger.info("social.carousel_slide_skipped",
+                        extra={"platform": platform, "detail": str(exc.detail)[:120]})
+            continue
+        except Exception as exc:  # noqa: BLE001 — one slide is best-effort
+            logger.info("social.carousel_slide_error", extra={"platform": platform, "error": str(exc)[:160]})
+            continue
+        if out.get("url"):
+            urls.append(out["url"])
+    return urls
 
 
 async def run_fanout_job(job: dict) -> None:
@@ -260,37 +302,68 @@ async def run_fanout_job(job: dict) -> None:
     for draft in pending:
         platform = draft["platform"]
         spec = _platform_spec(platform)
-        d_fmt = draft.get("format") or fmt
+        d_fmt = (draft.get("format") or fmt or "feed").lower()
         update: dict = {"source_version": source_version, "updated_at": "now()"}
-        try:
-            copy, voice_warnings, spec_warnings = await creator.draft_platform_copy(
-                platform=platform, spec=spec, fmt=d_fmt, source_title=source_title,
-                source_text=source_text, angle=angle, tone=tone, include_hashtags=include_hashtags,
-                card=card, voice_block=voice_block, client_context=client_context,
-            )
-        except Exception as exc:  # noqa: BLE001 — one draft failing doesn't abort the set
-            logger.warning("social.fanout_draft_failed",
-                           extra={"draft_id": draft["id"], "error": str(getattr(exc, 'detail', exc))[:200]})
-            sb.table("social_drafts").update(
-                {"status": "generation_failed", "source_version": source_version, "updated_at": "now()"}
-            ).eq("id", draft["id"]).execute()
-            failed += 1
-            continue
+        # Stories have no caption — skip the (discarded) copy generation entirely and
+        # keep the draft caption empty so the Drafts UI + publish never show/post one.
+        if d_fmt == "story":
+            copy, voice_warnings, spec_warnings = "", [], []  # type: str, list[str], list[str]
+        else:
+            try:
+                copy, voice_warnings, spec_warnings = await creator.draft_platform_copy(
+                    platform=platform, spec=spec, fmt=d_fmt, source_title=source_title,
+                    source_text=source_text, angle=angle, tone=tone,
+                    include_hashtags=include_hashtags,
+                    card=card, voice_block=voice_block, client_context=client_context,
+                )
+            except Exception as exc:  # noqa: BLE001 — one draft failing doesn't abort the set
+                logger.warning("social.fanout_draft_failed",
+                               extra={"draft_id": draft["id"],
+                                      "error": str(getattr(exc, 'detail', exc))[:200]})
+                sb.table("social_drafts").update(
+                    {"status": "generation_failed", "source_version": source_version,
+                     "updated_at": "now()"}
+                ).eq("id", draft["id"]).execute()
+                failed += 1
+                continue
 
-        image_url: Optional[str] = None
-        if include_image:
-            image_url = await _maybe_generate_image(
-                client_id, platform, d_fmt,
-                image_description_for_angle(angle, angle_title, source_title), user_id,
-                client=client, policy_template=policy_template,
-            )
-        media = [{"type": "image", "url": image_url}] if image_url else []
-        requires_image = bool((spec or {}).get("requires_image"))
-        status = draft_status(bool(media), requires_image, generation_ok=True)
+        image_urls: list[str] = []
+        if d_fmt == "carousel":
+            # A carousel is N slides, each its own paid Pro image (cost multiplies per
+            # slide), all at the platform's single carousel aspect ratio.
+            if include_image:
+                slide_count = creator.resolve_slide_count(
+                    payload.get("slides"),
+                    settings.social_carousel_default_slides,
+                    settings.social_carousel_max_slides,
+                )
+                descriptions = await creator.carousel_slide_descriptions(
+                    source_title=source_title, source_text=source_text, angle=angle,
+                    count=slide_count, client_context=client_context, voice_block=voice_block,
+                )
+                image_urls = await _generate_carousel_images(
+                    client_id, platform, descriptions, user_id,
+                    client=client, policy_template=policy_template,
+                )
+            media = [{"type": "image", "url": u} for u in image_urls]
+            # A carousel always needs ≥2 slides regardless of the per-platform spec.
+            status = draft_status(bool(media), True, generation_ok=True, enough_media=len(media) >= 2)
+        else:
+            image_url: Optional[str] = None
+            if include_image:
+                image_url = await _maybe_generate_image(
+                    client_id, platform, d_fmt,
+                    image_description_for_angle(angle, angle_title, source_title), user_id,
+                    client=client, policy_template=policy_template,
+                )
+            image_urls = [image_url] if image_url else []
+            media = [{"type": "image", "url": image_url}] if image_url else []
+            requires_image = bool((spec or {}).get("requires_image"))
+            status = draft_status(bool(media), requires_image, generation_ok=True)
 
         update.update({
             "copy": copy, "media": media,
-            "image_urls": [image_url] if image_url else [],
+            "image_urls": image_urls,
             "voice_verdict": {"warnings": voice_warnings},
             "spec_verdict": {"warnings": spec_warnings},
             "status": status,
@@ -354,9 +427,16 @@ def update_draft(
     # decides ready ↔ needs_image from the new media — never generation_failed.
     new_media = fields.get("media", draft.get("media") or [])
     if draft.get("status") in ("ready", "needs_image"):
-        spec = publish._platform_spec(draft["platform"])
-        requires_image = bool((spec or {}).get("requires_image"))
-        fields["status"] = draft_status(bool(new_media), requires_image, generation_ok=True)
+        d_fmt = (draft.get("format") or "feed").lower()
+        if d_fmt == "carousel":
+            # A carousel always needs ≥2 slides, regardless of the platform spec.
+            fields["status"] = draft_status(
+                bool(new_media), True, generation_ok=True, enough_media=len(new_media) >= 2
+            )
+        else:
+            spec = publish._platform_spec(draft["platform"])
+            requires_image = bool((spec or {}).get("requires_image"))
+            fields["status"] = draft_status(bool(new_media), requires_image, generation_ok=True)
 
     row = (_sb().table("social_drafts").update(fields).eq("id", draft_id).execute()).data
     return row[0] if row else get_draft(draft_id)
@@ -393,9 +473,10 @@ def publish_existing_draft(
     )
 
     platform = draft["platform"]
+    fmt = (draft.get("format") or "feed").lower()
     media = draft.get("media") or publish.build_media(draft.get("image_urls"), None)
     copy = draft.get("copy") or ""
-    verdict = publish.validate_post(platform, copy, media, publish._platform_spec(platform))
+    verdict = publish.validate_post(platform, copy, media, publish._platform_spec(platform), fmt=fmt)
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
 

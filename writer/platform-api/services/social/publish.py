@@ -48,22 +48,57 @@ def build_media(
 
 
 def validate_post(
-    platform: str, copy: str, media: Optional[list[dict]], spec: Optional[dict]
+    platform: str,
+    copy: str,
+    media: Optional[list[dict]],
+    spec: Optional[dict],
+    fmt: str = "feed",
 ) -> dict:
     """Deterministic Platform-Spec check (PRD §6). {"hard": [...], "warnings": [...]}:
-    a hard violation blocks approval/publish; a warning is advisory."""
+    a hard violation blocks approval/publish; a warning is advisory. ``fmt`` layers
+    format-specific rules on top of the per-platform spec:
+
+    - ``reel`` (Instagram/Facebook Reels are video-only) → require exactly ONE video
+      and NO images.
+    - ``story`` → require media (image or video); the caption is ignored by the
+      platform (Stories carry no caption / link stickers), so a missing caption is
+      never a violation, and a supplied caption is an advisory ``story_caption_ignored``.
+    - ``carousel`` → require at least 2 media items (a one-item carousel is just a
+      feed post); the per-spec ``max_images`` (≤10) still caps the count.
+    """
     copy = copy or ""
     media = media or []
+    fmt = (fmt or "feed").lower()
     images = [m for m in media if (m.get("type") or "image") == "image"]
     videos = [m for m in media if m.get("type") == "video"]
     hard: list[str] = []
     warnings: list[str] = []
 
-    if not copy.strip() and not media:
+    # A Story has no caption, so "no copy" is never an empty post for it (media is
+    # required separately below); every other format needs copy or media.
+    if not copy.strip() and not media and fmt != "story":
         hard.append("empty_post")
+
+    # Format-specific media rules (platform-independent — needed for Facebook too,
+    # whose spec has requires_image=false).
+    if fmt == "reel":
+        if images:
+            hard.append(f"reel_no_images:{len(images)}")
+        if len(videos) != 1:
+            hard.append(f"reel_requires_one_video:{len(videos)}")
+    elif fmt == "story":
+        if not media:
+            hard.append("story_requires_media")
+        if copy.strip():
+            warnings.append("story_caption_ignored")
+    elif fmt == "carousel":
+        if len(media) < 2:
+            hard.append(f"carousel_needs_multiple:{len(media)}")
+
     if spec:
         char_limit = spec.get("char_limit")
-        if char_limit and len(copy) > int(char_limit):
+        # A Story caption is dropped at publish, so don't block on its length.
+        if char_limit and fmt != "story" and len(copy) > int(char_limit):
             hard.append(f"over_char_limit:{len(copy)}>{char_limit}")
         if spec.get("requires_image") and not media:
             hard.append("media_required")
@@ -379,7 +414,7 @@ def create_post(
     _assert_account_allowed(client_id, account_id, require_live=False)
     platform = (platform or "").lower()
     media = build_media(image_urls, video_urls)
-    verdict = validate_post(platform, copy, media, _platform_spec(platform))
+    verdict = validate_post(platform, copy, media, _platform_spec(platform), fmt=fmt)
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
 
@@ -498,7 +533,11 @@ async def run_publish_job(job: dict) -> None:
         if post.get("draft_id"):
             drows = (sb.table("social_drafts").select("*").eq("id", post["draft_id"]).limit(1).execute()).data or []
             draft = drows[0] if drows else {}
-        copy = draft.get("copy") or ""
+        fmt = (draft.get("format") or "feed").lower()
+        # Stories carry no caption — drop it here so it can never reach the platform,
+        # regardless of how the draft was created (manual compose already sends empty
+        # copy; a fan-out draft may carry copy that must not be published on a Story).
+        copy = "" if fmt == "story" else (draft.get("copy") or "")
         media = draft.get("media") or [{"type": "image", "url": u} for u in (draft.get("image_urls") or [])]
         platform_specific = draft.get("platform_metadata") or None
         platform = post["platform"]
@@ -530,7 +569,7 @@ async def run_publish_job(job: dict) -> None:
 
         result = await asyncio.to_thread(
             get_adapter(client_id=client_id).post,
-            account_id, platform, copy, media or None, platform_specific,
+            account_id, platform, copy, media or None, platform_specific, fmt,
         )
         if result.ok:
             sb.table("social_posts").update({
