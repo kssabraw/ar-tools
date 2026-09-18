@@ -63,6 +63,8 @@ def validate_post(
     - ``story`` → require media (image or video); the caption is ignored by the
       platform (Stories carry no caption / link stickers), so a missing caption is
       never a violation, and a supplied caption is an advisory ``story_caption_ignored``.
+    - ``carousel`` → require at least 2 media items (a one-item carousel is just a
+      feed post); the per-spec ``max_images`` (≤10) still caps the count.
     """
     copy = copy or ""
     media = media or []
@@ -89,6 +91,9 @@ def validate_post(
             hard.append("story_requires_media")
         if copy.strip():
             warnings.append("story_caption_ignored")
+    elif fmt == "carousel":
+        if len(media) < 2:
+            hard.append(f"carousel_needs_multiple:{len(media)}")
 
     if spec:
         char_limit = spec.get("char_limit")

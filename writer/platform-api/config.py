@@ -123,6 +123,12 @@ class Settings(BaseSettings):
     nano_banana_pro_model: str = "gemini-3-pro-image-preview"   # NANO_BANANA_PRO_MODEL
     social_image_size: str = "2K"                # imageConfig.imageSize (1K/2K/4K)
     social_image_cost_usd: float = 0.134         # est. USD per generated image (budget)
+    # IG/Facebook carousel Draft type: ≤10 items, one shared aspect ratio. A fan-out
+    # carousel generates N nano-banana Pro slides — each its own paid image (the cost
+    # multiplies per slide, reserved individually against the fail-closed budget).
+    social_carousel_max_slides: int = 10         # provider cap (≤10 items)
+    social_carousel_default_slides: int = 3      # slides a carousel fan-out defaults to
+    social_carousel_slides_max_tokens: int = 900 # slide-description LLM budget
     # Social media store (ADR-0004): Cloudflare R2 (S3 API, zero egress) when
     # all five are set, else the Supabase fallback (images only). Reuses the
     # suite's existing Cloudflare account.

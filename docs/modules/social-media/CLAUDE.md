@@ -46,8 +46,9 @@
 > X, YouTube, Pinterest (LinkedIn deferred). Still to discuss: default per-client monthly ceiling (b3),
 > the P4 autonomy build (c2), the P5 Video Studio (c3).
 > **Next build queue (owner-set 2026-09-18), in order:** (1) **IG Reels + Stories** scope-out (b1 — Stories
-> is Business-account-only, no caption/link stickers); (2) **IG carousel Draft type** (b2 — ≤10 items, one
-> aspect ratio, ~$0.13/slide); (3) **YouTube poster** (re-scope against PostForMe — a YT post needs a `title`
+> is Business-account-only, no caption/link stickers) — **✅ BUILT (draft PR #1206)**; (2) **IG carousel
+> Draft type** (b2 — ≤10 items, one aspect ratio, ~$0.13/slide) — **✅ BUILT (same PR #1206)**; (3) **YouTube
+> poster** (re-scope against PostForMe — a YT post needs a `title`
 > via `platform_configurations`; uploads existing videos, not generation); (4) **big-video direct-to-R2
 > presign** (endpoint exists; needs the browser PUT wired + an R2 CORS policy for the Netlify origin);
 > (5) **mixed image path** (2.5-Flash-for-square cost-saver, "later"). Then **P4 autonomy** + **P5
@@ -289,11 +290,16 @@ Creator exists.
 - **Don't couple module code to PostPeer** — go through the adapter interface.
 - **Don't download or re-host competitor media** — analyze-in-place (ADR-0002).
 - **Don't auto-publish by default** — top tier + explicit per-client opt-in only.
-- **IG carousel + Reels/Stories are now IN v1 scope** (owner b1+b2, 2026-09-16) but **not built yet** —
-  the composer format set + the seeded IG `social_platform_specs` row are still feed/single-image. When
-  building: carousel is ≤10 images, one aspect ratio throughout (each slide is another ~$0.13 Pro image);
-  Stories is Business-account-only, no caption/link stickers. (IG has **no text-only posts** — an
-  image-less IG Draft is `needs_image`, like Pinterest.)
+- **IG/FB carousel + Reels/Stories are IN v1 scope AND BUILT** (owner b1+b2; draft PR #1206, see
+  `HANDOFF.md` 2026-09-18). Reel/Story route via `postforme_adapter.placement_config` →
+  `platform_configurations.{ig|fb}.placement`; the validator is format-aware (`validate_post(..., fmt=)`);
+  a **Story drops its caption** at the publish choke point (no caption / link stickers; Business-account
+  is provider-enforced); **Reel = one video, no images** (manual Compose only — no AI video); carousel =
+  ≥2 images, one aspect ratio, generated N slides in fan-out (`social_carousel_*` config, each slide a
+  budget-reserved ~$0.13 Pro image). Format rules live in **code** (the IG `social_platform_specs` row is
+  per-platform), so **no migration** was needed. (IG still has **no text-only posts** — an image-less IG
+  Draft is `needs_image`.) Live-verify the placement + Business-account + carousel behavior on the
+  deployed post path (sandbox egress-blocked from PostForMe + Gemini).
 - **Don't hand PostPeer the schedule (`scheduledFor`)** — publish with `publishNow` from our own
   freeze-gated job so the inline account-health check + `source_changed` guard run first.
 - **Don't use nano-banana 2.5 Flash where a non-1:1 aspect ratio is required** (Pinterest/9:16) — it

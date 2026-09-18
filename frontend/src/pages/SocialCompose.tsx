@@ -61,8 +61,8 @@ const specFor = (platform: string): Spec =>
 // format, so this keeps the picker from offering one the platform can't do
 // (e.g. a Reel/Story option on a LinkedIn or X account).
 const FORMATS_BY_PLATFORM: Record<string, string[]> = {
-  instagram: ['feed', 'reel', 'story'],
-  facebook: ['feed', 'reel', 'story'],
+  instagram: ['feed', 'carousel', 'reel', 'story'],
+  facebook: ['feed', 'carousel', 'reel', 'story'],
   pinterest: ['feed'],
   twitter: ['feed'],
   linkedin: ['feed'],
@@ -70,20 +70,25 @@ const FORMATS_BY_PLATFORM: Record<string, string[]> = {
   tiktok: ['reel'],
   threads: ['feed'],
 }
-const FORMAT_LABELS: Record<string, string> = { feed: 'Feed post', reel: 'Reel', story: 'Story' }
+const FORMAT_LABELS: Record<string, string> = {
+  feed: 'Feed post', carousel: 'Carousel', reel: 'Reel', story: 'Story',
+}
 const formatsFor = (platform: string): string[] =>
   FORMATS_BY_PLATFORM[(platform || '').toLowerCase()] ?? ['feed']
 // Fan-out applies ONE format to every selected platform, so only offer a format
 // all of them support (feed always survives; empty selection → feed-only). Reel is
 // deliberately excluded here: fan-out generates copy + IMAGES (no video generation
-// in v1), and a Reel is video-only — offer Reels only in manual Compose.
-const FANOUT_FORMATS = ['feed', 'story']
+// in v1), and a Reel is video-only — offer Reels only in manual Compose. Carousel IS
+// offered (each slide is a generated image).
+const FANOUT_FORMATS = ['feed', 'carousel', 'story']
 const formatsForMany = (platforms: string[]): string[] => {
   if (!platforms.length) return ['feed']
   const sets = platforms.map((p) => new Set(formatsFor(p)))
   const shared = FANOUT_FORMATS.filter((f) => sets.every((s) => s.has(f)))
   return shared.length ? shared : ['feed']
 }
+const CAROUSEL_MIN_SLIDES = 2
+const CAROUSEL_MAX_SLIDES = 10  // mirrors settings.social_carousel_max_slides
 
 const MAX_UPLOAD_MB = 200 // mirrors settings.social_max_upload_mb
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif']
@@ -494,9 +499,12 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
   React.useEffect(() => {
     if (!formatOptions.includes(format)) setFormat(formatOptions[0])
   }, [formatOptions, format])
-  // A Story needs media (and carries no caption) — always generate an image for it.
+  // A Story needs media (and carries no caption) and a Carousel is images — always
+  // generate images for those. A carousel fans out N slides (each a paid image).
   const isStoryFmt = format === 'story'
-  const effectiveIncludeImage = includeImage || isStoryFmt
+  const isCarouselFmt = format === 'carousel'
+  const effectiveIncludeImage = includeImage || isStoryFmt || isCarouselFmt
+  const [slides, setSlides] = useState(3)
 
   const anglesMut = useMutation({
     mutationFn: async () => { setError(null); return api.post<Angle[]>(`/clients/${clientId}/social/angles`, src.payload()) },
@@ -517,6 +525,7 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
         angle_title: activeAngle?.title,
         tone: tone.trim() || undefined,
         platforms, format, include_image: effectiveIncludeImage, include_hashtags: true,
+        slides: isCarouselFmt ? slides : undefined,
       })
     },
     onSuccess: (r) => { setJobId(r.job_id); setAngleSetId(r.angle_set_id) },
@@ -605,15 +614,26 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
             {formatOptions.map((f) => <option key={f} value={f}>{FORMAT_LABELS[f] ?? f}</option>)}
           </select>
         </div>
+        {isCarouselFmt && (
+          <div>
+            <label style={label}>Slides</label>
+            <input type="number" min={CAROUSEL_MIN_SLIDES} max={CAROUSEL_MAX_SLIDES} step={1}
+              style={{ ...input, width: 90 }} value={slides}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10)
+                setSlides(Number.isNaN(n) ? CAROUSEL_MIN_SLIDES : Math.min(CAROUSEL_MAX_SLIDES, Math.max(CAROUSEL_MIN_SLIDES, n)))
+              }} />
+          </div>
+        )}
         <div>
           <label style={label}>Tone (optional)</label>
           <input style={{ ...input, width: 180 }} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="upbeat, expert" />
         </div>
         <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: isStoryFmt ? 'not-allowed' : 'pointer', paddingBottom: 9, opacity: isStoryFmt ? 0.7 : 1 }}
           title={isStoryFmt ? 'A Story needs media, so an image is always generated.' : undefined}>
-          <input type="checkbox" checked={effectiveIncludeImage} disabled={isStoryFmt}
+          <input type="checkbox" checked={effectiveIncludeImage} disabled={isStoryFmt || isCarouselFmt}
             onChange={(e) => setIncludeImage(e.target.checked)} />
-          Also generate an image for each
+          {isCarouselFmt ? 'Generate the carousel slides' : 'Also generate an image for each'}
         </label>
       </div>
       {isStoryFmt && (
@@ -621,9 +641,14 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
           Stories have no caption — each draft is a generated image only (no link stickers; Business account required).
         </p>
       )}
+      {isCarouselFmt && (
+        <p style={{ margin: '-6px 0 12px', fontSize: 11, color: '#94a3b8' }}>
+          Each slide is a separate generated image, so a {slides}-slide carousel is {slides}× the image cost per platform.
+        </p>
+      )}
       {effectiveIncludeImage && (
         <p style={{ margin: '-6px 0 12px', fontSize: 11, color: '#94a3b8' }}>
-          Each image uses the client’s monthly social budget (~$0.13 each, per platform).
+          Each image uses the client’s monthly social budget (~$0.13 each{isCarouselFmt ? ` · ~$${(0.13 * slides).toFixed(2)} per ${slides}-slide carousel` : ''}, per platform).
         </p>
       )}
 
@@ -1132,9 +1157,11 @@ export function SocialCompose() {
     if (!formatOptions.includes(format)) setFormat(formatOptions[0])
   }, [formatOptions, format])
   // Stories carry no caption / link stickers (Business-account-only); Reels are a
-  // single video (no images). These drive the format-aware compose rules below.
+  // single video (no images); Carousels are 2–10 images, one shared shape. These
+  // drive the format-aware compose rules below.
   const isStory = format === 'story'
   const isReel = format === 'reel'
+  const isCarousel = format === 'carousel'
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
   const [scheduledLocal, setScheduledLocal] = useState('')
   const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -1178,11 +1205,14 @@ export function SocialCompose() {
   const hints = useMemo(() => {
     const out: string[] = []
     const hasMedia = images.length > 0 || Boolean(video)
+    const mediaCount = images.length + (video ? 1 : 0)
     if (isReel) {
       if (!video) out.push('A Reel needs a video — add one to publish.')
       if (images.length) out.push('Reels don’t support images — a Reel is a single video.')
     } else if (isStory) {
       if (!hasMedia) out.push('A Story needs an image or video.')
+    } else if (isCarousel) {
+      if (mediaCount < CAROUSEL_MIN_SLIDES) out.push(`A carousel needs at least ${CAROUSEL_MIN_SLIDES} items — add more (all the same shape).`)
     } else {
       if (!copy.trim() && !hasMedia) out.push('Add some copy or media — an empty post can’t publish.')
       if (spec.requiresImage && !hasMedia) out.push(spec.note ?? `${spec.label} requires at least one image or video.`)
@@ -1193,7 +1223,7 @@ export function SocialCompose() {
       out.push(`${images.length} images — ${spec.label} allows at most ${spec.maxImages}.`)
     if (video && spec.maxVideos === 0) out.push(`${spec.label} doesn’t support video.`)
     return out
-  }, [copy, images, video, spec, isStory, isReel])
+  }, [copy, images, video, spec, isStory, isReel, isCarousel])
 
   const warnings = useMemo(() => {
     const out: string[] = []
@@ -1422,6 +1452,11 @@ export function SocialCompose() {
             {isReel && (
               <p style={{ margin: '6px 0 0', fontSize: 11, color: '#94a3b8' }}>
                 A Reel is a single video (no images).
+              </p>
+            )}
+            {isCarousel && (
+              <p style={{ margin: '6px 0 0', fontSize: 11, color: '#94a3b8' }}>
+                A carousel is 2–{CAROUSEL_MAX_SLIDES} images — use the same shape for every slide.
               </p>
             )}
           </div>

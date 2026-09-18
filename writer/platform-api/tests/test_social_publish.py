@@ -85,6 +85,18 @@ def test_validate_story_ignores_char_limit():
     assert not any(h.startswith("over_char_limit") for h in v["hard"])
 
 
+def test_validate_carousel_needs_multiple_items():
+    # A carousel needs ≥2 items; one image is just a feed post.
+    assert any(h.startswith("carousel_needs_multiple")
+               for h in publish.validate_post("instagram", "cap", img("https://i/a.jpg"), IG, fmt="carousel")["hard"])
+    # two images → fine (within IG's max_images)
+    assert publish.validate_post("instagram", "cap", img("https://i/a.jpg", "https://i/b.jpg"), IG, fmt="carousel")["hard"] == []
+    # the per-spec max_images still caps the count
+    too_many = img(*[f"https://i/{n}.jpg" for n in range(11)])
+    assert any(h.startswith("too_many_images")
+               for h in publish.validate_post("instagram", "cap", too_many, IG, fmt="carousel")["hard"])
+
+
 def test_validate_feed_default_unchanged():
     assert publish.validate_post("facebook", "hi", [], FB)["hard"] == []
     assert publish.validate_post("facebook", "hi", [], FB, fmt="feed")["hard"] == []
