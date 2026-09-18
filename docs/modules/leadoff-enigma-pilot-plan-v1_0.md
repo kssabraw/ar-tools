@@ -1,9 +1,11 @@
 # LeadOff — Enigma card-transaction data (Pilot Plan v1.0): coverage-first feasibility
 
-**Status:** PROPOSED — pilot not run. This is a **go/no-go feasibility
-pilot**, not a build. No Enigma contract, no code, no new dependency is
-committed by this doc. The build sketch in §7 is contingent on the pilot
-passing the §5 thresholds.
+**Status:** PROPOSED — pilot **not yet run**; the **harness is built**
+(2026-09-18, see §6a). This is a **go/no-go feasibility pilot**, not a build.
+No Enigma contract, no service code, no new dependency is committed by this doc
+— the harness is a standalone throwaway script that refuses to run without a
+trial/eval key. The build sketch in §7 is contingent on the pilot passing the
+§5 thresholds.
 
 **Owner decision required before any of this:** Enigma is a new **enterprise
 data vendor** (contract + per-record/subscription cost), which the repo's
@@ -176,6 +178,61 @@ On the *matched* rows only:
   ground-truth revenue for the bucket-B anchors.
 
 ---
+
+## 6a. The harness (BUILT 2026-09-18 — not yet run)
+
+The runnable one-command harness now exists, so the pilot is a key + egress away
+from producing the §5 scorecard:
+
+- **`writer/platform-api/scripts/enigma_coverage_pilot.py`** — standalone
+  (stdlib + `httpx`, **no app import, no new dependency**). Reads
+  `ENIGMA_API_KEY` (env or `--key`) + `ENIGMA_GRAPHQL_URL`, and **refuses to run
+  without a key** (exit 2). Reads the ground-truth CSV, calls Enigma once per
+  business, writes a results CSV + a raw-envelope JSONL, and prints the §5
+  scorecard + the §5.4 outcome cell. `--dry-run` validates the CSV and prints the
+  GraphQL document + example variables with **no key and no API calls**, so the
+  input can be sanity-checked from the egress-blocked sandbox.
+- **`writer/platform-api/scripts/leadoff_enigma_ground_truth.csv`** — the §4 test
+  set. **Bucket A is pre-filled** with the five real Little Rock, AR water-damage
+  competitors LeadOff already holds (names + addresses + domains, pulled from
+  `competitor_locations`), including the generic/aggregator rows that are the
+  realistic worst case. **Bucket B (revenue anchors) and the positive control are
+  `#`-prefixed placeholder rows the owner fills** (a `#` id is skipped) — the two
+  numbers only the owner has: `known_revenue` + `known_trend` for the anchors, and
+  a card-present storefront for the §5.1 positive-control gate.
+
+**Faithful to the ONE Enigma shape we know works:** the harness reuses the
+outreach module's **live-verified** GraphQL `search(searchInput)` query
+(`outreach/api/services/enigma_graphql.py`, proven against a real eval key) —
+the single `cardTransactions` connection filtered by `quantityType` + `period`,
+and the `enigmaId: null`-on-a-real-match gotcha (a match is signalled by a result
+carrying fields, never by the id). It pulls `card_revenue_amount` over
+1m/3m/12m/24m plus a **best-effort** `card_transactions_count` alias for the
+avg-ticket (§5.3); an unknown count slug returns an empty connection rather than
+failing the document, and the raw JSONL surfaces the real slug to set
+`--count-quantity` on the next run (measure, don't infer). The **trend** is a
+real trailing-YoY when 12m+24m are present, else a labelled run-rate acceleration
+proxy — the harness never presents the proxy as a YoY.
+
+**Deterministic scorecard, human-confirmed lead-value:** coverage/growth verdicts
+and the §5.4 matrix are computed in code (unit-tested,
+`tests/test_enigma_coverage_pilot.py`, 27 cases — a sign-flipped threshold would
+mislead the go/no-go, so they are locked). §5.3 avg-ticket plausibility is a
+first-pass AUTO flag (below the category floor = the insurance-undercount
+failure); the owner's `plausible_human` column is authoritative and the printed
+scorecard says so.
+
+**To run it** (owner's machine or a Railway shell — the sandbox is egress-blocked
+from Enigma): fill the bucket-B + control rows in the CSV, then
+
+    export ENIGMA_API_KEY="<trial key>"
+    export ENIGMA_GRAPHQL_URL="<confirm against Enigma's live docs>"
+    cd writer/platform-api
+    python scripts/enigma_coverage_pilot.py --dry-run     # sanity-check the CSV first
+    python scripts/enigma_coverage_pilot.py               # the real §5 run
+
+Paste the printed scorecard + the results CSV into §8 below as the findings
+record, then close this doc NO-GO or open the §7 build with the owner.
 
 ## 7. Build sketch — ONLY if §5 passes (not authorized here)
 
