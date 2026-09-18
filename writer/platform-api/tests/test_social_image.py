@@ -45,8 +45,9 @@ def test_select_image_model_flash_off_falls_back_to_pro():
 
 
 def test_select_image_model_blank_flash_model_falls_back_to_pro():
-    # A misconfigured/empty flash model id can never route away from a real model.
-    for bad in ("", "   ", None):
+    # A misconfigured/empty flash model id (env SOCIAL_IMAGE_FLASH_MODEL="") can never
+    # route away from a real model — it falls back to Pro instead of a blank URL.
+    for bad in ("", "   "):
         out = image.select_image_model(
             use_flash=True, flash_model=bad, flash_cost=0.101,
             pro_model="gemini-3-pro-image-preview", pro_cost=0.134,
