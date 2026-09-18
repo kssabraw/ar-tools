@@ -45,11 +45,16 @@
 > Apify-ONLY — TwelveLabs is DROPPED** (c1, BUILT). Owner-confirmed P1 platform scope: Instagram, Facebook,
 > X, YouTube, Pinterest (LinkedIn deferred). Still to discuss: default per-client monthly ceiling (b3),
 > the P4 autonomy build (c2), the P5 Video Studio (c3).
-> Still unbuilt toward the full repurpose engine: the **IG Reels/Stories + carousel** scope-out, **P4 autonomy**,
-> and **P5 video/YouTube**. Remaining P1 confidence step: a **live research run from the dashboard** (the
-> sandbox is egress-blocked from Apify, so live scrape verification is deployed-only) + confirm/replace the
-> default Pinterest actor. The one open publish-path confidence step is a live test post. See `HANDOFF.md`
-> (this folder) for the live state and next actions — start there.
+> **Next build queue (owner-set 2026-09-18), in order:** (1) **IG Reels + Stories** scope-out (b1 — Stories
+> is Business-account-only, no caption/link stickers); (2) **IG carousel Draft type** (b2 — ≤10 items, one
+> aspect ratio, ~$0.13/slide); (3) **YouTube poster** (re-scope against PostForMe — a YT post needs a `title`
+> via `platform_configurations`; uploads existing videos, not generation); (4) **big-video direct-to-R2
+> presign** (endpoint exists; needs the browser PUT wired + an R2 CORS policy for the Netlify origin);
+> (5) **mixed image path** (2.5-Flash-for-square cost-saver, "later"). Then **P4 autonomy** + **P5
+> video/YouTube** remain the longer-horizon phases. The `HANDOFF.md` **"Next priority" block** (top of that
+> file) is authoritative on this order. Non-build confidence steps, independent of the queue: a **live test
+> post** on the PostForMe path, and a **live P1 research run** (both deployed-only — the sandbox is
+> egress-blocked from PostForMe and Apify). See `HANDOFF.md` (this folder) for the live state — start there.
 
 ## What this module is
 
