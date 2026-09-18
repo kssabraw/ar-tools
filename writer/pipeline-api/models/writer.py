@@ -226,6 +226,13 @@ class WriterMetadata(BaseModel):
     # Sections whose prose a voice revision pass rewrote (headings only — the
     # revision never touches structure).
     voice_sections_revised: int = 0
+    # Step 0.6 - client-aware banned-term outline compliance. The brief is
+    # client-agnostic + globally cached, so its pre-baked outline can carry a
+    # term THIS client bans; each entry records a reworded H2/H3 heading or FAQ
+    # question ({kind, original, revised, terms, method}) so a banned drug/brand
+    # name in a heading no longer hard-aborts the run. Additive metadata only —
+    # the article contract and schema_version are unchanged.
+    banned_outline_items_reworded: list[dict] = []
     # Banned terms that leaked into body content after the section LLM's
     # one-retry attempt. The run does NOT abort on body leakage (the
     # distillation LLM occasionally over-classifies common words like

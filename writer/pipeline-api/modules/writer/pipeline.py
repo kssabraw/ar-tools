@@ -55,6 +55,7 @@ from .citation_coverage_validator import (
 from .h2_body_length import H2BodyLengthResult, _split_h2_groups, validate_h2_body_lengths
 from .heading_sanitizer import SanitizationLog, sanitize_heading_structure
 from .heading_seo_optimizer import optimize_headings
+from .outline_compliance import sanitize_outline_terms
 from .heading_entity_enforcer import enforce_heading_entities
 from .icp_verification import verify_icp_callout_landed
 from .prose_llm import current_prose_provider, effective_prose_model, set_prose_provider
@@ -406,6 +407,25 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
             )
 
     banned_regex = build_banned_regex(brand_voice_card.banned_terms if brand_voice_card else [])
+
+    # ---- Step 0.6 - Banned-term outline compliance (client-aware) ----
+    # The brief is client-agnostic + globally cached, so its pre-baked outline
+    # (headings + FAQ questions) can carry a term THIS client bans (e.g. a
+    # compliance-bound client's competitor/drug brand names). The Writer
+    # preserves headings and hard-aborts on a banned term in one, so such a
+    # client could never generate on a topic whose SERP/PAA data names those
+    # terms. Reword the offending H2/H3 headings + FAQ questions to compliant
+    # equivalents in place (order + FAQ count preserved) before generation -
+    # mirroring how the Fan-out generator produces headings with the ban known
+    # rather than aborting on a pre-baked one. Warn-and-accept; surfaced in
+    # metadata. No-op when the client has no banned terms or none leaked.
+    outline_compliance = await sanitize_outline_terms(
+        heading_structure,
+        faq_questions,
+        banned_terms=(brand_voice_card.banned_terms if brand_voice_card else []),
+    )
+    heading_structure = outline_compliance.heading_structure
+    faq_questions = outline_compliance.faq_questions
 
     # ---- SIE v1.4 - pull zone × category aggregate targets ----
     # Each zone aggregate carries {entities, related_keywords,
@@ -945,6 +965,9 @@ async def run_writer(req: WriterRequest) -> WriterResponse:
         duplicate_h2_headings_dropped=sanitization_log.duplicate_h2s_dropped,
         faq_like_h2_content_dropped=sanitization_log.faq_like_h2s_dropped,
         h3_children_dropped_under_h2=sanitization_log.h3_children_dropped,
+        # Step 0.6 - client-aware banned-term outline compliance (reworded
+        # headings/FAQ questions that contained a client-banned term).
+        banned_outline_items_reworded=outline_compliance.reworded,
         # Step 6.6 - AIO heading main-entity enforcement (§X.4)
         main_entity_used=heading_entity_result.main_entity_used,
         headings_entity_enforced_count=heading_entity_result.enforced_count,
