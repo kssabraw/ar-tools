@@ -189,6 +189,7 @@ class SocialPresignResponse(BaseModel):
 class SocialPostResponse(BaseModel):
     id: UUID
     client_id: UUID
+    draft_id: Optional[UUID] = None
     platform: str
     account_id: Optional[str] = None
     status: str

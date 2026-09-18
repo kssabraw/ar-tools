@@ -626,6 +626,66 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'A scheduled post needs a time in the future.',
     steps: ['Pick a future date and time, then schedule again.'],
   },
+  social_post_not_cancellable: {
+    title: 'This post can’t be cancelled',
+    meaning: 'Only a scheduled post that hasn’t started publishing can be cancelled.',
+    steps: ['If it already published, there’s nothing to cancel. Refresh the calendar.'],
+  },
+  social_post_publishing: {
+    title: 'This post is already publishing',
+    meaning: 'The post is being sent to the platform right now, so it can’t be changed.',
+    steps: ['Wait a moment and refresh — it’ll land as published or show an error.'],
+  },
+  social_post_not_reschedulable: {
+    title: 'This post can’t be rescheduled',
+    meaning: 'Only a scheduled post that hasn’t started publishing can be moved.',
+    steps: ['Refresh the calendar to see its current state.'],
+  },
+  social_post_not_editable: {
+    title: 'This post can’t be edited',
+    meaning: 'Only a scheduled post that hasn’t started publishing can be edited.',
+    steps: ['Cancel and recompose it, or refresh to see its current state.'],
+  },
+  social_post_no_draft: {
+    title: 'Nothing to edit',
+    meaning: 'This post has no attached draft content to edit.',
+    steps: ['Cancel it and compose a new post instead.'],
+  },
+  social_draft_not_queueable: {
+    title: 'This draft can’t be queued yet',
+    meaning: 'Only a ready draft can be added to the cadence queue — one still missing an image or board can’t.',
+    steps: ['Finish the draft (add its image / board) so it’s ready, then add it to the queue.'],
+  },
+  social_draft_not_queued: {
+    title: 'This draft isn’t in the queue',
+    meaning: 'You can only remove a draft that’s currently queued.',
+    steps: ['Refresh the drafts list.'],
+  },
+  social_draft_wrong_client: {
+    title: 'That draft belongs to another client',
+    meaning: 'A batch publish can only include drafts for the client you’re working in.',
+    steps: ['Refresh and try again with this client’s drafts.'],
+  },
+  social_ceiling_must_be_positive: {
+    title: 'The monthly ceiling must be more than $0',
+    meaning: 'A budget ceiling of zero or less would block all spend.',
+    steps: ['Enter a positive dollar amount, or leave it blank to use the default.'],
+  },
+  social_ceiling_invalid: {
+    title: 'That ceiling isn’t a valid number',
+    meaning: 'The monthly ceiling must be a number.',
+    steps: ['Enter a dollar amount (e.g. 100), or leave it blank for the default.'],
+  },
+  social_schedule_platform_required: {
+    title: 'Pick a platform for the schedule',
+    meaning: 'A cadence schedule is set per platform.',
+    steps: ['Choose the platform, then save the schedule.'],
+  },
+  invalid_cadence: {
+    title: 'Choose a valid cadence',
+    meaning: 'The cadence must be Off, Weekly, Every 2 weeks, or Monthly.',
+    steps: ['Pick a cadence from the list and save again.'],
+  },
   unsupported_media_type: {
     title: 'Unsupported file type',
     meaning: 'That file isn’t a supported image or video.',

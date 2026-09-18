@@ -17,9 +17,10 @@ interface SocialAccount {
   reconnect_required: boolean
 }
 type PostStatus =
-  | 'scheduled' | 'publishing' | 'published' | 'rejected' | 'failed' | 'blocked_account'
+  | 'scheduled' | 'publishing' | 'published' | 'rejected' | 'failed' | 'blocked_account' | 'cancelled'
 interface SocialPost {
   id: string
+  draft_id: string | null
   platform: string
   account_id: string | null
   status: PostStatus
@@ -121,6 +122,7 @@ const STATUS_STYLE: Record<PostStatus, { bg: string; fg: string; label: string }
   rejected: { bg: '#fef2f2', fg: '#b91c1c', label: 'Rejected' },
   failed: { bg: '#fef2f2', fg: '#b91c1c', label: 'Failed' },
   blocked_account: { bg: '#fff7ed', fg: '#c2410c', label: 'Account needs reconnect' },
+  cancelled: { bg: '#f1f5f9', fg: '#64748b', label: 'Cancelled' },
 }
 
 function StatusBadge({ status }: { status: PostStatus }) {
@@ -424,7 +426,7 @@ function AiImagePanel({
 
 // ── Angle fan-out (Create with AI) + Drafts ───────────────────────────────────
 interface Angle { title: string; hook: string; description: string }
-type DraftStatus = 'generating' | 'ready' | 'needs_image' | 'needs_board' | 'generation_failed' | 'published' | 'archived'
+type DraftStatus = 'generating' | 'ready' | 'needs_image' | 'needs_board' | 'generation_failed' | 'published' | 'archived' | 'queued'
 interface Draft {
   id: string
   angle_set_id: string | null
@@ -443,6 +445,7 @@ interface Draft {
 const DRAFT_STATUS_STYLE: Record<string, { bg: string; fg: string; label: string }> = {
   generating: { bg: '#fffbeb', fg: '#b45309', label: 'Generating…' },
   ready: { bg: '#ecfdf5', fg: '#047857', label: 'Ready' },
+  queued: { bg: '#eef2ff', fg: '#4338ca', label: 'Queued' },
   needs_image: { bg: '#fff7ed', fg: '#c2410c', label: 'Needs image' },
   needs_board: { bg: '#fff7ed', fg: '#c2410c', label: 'Needs board' },
   generation_failed: { bg: '#fef2f2', fg: '#b91c1c', label: 'Failed' },
@@ -731,9 +734,18 @@ function DraftRow({ draft, accounts, onChanged }: {
     onSuccess: onChanged,
     onError: (e) => setError(e instanceof Error ? e.message : 'publish_failed'),
   })
+  const queueMut = useMutation({
+    mutationFn: () => { setError(null); return api.post(`/social/drafts/${draft.id}/queue`, {}) },
+    onSuccess: onChanged,
+    onError: (e) => setError(e instanceof Error ? e.message : 'queue_failed'),
+  })
+  const unqueueMut = useMutation({
+    mutationFn: () => api.post(`/social/drafts/${draft.id}/unqueue`, {}),
+    onSuccess: onChanged,
+  })
 
   const spec = specFor(draft.platform)
-  const publishable = draft.status === 'ready' && Boolean(acct)
+  const publishable = (draft.status === 'ready' || draft.status === 'queued') && Boolean(acct)
 
   return (
     <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, display: 'flex', gap: 14 }}>
@@ -788,6 +800,18 @@ function DraftRow({ draft, accounts, onChanged }: {
                     style={{ ...btn(publishable && !dirty ? '#4f46e5' : '#c7d2fe'), padding: '6px 12px', cursor: publishable && !dirty ? 'pointer' : 'not-allowed' }}>
                     {pubMut.isPending ? <Loader2 size={13} className="spin" /> : <Send size={13} />} Publish now
                   </button>
+                  {draft.status === 'ready' && (
+                    <button onClick={() => queueMut.mutate()} disabled={queueMut.isPending || dirty}
+                      title="Approve into the cadence queue — a schedule slot can drip it automatically"
+                      style={{ ...btn('#fff', '#4338ca'), padding: '6px 10px' }}>
+                      {queueMut.isPending ? <Loader2 size={13} className="spin" /> : <Clock size={13} />} Add to queue
+                    </button>
+                  )}
+                  {draft.status === 'queued' && (
+                    <button onClick={() => unqueueMut.mutate()} disabled={unqueueMut.isPending} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}>
+                      Remove from queue
+                    </button>
+                  )}
                 </>
               )}
               <button onClick={() => delMut.mutate()} disabled={delMut.isPending} style={{ ...btn('#fff', '#b91c1c'), padding: '6px 10px' }}>
@@ -819,16 +843,49 @@ function DraftsTab({ clientId, accounts, angleSetId }: {
       return Date.now() - pollStartRef.current > 10 * 60 * 1000 ? false : 3000  // give up after 10 min
     },
   })
-  const drafts = draftsQ.data ?? []
+  const drafts = useMemo(() => draftsQ.data ?? [], [draftsQ.data])
+  // Batch approve: every 'ready' draft that has a connected account for its platform.
+  const readyItems = useMemo(
+    () => drafts
+      .filter((d) => d.status === 'ready')
+      .map((d) => {
+        const a = accounts.find((x) => x.platform.toLowerCase() === d.platform.toLowerCase())
+        return a ? { draft_id: d.id, account_id: a.account_id } : null
+      })
+      .filter((x): x is { draft_id: string; account_id: string } => x !== null),
+    [drafts, accounts],
+  )
+  const [batchError, setBatchError] = useState<string | null>(null)
+  const batchMut = useMutation({
+    mutationFn: () => { setBatchError(null); return api.post<{ ok: boolean; error: string | null }[]>(`/clients/${clientId}/social/drafts/publish-batch`, { items: readyItems }) },
+    onSuccess: () => void draftsQ.refetch(),
+    onError: (e) => setBatchError(e instanceof Error ? e.message : 'batch_failed'),
+  })
+  const batchFailed = (batchMut.data ?? []).filter((r) => !r.ok).length
   return (
     <div style={card}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 8, flexWrap: 'wrap' }}>
         <div>
           <h3 style={{ margin: 0, fontSize: 15 }}>Drafts{angleSetId ? ' (latest fan-out)' : ''}</h3>
-          {angleSetId && <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>Showing the set you just created. Edit, then publish each.</p>}
+          {angleSetId
+            ? <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>Showing the set you just created. Edit, then publish or queue each.</p>
+            : <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>Review, then publish now, or add to the cadence queue.</p>}
         </div>
-        <button onClick={() => void draftsQ.refetch()} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}><RefreshCw size={13} /> Refresh</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {readyItems.length > 0 && (
+            <button onClick={() => batchMut.mutate()} disabled={batchMut.isPending} style={{ ...btn('#4f46e5'), padding: '6px 12px' }}>
+              {batchMut.isPending ? <Loader2 size={13} className="spin" /> : <Send size={13} />} Publish all ready ({readyItems.length})
+            </button>
+          )}
+          <button onClick={() => void draftsQ.refetch()} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}><RefreshCw size={13} /> Refresh</button>
+        </div>
       </div>
+      {batchMut.isSuccess && (
+        <p style={{ margin: '0 0 10px', fontSize: 12, color: batchFailed ? '#c2410c' : '#047857', fontWeight: 600 }}>
+          {batchFailed ? `Published ${(batchMut.data ?? []).length - batchFailed}, ${batchFailed} failed (see each draft).` : 'All ready drafts submitted.'}
+        </p>
+      )}
+      {batchError && <div style={{ marginBottom: 10 }}><ErrorDetails message={batchError} /></div>}
       {draftsQ.isLoading ? (
         <div style={{ color: '#64748b', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>
       ) : drafts.length === 0 ? (
@@ -1162,6 +1219,421 @@ function HandleDeleteButton({ clientId, handleId, onDeleted }: {
 }
 
 // ── page ─────────────────────────────────────────────────────────────────────
+// ── P3 Manager: Calendar (schedule + published, with edit/cancel/reschedule) ──
+
+function localDateTime(iso: string | null): string {
+  if (!iso) return ''
+  try { return new Date(iso).toLocaleString() } catch { return iso }
+}
+
+// An ISO string → datetime-local value (yyyy-MM-ddTHH:mm) in the viewer's local tz.
+function toLocalInput(iso: string | null): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+}
+
+function ManagedPostRow({ post, accounts, onChanged }: {
+  post: SocialPost; accounts: SocialAccount[]; onChanged: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [copy, setCopy] = useState<string | null>(null)   // null = not loaded yet
+  const [reOpen, setReOpen] = useState(false)
+  const [reAt, setReAt] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const isScheduled = post.status === 'scheduled'
+  const handle = accounts.find((a) => a.account_id === post.account_id)?.handle
+  const scheduleMin = useState(() => new Date(Date.now() + 60000).toISOString().slice(0, 16))[0]
+
+  // Lazily load the draft copy only when the editor opens.
+  const draftQ = useQuery<Draft>({
+    queryKey: ['social-post-draft', post.draft_id],
+    queryFn: () => api.get<Draft>(`/social/drafts/${post.draft_id}`),
+    enabled: editing && Boolean(post.draft_id),
+  })
+  // Prefill the editor once, when the draft loads (adjust-during-render; guarded so it
+  // runs once — copy becomes non-null and this condition stops matching).
+  if (editing && copy === null && draftQ.data) setCopy(draftQ.data.copy ?? '')
+
+  const editMut = useMutation({
+    mutationFn: () => api.patch(`/social/posts/${post.id}`, { copy: copy ?? '' }),
+    onSuccess: () => { setEditing(false); setCopy(null); onChanged() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'edit_failed'),
+  })
+  const reMut = useMutation({
+    mutationFn: () => api.post(`/social/posts/${post.id}/reschedule`, { scheduled_at: new Date(reAt).toISOString() }),
+    onSuccess: () => { setReOpen(false); onChanged() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'reschedule_failed'),
+  })
+  const cancelMut = useMutation({
+    mutationFn: () => api.post(`/social/posts/${post.id}/cancel`, {}),
+    onSuccess: onChanged,
+    onError: (e) => setError(e instanceof Error ? e.message : 'cancel_failed'),
+  })
+
+  const when = post.status === 'scheduled'
+    ? `Scheduled for ${localDateTime(post.scheduled_at)}`
+    : post.published_at ? `Published ${localDateTime(post.published_at)}`
+      : localDateTime(post.created_at)
+
+  return (
+    <div style={{ padding: '10px 12px', border: '1px solid #f1f5f9', borderRadius: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{specFor(post.platform).label}</span>
+            <StatusBadge status={post.status} />
+            {handle && <span style={{ fontSize: 11, color: '#94a3b8' }}>· {handle}</span>}
+          </div>
+          <div style={{ fontSize: 12, color: '#94a3b8' }}>
+            {when}
+            {post.status_detail && (post.status === 'rejected' || post.status === 'failed') ? ` — ${post.status_detail}` : ''}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+          {isScheduled && post.draft_id && (
+            <button onClick={() => { setError(null); setEditing((v) => !v); setReOpen(false) }} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}>Edit</button>
+          )}
+          {isScheduled && (
+            <button onClick={() => { setError(null); setReAt(toLocalInput(post.scheduled_at) || scheduleMin); setReOpen((v) => !v); setEditing(false) }} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}>
+              <Clock size={13} /> Reschedule
+            </button>
+          )}
+          {isScheduled && (
+            <button onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending} style={{ ...btn('#fff', '#b91c1c'), padding: '6px 10px' }}>
+              {cancelMut.isPending ? <Loader2 size={13} className="spin" /> : <X size={13} />} Cancel
+            </button>
+          )}
+          {post.post_url && (
+            <a href={post.post_url} target="_blank" rel="noreferrer" style={{ ...btn('#fff', '#334155'), padding: '6px 10px', textDecoration: 'none' }}>
+              <ExternalLink size={13} /> View
+            </a>
+          )}
+        </div>
+      </div>
+      {editing && (
+        <div style={{ marginTop: 10 }}>
+          {draftQ.isLoading || copy === null ? (
+            <div style={{ fontSize: 12, color: '#64748b', display: 'flex', gap: 6, alignItems: 'center' }}><Loader2 size={13} className="spin" /> Loading current copy…</div>
+          ) : (
+            <>
+              <textarea style={{ ...input, minHeight: 70, resize: 'vertical' }} value={copy} onChange={(e) => setCopy(e.target.value)} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 6 }}>
+                <button onClick={() => editMut.mutate()} disabled={editMut.isPending} style={{ ...btn('#4f46e5'), padding: '6px 12px' }}>
+                  {editMut.isPending ? <Loader2 size={13} className="spin" /> : null} Save edit
+                </button>
+                <button onClick={() => { setEditing(false); setCopy(null) }} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}>Cancel</button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+      {reOpen && (
+        <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <input type="datetime-local" min={scheduleMin} value={reAt} onChange={(e) => setReAt(e.target.value)} style={{ ...input, width: 'auto' }} />
+          <button onClick={() => reMut.mutate()} disabled={reMut.isPending || !reAt} style={{ ...btn('#4f46e5'), padding: '6px 12px' }}>
+            {reMut.isPending ? <Loader2 size={13} className="spin" /> : null} Save time
+          </button>
+          <button onClick={() => setReOpen(false)} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}>Cancel</button>
+        </div>
+      )}
+      {error && <div style={{ marginTop: 8 }}><ErrorDetails message={error} /></div>}
+    </div>
+  )
+}
+
+function CalendarTab({ clientId, accounts }: { clientId: string; accounts: SocialAccount[] }) {
+  const calQ = useQuery<SocialPost[]>({
+    queryKey: ['social-calendar', clientId],
+    queryFn: () => api.get<SocialPost[]>(`/clients/${clientId}/social/calendar`),
+    refetchInterval: (q) => ((q.state.data as SocialPost[] | undefined) ?? []).some((p) => p.status === 'scheduled' || p.status === 'publishing') ? 8000 : false,
+  })
+  const posts = useMemo(() => calQ.data ?? [], [calQ.data])
+  const upcoming = useMemo(
+    () => posts.filter((p) => p.status === 'scheduled').sort((a, b) => (a.scheduled_at ?? '').localeCompare(b.scheduled_at ?? '')),
+    [posts],
+  )
+  const past = useMemo(
+    () => posts.filter((p) => p.status !== 'scheduled').sort((a, b) => (b.published_at ?? b.created_at ?? '').localeCompare(a.published_at ?? a.created_at ?? '')),
+    [posts],
+  )
+  const onChanged = () => void calQ.refetch()
+
+  return (
+    <div style={card}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div>
+          <h3 style={{ margin: 0, fontSize: 15 }}>Calendar</h3>
+          <p style={{ margin: '2px 0 0', fontSize: 12, color: '#94a3b8' }}>Scheduled and published posts across every platform. Reschedule, edit, or cancel anything not yet published.</p>
+        </div>
+        <button onClick={() => void calQ.refetch()} style={{ ...btn('#fff', '#334155'), padding: '6px 10px' }}><RefreshCw size={13} /> Refresh</button>
+      </div>
+      {calQ.isLoading ? (
+        <div style={{ color: '#64748b', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>
+      ) : (
+        <>
+          <h4 style={{ margin: '4px 0 8px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: '#64748b' }}>Upcoming</h4>
+          {upcoming.length === 0 ? (
+            <p style={{ margin: '0 0 16px', fontSize: 13, color: '#94a3b8' }}>Nothing scheduled. Schedule a post from Compose, or set a cadence in Settings.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
+              {upcoming.map((p) => <ManagedPostRow key={p.id} post={p} accounts={accounts} onChanged={onChanged} />)}
+            </div>
+          )}
+          <h4 style={{ margin: '4px 0 8px', fontSize: 12, textTransform: 'uppercase', letterSpacing: 0.4, color: '#64748b' }}>Recent</h4>
+          {past.length === 0 ? (
+            <p style={{ margin: 0, fontSize: 13, color: '#94a3b8' }}>No published posts yet.</p>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {past.slice(0, 30).map((p) => <ManagedPostRow key={p.id} post={p} accounts={accounts} onChanged={onChanged} />)}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+// ── P3 Manager: Settings (Social Policy + per-platform cadence schedule) ──────
+
+interface SocialPolicy {
+  monthly_ceiling_usd: number | null
+  image_prompt_template: string | null
+  text_prompt_template: string | null
+  effective_ceiling_usd: number
+  default_ceiling_usd: number
+}
+interface SocialSchedule {
+  id?: string
+  platform: string
+  account_id: string | null
+  cadence: string
+  day_of_week: number | null
+  day_of_month: number | null
+  hour_local: number
+  is_active: boolean
+  auto_fill: boolean
+  next_run_at: string | null
+  last_run_at: string | null
+}
+interface SchedulesResponse {
+  timezone: string | null
+  auto_publish_enabled: boolean
+  schedules: SocialSchedule[]
+}
+
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+function PolicyCard({ clientId }: { clientId: string }) {
+  const polQ = useQuery<SocialPolicy>({
+    queryKey: ['social-policy', clientId],
+    queryFn: () => api.get<SocialPolicy>(`/clients/${clientId}/social/policy`),
+  })
+  const [ceiling, setCeiling] = useState<string | null>(null)
+  const [imgTmpl, setImgTmpl] = useState<string | null>(null)
+  const [txtTmpl, setTxtTmpl] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // Prefill once from the loaded policy (adjust-during-render, guarded).
+  if (ceiling === null && polQ.data) {
+    setCeiling(polQ.data.monthly_ceiling_usd == null ? '' : String(polQ.data.monthly_ceiling_usd))
+    setImgTmpl(polQ.data.image_prompt_template ?? '')
+    setTxtTmpl(polQ.data.text_prompt_template ?? '')
+  }
+  const saveMut = useMutation({
+    mutationFn: () => api.put(`/clients/${clientId}/social/policy`, {
+      monthly_ceiling_usd: ceiling && ceiling.trim() ? Number(ceiling) : null,
+      image_prompt_template: imgTmpl && imgTmpl.trim() ? imgTmpl : null,
+      text_prompt_template: txtTmpl && txtTmpl.trim() ? txtTmpl : null,
+    }),
+    onSuccess: () => { setError(null); void polQ.refetch() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'save_failed'),
+  })
+
+  return (
+    <div style={card}>
+      <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>Policy</h3>
+      <p style={{ margin: '0 0 12px', fontSize: 12, color: '#94a3b8' }}>Per-client budget and generation-prompt tuning.</p>
+      {polQ.isLoading || ceiling === null ? (
+        <div style={{ color: '#64748b', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>
+      ) : (
+        <>
+          <div style={{ marginBottom: 12, maxWidth: 260 }}>
+            <label style={label}>Monthly cost ceiling (USD)</label>
+            <input style={input} type="number" min={1} step={1} value={ceiling} placeholder={String(polQ.data?.default_ceiling_usd ?? '')} onChange={(e) => setCeiling(e.target.value)} />
+            <p style={{ margin: '4px 0 0', fontSize: 11, color: '#94a3b8' }}>Blank = the default (${polQ.data?.default_ceiling_usd}). Spend is blocked once the month hits this.</p>
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={label}>Image prompt template</label>
+            <textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={imgTmpl ?? ''} placeholder="Steer AI image generation (brand look, style)…" onChange={(e) => setImgTmpl(e.target.value)} />
+          </div>
+          <div style={{ marginBottom: 12 }}>
+            <label style={label}>Copy prompt template</label>
+            <textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={txtTmpl ?? ''} placeholder="Steer AI copy WITHIN the brand voice (never over it)…" onChange={(e) => setTxtTmpl(e.target.value)} />
+          </div>
+          <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={{ ...btn('#4f46e5') }}>
+            {saveMut.isPending ? <Loader2 size={13} className="spin" /> : null} Save policy
+          </button>
+          {saveMut.isSuccess && <span style={{ marginLeft: 10, fontSize: 12, color: '#047857', fontWeight: 600 }}>Saved</span>}
+          {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+        </>
+      )}
+    </div>
+  )
+}
+
+function ScheduleEditor({ clientId, platform, accounts, schedule, autoPublishEnabled, timezone, onChanged }: {
+  clientId: string; platform: string; accounts: SocialAccount[]
+  schedule: SocialSchedule | undefined; autoPublishEnabled: boolean; timezone: string | null; onChanged: () => void
+}) {
+  const [cadence, setCadence] = useState(schedule?.cadence ?? 'disabled')
+  const [dow, setDow] = useState(schedule?.day_of_week ?? 0)
+  const [dom, setDom] = useState(schedule?.day_of_month ?? 1)
+  const [hour, setHour] = useState(schedule?.hour_local ?? 9)
+  const [active, setActive] = useState(schedule?.is_active ?? true)
+  const [autoFill, setAutoFill] = useState(schedule?.auto_fill ?? false)
+  const platAccounts = accounts.filter((a) => a.platform.toLowerCase() === platform)
+  const [acct, setAcct] = useState(schedule?.account_id ?? platAccounts[0]?.account_id ?? '')
+  const [error, setError] = useState<string | null>(null)
+
+  const saveMut = useMutation({
+    mutationFn: () => api.put(`/clients/${clientId}/social/schedule`, {
+      platform, account_id: acct || null, cadence,
+      day_of_week: cadence === 'weekly' || cadence === 'biweekly' ? dow : null,
+      day_of_month: cadence === 'monthly' ? dom : null,
+      hour_local: hour, is_active: active, auto_fill: autoFill,
+    }),
+    onSuccess: () => { setError(null); onChanged() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'save_failed'),
+  })
+  const delMut = useMutation({
+    mutationFn: () => api.delete(`/clients/${clientId}/social/schedule?platform=${platform}`),
+    onSuccess: onChanged,
+  })
+
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 10, padding: 14, marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ fontSize: 14, fontWeight: 700 }}>{specFor(platform).label}</span>
+        {schedule?.next_run_at && schedule.is_active && schedule.cadence !== 'disabled' && (
+          <span style={{ fontSize: 11, color: '#94a3b8' }}>· next {localDateTime(schedule.next_run_at)}</span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <div>
+          <label style={{ ...label, fontSize: 11 }}>Cadence</label>
+          <select style={{ ...input, width: 'auto', padding: '7px 8px' }} value={cadence} onChange={(e) => setCadence(e.target.value)}>
+            <option value="disabled">Off</option>
+            <option value="weekly">Weekly</option>
+            <option value="biweekly">Every 2 weeks</option>
+            <option value="monthly">Monthly</option>
+          </select>
+        </div>
+        {(cadence === 'weekly' || cadence === 'biweekly') && (
+          <div>
+            <label style={{ ...label, fontSize: 11 }}>Day</label>
+            <select style={{ ...input, width: 'auto', padding: '7px 8px' }} value={dow} onChange={(e) => setDow(Number(e.target.value))}>
+              {DOW.map((d, i) => <option key={d} value={i}>{d}</option>)}
+            </select>
+          </div>
+        )}
+        {cadence === 'monthly' && (
+          <div>
+            <label style={{ ...label, fontSize: 11 }}>Day of month</label>
+            <input style={{ ...input, width: 70, padding: '7px 8px' }} type="number" min={1} max={28} value={dom} onChange={(e) => setDom(Number(e.target.value))} />
+          </div>
+        )}
+        {cadence !== 'disabled' && (
+          <div>
+            <label style={{ ...label, fontSize: 11 }}>Hour {timezone ? `(${timezone})` : '(UTC)'}</label>
+            <input style={{ ...input, width: 70, padding: '7px 8px' }} type="number" min={0} max={23} value={hour} onChange={(e) => setHour(Number(e.target.value))} />
+          </div>
+        )}
+        {platAccounts.length > 0 && (
+          <div>
+            <label style={{ ...label, fontSize: 11 }}>Account</label>
+            <select style={{ ...input, width: 'auto', padding: '7px 8px' }} value={acct} onChange={(e) => setAcct(e.target.value)}>
+              {platAccounts.map((a) => <option key={a.account_id} value={a.account_id}>{a.handle || a.account_id}</option>)}
+            </select>
+          </div>
+        )}
+      </div>
+      {cadence !== 'disabled' && (
+        <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <label style={{ fontSize: 12, color: '#334155', display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> Active
+          </label>
+          <label style={{ fontSize: 12, color: '#334155', display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={autoFill} onChange={(e) => setAutoFill(e.target.checked)} style={{ marginTop: 3 }} />
+            <span>
+              Auto-fill: <strong>publish an approved queued draft automatically</strong> at each slot.
+              <span style={{ display: 'block', color: '#c2410c', fontSize: 11 }}>
+                {autoPublishEnabled
+                  ? 'This publishes unattended — only queued (approved) drafts drip.'
+                  : 'Auto-publish is OFF for the module — this stays a reminder until an admin enables it. Only queued drafts would ever drip.'}
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={{ ...btn('#4f46e5'), padding: '6px 12px' }}>
+          {saveMut.isPending ? <Loader2 size={13} className="spin" /> : null} Save schedule
+        </button>
+        {schedule?.id && (
+          <button onClick={() => delMut.mutate()} disabled={delMut.isPending} style={{ ...btn('#fff', '#b91c1c'), padding: '6px 10px' }}>Remove</button>
+        )}
+        {saveMut.isSuccess && <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>Saved</span>}
+      </div>
+      {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+    </div>
+  )
+}
+
+function SettingsTab({ clientId, accounts }: { clientId: string; accounts: SocialAccount[] }) {
+  const schedQ = useQuery<SchedulesResponse>({
+    queryKey: ['social-schedules', clientId],
+    queryFn: () => api.get<SchedulesResponse>(`/clients/${clientId}/social/schedule`),
+  })
+  const onChanged = () => void schedQ.refetch()
+  // One editor per platform the client has a connected account for, plus any platform
+  // that already has a schedule row (so a schedule survives an account list change).
+  const platforms = useMemo(() => {
+    const set = new Set<string>()
+    accounts.forEach((a) => set.add(a.platform.toLowerCase()))
+    ;(schedQ.data?.schedules ?? []).forEach((s) => set.add(s.platform.toLowerCase()))
+    return Array.from(set)
+  }, [accounts, schedQ.data])
+  const byPlatform = useMemo(() => {
+    const m: Record<string, SocialSchedule> = {}
+    ;(schedQ.data?.schedules ?? []).forEach((s) => { m[s.platform.toLowerCase()] = s })
+    return m
+  }, [schedQ.data])
+
+  return (
+    <div>
+      <PolicyCard clientId={clientId} />
+      <div style={card}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>Posting cadence</h3>
+        <p style={{ margin: '0 0 12px', fontSize: 12, color: '#94a3b8' }}>
+          A recurring rhythm per platform. On its slot it drips an approved <em>queued</em> draft
+          (when auto-fill + module auto-publish are on) or reminds you to post.
+        </p>
+        {schedQ.isLoading ? (
+          <div style={{ color: '#64748b', fontSize: 13, display: 'flex', gap: 8, alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>
+        ) : platforms.length === 0 ? (
+          <p style={{ margin: 0, fontSize: 13, color: '#94a3b8' }}>Connect an account first (Compose tab) to set a cadence.</p>
+        ) : (
+          platforms.map((p) => (
+            <ScheduleEditor key={p} clientId={clientId} platform={p} accounts={accounts}
+              schedule={byPlatform[p]} autoPublishEnabled={Boolean(schedQ.data?.auto_publish_enabled)}
+              timezone={schedQ.data?.timezone ?? null} onChanged={onChanged} />
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function SocialCompose() {
   const { id } = useParams<{ id: string }>()
   const clientId = id as string
@@ -1191,8 +1663,8 @@ export function SocialCompose() {
   })
 
   const accounts = useMemo(() => accountsQ.data ?? [], [accountsQ.data])
-  const [tab, setTab] = useState<'compose' | 'create' | 'drafts' | 'competitors'>('compose')
-  // Compose + Create need a connected account; Drafts + Competitors don't.
+  const [tab, setTab] = useState<'compose' | 'create' | 'drafts' | 'calendar' | 'settings' | 'competitors'>('compose')
+  // Compose + Create need a connected account; the rest don't.
   const needsAccounts = tab === 'compose' || tab === 'create'
   const [activeAngleSet, setActiveAngleSet] = useState<string | null>(null)
   const [accountId, setAccountId] = useState<string>('')
@@ -1368,7 +1840,7 @@ export function SocialCompose() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
-        {([['compose', 'Compose'], ['create', 'Create with AI'], ['drafts', 'Drafts'], ['competitors', 'Competitors']] as const).map(([key, lbl]) => (
+        {([['compose', 'Compose'], ['create', 'Create with AI'], ['drafts', 'Drafts'], ['calendar', 'Calendar'], ['settings', 'Settings'], ['competitors', 'Competitors']] as const).map(([key, lbl]) => (
           <button key={key} onClick={() => setTab(key)}
             style={{ padding: '8px 14px', background: 'none', border: 'none', borderBottom: `2px solid ${tab === key ? '#4f46e5' : 'transparent'}`, color: tab === key ? '#4f46e5' : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: -1 }}>
             {lbl}
@@ -1403,6 +1875,8 @@ export function SocialCompose() {
       {tab === 'drafts' && (
         <DraftsTab clientId={clientId} accounts={accounts} angleSetId={activeAngleSet} />
       )}
+      {tab === 'calendar' && <CalendarTab clientId={clientId} accounts={accounts} />}
+      {tab === 'settings' && <SettingsTab clientId={clientId} accounts={accounts} />}
       {tab === 'competitors' && <CompetitorsTab clientId={clientId} />}
 
       {/* Compose */}
