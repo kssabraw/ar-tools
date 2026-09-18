@@ -48,23 +48,23 @@ FRESH_DAYS = la.FRESH_DAYS  # 90 — a city×service grade is stable for weeks
 # ── Pure helpers ──────────────────────────────────────────────────────────────
 
 def resolve_service(service: str, board_categories: list[str]) -> dict[str, Any]:
-    """Map a typed service to a board category. Returns
-    {category_name, on_catalog}: the canonical GBP category when the text
-    resolves to one (on_catalog=True), else the cleaned typed text as an
-    off-catalog service (on_catalog=False) that still grades live."""
+    """Resolve a typed service into the grade KEYWORD (always the literal input —
+    what the live demand + Maps SERP pull actually uses) plus the nearest catalog
+    CATEGORY, used ONLY for the lead value (CPL), the exact-category holder count,
+    and the board/scout id — never as the pulled keyword. So "roofer" grades
+    "roofer" (its own volume + SERP) while still borrowing "Roofing contractor"'s
+    CPL. Returns {keyword, category_name (catalog match or None), on_catalog}."""
     from services.leadoff_finder import resolve_category
     cleaned = " ".join((service or "").split()).strip()
     match = resolve_category(cleaned, board_categories) if cleaned else None
-    if match:
-        return {"category_name": match, "on_catalog": True}
-    return {"category_name": cleaned, "on_catalog": False}
+    return {"keyword": cleaned, "category_name": match, "on_catalog": match is not None}
 
 
-def cache_key(city_id: int, category_name: str) -> str:
-    """Freshness key for the grade cache — city + normalized service name, so a
-    typed 'Roofing' and 'roofing contractor' that resolve to the same category
-    share a cache row."""
-    return f"{int(city_id)}|{norm(category_name)}"
+def cache_key(city_id: int, keyword: str) -> str:
+    """Freshness key for the grade cache — city + the normalized LITERAL keyword
+    that was graded. Keyed on the keyword (not the catalog category) so "roofer"
+    and "roofing contractor" — which pull different SERPs — cache distinctly."""
+    return f"{int(city_id)}|{norm(keyword)}"
 
 
 def resolve_cpl(category_name: str, lead_values: dict[str, float],
@@ -84,23 +84,27 @@ def thin_demand(vol: Optional[float]) -> bool:
     return vol is not None and float(vol) < la.MIN_VOL
 
 
-def build_grade_row(*, category_name: str, category_id: Optional[str],
+def build_grade_row(*, keyword: str, category_id: Optional[str],
                     vol: Optional[float], cpc: Optional[float],
                     field: dict[str, Any], cpl: float, cpl_default: bool,
                     breakpoints: list[float], capture: float,
-                    competitors: Optional[list[dict[str, Any]]] = None) -> dict[str, Any]:
+                    competitors: Optional[list[dict[str, Any]]] = None,
+                    lead_category: Optional[str] = None) -> dict[str, Any]:
     """Compose the single grade row from measured demand + a SERP field read,
-    reusing the tryout's economics/grade math (one category in, one row out).
-    Pure — no I/O."""
+    reusing the tryout's economics/grade math (one keyword in, one row out).
+    `keyword` is the LITERAL term graded (its own volume + SERP → row.category
+    for display); `lead_category` is the catalog category the CPL + exact-holder
+    count came from (recorded for transparency, may be None). Pure — no I/O."""
     rows = la.tryout_rows(
-        demand={category_name: {"vol": vol, "cpc": cpc}},
-        field={category_name: field},
-        cpl={category_name: cpl},
+        demand={keyword: {"vol": vol, "cpc": cpc}},
+        field={keyword: field},
+        cpl={keyword: cpl},
         breakpoints=breakpoints,
         capture=capture,
     )
-    row = rows[0] if rows else {"category": category_name, "grade": "F", "exp_val": 0}
+    row = rows[0] if rows else {"category": keyword, "grade": "F", "exp_val": 0}
     row["category_id"] = category_id
+    row["lead_category"] = lead_category
     row["thin_demand"] = thin_demand(vol)
     row["cpl"] = round(float(cpl), 2)
     row["cpl_default"] = cpl_default
@@ -140,12 +144,14 @@ def fresh_cached(city_id: int, category_name: str,
 
 # ── Live single-cell grade (PAID) ─────────────────────────────────────────────
 
-def enqueue_grade(user_id: str, city_row: dict[str, Any], category_name: str,
-                  category_id: Optional[str], on_catalog: bool,
-                  service_query: str, capture: float,
+def enqueue_grade(user_id: str, city_row: dict[str, Any], keyword: str,
+                  lead_category: Optional[str], category_id: Optional[str],
+                  on_catalog: bool, service_query: str, capture: float,
                   lead_tier: str) -> dict[str, Any]:
-    """Create the leadoff_grades row (status running) + the async job that
-    fills it. Poll GET /leadoff/grade/{grade_id}."""
+    """Create the leadoff_grades row (status running) + the async job that fills
+    it. The row's category_name is the LITERAL keyword (what's graded + cached);
+    the catalog category (for CPL/scout) rides in the job payload as
+    lead_category. Poll GET /leadoff/grade/{grade_id}."""
     supabase = get_supabase()
     grade = supabase.table("leadoff_grades").insert({
         "requested_by": user_id,
@@ -153,9 +159,9 @@ def enqueue_grade(user_id: str, city_row: dict[str, Any], category_name: str,
         "city_name": city_row.get("name"),
         "state_code": city_row.get("state_code"),
         "category_id": category_id,
-        "category_name": category_name,
+        "category_name": keyword,
         "service_query": service_query,
-        "cache_key": cache_key(city_row.get("city_id"), category_name),
+        "cache_key": cache_key(city_row.get("city_id"), keyword),
         "capture": capture, "lead_tier": lead_tier,
         "on_catalog": on_catalog, "source": "live", "status": "running",
     }).execute().data[0]
@@ -163,7 +169,8 @@ def enqueue_grade(user_id: str, city_row: dict[str, Any], category_name: str,
         "job_type": "leadoff_grade",
         "entity_id": grade["id"],
         "payload": {"grade_id": grade["id"], "city_id": city_row.get("city_id"),
-                    "category_name": category_name, "category_id": category_id,
+                    "keyword": keyword, "lead_category": lead_category,
+                    "category_id": category_id,
                     "capture": capture, "lead_tier": lead_tier},
     }).execute().data[0]
     return {"grade": grade, "grade_id": grade["id"], "job_id": job["id"]}
@@ -174,7 +181,12 @@ async def run_grade_job(job: dict) -> None:
     job_id = job["id"]
     payload = job.get("payload") or {}
     grade_id = payload.get("grade_id")
-    category_name = payload.get("category_name") or ""
+    # `keyword` is the literal term graded; `lead_category` the catalog category
+    # the CPL + exact-holder count come from. (Back-compat: an in-flight job
+    # enqueued before this change carries only `category_name` — treat it as both.)
+    keyword = payload.get("keyword") or payload.get("category_name") or ""
+    lead_category = payload.get("lead_category") or (
+        payload.get("category_name") if payload.get("category_id") else None)
     category_id = payload.get("category_id")
     capture = float(payload.get("capture") or 0.10)
     lead_tier = payload.get("lead_tier") or "mid"
@@ -204,22 +216,24 @@ async def run_grade_job(job: dict) -> None:
                 posted = await la._dfs_post(
                     client, "/keywords_data/google_ads/search_volume/task_post",
                     [{"location_code": lc, "language_name": "English",
-                      "keywords": [category_name, category_name + " near me"]}])
+                      "keywords": [keyword, keyword + " near me"]}])
                 task = la._task0(posted)
                 la._check_money_limit(task)
                 result = await la._poll_task(
                     client, "/keywords_data/google_ads/search_volume/task_get",
                     task.get("id"), interval_s=8, attempts=45)
-                dem = la.demand_from_items(result or [], [category_name])
-                vol = dem.get(category_name, {}).get("vol")
-                cpc = dem.get(category_name, {}).get("cpc")
+                dem = la.demand_from_items(result or [], [keyword])
+                vol = dem.get(keyword, {}).get("vol")
+                cpc = dem.get(keyword, {}).get("cpc")
 
-            # 2) one Maps SERP live @ 13z (lesson #1); 40102 = a VALID zero
+            # 2) one Maps SERP live @ 13z (lesson #1); 40102 = a VALID zero.
+            # The SERP is pulled on the LITERAL keyword; exact-category holders
+            # are counted against the catalog category when we matched one.
             from services.leadoff_brand import top5_from_items
             coord = f"{city['latitude']},{city['longitude']},13z"
             d = await la._dfs_post(
                 client, "/serp/google/maps/live/advanced",
-                [{"keyword": category_name, "location_coordinate": coord,
+                [{"keyword": keyword, "location_coordinate": coord,
                   "language_code": "en", "device": "desktop", "os": "windows",
                   "depth": 100}])
             t0 = la._task0(d)
@@ -228,15 +242,16 @@ async def run_grade_job(job: dict) -> None:
                 items: list[dict[str, Any]] = []
             else:
                 items = ((t0.get("result") or [{}])[0] or {}).get("items") or []
-            field = la.field_stats(items, category_name)
+            field = la.field_stats(items, keyword, holder_category=lead_category)
             competitors = top5_from_items(items)
 
-        # 3) economics + grade vs the national reference
+        # 3) economics + grade vs the national reference; CPL from the nearest
+        # catalog category (flagged default when off-catalog).
         cpl, cpl_default = resolve_cpl(
-            category_name, la._lead_values(lead_tier),
+            lead_category or keyword, la._lead_values(lead_tier),
             __import__("config").settings.leadoff_finder_default_lead_value)
         row = build_grade_row(
-            category_name=category_name, category_id=category_id,
+            keyword=keyword, category_id=category_id, lead_category=lead_category,
             vol=vol, cpc=cpc, field=field, cpl=cpl, cpl_default=cpl_default,
             breakpoints=la._breakpoints(), capture=capture,
             competitors=competitors)
@@ -256,7 +271,7 @@ async def run_grade_job(job: dict) -> None:
             "result": {"grade": row.get("grade"), "exp_val": row.get("exp_val")},
         }).eq("id", job_id).execute()
         logger.info("leadoff_grade.complete", extra={
-            "grade_id": grade_id, "category": category_name,
+            "grade_id": grade_id, "keyword": keyword, "lead_category": lead_category,
             "grade": row.get("grade"), "thin_demand": row.get("thin_demand")})
     except Exception as exc:
         logger.error("leadoff_grade.failed",
@@ -286,9 +301,13 @@ def grade_market_comps(grade_row: dict[str, Any]) -> tuple[dict[str, Any], list[
     """(market, comps) for scout_market_state, built from a grade row's stored
     top-5 — the off-board substitute for the board row + serp_top5 (pure)."""
     g = grade_row.get("grade") or {}
+    # Scout keys on the catalog CATEGORY (that's how the scanner's Pass-2 caches
+    # are keyed) — the grade's lead_category — not the literal keyword now stored
+    # in category_name. Older rows have no lead_category, so fall back.
+    scout_category = g.get("lead_category") or grade_row.get("category_name")
     market = {"city_id": grade_row.get("city_id"),
               "category_id": grade_row.get("category_id"),
-              "category": grade_row.get("category_name"),
+              "category": scout_category,
               "city_name": grade_row.get("city_name"),
               "state_code": grade_row.get("state_code")}
     comps = [{"rank_position": i + 1, **c}
@@ -319,9 +338,9 @@ def store_scout_result(grade_id: str,
            .eq("id", grade_id).limit(1).execute().data or [None])[0]
     if not row:
         return None
-    _market, comps = grade_market_comps(row)
+    market, comps = grade_market_comps(row)
     scout = leadoff_service.scout_enrichment(
-        int(row["city_id"]), row.get("category_name") or "", comps)
+        int(row["city_id"]), market.get("category") or "", comps)
     payload = {"enrichment": scout["enrichment"], "competitors": scout["competitors"],
                "summary": summary or {},
                "scouted_at": datetime.now(timezone.utc).isoformat()}

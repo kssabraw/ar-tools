@@ -75,16 +75,25 @@ class TestNormalizeState:
 class TestResolveLocation:
     def test_full_location(self):
         loc = resolve_location({"city": "Cleveland", "state": "Ohio",
-                                "county": "Cuyahoga"})
-        assert loc == {"city": "Cleveland", "state": "OH", "county": "Cuyahoga"}
+                                "county": "Cuyahoga", "service": "roofer"})
+        assert loc == {"city": "Cleveland", "state": "OH", "county": "Cuyahoga",
+                       "service": "roofer"}
 
     def test_strips_trailing_county_word(self):
         assert resolve_location({"county": "Hudson County"})["county"] == "Hudson"
         assert resolve_location({"county": "Orleans Parish"})["county"] == "Orleans"
 
+    def test_literal_service_extracted_independently(self):
+        # the literal keyword rides through even with no location — for the
+        # board-search "Grade it live" handoff
+        assert resolve_location({"service": "roofer"})["service"] == "roofer"
+        assert resolve_location({"city": "Boise", "service": " tree guys "}) == {
+            "city": "Boise", "state": None, "county": None, "service": "tree guys"}
+
     def test_empty_fields_become_none(self):
-        loc = resolve_location({"city": "", "state": "", "county": "  "})
-        assert loc == {"city": None, "state": None, "county": None}
+        loc = resolve_location({"city": "", "state": "", "county": "  ",
+                                "service": ""})
+        assert loc == {"city": None, "state": None, "county": None, "service": None}
 
     def test_bad_state_dropped_but_city_kept(self):
         # a location-only query with an unparseable state still keeps the city
@@ -93,4 +102,4 @@ class TestResolveLocation:
 
     def test_none_result(self):
         assert resolve_location(None) == {"city": None, "state": None,
-                                          "county": None}
+                                          "county": None, "service": None}

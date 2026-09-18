@@ -713,3 +713,109 @@ scorecard vs the plan's §5 thresholds; refuses to run without a key) + assemble
 ground-truth set — so the owner runs the pilot in one command once they have a trial key.
 Alternative the owner may pick instead: skip Enigma for lead-value and wire the
 won-client-close-data calibration path (no vendor).
+
+## LeadOff — grade-all bulk sweep ("Rank cities") (2026-09-18)
+
+**Context.** The single-cell grader answers "type a city + a service → grade";
+the board answers "rank cities for a service" but only for scanned categories on
+the ≥30k tier. Nothing ranked EVERY gradeable city (incl. sub-30k + off-catalog)
+for one service — the #2 open item from the 2026-09-18 grader entry, and the one
+flagged there as "the most natural next build."
+
+**DECIDED + BUILT (this session, green draft PR):**
+- **A board/cache-aware bulk sweep**, NOT a re-run of every cell: per candidate
+  city, board-first (free) → recent cache (free) → live (~$0.06). So a service
+  already precomputed on the board (HVAC = 723 free rows) only pays for the
+  ungraded remainder. Distinct from city-finder (which always pays + caps at
+  300); grade-all reaches all ~3,993 gradeable cities.
+- **Each live grade is persisted to `leadoff_grades`** — the sweep is
+  idempotent/resumable (a reaper requeue re-runs but finds graded cells cached =
+  free) and those cells are free for future single grades too. Paired with a
+  180-min stale-timeout override (cheap requeue, not a double-spend risk).
+- **Spend model — nothing spends without staff auth + confirm + a ceiling:** a
+  FREE estimate endpoint shows the board/cache-free split + the live cost; the
+  caller sets a required `max_spend_usd`; the job grades only as many live cities
+  as the RESERVED amount (`min(estimate, ceiling)`) covers (biggest markets
+  first), the rest `budget_skipped` → run `partial`. The reserved amount is
+  guarded + recorded, and the job's hard cap = the reservation, so a
+  candidate-set change between enqueue and run can never overspend.
+- **A DEDICATED daily budget** `leadoff_grade_all_daily_budget_usd` ($300),
+  SEPARATE from the tight $5 single-grade `leadoff_daily_budget_usd` — so a
+  deliberate sweep can be authorized without loosening single-grade safety.
+  Rationale: a sweep is a different, infrequent, staff-only action; conflating
+  its budget with single grades would either block sweeps or weaken the single
+  guard.
+- **Ranked by expected value** across all three sources; board rows carry the
+  regressed `xdem` demand, live/cache the raw observed `vol` — both surfaced with
+  `demand_basis` (the same board-vs-tryout apples-to-oranges the grader already
+  accepts, made transparent per row rather than hidden).
+- Migration `20260918200000` applied live (`leadoff_grade_all_runs` + the
+  `grade_all` spend action + the `leadoff_grade_all` job type, both rebuilt from
+  the verified live constraints). Frontend "Rank cities" tab (estimate → set
+  ceiling → run → ranked table + CSV).
+
+**Scout-from-grade (PR #1212) — MERGED** (`1ccd4df` on `main`); the prior entry's
+OPEN item #1 is closed.
+
+**Still OPEN (unchanged):** the 4-category board-add runbook (owner's scanner
+machine), a scout button on Tryout rows, a sub-10k geocode step, and the Enigma
+coverage pilot. The real DataForSEO sweep is worker-verified post-deploy (the
+sandbox is egress-blocked from DataForSEO).
+
+## LeadOff — grade the literal keyword, not the catalog category (2026-09-18)
+
+**Context.** Owner searched "roofer in cypress, ca" and got nothing. Diagnosis
+uncovered two things: (1) the Board search box is a filter over the precomputed
+board and has no live fallback (Cypress had no roofing board row → empty); and
+(2) the on-demand grader, when the typed term fuzzy-matched a catalog category
+(`roofer`→`Roofing contractor` via the `roof` stem), pulled the volume + Maps
+SERP on the CATEGORY, not the user's keyword — so it graded the wrong query.
+
+**DECIDED + BUILT (this session, on PR #1217's branch).** Decouple the pulled
+keyword from the lead-value lookup:
+- **The live pull (volume + Maps SERP) always uses the LITERAL keyword** the user
+  typed. "roofer" grades "roofer".
+- **The nearest catalog category is used ONLY** for the CPL (lead value, flagged),
+  the exact-category holder count, and the board/scout id — never as the pulled
+  keyword. Rationale: the catalog match is free accuracy for lead value; there's
+  no reason to throw it away, but it must not replace the keyword.
+- **The grade cache keys on the literal keyword**, so "roofer" and "roofing
+  contractor" (different SERPs) cache distinctly.
+- **Board-first and cache-first are unchanged**: a board hit is still the free
+  precomputed *category* grade (transparently labeled). Only the LIVE path — the
+  case the owner hit — changed. Forcing a live literal grade for every mapped
+  keyword would defeat the free board and cost money for no benefit.
+- **Consequence (accepted):** on-catalog live grades now measure the literal
+  keyword's SERP, so grade numbers shift vs before. Intended.
+
+Applies to the single-cell grader AND the grade-all sweep. `resolve_service`
+now returns `{keyword, category_name (catalog match or None), on_catalog}`;
+`field_stats` gained an optional `holder_category` so the literal keyword's SERP
+is graded while holders count against the catalog category.
+
+**Related UX gap (NOT yet built, proposed):** the Board search box silently
+returns nothing when it resolves a city+service with no board row, even though a
+live grade is one tab over. Proposed fix: an inline "Grade it live (~$0.06)?"
+handoff from the empty board-search state into the grade flow (offer a button,
+never auto-spend). Awaiting owner go-ahead.
+
+## LeadOff — Board-search "Grade it live?" handoff (2026-09-18)
+
+**Status: DECIDED + BUILT** (the "Related UX gap" from the prior entry — owner
+gave the go-ahead). When the Board smart-search resolves a city + service but the
+precomputed board has no such row, the empty state now offers **"Grade it live
+(~$0.06)"**, which hands off to the Grade tab (prefilled) and auto-runs the grade.
+
+Decisions:
+- **Offer, then auto-run on the click** — the "Grade it live (~$0.06)?" button IS
+  the deliberate spend action (cost named on it), so landing on the Grade tab and
+  requiring a second click would be redundant. Auto-runs once (guarded by a ref;
+  the parent prefill is cleared on consume so a later manual visit can't re-fire).
+  Grading stays staff- + budget-gated like any grade.
+- **Grades the literal keyword**, consistent with the same-day keyword-decoupling
+  fix: `leadoff_category_match` now extracts the literal `service` phrase (its own
+  tool-schema field, independent of the mapped category), and the handoff seeds
+  the Grade form with it (fallback to the mapped category only if the parser
+  didn't isolate the service).
+- **Board search stays a free filter** — no live call is made from the search box
+  itself; the handoff is a one-click bridge to the paid Grade flow.
