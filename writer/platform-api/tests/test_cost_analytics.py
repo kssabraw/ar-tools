@@ -123,6 +123,18 @@ def test_model_label_for():
     assert ca.model_label_for("claude-haiku-9") == "Claude Haiku"
     assert ca.model_label_for("claude-opus-5") == "Claude Opus"
     assert ca.model_label_for("gpt-4.1") == "OpenAI gpt-4.1"
+    # AI-visibility providers/models
+    assert ca.model_label_for("gpt-5.4-mini") == "OpenAI GPT-5.4 mini"
+    assert ca.model_label_for("sonar") == "Perplexity Sonar"
+    assert ca.model_label_for("dataforseo") == "DataForSEO (non-LLM API)"
+    assert ca.model_label_for("gemini-3.5-flash") == "Google gemini-3.5-flash"
+
+
+def test_ai_visibility_label_and_group():
+    assert ca.label_for("ai_visibility_scan") == "AI visibility scan"
+    assert ca.label_for("ai_visibility_suggest") == "AI visibility suggestions"
+    assert ca.group_for("ai_visibility_scan") == "AI visibility"
+    assert ca.group_for("ai_visibility_suggest") == "AI visibility"
 
 
 def test_aggregate_and_build_model_rows():

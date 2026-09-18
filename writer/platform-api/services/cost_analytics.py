@@ -50,6 +50,8 @@ TYPE_LABELS: dict[str, str] = {
     "leadoff_tryout": "LeadOff tryout",
     "leadoff_city_finder": "LeadOff city finder",
     "leadoff_ai_probe": "LeadOff AI probe",
+    "ai_visibility_scan": "AI visibility scan",
+    "ai_visibility_suggest": "AI visibility suggestions",
 }
 _PAGE_TYPES = {
     "blog_post", "service_page", "location_page", "local_seo_page",
@@ -58,6 +60,7 @@ _PAGE_TYPES = {
 }
 _RESEARCH_TYPES = {"keyword_research", "keyword_topic_research", "domain_intel"}
 _AGENT_TYPES = {"autonomy_run", "strategist_review", "qa_review"}
+_AI_VISIBILITY_TYPES = {"ai_visibility_scan", "ai_visibility_suggest"}
 
 # ── model presentation ─────────────────────────────────────────────────────────
 # The cost_events view emits a raw model id per event (or 'mixed' for the
@@ -67,6 +70,10 @@ MODEL_LABELS: dict[str, str] = {
     "claude-sonnet-4-6": "Claude Sonnet 4.6",
     "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
     "gpt-5.6-luna": "OpenAI GPT-5.6 (Luna)",
+    "gpt-5.4": "OpenAI GPT-5.4",
+    "gpt-5.4-mini": "OpenAI GPT-5.4 mini",
+    "sonar": "Perplexity Sonar",
+    "dataforseo": "DataForSEO (non-LLM API)",
     "mixed": "Blog/service pipeline (mixed models)",
 }
 # The bucket key we use for a NULL model (non-LLM paid APIs — DataForSEO, etc.).
@@ -90,6 +97,10 @@ def model_label_for(model: Optional[str]) -> str:
         return "Claude Opus"
     if "sonnet" in lo:
         return "Claude Sonnet"
+    if "gemini" in lo:
+        return f"Google {model}"
+    if "sonar" in lo or "perplexity" in lo:
+        return f"Perplexity {model}"
     if lo.startswith("gpt-") or lo.startswith("o1") or lo.startswith("o3") or "openai" in lo:
         return f"OpenAI {model}"
     return model
@@ -115,6 +126,8 @@ def group_for(cost_type: str) -> str:
         return "Market research"
     if cost_type in _AGENT_TYPES:
         return "Agents"
+    if cost_type in _AI_VISIBILITY_TYPES:
+        return "AI visibility"
     return "Other"
 
 

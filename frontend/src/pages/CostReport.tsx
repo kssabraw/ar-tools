@@ -34,7 +34,7 @@ const PRESETS: Preset[] = [
   { key: '60d', label: 'Last 60 days', from: () => daysAgo(59), to: () => isoDay(new Date()) },
   { key: '90d', label: 'Last 90 days', from: () => daysAgo(89), to: () => isoDay(new Date()) },
 ]
-const GROUP_ORDER = ['Content pages', 'Research', 'Market research', 'Agents', 'Automation', 'Other']
+const GROUP_ORDER = ['Content pages', 'Research', 'Market research', 'AI visibility', 'Agents', 'Automation', 'Other']
 
 function qs(params: Record<string, string>): string {
   const p = new URLSearchParams()
