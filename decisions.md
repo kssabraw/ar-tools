@@ -819,3 +819,34 @@ Decisions:
   didn't isolate the service).
 - **Board search stays a free filter** — no live call is made from the search box
   itself; the handoff is a one-click bridge to the paid Grade flow.
+
+## LeadOff — Scout button on Tryout rows (2026-09-18)
+
+**Status: DECIDED + BUILT** (the "scout button on Tryout rows" open item from the
+2026-09-18 grader entries). Scout was on the single-service grade card only; a
+tryout grades a whole city across the ~100 catalog categories but offered no way
+to deepen any one of them.
+
+Decisions:
+- **Reuse scout-from-grade wholesale, no new job/spend/migration.** A tryout scout
+  is a third off-board path on the existing `leadoff_scout` job (`tryout_id` +
+  `category_id` in the payload), mirroring the grade path (`grade_id`). Pure
+  helpers `tryout_scoutable` / `tryout_result_row` / `tryout_market_comps` /
+  `tryout_scout_inputs` / `store_tryout_scout_result` parallel `leadoff_grade`'s
+  scout helpers.
+- **Stash the top-5 competitors on each tryout row at completion** (the only
+  run-time change) — the tryout analogue of a grade row's `grade.competitors`.
+  A tryout already pulls them (`top5_by_cat`); they were used for footprint + GBP
+  pins but discarded from the row. Competitors + the resulting `scout` block ride
+  in the existing `leadoff_tryouts.results` jsonb — no schema change.
+- **Key scout on the tryout category NAME directly** (not a `lead_category`
+  indirection). A tryout category IS a scanned catalog category, so its name keys
+  the scanner's Pass-2 caches (`trend_key`/`biz_key`) as-is — unlike the grader,
+  whose row stores the user's literal keyword and so needs `lead_category`.
+- **One scout at a time per tryout, budget-guarded + staff-gated** like every
+  paid LeadOff action; the fully-cache-fresh case stores inline ($0, no job),
+  same as the grade card. Older tryouts (generated before the stash) show no
+  Scout button — re-run the tryout to scout them.
+
+Backend + frontend + tests (`TestTryoutScout`, 8 pure cases); the live paid scout
+pulls are worker-verified post-deploy (sandbox egress-blocked from DataForSEO).

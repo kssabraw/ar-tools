@@ -1,5 +1,21 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff — Scout button on Tryout rows (BUILT, green draft PR, branch `claude/leadoff-grading-continuation-2mcu6j`).**
+
+The open item flagged in the merged grader entries below ("a scout button on Tryout rows — scout is on the single-service grade card only"). Now every **completed tryout row** (a city × one of the ~100 catalog categories) carries a **"Scout"** button beside its "Map" button — deepening THAT market (competitor referring domains, review velocity + momentum, demand trend, brand footprint) without a board row, the exact off-board analogue of scout-from-grade (#1212).
+
+**How it works (reuses the merged scout-from-grade machinery wholesale — no new job/spend types, no migration):** `run_tryout_job` now **stashes each category's top-5 competitors on its result row** (`{business_name, domain, phone}` — the tryout analogue of a grade row's `grade.competitors`; the only run-time change). A per-row scout is a third off-board path on the existing `leadoff_scout` job: pure `tryout_scoutable` / `tryout_result_row` / `tryout_market_comps` / `tryout_scout_inputs` (in `services/leadoff_actions.py`, mirroring `leadoff_grade`'s scout helpers) build market+comps from the row's stash; `enqueue_scout(..., tryout_id=…)` routes the job; `store_tryout_scout_result` writes the Pass-2 enrichment back onto that category's row inside the tryout's `results` jsonb. A tryout category **is** a scanned catalog category, so its name keys the scanner's Pass-2 caches directly (no `lead_category` indirection the grader needs for its literal keyword). Competitors + scout ride in the existing `leadoff_tryouts.results` jsonb.
+
+**Endpoint / UI:** `POST /leadoff/tryouts/{tryout_id}/scout` (staff, budget-guarded, `{category_id}` body) — mirrors `POST /leadoff/grade/{grade_id}/scout` exactly, incl. the fully-cache-fresh inline-store shortcut ($0, no job). Frontend `TryoutsView` gained a per-row Scout button + an expandable scout panel (one scout at a time per tryout; polls `/leadoff/jobs/{id}`, then re-reads the tryout so the row's stored `scout` renders); the shared `ScoutEnrichment` component (extracted from `GradeView`) renders the enrichment KVs in both places. Older tryouts (pre-stash) show no Scout button (no captured competitors) — re-run the tryout to scout them.
+
+**Verified:** 123 leadoff backend tests green (8 new `TestTryoutScout` pure cases); ruff (CI select E9,F63,F7,F82) clean; `tsc -b` + `vite build` clean; **zero new eslint problems** (LeadOff.tsx is 4 errors/1 warning on both `main` and this branch — all pre-existing). Live paid path (the actual scout DataForSEO pulls) is worker-verified post-deploy (sandbox egress-blocked from DataForSEO), same as scout-from-grade.
+
+**Deploy + migrations verified this session:** the live PLATFORM deploy is `b149379` (PR #1220, sitting on #1217 `67b0125`) — the merged grader/grade-all/literal-keyword/Grade-it-live code is live + healthy (`/health` 200; `/leadoff/grade` returns 401 = live + staff-gated); migrations `20260918120000` (leadoff_grades) / `_160000` (grades.scout col) / `_200000` (grade_all) applied (tables + `leadoff_spend` CHECK has `grade`+`grade_all`, `async_jobs` CHECK has `leadoff_grade`+`leadoff_grade_all`). **The 3 functional UI smoke-tests (grade "roofer" in Cypress; Board-search "Grade it live?" handoff; a small Rank-cities sweep) need a logged-in staff user hitting paid DataForSEO — they can't be driven from a Claude Code session (no staff JWT); the OWNER should run them in the UI.**
+
+**OPEN ITEMS / next (LeadOff on-demand), updated:** (1) apply the 4-category board-add runbook (owner's scanner machine); (2) ~~scout button on Tryout rows~~ — **BUILT this session**; (3) sub-10k geocode step (NOT built); (4) Enigma coverage pilot (harness not built; blocked on a trial key + egress).
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff on-demand grading — PR [#1217](https://github.com/kssabraw/ar-tools/pull/1217) MERGED (squash `67b0125`).**
 
 Three related changes now live on `main` (details in the three entries below): the **`grade-all` bulk sweep** ("Rank cities" — rank every gradeable city for a service, board/cache-first), the **literal-keyword grading fix** (grade what the user typed, not the mapped catalog category), and the **Board-search "Grade it live?" handoff** (an empty board search offers an on-demand live grade). Scout-from-grade (#1212) merged earlier. All CI green at merge (pytest/ruff/mypy/Netlify). **Live paid paths (the DataForSEO sweep + the category-match Sonnet call) are worker-verified post-deploy** — the sandbox is egress-blocked from both. Open LeadOff items after this: the 4-category board-add runbook (owner's scanner machine), a scout button on Tryout rows, a sub-10k geocode step, the Enigma coverage pilot, and — deferred, largely optional now — dropping the demand gate to 10 on the ≥30k board (~$200, mostly the 30k–100k bands; the on-demand grader answers the same questions per-cell for pennies).
@@ -34,7 +50,7 @@ The cross-city sort the precomputed board can't do: **"rank every gradeable city
 1. ~~Merge PR #1212 (scout-from-grade)~~ — **MERGED** (`1ccd4df` on `main`).
 2. ~~`grade-all` bulk endpoint~~ — **BUILT this session** (green draft PR above; owner to merge). To run a real sweep, the `leadoff_grade_all_daily_budget_usd` ($300 default) is already generous; the per-run `max_spend_usd` is the operator's knob.
 3. **Apply the 4-category board-add runbook** (`docs/modules/leadoff-board-add-4-categories-runbook.md`, owner's scanner machine) — Fire damage / Dumpster rental / Carpenter / Dryer vent cleaning; Level A (~$0, real CPLs for the grader + grade-all) then Level B (~$80–90, board rows).
-4. **Scout button on Tryout rows** (NOT built) — scout is on the single-service grade card only.
+4. ~~Scout button on Tryout rows~~ — **BUILT** (2026-09-18; see the top entry).
 5. **Sub-10k geocode step** (NOT built) — to grade towns below the 10k `cities` floor.
 6. **Enigma coverage pilot** (better pricing/profit data — see the dedicated entry below).
 
@@ -65,7 +81,7 @@ The "type a city + a service → get a grade" tool — the on-demand complement 
 1. **Merge PR #1212** (scout-from-grade) — green + mergeable, owner's call.
 2. **Apply the 4-category board-add runbook** (`docs/modules/leadoff-board-add-4-categories-runbook.md`, owner's scanner machine) — Fire damage / Dumpster rental / Carpenter / Dryer vent cleaning. **Level A** (catalog CSV rows + the Supabase mirror upsert, ~$0 → grader gets real CPLs for the 4 immediately); **Level B** (gated repull → `export_leadoff_board`, ~$80–90 → board rows). Carries the reload-strips-grants caveat + re-grant SQL.
 3. **`grade-all` bulk endpoint** (NOT built) — "rank every city for a service" reaching sub-30k + off-catalog (the cross-city sort the board can't). ~$195–240 for HVAC-all-cities; would batch the per-city grade + surface a ranked table + CSV. The most natural next build.
-4. **Scout button on Tryout rows** (NOT built) — scout is only on the single-service grade card today.
+4. ~~Scout button on Tryout rows~~ — **BUILT** (2026-09-18; see the top entry).
 5. **Sub-10k geocode step** (NOT built) — to grade towns below the 10k `cities` floor.
 6. **Enigma coverage pilot** (better pricing/profit data — see the dedicated entry below).
 

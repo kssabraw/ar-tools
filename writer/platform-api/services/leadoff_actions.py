@@ -586,6 +586,11 @@ async def run_tryout_job(job: dict) -> None:
             rows = [attach_roi(r) for r in attach_beatability(rows)]
         except Exception:
             logger.warning("leadoff_tryout.roi_attach_failed", exc_info=True)
+        # Stash each category's top-5 competitors on its row so a per-row scout can
+        # deepen that market later without a re-pull (the tryout analogue of a
+        # grade row's grade.competitors). Same {business_name, domain, phone} shape.
+        for r in rows:
+            r["competitors"] = top5_by_cat.get(r["category"]) or []
         supabase.table("leadoff_tryouts").update({
             "status": "complete", "results": rows, "completed_at": "now()",
         }).eq("id", tryout_id).execute()
@@ -598,6 +603,97 @@ async def run_tryout_job(job: dict) -> None:
     except Exception as exc:
         logger.error("leadoff_tryout.failed", extra={"job_id": job_id, "error": str(exc)})
         _fail(str(exc))
+
+
+# ── Scout a tryout row (off-board market) ─────────────────────────────────────
+# A completed tryout already pulled each category's top-5 competitors (stashed on
+# the row above). Scouting one row deepens THAT market (RD / review velocity /
+# demand trend / brand footprint) without needing a board row — the exact
+# analogue of scouting a graded off-board market (leadoff_grade). Reuses the
+# leadoff_scout job (tryout_id + category_id in the payload); the enrichment is
+# stored back on that row inside the tryout's results jsonb.
+
+def tryout_result_row(tryout_row: dict[str, Any],
+                      category_id: str) -> dict[str, Any] | None:
+    """The results-array row for one category of a tryout, or None (pure)."""
+    for r in (tryout_row.get("results") or []):
+        if str(r.get("category_id") or "") == str(category_id):
+            return r
+    return None
+
+
+def tryout_scoutable(tryout_row: dict[str, Any], category_id: str) -> str | None:
+    """Error code if this tryout category can't be scouted, else None (pure).
+    Scout keys on a real category_id and needs the row's stashed top-5."""
+    if tryout_row.get("status") != "complete":
+        return "tryout_not_ready"
+    row = tryout_result_row(tryout_row, category_id)
+    if row is None:
+        return "category_not_found"
+    if not row.get("category_id"):
+        return "scout_requires_catalog"
+    if not (row.get("competitors") or []):
+        return "no_competitors"
+    return None
+
+
+def tryout_market_comps(tryout_row: dict[str, Any], result_row: dict[str, Any]
+                        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """(market, comps) for scout_market_state, built from a tryout + one of its
+    result rows — the off-board substitute for a board row + serp_top5 (pure).
+    A tryout category IS a scanned catalog category, so its name keys the
+    scanner's Pass-2 caches directly (unlike a grade's literal keyword)."""
+    market = {"city_id": tryout_row.get("city_id"),
+              "category_id": result_row.get("category_id"),
+              "category": result_row.get("category"),
+              "city_name": tryout_row.get("city_name"),
+              "state_code": tryout_row.get("state_code")}
+    comps = [{"rank_position": i + 1, **c}
+             for i, c in enumerate(result_row.get("competitors") or [])]
+    return market, comps
+
+
+def tryout_scout_inputs(tryout_id: str, category_id: str
+                        ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Load a tryout and return (market, comps) for the scout job. Raises when
+    the row is gone or unscoutable (surfaces as the job's failure reason)."""
+    row = (get_supabase().table("leadoff_tryouts").select("*")
+           .eq("id", tryout_id).limit(1).execute().data or [None])[0]
+    if not row:
+        raise RuntimeError("tryout_not_found")
+    err = tryout_scoutable(row, category_id)
+    if err:
+        raise RuntimeError(err)
+    return tryout_market_comps(row, tryout_result_row(row, category_id))
+
+
+def store_tryout_scout_result(tryout_id: str, category_id: str,
+                              summary: dict[str, Any] | None = None
+                              ) -> dict[str, Any] | None:
+    """Read the now-fresh Pass-2 caches for the tryout market and store the
+    enrichment on that category's row inside the tryout's results jsonb (the
+    off-board analogue of the grade row's `scout` column). Best-effort."""
+    from services import leadoff as leadoff_service
+    row = (get_supabase().table("leadoff_tryouts").select("*")
+           .eq("id", tryout_id).limit(1).execute().data or [None])[0]
+    if not row:
+        return None
+    result_row = tryout_result_row(row, category_id)
+    if result_row is None:
+        return None
+    market, comps = tryout_market_comps(row, result_row)
+    scout = leadoff_service.scout_enrichment(
+        int(row["city_id"]), market.get("category") or "", comps)
+    payload = {"enrichment": scout["enrichment"], "competitors": scout["competitors"],
+               "summary": summary or {},
+               "scouted_at": datetime.now(timezone.utc).isoformat()}
+    results = row.get("results") or []
+    for r in results:
+        if str(r.get("category_id") or "") == str(category_id):
+            r["scout"] = payload
+    get_supabase().table("leadoff_tryouts").update(
+        {"results": results}).eq("id", tryout_id).execute()
+    return payload
 
 
 # ── Scout job ─────────────────────────────────────────────────────────────────
@@ -661,16 +757,19 @@ def scout_market_state(city_id: int, category_id: str, *,
 
 
 def enqueue_scout(user_id: str, city_id: int, category_id: str,
-                  est_cost: float, grade_id: str | None = None) -> dict[str, Any]:
+                  est_cost: float, grade_id: str | None = None,
+                  tryout_id: str | None = None) -> dict[str, Any]:
     # entity_id is a uuid column — the market identity lives in the payload.
     # (The original f"{city_id}:{category_id}" here failed the insert, so no
     # scout had ever actually enqueued; caught in the first live validation.)
-    # grade_id, when set, routes run_scout_job through the grader's off-board
-    # path (competitors sourced from the grade row; enrichment stored back on it).
+    # grade_id / tryout_id, when set, route run_scout_job through an off-board
+    # path (competitors sourced from that row; enrichment stored back on it).
     payload: dict[str, Any] = {"city_id": city_id, "category_id": category_id,
                                "user_id": user_id, "est_cost": est_cost}
     if grade_id:
         payload["grade_id"] = grade_id
+    if tryout_id:
+        payload["tryout_id"] = tryout_id
     job = get_supabase().table("async_jobs").insert({
         "job_type": "leadoff_scout",
         "entity_id": str(uuid.uuid4()),
@@ -686,12 +785,18 @@ async def run_scout_job(job: dict) -> None:
     city_id = int(payload["city_id"])
     category_id = str(payload["category_id"])
     grade_id = payload.get("grade_id")
+    tryout_id = payload.get("tryout_id")
     try:
         if grade_id:
             # Off-board grader path: competitors come from the live grade row,
             # not the board's serp_top5 (which an off-board city has no row in).
             from services import leadoff_grade
             market, comps = leadoff_grade.grade_scout_inputs(grade_id)
+            state = scout_market_state(city_id, category_id, market=market, comps=comps)
+        elif tryout_id:
+            # Off-board tryout path: competitors come from the tryout row's
+            # stashed top-5 (a tryout city may never have made the board).
+            market, comps = tryout_scout_inputs(tryout_id, category_id)
             state = scout_market_state(city_id, category_id, market=market, comps=comps)
         else:
             state = scout_market_state(city_id, category_id)
@@ -818,6 +923,15 @@ async def run_scout_job(job: dict) -> None:
             except Exception:
                 logger.warning("leadoff_scout.grade_store_failed",
                                extra={"grade_id": grade_id}, exc_info=True)
+        elif tryout_id:
+            # Store the enrichment back on the tryout row's category (the
+            # tryout analogue of the grade card's stored scout block).
+            try:
+                store_tryout_scout_result(tryout_id, category_id, summary)
+            except Exception:
+                logger.warning("leadoff_scout.tryout_store_failed",
+                               extra={"tryout_id": tryout_id,
+                                      "category_id": category_id}, exc_info=True)
         supabase.table("async_jobs").update({
             "status": "complete", "completed_at": "now()", "result": summary,
         }).eq("id", job_id).execute()

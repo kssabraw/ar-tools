@@ -780,6 +780,54 @@ async def scout_grade(grade_id: str, auth: dict = Depends(require_staff)) -> dic
             "fully_cached": False}
 
 
+class TryoutScoutRequest(BaseModel):
+    category_id: str = Field(..., min_length=1)
+
+
+@router.post("/leadoff/tryouts/{tryout_id}/scout", status_code=202)
+async def scout_tryout(tryout_id: str, body: TryoutScoutRequest,
+                       auth: dict = Depends(require_staff)) -> dict:
+    """Deepen one category of a completed tryout: Pass-2 scout (RD + review
+    velocity + demand trend + competitor brand footprint) sourced from that
+    row's stashed top-5, with the enrichment stored back on the row. Poll
+    GET /leadoff/jobs/{job_id}, then re-read GET /leadoff/tryouts/{tryout_id}
+    for the row's `scout` block. The off-board tryout analogue of the grade
+    card's scout."""
+    category_id = body.category_id
+    row = (get_supabase().table("leadoff_tryouts").select("*")
+           .eq("id", tryout_id).limit(1).execute().data or [None])[0]
+    if not row:
+        raise HTTPException(status_code=404, detail="not_found")
+    err = leadoff_actions.tryout_scoutable(row, category_id)
+    if err:
+        raise HTTPException(status_code=422, detail=err)
+    result_row = leadoff_actions.tryout_result_row(row, category_id)
+    market, comps = leadoff_actions.tryout_market_comps(row, result_row)
+    city_id = int(row["city_id"])
+    state = leadoff_actions.scout_market_state(
+        city_id, category_id, market=market, comps=comps)
+    if state is None:
+        raise HTTPException(status_code=404, detail="not_found")
+    # Fully cache-fresh → assemble + store the enrichment inline; no job, no spend.
+    if state["est_cost"] == 0 and not state["rd_misses"] \
+            and not state["vel_misses"] and not state["trend_miss"]:
+        leadoff_actions.store_tryout_scout_result(
+            tryout_id, category_id, {"fully_cached": True})
+        return {"job_id": None, "est_cost": 0.0, "fully_cached": True}
+    try:
+        leadoff_actions.check_budget(auth["user_id"], state["est_cost"])
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_actions.enqueue_scout(
+        auth["user_id"], city_id, category_id, state["est_cost"], tryout_id=tryout_id)
+    leadoff_actions.record_spend(
+        auth["user_id"], "scout", state["est_cost"],
+        city_id=city_id, category_id=category_id,
+        city_name=row.get("city_name"), state_code=row.get("state_code"))
+    return {"job_id": out["job_id"], "est_cost": state["est_cost"],
+            "fully_cached": False}
+
+
 class ScoutRequest(BaseModel):
     city_id: int
     category_id: str
