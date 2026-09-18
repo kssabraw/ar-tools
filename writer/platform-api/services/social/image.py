@@ -60,6 +60,14 @@ def resolve_aspect_ratio(platform: str, fmt: str) -> str:
     return "1:1"
 
 
+# A paid image must reserve a strictly-positive estimate: ``budget.reserve`` treats
+# ``amount <= 0`` as a no-op that SUCCEEDS, so a misconfigured $0/negative cost (env
+# SOCIAL_IMAGE_FLASH_COST_USD / SOCIAL_IMAGE_COST_USD = 0) would otherwise slip every
+# image past the fail-closed monthly cap. The floor is a last resort for the
+# pathological both-costs-zero case; the normal fallback is the other model's cost.
+_IMAGE_COST_FLOOR_USD = 0.05
+
+
 def select_image_model(
     *,
     use_flash: bool,
@@ -75,10 +83,16 @@ def select_image_model(
     ``imageConfig.aspectRatio`` API as Pro, at ~25% under Pro at 2K — so the routing
     is model-only and aspect-ratio-agnostic (Nano Banana 2 covers 1:1 and non-square
     alike). When the lever is off, or the Flash model id is unset, fall back to Pro
-    (the pre-#5 behavior). Pure — the single place the model choice is decided."""
+    (the pre-#5 behavior). The returned cost is always **> 0** so a misconfigured $0
+    cost can't bypass the fail-closed budget (see ``_IMAGE_COST_FLOOR_USD``). Pure —
+    the single place the model choice is decided."""
     if use_flash and (flash_model or "").strip():
-        return flash_model.strip(), flash_cost
-    return pro_model, pro_cost
+        model, cost = flash_model.strip(), flash_cost
+    else:
+        model, cost = pro_model, pro_cost
+    if cost <= 0:
+        cost = pro_cost if pro_cost > 0 else _IMAGE_COST_FLOOR_USD
+    return model, cost
 
 
 def ext_for_mime(mime: str) -> str:

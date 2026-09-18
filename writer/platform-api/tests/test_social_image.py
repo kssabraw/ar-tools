@@ -63,6 +63,37 @@ def test_select_image_model_strips_flash_model_whitespace():
     assert out == ("gemini-3.1-flash-image", 0.101)
 
 
+def test_select_image_model_zero_flash_cost_falls_back_to_pro_cost():
+    # A misconfigured $0 flash cost keeps the flash MODEL but reserves the (positive)
+    # Pro cost — budget.reserve(0) is a no-op success, so $0 would bypass the cap.
+    for bad in (0.0, -1.0):
+        model, cost = image.select_image_model(
+            use_flash=True, flash_model="gemini-3.1-flash-image", flash_cost=bad,
+            pro_model="gemini-3-pro-image-preview", pro_cost=0.134,
+        )
+        assert model == "gemini-3.1-flash-image"
+        assert cost == 0.134
+
+
+def test_select_image_model_both_costs_zero_uses_floor():
+    # Pathological both-zero misconfig: never reserve 0 for a paid image.
+    for use_flash in (True, False):
+        _, cost = image.select_image_model(
+            use_flash=use_flash, flash_model="gemini-3.1-flash-image", flash_cost=0.0,
+            pro_model="gemini-3-pro-image-preview", pro_cost=0.0,
+        )
+        assert cost == image._IMAGE_COST_FLOOR_USD
+        assert cost > 0
+
+
+def test_select_image_model_zero_pro_cost_uses_floor_when_pro_selected():
+    _, cost = image.select_image_model(
+        use_flash=False, flash_model="gemini-3.1-flash-image", flash_cost=0.101,
+        pro_model="gemini-3-pro-image-preview", pro_cost=0.0,
+    )
+    assert cost == image._IMAGE_COST_FLOOR_USD
+
+
 def test_select_image_model_default_config_routes_to_flash():
     # The shipped defaults (queue #5 ON) route every social image to Nano Banana 2.
     from config import settings
