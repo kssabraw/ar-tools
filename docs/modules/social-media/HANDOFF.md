@@ -37,6 +37,56 @@ The owner set the **next build order** to these five, top-to-bottom:
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
+## Update (2026-09-18) — **Pinterest board made first-class — BUILT** (post-queue task 1; scope: `pinterest-board-first-class-scope-v1_0.md`)
+
+The first of the two owner-set post-queue items (Pinterest → then P3 Manager). Pinterest
+was wired end-to-end EXCEPT the board — pure opaque passthrough (a board only reached the
+provider if a human typed raw JSON), so a boardless Pin failed at publish as a generic
+`postforme_invalid_request`. Board is now a **first-class, required, validated** field.
+
+**Owner-confirmed data-flow first (2026-09-18, via Claude-in-Chrome against the live
+OpenAPI spec):** PostForMe has **no board-list endpoint** (all 13 endpoints checked) — the
+only board handle is the input field **`board_ids`** (a Pinterest board-IDs **array**) in
+`POST /v1/social-posts`. So a provider board dropdown isn't buildable; **board entry is
+field-based** (paste the numeric id). Decisions: **block** a boardless Pin (not warn);
+**keep** the research actor default (`epctex/pinterest-scraper`, confirm on first live run).
+
+**What shipped (single PR, no migration):**
+- **Adapter edge** (`postforme_adapter.map_pinterest_board`, wired into `build_post_payload`)
+  — maps our module-internal single `board_id` → PostForMe's `board_ids: [id]` **array**
+  under `platform_configurations.pinterest`. The provider shape lives ONLY here (per the
+  ADR-0006 edge rule). Field name is `settings.social_pinterest_board_field` (`board_ids`,
+  env-overridable without a redeploy if the live field is `board_id`).
+- **Publish** (`publish.py`) — `validate_post(…, board_id=)` adds a hard
+  `pinterest_board_required` rule (Pinterest can't create a boardless pin);
+  `build_pinterest_config` folds the board into `platform_metadata` (module-internal
+  `board_id`); `create_post(…, board_id=)` extracts → validates → stores. Mirrors the
+  YouTube-title pattern (queue #3), except the provider `board_ids[]` mapping is at the edge.
+- **Fanout** (`fanout.py`) — a fan-out Pinterest draft (has image, no board) lands
+  **`needs_board`** (`draft_status(…, board_required_missing=)`; `social_drafts.status` is
+  free-text so **no migration**); `update_draft(…, board_id=)` sets the board and flips
+  `needs_board → ready`; `publish_existing_draft` reads the board from the draft's
+  `platform_metadata` and validates it.
+- **Models/router/config** — `SocialPostCreateRequest.board_id`,
+  `SocialDraftUpdateRequest.board_id`, wired through the routes; `social_pinterest_board_field`.
+- **Frontend** (`SocialCompose.tsx`, eslint stays 0) — a required **"Board ID"** field on
+  Compose (Pinterest only, with find-your-board-id help + a `hints` block), sent as
+  `board_id`; a Board ID field + `needs_board` badge on the Pinterest Draft (saving the
+  board flips it to ready); advanced-JSON placeholder no longer suggests a board key.
+  `errorGuidance`: `pinterest_board_required` + the enriched `social_spec_violation`.
+- **Tests** — `map_pinterest_board` + `build_post_payload` Pinterest mapping
+  (`test_social_postforme.py`), the `validate_post` board rule + `build_pinterest_config` +
+  `_pinterest_board_id` (`test_social_publish.py`), `draft_status` `needs_board`
+  (`test_social_fanout.py`). 104 social tests pass; ruff clean; frontend tsc/eslint clean.
+
+**Deployed-only confirm (sandbox egress-blocked from PostForMe):** the **first live Pin**
+confirms the `board_ids` **placement** — default is nested under
+`platform_configurations.pinterest` (like YouTube `title` + IG/FB `placement`); if PostForMe
+takes it top-level or as `board_id`, it's a one-line adapter change / the config knob. A
+wrong placement fails the post (not silently ignored), so it surfaces on the first live Pin.
+
+**Next:** P3 Manager (Calendar / Cadence / Approval queue + a `social_policy` write path).
+
 ## Update (2026-09-18) — **Queue #5 (mixed image path) BUILT + MERGED — the build queue is COMPLETE** (PR [#1216](https://github.com/kssabraw/ar-tools/pull/1216))
 
 **#5 mixed image path — MERGED** (squash `cf9ffa0`). **Scope evolved when grounded against current

@@ -418,12 +418,23 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning:
       'The post failed a platform check before publishing — usually an empty ' +
       'post, copy over the character limit, too many images, more than one ' +
-      'video, a platform that requires an image, or a YouTube post missing its ' +
-      'required video or title.',
+      'video, a platform that requires an image, a YouTube post missing its ' +
+      'required video or title, or a Pinterest pin missing its board.',
     steps: [
-      'Read the detail after the code (e.g. over_char_limit, too_many_images, media_required, empty_post, youtube_title_required, youtube_requires_one_video).',
+      'Read the detail after the code (e.g. over_char_limit, too_many_images, media_required, empty_post, youtube_title_required, pinterest_board_required).',
       'For YouTube: add exactly one video and a title (no images).',
+      'For Pinterest: paste the board ID — a pin must go to a board.',
       'Trim the copy, adjust the media to fit the platform, then publish again.',
+    ],
+  },
+  pinterest_board_required: {
+    title: 'This pin needs a board',
+    meaning:
+      'Pinterest can’t create a pin without a board. PostForMe doesn’t list your ' +
+      'boards, so the board ID is entered by hand.',
+    steps: [
+      'Open the target board on Pinterest and copy its numeric board ID.',
+      'Paste it into the Board ID field (Compose, or on the Pinterest draft), then publish.',
     ],
   },
   social_copy_generation_failed: {

@@ -75,6 +75,31 @@ def build_youtube_config(
     return cfg
 
 
+def build_pinterest_config(
+    board_id: Optional[str], platform_specific: Optional[dict] = None
+) -> dict:
+    """The Pinterest ``platform_metadata`` block: the user's advanced JSON plus our
+    module-internal ``board_id`` (a single board id — a Pin needs a board). Pure and
+    provider-agnostic: the provider shape (PostForMe's ``board_ids`` ARRAY) is applied
+    later at the adapter edge (``postforme_adapter.map_pinterest_board``), NOT here.
+    Precedence, low→high: the user advanced JSON, then the first-class ``board_id``
+    (a supplied board always wins over an advanced-JSON key of the same name)."""
+    cfg: dict = dict(platform_specific or {})
+    bid = (board_id or "").strip()
+    if bid:
+        cfg["board_id"] = bid
+    return cfg
+
+
+def _pinterest_board_id(platform_metadata: Optional[dict]) -> Optional[str]:
+    """The single internal board id from a draft's platform_metadata, if any. Pure."""
+    md = platform_metadata or {}
+    bid = md.get("board_id")
+    if isinstance(bid, str) and bid.strip():
+        return bid.strip()
+    return None
+
+
 def validate_post(
     platform: str,
     copy: str,
@@ -82,6 +107,7 @@ def validate_post(
     spec: Optional[dict],
     fmt: str = "feed",
     title: Optional[str] = None,
+    board_id: Optional[str] = None,
 ) -> dict:
     """Deterministic Platform-Spec check (PRD §6). {"hard": [...], "warnings": [...]}:
     a hard violation blocks approval/publish; a warning is advisory. ``fmt`` layers
@@ -99,6 +125,11 @@ def validate_post(
     a YouTube post is exactly ONE video, NO images, and a non-empty ``title``
     (2–``social_youtube_title_max`` chars — distinct from the caption, which becomes
     the video description).
+
+    ``platform == "pinterest"`` layers a platform-level rule: a Pin REQUIRES a
+    ``board_id`` (Pinterest can't create a boardless pin). A missing board is a hard
+    ``pinterest_board_required`` — blocked at compose/publish rather than left to fail
+    as an opaque provider 422 (owner ruling).
     """
     copy = copy or ""
     media = media or []
@@ -143,6 +174,11 @@ def validate_post(
             hard.append("youtube_title_required")
         elif len(t) > title_max:
             hard.append(f"youtube_title_too_long:{len(t)}>{title_max}")
+
+    # Pinterest (platform-level, any fmt): a Pin requires a board. Block a boardless
+    # Pin here rather than let it fail as an opaque provider 422 (owner ruling).
+    if platform == "pinterest" and not (board_id or "").strip():
+        hard.append("pinterest_board_required")
 
     if spec:
         char_limit = spec.get("char_limit")
@@ -456,13 +492,17 @@ def create_post(
     fmt: str = "feed",
     scheduled_at: Optional[datetime] = None,
     title: Optional[str] = None,
+    board_id: Optional[str] = None,
 ) -> dict:
     """Compose one platform-native post and publish it now, or schedule it for a
     future time. Validates against the Platform Spec (hard violation → 422) first.
 
     ``title`` is the YouTube video title (required for YouTube, ignored elsewhere) —
     a first-class field distinct from the caption; it's folded into the YouTube
-    ``platform_configurations`` block below and the adapter nests it at the edge."""
+    ``platform_configurations`` block below and the adapter nests it at the edge.
+    ``board_id`` is the Pinterest board (required for Pinterest, ignored elsewhere) —
+    a first-class field folded into the Pinterest block; the adapter maps our internal
+    single ``board_id`` to PostForMe's ``board_ids`` array at the edge."""
     _assert_enabled()
     # Compose-time gate: always enforce "profile is set" + a fast 403 when PostPeer
     # is reachable, but tolerate a PostPeer outage (require_live=False) so a blip
@@ -470,7 +510,9 @@ def create_post(
     _assert_account_allowed(client_id, account_id, require_live=False)
     platform = (platform or "").lower()
     media = build_media(image_urls, video_urls)
-    verdict = validate_post(platform, copy, media, _platform_spec(platform), fmt=fmt, title=title)
+    verdict = validate_post(
+        platform, copy, media, _platform_spec(platform), fmt=fmt, title=title, board_id=board_id
+    )
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
 
@@ -479,6 +521,10 @@ def create_post(
     # at the adapter edge. User advanced-JSON keys still win over the default.
     if platform == "youtube":
         platform_specific = build_youtube_config(title, platform_specific)
+    # Fold the first-class Pinterest board id into platform_metadata (module-internal
+    # single board_id; the adapter maps it to board_ids[] at the edge).
+    elif platform == "pinterest":
+        platform_specific = build_pinterest_config(board_id, platform_specific)
 
     scheduled_iso = _ensure_future_iso(scheduled_at) if scheduled_at else None
 

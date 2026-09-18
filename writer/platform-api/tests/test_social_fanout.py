@@ -45,6 +45,27 @@ def test_draft_status():
     assert fanout.draft_status(has_media=True, requires_image=False, generation_ok=True, enough_media=False) == "ready"
 
 
+def test_draft_status_needs_board():
+    # A Pinterest draft with its image but no board yet → needs_board (fan-out can't
+    # pick a board; the user sets it in the Drafts tab).
+    assert fanout.draft_status(
+        has_media=True, requires_image=True, generation_ok=True, board_required_missing=True
+    ) == "needs_board"
+    # Board present → ready.
+    assert fanout.draft_status(
+        has_media=True, requires_image=True, generation_ok=True, board_required_missing=False
+    ) == "ready"
+    # needs_image is checked FIRST — a boardless Pinterest draft still missing its image
+    # reads needs_image, not needs_board.
+    assert fanout.draft_status(
+        has_media=False, requires_image=True, generation_ok=True, board_required_missing=True
+    ) == "needs_image"
+    # board_required_missing never overrides a failed generation.
+    assert fanout.draft_status(
+        has_media=True, requires_image=True, generation_ok=False, board_required_missing=True
+    ) == "generation_failed"
+
+
 def test_image_description_for_angle_fallback_chain():
     assert fanout.image_description_for_angle("angle hook", "title", "src") == "angle hook"
     assert fanout.image_description_for_angle("", "title", "src") == "title"
