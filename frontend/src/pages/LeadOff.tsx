@@ -1,7 +1,7 @@
 import { Fragment, useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2, RefreshCw, Crosshair } from 'lucide-react'
+import { Radar, Download, Search, X, Flame, Snowflake, AlertTriangle, Loader2, UserPlus, Binoculars, FlaskConical, Compass, Hammer, ArrowUp, ArrowDown, ChevronsUpDown, Sparkles, ChevronLeft, ChevronRight, MapPin, Link2, RefreshCw, Crosshair, Gauge } from 'lucide-react'
 import { api } from '../lib/api'
 import { toCsv, downloadCsv } from '../lib/csv'
 import { MarketMap, type MarketMapGbp } from '../components/leadoff/MarketMap'
@@ -195,7 +195,7 @@ const compact = (n: number | null | undefined) =>
     : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M`
       : n >= 1_000 ? `${(n / 1_000).toFixed(1)}k` : String(n)
 
-type View = 'board' | 'neighborhoods' | 'tryouts'
+type View = 'board' | 'grade' | 'neighborhoods' | 'tryouts'
 
 // Board columns + click-to-sort model. `key: null` = a non-sortable column
 // (the luck/permit icon strip). `num` picks the default first-click direction
@@ -419,6 +419,9 @@ export function LeadOff() {
           <TabButton active={view === 'board'} onClick={() => setView('board')}>
             <Radar size={13} /> Board
           </TabButton>
+          <TabButton active={view === 'grade'} onClick={() => setView('grade')}>
+            <Gauge size={13} /> Grade a market
+          </TabButton>
           <TabButton active={view === 'neighborhoods'} onClick={() => setView('neighborhoods')}>
             <Compass size={13} /> Neighborhoods
           </TabButton>
@@ -427,6 +430,7 @@ export function LeadOff() {
           </TabButton>
         </div>
 
+        {view === 'grade' && <GradeView />}
         {view === 'neighborhoods' && <NeighborhoodsView />}
         {view === 'tryouts' && <TryoutsView />}
 
@@ -1135,6 +1139,274 @@ function TryoutsView() {
         </div>
       </div>
     </>
+  )
+}
+
+// Grade a market: the on-demand single-input grader — type a city + a service,
+// get a grade. Board-first (free), then the recent cache (free), else a cheap
+// live single-cell grade (~$0.06, async). Unlike the board it does NOT apply the
+// vol>=20 demand gate — the requested cell is always graded; thin demand is
+// surfaced, never used to withhold.
+type GradeSource = 'board' | 'cache' | 'live'
+interface GradeRow {
+  grade: string
+  exp_val: number
+  value_mo?: number | null
+  rankab: number
+  vol?: number | null            // live/cache raw demand
+  xdem?: number                  // board regressed demand
+  rev_win?: number
+  rating?: number | null
+  exact_open?: number
+  namekw?: number
+  supply?: number
+  thin_demand?: boolean
+  cpl?: number
+  cpl_default?: boolean
+  category?: string
+  category_id?: string | null
+  beatability?: number | null
+  beatability_band?: string | null
+  monthly_profit?: number | null
+  payback_months?: number | null
+  cost_to_win?: number | null
+  roi_confidence?: 'measured' | 'modelled' | null
+  competitors?: Array<{ business_name?: string; rating?: number | null
+    review_count?: number | null; domain?: string | null }>
+}
+interface GradeResponse {
+  status: 'complete' | 'running' | 'failed'
+  source: GradeSource
+  grade?: GradeRow | null
+  grade_id?: string
+  job_id?: string
+  city_name?: string
+  state_code?: string
+  category?: string          // resolved catalog/typed category
+  category_name?: string     // the GET-by-id row uses this key
+  on_catalog?: boolean
+  est_cost?: number
+  error?: string | null
+}
+
+function GradeView() {
+  const [city, setCity] = useState('')
+  const [state, setState] = useState('')
+  const [service, setService] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<GradeResponse | null>(null)
+  const [gradeId, setGradeId] = useState<string | null>(null)
+
+  // Poll the live grade job (only when the POST returned status=running).
+  const { data: polled } = useQuery<GradeResponse>({
+    queryKey: ['leadoff-grade', gradeId],
+    queryFn: () => api.get<GradeResponse>(`/leadoff/grade/${gradeId}`),
+    enabled: !!gradeId,
+    refetchInterval: q => {
+      const s = q.state.data?.status
+      return s === 'running' || !s ? 4000 : false
+    },
+  })
+  const liveDone = !!polled && (polled.status === 'complete' || polled.status === 'failed')
+  const running = !!gradeId && !liveDone
+  const failed = liveDone && polled!.status === 'failed'
+  // The completed grade row, from the inline (board/cache) response or the poll.
+  const row: GradeRow | null =
+    result?.status === 'complete' ? (result.grade ?? null)
+      : liveDone && polled!.status === 'complete' ? (polled!.grade ?? null) : null
+  const source: GradeSource | undefined = result?.source
+  const onCatalog = polled?.on_catalog ?? result?.on_catalog
+  const resolvedCat = row?.category ?? polled?.category_name ?? result?.category
+
+  const submit = async () => {
+    if (!city.trim() || state.trim().length !== 2 || !service.trim() || busy) return
+    setBusy(true); setError(null); setResult(null); setGradeId(null)
+    try {
+      const res = await api.post<GradeResponse>('/leadoff/grade', {
+        city: city.trim(), state: state.trim().toUpperCase(), service: service.trim(),
+      })
+      setResult(res)
+      if (res.status === 'running' && res.grade_id) setGradeId(res.grade_id)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'grade_failed'
+      setError(msg === 'city_not_found'
+        ? 'City not found (covers US places ≥10k population — check spelling/state).'
+        : msg === 'budget_exceeded' ? 'Daily LeadOff budget reached — try tomorrow or raise the budget.'
+          : msg === 'invalid_service' ? 'Enter a service to grade (e.g. "roofing", "dumpster rental").'
+            : msg)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const demand = row?.vol ?? row?.xdem ?? null
+
+  return (
+    <>
+      <div style={barStyle}>
+        <Field label="City">
+          <input style={inputStyle} value={city} placeholder="Boise"
+            onChange={e => setCity(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && submit()} />
+        </Field>
+        <Field label="State">
+          <input style={{ ...inputStyle, width: 52 }} value={state} placeholder="ID" maxLength={2}
+            onChange={e => setState(e.target.value.toUpperCase())}
+            onKeyDown={e => e.key === 'Enter' && submit()} />
+        </Field>
+        <Field label="Service to target">
+          <input style={{ ...inputStyle, width: 220 }} value={service} placeholder="roofing"
+            onChange={e => setService(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && submit()} />
+        </Field>
+        <button style={primaryBtn}
+          disabled={busy || !city.trim() || state.length !== 2 || !service.trim()}
+          onClick={submit}>
+          {busy ? <Loader2 size={14} className="spin" /> : <Gauge size={14} />} Grade it
+        </button>
+        <span style={{ fontSize: 11, color: '#64748b', background: '#f1f5f9', borderRadius: 99, padding: '3px 10px', fontWeight: 600 }}>
+          on the board or cached · free — a new market · ~$0.06
+        </span>
+      </div>
+      {error && <div style={errorBox}>{error}</div>}
+
+      {!result && !busy && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#94a3b8', fontSize: 13, maxWidth: 560 }}>
+          Type a city and the service you want to rank for. If it's already on the board
+          you get the answer instantly; otherwise LeadOff scores that one market live
+          (~$0.06) against the same national reference and caches it. Any US city ≥10k
+          population, any service — on our catalog or not.
+        </div>
+      )}
+
+      {(running || (busy && !result)) && (
+        <div style={{ padding: 40, textAlign: 'center', color: '#64748b', fontSize: 13 }}>
+          <Loader2 size={18} className="spin" style={{ verticalAlign: -4 }} />{' '}
+          Scoring {result?.city_name ?? city}, {result?.state_code ?? state.toUpperCase()} — demand pull, then the Maps field at 13z (~1 min)…
+        </div>
+      )}
+
+      {failed && (
+        <div style={errorBox}>
+          {polled!.error === 'dataforseo_daily_limit'
+            ? 'DataForSEO daily money limit hit — nothing was recorded; retry after midnight UTC.'
+            : `Grade failed: ${polled!.error}`}
+        </div>
+      )}
+
+      {row && (
+        <div style={{ maxWidth: 620, border: '1px solid #e2e8f0', borderRadius: 12, padding: 20, background: '#fff' }}>
+          {/* headline */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+              minWidth: 52, height: 52, borderRadius: 12, fontSize: 26, fontWeight: 800,
+              color: '#fff', background: GRADE_COLORS[row.grade] ?? '#94a3b8',
+            }}>{row.grade}</span>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
+                {result?.city_name ?? city}, {result?.state_code ?? state.toUpperCase()}
+              </div>
+              <div style={{ fontSize: 14, color: '#64748b' }}>{resolvedCat}</div>
+            </div>
+            <span style={{ ...pill, marginLeft: 'auto',
+              background: source === 'live' ? '#e3f2ef' : '#f1f5f9',
+              color: source === 'live' ? '#0e7d6f' : '#64748b' }}
+              title={source === 'board' ? 'Served from the precomputed board — free.'
+                : source === 'cache' ? 'Served from a recent live grade — free.'
+                  : 'Freshly graded live against the national reference.'}>
+              {source === 'board' ? 'on the board' : source === 'cache' ? 'cached' : 'graded live'}
+            </span>
+          </div>
+
+          {/* caveats */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '10px 0 2px' }}>
+            {onCatalog && service.trim().toLowerCase() !== (resolvedCat ?? '').toLowerCase() && (
+              <CaveatLine tone="info">Graded as <b>{resolvedCat}</b> — the closest catalog category to "{service.trim()}".</CaveatLine>
+            )}
+            {onCatalog === false && (
+              <CaveatLine tone="info">Off-catalog service — graded live with an estimated lead value.</CaveatLine>
+            )}
+            {row.thin_demand && (
+              <CaveatLine tone="warn">Thin demand ({demand ?? '—'}/mo searches — below the ~20 gate the board uses). Graded anyway; treat the volume cautiously.</CaveatLine>
+            )}
+            {row.cpl_default && (
+              <CaveatLine tone="warn">Lead value estimated — no catalog value for this service, so the default was used.</CaveatLine>
+            )}
+          </div>
+
+          {/* metrics */}
+          <div style={{ margin: '12px 0' }}>
+            <KV k="Expected value / mo" v={usd(row.exp_val)} strong
+              hint="Estimated monthly lead value × how winnable the ranking is." />
+            {row.value_mo != null && <KV k="Lead value / mo (before winnability)" v={usd(row.value_mo)} />}
+            <KV k="Winnability (rankability)" v={row.rankab != null ? row.rankab.toFixed(2) : '—'}
+              hint="0–1: higher = a weaker incumbent field to displace." />
+            <KV k="Demand (mo. searches)" v={demand != null ? demand.toLocaleString() : '—'} />
+            {row.monthly_profit != null && (
+              <KV k="Profit / mo (after agency cost)" v={usd(row.monthly_profit)} strong
+                hint={row.cost_to_win != null ? `Cost to win ~${usd(row.cost_to_win)} (${row.roi_confidence ?? 'modelled'}).` : undefined} />
+            )}
+            {row.payback_months !== undefined && (
+              <KV k="Payback" v={paybackLabel(row.payback_months)} />
+            )}
+          </div>
+
+          {/* field forensics */}
+          <SectionTitle>The incumbent field</SectionTitle>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
+            <BeatabilityChip score={row.beatability} band={row.beatability_band}
+              revWin={row.rev_win} holders={row.exact_open} rating={row.rating} />
+            <span style={{ fontSize: 12, color: '#64748b' }}>how weak the field is (higher = easier)</span>
+          </div>
+          <KV k="Reviews to beat #3" v={row.rev_win != null ? String(row.rev_win) : '—'} />
+          <KV k="Exact-category competitors" v={row.exact_open != null ? String(row.exact_open) : '—'} />
+          <KV k="Field avg rating" v={row.rating ? `${row.rating}★` : '—'} />
+          {row.supply != null && <KV k="Businesses in the pack" v={String(row.supply)} />}
+
+          {/* top competitors */}
+          {row.competitors && row.competitors.length > 0 && (
+            <>
+              <SectionTitle>Top competitors</SectionTitle>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {row.competitors.slice(0, 5).map((c, i) => (
+                  <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, padding: '2px 0' }}>
+                    <span style={{ color: '#0f172a', fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {i + 1}. {c.business_name ?? '—'}
+                    </span>
+                    <span style={{ color: '#64748b', flexShrink: 0, marginLeft: 8 }}>
+                      {c.rating ? `${c.rating}★` : ''}{c.review_count != null ? ` · ${c.review_count} reviews` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 14 }}>
+            Graded vs the same national reference as the board (raw demand, not regressed —
+            outlier cities read hot). A planning number, not a promise.
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+function CaveatLine({ tone, children }: { tone: 'info' | 'warn'; children: React.ReactNode }) {
+  const c = tone === 'warn'
+    ? { bg: '#fef3c7', fg: '#92400e', bd: '#fde68a' }
+    : { bg: '#eff6ff', fg: '#1e40af', bd: '#bfdbfe' }
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 12.5,
+      background: c.bg, color: c.fg, border: `1px solid ${c.bd}`,
+      borderRadius: 7, padding: '6px 10px',
+    }}>
+      <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+      <span>{children}</span>
+    </div>
   )
 }
 

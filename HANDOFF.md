@@ -1,5 +1,26 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff on-demand grader — BUILT (backend live-migrated + tested; frontend built; part-(a) board-add runbook written). PR #1204.**
+
+The "type a city + a service → get a grade" tool — the on-demand complement to the precomputed board that **dissolves the small-market/demand-gate debate below** (you no longer need to precompute a whole tier to answer one market). Owner-approved 2026-09-18: "write up the exact 4-category scanner runbook + the catalog CSV/Supabase changes for your machine, and (b) build the on-demand grader."
+
+**How it resolves a lookup — cheapest path first (all in `services/leadoff_grade.py`):**
+1. **Board-first (FREE)** — exact city×category already on `leadoff_board` → its enriched `get_market_brief` grade, no spend.
+2. **Cache (FREE)** — a recent live grade for this city×service (`leadoff_grades`, `< FRESH_DAYS`=90).
+3. **Live (PAID, ~$0.06, cached)** — one Google Ads keyword task (both forms) + one Maps SERP @ 13z → the SAME `leadoff_actions.tryout_rows` economics/grade math, scoped to one service. Async `leadoff_grade` job; poll `GET /leadoff/grade/{grade_id}`.
+
+**Key design calls:** the live path does **NOT** apply the `vol≥20` demand gate — the user asked for THIS cell, so it's graded regardless and thin demand is *surfaced* (`thin_demand`), never used to withhold (the gate only ever bounded PRECOMPUTE cost). Off-catalog services (not one of the ~100 GBP categories) still grade live; only the CPL falls back to `leadoff_finder_default_lead_value`, flagged `cpl_default=True`. Staff-gated + per-user daily budget guarded (`check_budget`/`record_spend` action `'grade'`), like Tryout.
+
+**Shipped:**
+- **Migration `20260918120000_leadoff_grades.sql` — APPLIED LIVE** (`leadoff_grades` table + RLS; `'grade'` added to `leadoff_spend_action_check`; `'leadoff_grade'` added to `async_jobs_job_type_check`, rebuilt from the verified live constraint).
+- **Backend:** `services/leadoff_grade.py` (pure `resolve_service`/`cache_key`/`resolve_cpl`/`thin_demand`/`build_grade_row` + impure `board_hit`/`fresh_cached`/`enqueue_grade`/`run_grade_job`), `POST /leadoff/grade` + `GET /leadoff/grade/{id}` (`routers/leadoff.py`), `job_worker` dispatch. Tests `tests/test_leadoff_grade.py` (17) + full leadoff suite (336) green.
+- **Frontend:** a **"Grade a market"** tab on `pages/LeadOff.tsx` (`GradeView` — city + state + service → grade card; surfaces the resolved catalog category, `on_catalog`/off-catalog + `cpl_default` + `thin_demand` caveats, exp-val/rankability/demand/profit, beatability, top competitors; free for board/cache, polls the live job). `tsc -b` + `vite build` clean.
+- **Part (a) runbook — `docs/modules/leadoff-board-add-4-categories-runbook.md`** — adds **Fire damage restoration service / Dumpster rental service / Carpenter / Dryer vent cleaning service** to the catalog (CSV rows + the Supabase mirror upsert, with `category_id`/`cluster`/`demand_profile` matched to real siblings) and, optionally, the board (gated repull → field_quality → 06 → `export_leadoff_board`). Corrects the cost to **~$80–90** (per-city demand tasks dominate; the earlier "~$6–10" under-counted). **Level A** (catalog only, ~$0) makes the grader treat the 4 as on-catalog with the real CPL immediately; **Level B** (~$80–90) precomputes the board rows. Carries the reload-strips-grants caveat + re-grant SQL.
+
+**Not done (owner's machine):** running the part-(a) scanner steps + the Supabase catalog mirror are the owner's to apply ("for your machine"). The migration + app code are live/merged-ready on this branch.
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff — small-market tier + demand-gate exploration (TABLED, decision pending; no code written, no scanner spend yet)**
 
 Owner and Claude explored extending LeadOff below the current **≥30k board** into small-market tiers (15–30k, and possibly up to 50k) for the rank-and-rent / pay-per-lead thesis (thin competition, cheap to rank). **Tabled by the owner 2026-09-18** — captured here so it can resume cold. Nothing built; no DataForSEO spend; the scanner has NOT been re-run.
