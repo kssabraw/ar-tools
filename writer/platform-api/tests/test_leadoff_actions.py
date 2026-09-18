@@ -14,7 +14,10 @@ from services.leadoff_actions import (
     spent_today,
     trend_date_from,
     trend_row,
+    tryout_market_comps,
+    tryout_result_row,
     tryout_rows,
+    tryout_scoutable,
     velocity_row,
 )
 
@@ -143,6 +146,67 @@ class TestTryoutEconomics:
         demand = {"A": {"vol": 100, "cpc": 1}, "B": {"vol": 1000, "cpc": 1}}
         rows = tryout_rows(demand, field, {"A": 20.0, "B": 20.0}, BREAKPOINTS, 0.10)
         assert rows[0]["category"] == "B"
+
+
+def _tryout(**over):
+    row = {"id": "t1", "status": "complete", "city_id": 5368304,
+           "city_name": "Los Alamitos", "state_code": "CA",
+           "results": [
+               {"category": "Plumber", "category_id": "plumber", "grade": "B",
+                "competitors": [
+                    {"business_name": "ACME Plumbing", "domain": "acme.com", "phone": "1"},
+                    {"business_name": "Bob Pipes", "domain": "bob.com", "phone": "2"}]},
+               {"category": "Locksmith", "category_id": "locksmith", "grade": "C",
+                "competitors": [{"business_name": "Lock Co", "domain": "lock.com"}]}]}
+    row.update(over)
+    return row
+
+
+class TestTryoutScout:
+    def test_result_row_lookup(self):
+        assert tryout_result_row(_tryout(), "plumber")["grade"] == "B"
+        assert tryout_result_row(_tryout(), "locksmith")["grade"] == "C"
+        assert tryout_result_row(_tryout(), "nope") is None
+
+    def test_complete_row_with_comps_is_scoutable(self):
+        assert tryout_scoutable(_tryout(), "plumber") is None
+
+    def test_incomplete_tryout_not_scoutable(self):
+        assert tryout_scoutable(_tryout(status="running"), "plumber") == "tryout_not_ready"
+
+    def test_unknown_category_not_scoutable(self):
+        assert tryout_scoutable(_tryout(), "nope") == "category_not_found"
+
+    def test_row_without_category_id_not_scoutable(self):
+        # defensive guard: a matched row that carries no category_id can't be
+        # scouted (the scanner's Pass-2 caches key on the catalog category).
+        # The router requires a non-empty category_id, so this is belt-and-braces.
+        row = _tryout(results=[{"category": "X", "category_id": None,
+                                "competitors": [{"business_name": "Y"}]}])
+        assert tryout_scoutable(row, "") == "scout_requires_catalog"
+
+    def test_no_competitors_not_scoutable(self):
+        row = _tryout(results=[{"category": "Plumber", "category_id": "plumber",
+                                "competitors": []}])
+        assert tryout_scoutable(row, "plumber") == "no_competitors"
+
+    def test_market_comps_shape(self):
+        row = _tryout()
+        market, comps = tryout_market_comps(row, tryout_result_row(row, "plumber"))
+        # a tryout category IS a scanned catalog category, so its NAME keys the
+        # scanner's Pass-2 caches directly (unlike a grade's literal keyword).
+        assert market == {"city_id": 5368304, "category_id": "plumber",
+                          "category": "Plumber", "city_name": "Los Alamitos",
+                          "state_code": "CA"}
+        assert [c["rank_position"] for c in comps] == [1, 2]
+        assert comps[0]["business_name"] == "ACME Plumbing"
+        assert comps[0]["domain"] == "acme.com"
+
+    def test_market_comps_empty_competitors(self):
+        row = _tryout(results=[{"category": "Plumber", "category_id": "plumber",
+                                "competitors": []}])
+        _market, comps = tryout_market_comps(row, tryout_result_row(row, "plumber"))
+        assert comps == []
 
 
 class TestScoutContracts:

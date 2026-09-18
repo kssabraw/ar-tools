@@ -143,6 +143,10 @@ interface TryoutRow {
   cost_to_win?: number | null
   ramp_months?: number | null
   roi_confidence?: 'measured' | 'modelled' | null
+  // top-5 competitors stashed at completion so a per-row scout can deepen this
+  // market; scout = the Pass-2 enrichment stored back after a scout pull.
+  competitors?: Array<{ business_name?: string; domain?: string | null; phone?: string | null }>
+  scout?: ScoutBlock | null
 }
 interface Tryout {
   id: string
@@ -1014,7 +1018,16 @@ function TryoutsView() {
   const [openId, setOpenId] = useState<string | null>(null)
   // Which category row's live-GBP map is expanded (owner request 2026-08-21).
   const [mapCat, setMapCat] = useState<string | null>(null)
-  useEffect(() => { setMapCat(null) }, [openId])
+  // Per-row scout: which category's scout panel is expanded, the in-flight
+  // category + its job (one scout at a time), and any error tied to a category.
+  const [scoutCat, setScoutCat] = useState<string | null>(null)
+  const [scoutingCat, setScoutingCat] = useState<string | null>(null)
+  const [scoutJobId, setScoutJobId] = useState<string | null>(null)
+  const [scoutErr, setScoutErr] = useState<{ cat: string; msg: string } | null>(null)
+  useEffect(() => {
+    setMapCat(null); setScoutCat(null); setScoutingCat(null)
+    setScoutJobId(null); setScoutErr(null)
+  }, [openId])
   const { data } = useQuery<{ tryouts: Tryout[] }>({
     queryKey: ['leadoff-tryouts'],
     queryFn: () => api.get('/leadoff/tryouts?limit=20'),
@@ -1024,6 +1037,50 @@ function TryoutsView() {
   })
   const tryouts = data?.tryouts ?? []
   const open = tryouts.find(t => t.id === openId)
+
+  // Poll the in-flight scout job; on completion refetch the tryout so the row's
+  // stored `scout` block renders in its (still-expanded) panel.
+  useQuery({
+    queryKey: ['leadoff-tryout-scout', scoutJobId],
+    queryFn: async () => {
+      const job = await api.get<{ status: string; error: string | null }>(`/leadoff/jobs/${scoutJobId}`)
+      if (job.status === 'complete' || job.status === 'failed') {
+        if (job.status === 'failed') {
+          setScoutErr({ cat: scoutingCat ?? '', msg: job.error || 'scout_failed' })
+        }
+        setScoutJobId(null); setScoutingCat(null)
+        qc.invalidateQueries({ queryKey: ['leadoff-tryouts'] })
+      }
+      return job
+    },
+    enabled: !!scoutJobId,
+    refetchInterval: 4000,
+  })
+
+  const startScout = async (row: TryoutRow) => {
+    const catId = row.category_id
+    if (!catId || !openId) return
+    if (row.scout) { setScoutCat(scoutCat === catId ? null : catId); return }  // already scouted → toggle
+    if (scoutingCat) return   // one scout at a time
+    setScoutErr(null); setScoutCat(catId); setScoutingCat(catId)
+    try {
+      const res = await api.post<{ job_id: string | null; fully_cached: boolean }>(
+        `/leadoff/tryouts/${openId}/scout`, { category_id: catId })
+      if (res.job_id) {
+        setScoutJobId(res.job_id)   // poll it
+      } else {                      // fully cache-fresh → stored inline, just refetch
+        setScoutingCat(null)
+        qc.invalidateQueries({ queryKey: ['leadoff-tryouts'] })
+      }
+    } catch (e) {
+      setScoutingCat(null)
+      const msg = e instanceof Error ? e.message : 'scout_failed'
+      setScoutErr({ cat: catId, msg:
+        msg === 'budget_exceeded' ? 'Daily LeadOff budget reached — try tomorrow or raise the budget.'
+        : msg === 'no_competitors' ? 'No competitors were captured for this category — can’t scout.'
+        : msg })
+    }
+  }
 
   const submit = async () => {
     if (!city.trim() || state.trim().length !== 2 || busy) return
@@ -1111,7 +1168,7 @@ function TryoutsView() {
                 <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780, fontSize: 13 }}>
                   <thead>
                     <tr>{['Grade', 'Category', 'Exp $/mo', 'Profit $/mo', 'Payback', 'Demand', 'Supply',
-                          'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions', 'Map'].map(h => (
+                          'Rev to win', 'Field ★', 'Cat open', 'Field pages', 'Field mentions', 'Actions'].map(h => (
                       <th key={h} style={thStyle}>{h}</th>
                     ))}</tr>
                   </thead>
@@ -1119,6 +1176,13 @@ function TryoutsView() {
                     {(open.results ?? []).map((r, i) => {
                       const canMap = !!r.category_id && open.city_id != null
                       const expanded = canMap && mapCat === r.category_id
+                      // Scout: offered for a catalog row with captured competitors
+                      // (older tryouts predate the stash → no button). A scouted
+                      // row toggles its stored enrichment panel.
+                      const hasScout = !!r.scout
+                      const canScout = !!r.category_id && ((r.competitors?.length ?? 0) > 0 || hasScout)
+                      const scoutExpanded = scoutCat === r.category_id
+                      const scouting = scoutingCat === r.category_id
                       return (
                       <Fragment key={i}>
                       <tr>
@@ -1141,21 +1205,62 @@ function TryoutsView() {
                         <td style={tdStyle} title="median indexed pages across the category's top-5 (site: estimate)">{compact(r.field_pages_med)}</td>
                         <td style={tdStyle} title="median web-mention count across the top-5 (generic names inflate — context only)">{compact(r.field_mentions_med)}</td>
                         <td style={tdStyle}>
-                          {canMap ? (
-                            <button type="button"
-                              onClick={() => setMapCat(expanded ? null : r.category_id!)}
-                              style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px',
-                                background: expanded ? '#0e7d6f' : '#fff', color: expanded ? '#fff' : '#0e7d6f',
-                                border: '1px solid #0e7d6f', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
-                              <Compass size={12} /> {expanded ? 'Hide' : 'Map'}
-                            </button>
-                          ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                            {canMap ? (
+                              <button type="button"
+                                onClick={() => setMapCat(expanded ? null : r.category_id!)}
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px',
+                                  background: expanded ? '#0e7d6f' : '#fff', color: expanded ? '#fff' : '#0e7d6f',
+                                  border: '1px solid #0e7d6f', borderRadius: 6, cursor: 'pointer', fontSize: 11, fontWeight: 600 }}>
+                                <Compass size={12} /> {expanded ? 'Hide' : 'Map'}
+                              </button>
+                            ) : <span style={{ color: '#cbd5e1' }}>—</span>}
+                            {canScout && (
+                              <button type="button" disabled={scouting}
+                                onClick={() => startScout(r)}
+                                title="Deepen this market: competitor referring domains, review velocity & momentum, demand trend (~$0.10–1, cached)"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 8px',
+                                  background: scoutExpanded ? '#7c3aed' : '#fff', color: scoutExpanded ? '#fff' : '#7c3aed',
+                                  border: '1px solid #7c3aed', borderRadius: 6, cursor: scouting ? 'default' : 'pointer',
+                                  fontSize: 11, fontWeight: 600, opacity: scouting ? 0.7 : 1 }}>
+                                {scouting
+                                  ? <Loader2 size={12} className="spin" />
+                                  : <Binoculars size={12} />}
+                                {' '}{scouting ? 'Scouting' : hasScout ? (scoutExpanded ? 'Hide' : 'Scout ✓') : 'Scout'}
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                       {expanded && (
                         <tr>
-                          <td colSpan={12} style={{ padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
+                          <td colSpan={13} style={{ padding: '10px 14px', background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
                             <TryoutCategoryMap cityId={open.city_id!} categoryId={r.category_id!} />
+                          </td>
+                        </tr>
+                      )}
+                      {scoutExpanded && (
+                        <tr>
+                          <td colSpan={13} style={{ padding: '10px 14px', background: '#faf5ff', borderBottom: '1px solid #e2e8f0' }}>
+                            <div style={{ fontSize: 12, fontWeight: 700, color: '#6d28d9', marginBottom: 6 }}>
+                              Scouting report — {r.category}
+                            </div>
+                            {r.scout ? (
+                              <ScoutEnrichment scout={r.scout} />
+                            ) : scouting ? (
+                              <div style={{ fontSize: 13, color: '#64748b' }}>
+                                <Loader2 size={14} className="spin" style={{ verticalAlign: -3 }} />{' '}
+                                Scouting the market — referring domains, review velocity, demand trend…
+                              </div>
+                            ) : (
+                              <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                                Deepen this market: competitor referring domains, review velocity &amp;
+                                momentum, and the demand trend (~$0.10–1, cached).
+                              </div>
+                            )}
+                            {scoutErr && scoutErr.cat === r.category_id && (
+                              <div style={{ ...errorBox, marginTop: 8 }}>{scoutErr.msg}</div>
+                            )}
                           </td>
                         </tr>
                       )}
@@ -1218,6 +1323,39 @@ interface ScoutBlock {
   summary?: Record<string, unknown>
   scouted_at?: string
 }
+
+// The Pass-2 enrichment KVs for a scouted market — shared by the grade card and
+// a scouted tryout row (both store the same ScoutBlock shape).
+function ScoutEnrichment({ scout }: { scout: ScoutBlock }) {
+  const e = scout.enrichment
+  if (!e) return (
+    <div style={{ fontSize: 12, color: '#94a3b8' }}>
+      Scouted — no cached RD / review-velocity / demand-trend signals landed
+      for this field (the competitors may have no linked domains or reviews).
+    </div>
+  )
+  return (
+    <>
+      <KV k="Links to win (true RD)"
+        v={e.rd_min != null ? `~${e.rd_min * 10}` : '—'} strong
+        hint="tool read ×10 per orchestrator rule" />
+      <KV k="Field reviews 30d (vs prior)"
+        v={e.field_vel30 != null ? `${e.field_vel30} vs ${e.field_prior30 ?? 0}` : '—'}
+        hint={e.vel_matched != null
+          ? `summed over ${e.vel_matched} of ${scout.competitors.length} top-5 competitors found in the review cache`
+          : undefined} />
+      <KV k="Momentum" v={e.momentum ?? (e.vel_matched ? 'thin data' : '—')} />
+      <KV k="Newest field review" v={e.newest_review ?? '—'} />
+      <KV k="Demand growth (YoY)"
+        v={e.growth_yoy_ss != null ? `${e.growth_yoy_ss}×`
+          : e.growth_yoy != null ? `${e.growth_yoy}× ⚠` : '—'}
+        hint={e.growth_yoy_ss != null
+          ? `same-month YoY (seasonality-cancelled)${e.peak_months ? ` · peaks: months ${e.peak_months}` : ''}`
+          : '12-mo window — seasonal categories confound this'} />
+    </>
+  )
+}
+
 interface GradeResponse {
   status: 'complete' | 'running' | 'failed'
   source: GradeSource
@@ -1508,35 +1646,7 @@ function GradeView({ prefill, onConsumed }: {
             <>
               <SectionTitle>Scouting report</SectionTitle>
               {scout ? (
-                scout.enrichment ? (
-                  <>
-                    <KV k="Links to win (true RD)"
-                      v={scout.enrichment.rd_min != null ? `~${scout.enrichment.rd_min * 10}` : '—'} strong
-                      hint="tool read ×10 per orchestrator rule" />
-                    <KV k="Field reviews 30d (vs prior)"
-                      v={scout.enrichment.field_vel30 != null
-                        ? `${scout.enrichment.field_vel30} vs ${scout.enrichment.field_prior30 ?? 0}` : '—'}
-                      hint={scout.enrichment.vel_matched != null
-                        ? `summed over ${scout.enrichment.vel_matched} of ${scout.competitors.length} top-5 competitors found in the review cache`
-                        : undefined} />
-                    <KV k="Momentum"
-                      v={scout.enrichment.momentum
-                        ?? (scout.enrichment.vel_matched ? 'thin data' : '—')} />
-                    <KV k="Newest field review" v={scout.enrichment.newest_review ?? '—'} />
-                    <KV k="Demand growth (YoY)"
-                      v={scout.enrichment.growth_yoy_ss != null
-                        ? `${scout.enrichment.growth_yoy_ss}×`
-                        : scout.enrichment.growth_yoy != null ? `${scout.enrichment.growth_yoy}× ⚠` : '—'}
-                      hint={scout.enrichment.growth_yoy_ss != null
-                        ? `same-month YoY (seasonality-cancelled)${scout.enrichment.peak_months ? ` · peaks: months ${scout.enrichment.peak_months}` : ''}`
-                        : '12-mo window — seasonal categories confound this'} />
-                  </>
-                ) : (
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                    Scouted — no cached RD / review-velocity / demand-trend signals landed
-                    for this field (the competitors may have no linked domains or reviews).
-                  </div>
-                )
+                <ScoutEnrichment scout={scout} />
               ) : scouting || scoutJobId ? (
                 <div style={{ fontSize: 13, color: '#64748b' }}>
                   <Loader2 size={14} className="spin" style={{ verticalAlign: -3 }} />{' '}
