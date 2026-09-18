@@ -525,6 +525,88 @@ async def get_tryout(tryout_id: str, auth: dict = Depends(require_auth)) -> dict
     return rows[0]
 
 
+# ── On-demand grade: one city + one service → a grade ─────────────────────────
+
+class GradeRequest(BaseModel):
+    city: str = Field(..., min_length=1)
+    state: str = Field(..., min_length=2, max_length=2)
+    service: str = Field(..., min_length=1)
+    capture: float = Field(default=DEFAULT_CAPTURE, ge=0.01, le=0.5)
+    lead_tier: str = DEFAULT_TIER
+
+
+@router.post("/leadoff/grade", status_code=200)
+async def grade_market(
+    body: GradeRequest,
+    auth: dict = Depends(require_staff),
+) -> dict:
+    """Grade a single city × service on demand. Board-first (free), then a
+    recent cache (free), else a cheap live single-cell grade (~$0.06, async —
+    poll GET /leadoff/grade/{grade_id})."""
+    from services import leadoff_grade
+    if body.lead_tier not in LEAD_TIERS:
+        raise HTTPException(status_code=422, detail="invalid_lead_tier")
+    city_row = leadoff_actions.resolve_city(body.city, body.state)
+    if city_row is None:
+        # cities covers US places >=10k pop; smaller towns need a geocode step
+        raise HTTPException(status_code=404, detail="city_not_found")
+    city_id = city_row.get("city_id")
+
+    cats = leadoff_actions._categories()
+    name_to_id = {c["category_name"]: c["category_id"] for c in cats}
+    resolved = leadoff_grade.resolve_service(
+        body.service, [c["category_name"] for c in cats])
+    category_name = resolved["category_name"]
+    if not category_name:
+        raise HTTPException(status_code=422, detail="invalid_service")
+    category_id = name_to_id.get(category_name) if resolved["on_catalog"] else None
+
+    # 1) board-first (free)
+    brief = leadoff_grade.board_hit(city_id, category_id)
+    if brief is not None:
+        return {"status": "complete", "source": "board", "grade": brief,
+                "city_name": city_row.get("name"),
+                "state_code": city_row.get("state_code"),
+                "category": category_name, "on_catalog": True}
+
+    # 2) recent cached live grade (free)
+    cached = leadoff_grade.fresh_cached(city_id, category_name)
+    if cached is not None:
+        return {"status": "complete", "source": "cache",
+                "grade": cached.get("grade"), "grade_id": cached.get("id"),
+                "city_name": city_row.get("name"),
+                "state_code": city_row.get("state_code"),
+                "category": category_name, "on_catalog": resolved["on_catalog"]}
+
+    # 3) live single-cell grade (paid, budget-guarded)
+    try:
+        leadoff_actions.check_budget(auth["user_id"], leadoff_grade.COST_GRADE)
+    except leadoff_actions.BudgetExceeded as exc:
+        raise HTTPException(status_code=422, detail="budget_exceeded") from exc
+    out = leadoff_grade.enqueue_grade(
+        auth["user_id"], city_row, category_name, category_id,
+        resolved["on_catalog"], body.service, body.capture, body.lead_tier)
+    leadoff_actions.record_spend(
+        auth["user_id"], "grade", leadoff_grade.COST_GRADE,
+        city_id=city_id, city_name=city_row.get("name"),
+        state_code=city_row.get("state_code"))
+    return {"status": "running", "source": "live",
+            "grade_id": out["grade_id"], "job_id": out["job_id"],
+            "city_name": city_row.get("name"),
+            "state_code": city_row.get("state_code"),
+            "category": category_name, "on_catalog": resolved["on_catalog"],
+            "est_cost": leadoff_grade.COST_GRADE}
+
+
+@router.get("/leadoff/grade/{grade_id}")
+async def get_grade(grade_id: str, auth: dict = Depends(require_auth)) -> dict:
+    rows = (get_supabase().table("leadoff_grades").select("*")
+            .eq("id", grade_id).limit(1).execute().data or [])
+    if not rows:
+        raise HTTPException(status_code=404, detail="not_found")
+    return rows[0]
+
+
 class ScoutRequest(BaseModel):
     city_id: int
     category_id: str
