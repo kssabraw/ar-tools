@@ -139,8 +139,14 @@ def _layer4_text_filters(text: str) -> bool:
 
 
 def extract_zones(url: str, html: str) -> Optional[PageZones]:
-    """Extract zones from raw HTML. Returns None if the page is empty/unparseable."""
-    if not html or not html.strip():
+    """Extract zones from raw HTML. Returns None if the page is empty/unparseable.
+
+    Defends the type at the boundary: a caller (or an upstream scraper quirk) that
+    hands a non-string ``html`` yields a handled empty-page (None) rather than an
+    ``AttributeError`` from ``.strip()`` that would 500 the whole ``/sie`` call.
+    The scraper (``scraper._extract_html``) is the primary guard; this is the
+    belt-and-suspenders one so no future caller can reintroduce the crash."""
+    if not isinstance(html, str) or not html.strip():
         return None
     try:
         soup = BeautifulSoup(html, "lxml")
