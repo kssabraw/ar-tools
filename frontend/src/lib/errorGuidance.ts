@@ -418,9 +418,11 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning:
       'The post failed a platform check before publishing — usually an empty ' +
       'post, copy over the character limit, too many images, more than one ' +
-      'video, or a platform that requires an image.',
+      'video, a platform that requires an image, or a YouTube post missing its ' +
+      'required video or title.',
     steps: [
-      'Read the detail after the code (e.g. over_char_limit, too_many_images, media_required, empty_post).',
+      'Read the detail after the code (e.g. over_char_limit, too_many_images, media_required, empty_post, youtube_title_required, youtube_requires_one_video).',
+      'For YouTube: add exactly one video and a title (no images).',
       'Trim the copy, adjust the media to fit the platform, then publish again.',
     ],
   },

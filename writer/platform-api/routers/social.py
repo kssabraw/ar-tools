@@ -132,7 +132,7 @@ async def create_social_post(
         str(client_id), body.platform, body.account_id,
         copy=body.copy, image_urls=body.image_urls, video_urls=body.video_urls,
         platform_specific=body.platform_specific, fmt=body.format,
-        scheduled_at=body.scheduled_at,
+        title=body.title, scheduled_at=body.scheduled_at,
     )
 
 

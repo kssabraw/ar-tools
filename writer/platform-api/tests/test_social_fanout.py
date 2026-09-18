@@ -15,6 +15,14 @@ def test_resolve_platforms_filters_dedupes_orders():
     assert fanout.resolve_platforms([], avail) == []
 
 
+def test_resolve_platforms_excludes_youtube():
+    # YouTube is video-only + Compose-only — fan-out never targets it, even when the
+    # client has a connected YouTube account and requests it.
+    avail = ["youtube", "facebook", "instagram"]
+    assert fanout.resolve_platforms(["youtube", "facebook"], avail) == ["facebook"]
+    assert fanout.resolve_platforms(["youtube"], avail) == []
+
+
 def test_build_source_ref_per_type():
     assert fanout.build_source_ref("topic", None, None) == {"type": "topic"}
     assert fanout.build_source_ref("url", None, "https://x.io/a") == {"type": "url", "url": "https://x.io/a"}

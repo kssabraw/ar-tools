@@ -45,15 +45,22 @@ def _sb():
 
 # ── pure helpers (unit-tested) ───────────────────────────────────────────────
 
+# Platforms fan-out never targets: fan-out generates copy + IMAGES (no AI video in
+# v1), and a YouTube post is video-only + Compose-only — so it's uploaded from the
+# manual composer, never fanned out (mirrors the frontend FANOUT exclusion).
+_FANOUT_EXCLUDED_PLATFORMS = frozenset({"youtube"})
+
+
 def resolve_platforms(requested: list[str], available: list[str]) -> list[str]:
     """The distinct platforms to fan out to: those requested that the client has a
-    connected account for, order-stable, deduped, lowercased. Pure."""
+    connected account for, order-stable, deduped, lowercased, minus the platforms
+    fan-out can't produce publishable drafts for (YouTube — video-only). Pure."""
     avail = {(p or "").lower() for p in (available or [])}
     seen: set[str] = set()
     out: list[str] = []
     for p in (requested or []):
         pl = (p or "").lower().strip()
-        if pl and pl in avail and pl not in seen:
+        if pl and pl in avail and pl not in seen and pl not in _FANOUT_EXCLUDED_PLATFORMS:
             seen.add(pl)
             out.append(pl)
     return out
