@@ -228,6 +228,42 @@ export function serviceAdapter(clientId: string): ReoptAdapter {
   }
 }
 
+// ── Location pages (spawns runs) ─────────────────────────────────────────────
+// Same run-spawning reoptimize-of-existing flow as the Service adapter, but
+// locked to location_page (no Service/Location switch in the Location Pages
+// module) and location-aware, so the spawned run scores against its area.
+export function locationAdapter(clientId: string): ReoptAdapter {
+  return {
+    toolLabel: 'Location pages',
+    storageKey: `reopt:location:${clientId}`,
+    clientId,
+    supportsUrl: true,
+    supportsPaste: true,
+    supportsExisting: false,
+    requiresKeyword: true,
+    keywordLabel: 'Keyword',
+    keywordPlaceholder: 'e.g. plumber austin',
+    supportsLocation: true,
+    runLinkBase: '/runs',
+    runVerb: 'reoptimizing (see the run list)',
+    introText: 'Point at a live location page — paste its URL(s) or its content, and set the target area. Each is scored against the area and rewritten to fix its deficiencies as a new run you can review, score and publish.',
+    async start(items) {
+      const res = await reoptApi.serviceReoptimizeBulk(clientId, {
+        page_type: 'location_page',
+        items: items.map(t => ({
+          keyword: t.keyword,
+          source_url: t.url ?? null,
+          source_html: t.html ?? null,
+          location: t.location ?? null,
+          location_code: t.locationCode ?? null,
+        })),
+      })
+      return runHandles(res)
+    },
+    poll: runPoll,
+  }
+}
+
 // ── Blog (spawns runs) ───────────────────────────────────────────────────────
 export function blogAdapter(clientId: string): ReoptAdapter {
   return {

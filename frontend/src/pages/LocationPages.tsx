@@ -7,6 +7,10 @@ import { LocationAutocomplete } from '../components/localseo/LocationAutocomplet
 import { useBulkPublish, type PublishItem } from '../components/publish/useBulkPublish'
 import { BulkPublishBar } from '../components/publish/BulkPublishBar'
 import { usePagedPublish, PublishTabs, Pager, PublishBadges } from '../components/publish/PublishFilter'
+import { ReoptimizePanel } from '../components/reoptimize/ReoptimizePanel'
+import { locationAdapter } from '../components/reoptimize/adapters'
+import { ScorePanel } from '../components/score/ScorePanel'
+import { locationScoreAdapter } from '../components/score/adapters'
 import type { Client, RunListResponse, RunStatus } from '../lib/types'
 
 const TERMINAL: RunStatus[] = ['complete', 'failed', 'cancelled']
@@ -40,6 +44,9 @@ function extractScannedServices(wa: Record<string, unknown> | null | undefined):
 export function LocationPages() {
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
+
+  // Create pages vs Score / Reoptimize existing ones (mirrors Service Pages).
+  const [mode, setMode] = useState<'create' | 'score' | 'reopt'>('create')
 
   const [location, setLocation] = useState('')
   const [locationCode, setLocationCode] = useState<number | null>(null)
@@ -164,6 +171,28 @@ export function LocationPages() {
         local SEO/AEO engines.
       </p>
 
+      {/* Create vs Score vs Reoptimize */}
+      <div style={{ display: 'inline-flex', gap: 4, background: '#f1f5f9', borderRadius: 8, padding: 4, margin: '4px 0 12px' }}>
+        {(['create', 'score', 'reopt'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            style={{
+              padding: '6px 14px', fontSize: 13, fontWeight: 600, borderRadius: 6, cursor: 'pointer', border: 'none',
+              background: mode === m ? '#fff' : 'transparent', color: mode === m ? '#0f172a' : '#64748b',
+              boxShadow: mode === m ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+            }}
+          >{m === 'create' ? 'Create pages' : m === 'score' ? 'Score' : 'Reoptimize'}</button>
+        ))}
+      </div>
+
+      {mode === 'score' ? (
+        <ScorePanel adapter={locationScoreAdapter(id ?? '')} />
+      ) : mode === 'reopt' ? (
+        <ReoptimizePanel adapter={locationAdapter(id ?? '')} />
+      ) : (
+      <>
       {/* Target location */}
       <label style={labelStyle}>Target location</label>
       {id && (
@@ -298,6 +327,8 @@ export function LocationPages() {
         )}
         <Pager page={pub.page} pageCount={pub.pageCount} total={pub.total} pageSize={pub.pageSize} onPage={pub.setPage} />
         </>
+      )}
+      </>
       )}
     </div>
   )
