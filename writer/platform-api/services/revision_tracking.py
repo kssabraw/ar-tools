@@ -136,8 +136,10 @@ def _member_names(supabase, profile_ids: set[str]) -> dict[str, str]:
     if not profile_ids:
         return {}
     try:
-        rows = (supabase.table("profiles").select("id, full_name, email").in_("id", list(profile_ids)).execute()).data or []
-        return {str(r["id"]): (r.get("full_name") or r.get("email") or "Unknown user") for r in rows}
+        # profiles has no `email` column — selecting it 400s and every member
+        # would collapse to "Unknown user". Select only what exists.
+        rows = (supabase.table("profiles").select("id, full_name").in_("id", list(profile_ids)).execute()).data or []
+        return {str(r["id"]): (r.get("full_name") or "Unknown user") for r in rows}
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("revision_tracking.member_names_failed", extra={"error": str(exc)})
         return {}

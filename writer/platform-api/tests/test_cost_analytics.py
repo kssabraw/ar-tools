@@ -25,10 +25,11 @@ if "db.supabase_client" not in sys.modules:
 from services import cost_analytics as ca  # noqa: E402
 
 
-def _ev(cost_type, cost, tin=0, tout=0, client_id=None, actor_id=None, actor_name=None, occurred_at=None):
+def _ev(cost_type, cost, tin=0, tout=0, client_id=None, actor_id=None, actor_name=None, occurred_at=None, model=None):
     return {
         "cost_type": cost_type, "cost_usd": cost, "input_tokens": tin, "output_tokens": tout,
-        "client_id": client_id, "actor_id": actor_id, "actor_name": actor_name, "occurred_at": occurred_at,
+        "client_id": client_id, "actor_id": actor_id, "actor_name": actor_name,
+        "occurred_at": occurred_at, "model": model,
     }
 
 
@@ -109,6 +110,53 @@ def test_build_member_rows_assignee_and_system():
     assert rows["Ivy"]["events"] == 1
     assert rows["Kyle"]["cost"] == 0.5
     assert rows[ca.da._SYSTEM_MEMBER]["cost"] == 0.2
+
+
+def test_model_label_for():
+    assert ca.model_label_for("claude-sonnet-4-6") == "Claude Sonnet 4.6"
+    assert ca.model_label_for("gpt-5.6-luna") == "OpenAI GPT-5.6 (Luna)"
+    assert ca.model_label_for("mixed") == "Blog/service pipeline (mixed models)"
+    # null → non-LLM bucket
+    assert "Non-LLM" in ca.model_label_for(None)
+    assert "Non-LLM" in ca.model_label_for("")
+    # unmapped ids → readable, provider-prefixed fallbacks (future models)
+    assert ca.model_label_for("claude-haiku-9") == "Claude Haiku"
+    assert ca.model_label_for("claude-opus-5") == "Claude Opus"
+    assert ca.model_label_for("gpt-4.1") == "OpenAI gpt-4.1"
+
+
+def test_aggregate_and_build_model_rows():
+    events = [
+        _ev("local_seo_page", 0.60, 100, 50, model="claude-sonnet-4-6"),
+        _ev("ecommerce_product", 0.20, 40, 20, model="gpt-5.6-luna"),
+        _ev("blog_post", 0.50, 10, 5, model="mixed"),
+        _ev("keyword_research", 0.30, 0, 0, model=None),  # non-LLM
+        _ev("qa_review", 0.01, 5, 1, model=""),            # empty → non-LLM sentinel
+    ]
+    by_model = ca.aggregate(events)["by_model"]
+    assert round(by_model["claude-sonnet-4-6"]["cost"], 2) == 0.60
+    assert by_model["gpt-5.6-luna"]["input_tokens"] == 40
+    # both the None and "" model land in the same non-LLM sentinel bucket
+    assert round(by_model[ca._NON_LLM_KEY]["cost"], 2) == 0.31
+    assert by_model[ca._NON_LLM_KEY]["events"] == 2
+
+    rows = {r["model"]: r for r in ca.build_model_rows(by_model)}
+    assert rows["gpt-5.6-luna"]["label"] == "OpenAI GPT-5.6 (Luna)"
+    assert "Non-LLM" in rows[ca._NON_LLM_KEY]["label"]
+    # sorted by cost desc → Sonnet ($0.60) first
+    assert ca.build_model_rows(by_model)[0]["model"] == "claude-sonnet-4-6"
+
+
+def test_build_model_rows_prev_deltas():
+    cur = ca.aggregate([_ev("local_seo_page", 1.0, 100, 50, model="claude-sonnet-4-6")])["by_model"]
+    prev = ca.aggregate([
+        _ev("local_seo_page", 0.4, 60, 40, model="claude-sonnet-4-6"),
+        _ev("ecommerce_product", 0.3, 10, 5, model="gpt-5.6-luna"),
+    ])["by_model"]
+    rows = {r["model"]: r for r in ca.build_model_rows(cur, prev)}
+    assert rows["claude-sonnet-4-6"]["cost_delta"] == 0.6
+    # Luna ran last period, none this period → surfaces with a negative delta
+    assert rows["gpt-5.6-luna"]["cost"] == 0.0 and rows["gpt-5.6-luna"]["cost_delta"] == -0.3
 
 
 def test_daily_series_zero_filled():
