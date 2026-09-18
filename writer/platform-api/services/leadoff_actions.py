@@ -144,19 +144,26 @@ def field_stats(items: list[dict[str, Any]], category_name: str,
 def tryout_rows(demand: dict[str, dict[str, Any]], field: dict[str, dict[str, Any]],
                 cpl: dict[str, float], breakpoints: list[float],
                 capture: float,
-                cpl_multipliers: dict[str, float] | None = None) -> list[dict[str, Any]]:
+                cpl_multipliers: dict[str, float] | None = None,
+                cpl_modifier_details: dict[str, dict[str, Any]] | None = None) -> list[dict[str, Any]]:
     """Economics + grade per measured category (mirrors check_city step 3).
     Note: tryout uses RAW observed volume (a single city can't be regressed
     to a category expectation), so grades are slightly optimistic for
     outlier-demand cities vs the board's xdemand — same as the source tool.
 
-    ``cpl_multipliers`` (per category key) is the per-market CPC local modifier
-    (valuation plan §3 — ``leadoff_cpc.modifier_for``): the effective CPL is
-    ``cpl[cat] × multiplier`` and everything downstream (value/exp_val/grade)
-    follows from it. Omitted / 1.0 ⇒ byte-identical to the flat-CPL behavior; the
-    row always carries ``cpl_base`` / ``cpl_modifier`` / ``cpl`` (effective) for
-    transparency."""
+    ``cpl_multipliers`` (per category key) is the per-market local modifier
+    (valuation plan §3 — ``leadoff_income_modifier.local_modifier``, blending the
+    CPC + income signals): the effective CPL is ``cpl[cat] × multiplier`` and
+    everything downstream (value/exp_val/grade) follows from it. Omitted / 1.0 ⇒
+    byte-identical to the flat-CPL behavior; the row always carries ``cpl_base`` /
+    ``cpl_modifier`` / ``cpl`` (effective) for transparency.
+
+    ``cpl_modifier_details`` (per category key, optional) records WHICH signals
+    fed the modifier (e.g. ``{"cpc": 1.3, "income": 1.1}``, either may be None when
+    absent — plan §3 transparency); stamped onto the row as ``cpl_modifier_detail``
+    when provided (omitted ⇒ the row has no detail key, unchanged)."""
     mults = cpl_multipliers or {}
+    details = cpl_modifier_details or {}
     rows: list[dict[str, Any]] = []
     for cat, v in field.items():
         vol = demand.get(cat, {}).get("vol")
@@ -179,6 +186,8 @@ def tryout_rows(demand: dict[str, dict[str, Any]], field: dict[str, dict[str, An
             "cpl_modifier": round(mult, 3),
             "cpl": round(eff, 2) if eff is not None else None,
         })
+        if cat in details:
+            rows[-1]["cpl_modifier_detail"] = details[cat]
     rows.sort(key=lambda r: r["exp_val"], reverse=True)
     return rows
 
@@ -581,16 +590,28 @@ async def run_tryout_job(job: dict) -> None:
                                extra={"error": str(exc)})
 
         # 3) economics + grade vs the national reference — with the per-market
-        # CPC local modifier on CPL (valuation plan §3; inert until the
-        # public.leadoff_cpc_baseline is populated, ×1.0 on any thin CPC).
-        from services import leadoff_cpc, leadoff_monetization
+        # local modifier on CPL (valuation plan §3): CPC (per category; inert
+        # until public.leadoff_cpc_baseline is populated) + income (this city's
+        # median household income vs the national median, same for every category),
+        # blended. ×1.0 on any thin/missing signal.
+        from services import (
+            leadoff_cpc,
+            leadoff_income_modifier as lim,
+            leadoff_monetization,
+        )
         _baseline = leadoff_cpc.baseline_map()
-        _bounds = leadoff_cpc.bounds()
-        cpl_mults = {c: leadoff_cpc.modifier_for(demand.get(c, {}).get("cpc"),
-                                                 c, _baseline, _bounds)
-                     for c in field}
+        _p = lim.params()
+        _income = lim.city_income(payload["city_id"]) if _p["enabled"] else None
+        cpl_mults: dict[str, float] = {}
+        cpl_details: dict[str, dict[str, Any]] = {}
+        for c in field:
+            mult, detail = lim.local_modifier(
+                demand.get(c, {}).get("cpc"), c, _income, _baseline, _p)
+            cpl_mults[c] = mult
+            cpl_details[c] = detail
         rows = tryout_rows(demand, field, _lead_values(lead_tier),
-                           _breakpoints(), capture, cpl_multipliers=cpl_mults)
+                           _breakpoints(), capture, cpl_multipliers=cpl_mults,
+                           cpl_modifier_details=cpl_details)
         for r in rows:  # so the frontend can open each row's live-GBP map
             r["category_id"] = name_to_id.get(r["category"])
             leadoff_monetization.attach(r)  # PPL / rank-and-rent / shared print

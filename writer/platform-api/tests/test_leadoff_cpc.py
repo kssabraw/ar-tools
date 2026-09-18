@@ -25,6 +25,19 @@ def test_missing_or_thin_cpc_is_neutral():
     assert leadoff_cpc.cpc_modifier("bad", 30.0, **B) == 1.0
 
 
+def test_modifier_opt_matches_when_present_but_none_when_absent():
+    # present → identical value to cpc_modifier (byte-identical for blending)
+    assert leadoff_cpc.cpc_modifier_opt(36.0, 30.0, **B) == 1.2
+    assert leadoff_cpc.cpc_modifier_opt(36.0, 30.0, **B) == leadoff_cpc.cpc_modifier(36.0, 30.0, **B)
+    # a genuine market == national is a present 1.0 (not absent)
+    assert leadoff_cpc.cpc_modifier_opt(30.0, 30.0, **B) == 1.0
+    # absent (missing / thin / bad) → None, where cpc_modifier returns 1.0
+    assert leadoff_cpc.cpc_modifier_opt(None, 30.0, **B) is None
+    assert leadoff_cpc.cpc_modifier_opt(45.0, None, **B) is None
+    assert leadoff_cpc.cpc_modifier_opt(0.2, 30.0, **B) is None
+    assert leadoff_cpc.cpc_modifier_opt("bad", 30.0, **B) is None
+
+
 def test_modifier_for_reads_baseline_case_insensitively():
     baseline = {"roofing contractor": 20.0}
     assert leadoff_cpc.modifier_for(30.0, "Roofing Contractor", baseline, B) == 1.5

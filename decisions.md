@@ -936,3 +936,57 @@ the ladder to sub-job level → more categories off flagged manual); `review_rat
 calibration + a Shovels.ai per-contractor-permit eval + the Enigma pilot result
 (all v2 — revenue estimation + the affordability ceiling). The
 `market_scanner.lead_values` DataForSEO/scanner side is the owner's machine.
+
+## LeadOff — valuation v1.5: income folded into the local modifier (2026-09-18)
+
+**Context.** Plan §8's v1.5 step — fold the "income / home-value ratio" into the
+CPL `local_modifier` as a second bounded signal that COMPOSES with the v1 CPC
+modifier (plan §3's confidence-weighted blend). Owner picked v1.5 next (v2 is
+blocked on the un-run Enigma pilot) and confirmed the modifier should key off
+**above/below the national median** with my conservative defaults, enabled.
+
+**Scope call (recorded honestly).** The plan says "income / home-value ratio,"
+but median **home value is NOT captured** anywhere: `census_demand.py` pulls
+households/pop/income/year-built (no B25077) and is block-group data cached only
+where a Placement Advisor scan ran — not board-wide. So v1.5 ships **income-only**
+(the correctness win), from the already-live `public.city_household_income`
+(the `leadoff_income` ACS-B19013 backfill — **3,731 board cities**, all non-null,
+board median **$78,921** ≈ the US ACS median, keyed by `city_id`). A board-wide
+home-value fetch (a new B25077 backfill) is a deferred follow-up if wanted.
+
+**DECIDED + BUILT (this session):**
+- **Income modifier** (`services/leadoff_income_modifier.py::income_modifier`,
+  pure): `clamp(city_income ÷ national_median, 0.85, 1.2)` — bidirectional (an
+  above-median metro → premium up to +20%, below → discount down to −15%),
+  `None` (absent → ×1.0) on any missing/thin income. National median is a config
+  scalar (`leadoff_income_national_median`=78921, calibratable).
+- **The blend** (`combine`, pure): a **renormalizing weighted-deviation average**
+  of whichever signals are present — a SINGLE present signal is returned
+  UNCHANGED, so CPC-only (income absent/disabled) is **byte-identical to v1**; two
+  present → `1 + Σ(w·(m−1))÷Σw` (weights CPC 0.7 / income 0.3), clamped to the
+  widest of the two bounds ([0.7, 1.5] = CPC's). The blend always sits BETWEEN the
+  two individual modifiers, so it is never MORE extreme than a single signal — the
+  conservative property. A new `leadoff_cpc.cpc_modifier_opt` returns `None` when
+  CPC is genuinely absent (vs the `1.0` `cpc_modifier` returns for both absent AND
+  market==national), so an absent CPC hands full weight to income; `cpc_modifier`
+  itself is untouched (byte-identical, its tests unchanged).
+- **Wired into all 3 live grade paths** (tryout / grade / grade-all) via
+  `local_modifier(cpc, category, city_income, cpc_baseline, params)` → the same
+  `tryout_rows` `cpl_multipliers` seam the CPC modifier already fed. Income is a
+  per-city scalar (batch-loaded once per sweep in grade-all). Each row records a
+  `cpl_modifier_detail` = `{"cpc": …, "income": …}` (which signals fed it — plan
+  §3 transparency; surfaced in the grade-card monetization hint).
+- **Config + flag** (`leadoff_income_modifier_enabled` default True, bounds,
+  weights, national median — all calibratable). No migration (reuses the live
+  `public.city_household_income`). The board stays a national-anchor view (income,
+  like CPC, applies only on the live grade paths).
+
+**Guardrails held.** Ships enabled, and the income data IS populated, so on deploy
+the live grade paths gain bounded per-market income variation (mirrors how the
+CPC modifier activated) — but it's a NEW mechanic, so it's bounded + conservative
++ flag-gated per the `leadoff_scoring` precedent (no grade *weight* shipped
+unearned). The exclusive CPL re-anchor + board re-export stay the owner's to run.
+
+**Open (unchanged v2, plan §10):** median home value (a new B25077 backfill) if
+the second demographic signal is wanted; the raw 713-row HomeAdvisor CSV; revenue
+estimation + Enigma (gated on the pilot).

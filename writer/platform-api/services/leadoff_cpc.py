@@ -52,6 +52,25 @@ def cpc_modifier(market_cpc: Optional[float], national_median_cpc: Optional[floa
     return round(_clamp(m / n, lo, hi), 3)
 
 
+def cpc_modifier_opt(market_cpc: Optional[float], national_median_cpc: Optional[float],
+                     *, lo: float, hi: float, min_cpc: float) -> Optional[float]:
+    """Like ``cpc_modifier`` but returns ``None`` when the signal is ABSENT (either
+    CPC missing or below ``min_cpc``), vs the ``1.0`` that ``cpc_modifier`` returns
+    for both 'absent' AND 'market == national'. The distinction matters only when
+    BLENDING with a second signal (leadoff_income_modifier): an absent CPC must
+    hand full weight to the other signal, whereas a genuine 1.0 (market == national)
+    is a real, weighted contribution. When present, this returns the identical value
+    to ``cpc_modifier`` (both round to 3), so CPC-only stays byte-identical."""
+    try:
+        m = float(market_cpc) if market_cpc is not None else None
+        n = float(national_median_cpc) if national_median_cpc is not None else None
+    except (TypeError, ValueError):
+        return None
+    if m is None or n is None or m < min_cpc or n < min_cpc:
+        return None
+    return round(_clamp(m / n, lo, hi), 3)
+
+
 def bounds() -> dict[str, float]:
     """Config-driven modifier bounds (calibratable). Kept out of the pure fn so
     ``cpc_modifier`` stays testable without config."""

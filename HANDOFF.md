@@ -1,5 +1,23 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff — Market Valuation v1.5 BUILT (draft PR): income folded into the CPL local modifier (composes with the v1 CPC modifier).**
+
+Plan §8's v1.5 step, owner-picked next (v2 stays blocked on the un-run Enigma pilot). Folds per-city **median household income** into the CPL `local_modifier` as a second bounded signal that BLENDS with the v1 CPC modifier — a market **above** the national median household income gets a premium (up to +20%), **below** a discount (down to −15%), the `income ÷ national_median` ratio clamped. Bidirectional (the owner's ask), conservative, flag-gated, calibratable.
+
+**Scope call (honest):** the plan says "income / home-value ratio," but median **home value is NOT captured** (census_demand pulls households/pop/income/year-built, no B25077, and only where a Placement scan ran). So v1.5 ships **income-only** — the correctness win — from the already-live `public.city_household_income` (the `leadoff_income` ACS-B19013 backfill: **3,731 board cities**, board median **$78,921** ≈ the US ACS median, keyed by `city_id`). A board-wide home-value fetch is a deferred follow-up.
+
+**Built:**
+- **`services/leadoff_income_modifier.py`** (pure + a thin impure income read): `income_modifier` (clamp [0.85, 1.2], `None`→×1.0 on missing/thin), `combine` (a **renormalizing weighted-deviation blend** — a single present signal is returned UNCHANGED so **CPC-only stays byte-identical to v1**; two present → weighted deviation, weights CPC 0.7 / income 0.3, clamped to the widest bounds [0.7, 1.5]; the blend always sits BETWEEN the two individual modifiers, never more extreme), `local_modifier` (the caller entry: CPC-baseline lookup + income + blend + a `{"cpc","income"}` detail dict), `income_map`/`city_income` reads.
+- **`leadoff_cpc.cpc_modifier_opt`** (new, additive) — returns `None` when CPC is genuinely absent (vs the `1.0` `cpc_modifier` returns for both absent AND market==national) so an absent CPC hands full weight to income; `cpc_modifier` itself untouched (byte-identical, tests unchanged).
+- **Wired into all 3 live grade paths** (tryout / grade / grade-all) through the existing `tryout_rows` `cpl_multipliers` seam; income is a per-city scalar (batch-loaded once per sweep in grade-all). Each row records `cpl_modifier_detail` (which signals fed it — plan §3), surfaced in the grade-card monetization hint. The board stays a national-anchor view (income, like CPC, applies only on the live grade paths).
+- **Config + flag** (`leadoff_income_modifier_enabled` default True; bounds/weights/national-median all calibratable). **No migration** (reuses the live `public.city_household_income`).
+
+**Verified:** 397 leadoff backend tests green (+13: a new `test_leadoff_income_modifier.py`, a `cpc_modifier_opt` case, a `cpl_modifier_detail` seam case); ruff (CI select E9,F63,F7,F82 + default) clean; `tsc -b` + `vite build` clean; **LeadOff.tsx at its pre-existing 4 errors / 1 warning — zero new**.
+
+**Guardrails / activation:** ships enabled and the income data IS populated, so on deploy the live grade paths gain bounded per-market income variation (mirrors how the CPC modifier activated) — but it's a NEW, bounded, conservative, flag-gated mechanic (no grade *weight* shipped unearned). The exclusive CPL re-anchor + board re-export stay the owner's to run (unchanged). **Live paid grade paths (the DataForSEO pulls) are worker-verified post-deploy** — sandbox egress-blocked from DataForSEO. **Open (v2, plan §10, unchanged):** median home value (a new B25077 backfill) if a second demographic signal is wanted; the raw 713-row HomeAdvisor CSV; revenue estimation + Enigma (gated on the pilot).
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff — Market Valuation v1 BUILT + MERGED (PR [#1234](https://github.com/kssabraw/ar-tools/pull/1234), squash `be99a3e`): exclusive CPL re-anchor + per-market CPC modifier + monetization print. Owner reviews the before→after, then activates.**
 
 The valuation half of LeadOff, built to the plan (`docs/modules/leadoff-valuation-plan-v1_0.md`; owner chose "full v1 in one PR"). Fixes the code-verified defect: the grade value was `leads × flat_national_CPL` anchored to *shared*-lead economics, and the grader pulled per-market CPC then **discarded it** (Manhattan == Mobile).

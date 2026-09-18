@@ -242,7 +242,9 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
                           capture: float, lead_tier: str,
                           user_id: Optional[str],
                           cpc_median: Optional[float] = None,
-                          cpc_bounds: Optional[dict[str, float]] = None
+                          cpc_bounds: Optional[dict[str, float]] = None,
+                          city_income: Optional[float] = None,
+                          income_params: Optional[dict[str, Any]] = None
                           ) -> Optional[dict[str, Any]]:
     """Live-grade one city on the LITERAL keyword (mirrors
     leadoff_grade.run_grade_job's body), enrich, persist to leadoff_grades
@@ -286,17 +288,26 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
                        extra={"city": city.get("city_name"), "error": str(exc)})
         return None
 
-    # per-market CPC local modifier (valuation plan §3): the national median for
-    # this sweep's category is loaded once (cpc_median); ×1.0 when absent/thin.
+    # per-market local modifier (valuation plan §3): the national CPC median for
+    # this sweep's category is loaded once (cpc_median); income is this city's
+    # median household income (batch-loaded once for the sweep). Blended when
+    # income_params is present, CPC-only otherwise; ×1.0 when a signal is
+    # absent/thin.
     cpl_mult = 1.0
-    if cpc_bounds is not None:
+    cpl_detail: Optional[dict[str, Any]] = None
+    if income_params is not None and cpc_bounds is not None:
+        from services import leadoff_income_modifier as lim
+        _key = str(lead_category or keyword).lower()
+        cpl_mult, cpl_detail = lim.local_modifier(
+            cpc, _key, city_income, {_key: cpc_median}, income_params)
+    elif cpc_bounds is not None:
         from services import leadoff_cpc
         cpl_mult = leadoff_cpc.cpc_modifier(cpc, cpc_median, **cpc_bounds)
     row = lg.build_grade_row(
         keyword=keyword, category_id=category_id, lead_category=lead_category,
         vol=vol, cpc=cpc, field=field, cpl=cpl, cpl_default=cpl_default,
         breakpoints=breakpoints, capture=capture, competitors=competitors,
-        cpl_multiplier=cpl_mult)
+        cpl_multiplier=cpl_mult, cpl_modifier_detail=cpl_detail)
     try:
         from services.leadoff_beatability import attach_beatability
         from services.leadoff_roi import attach_roi
@@ -398,12 +409,17 @@ async def run_grade_all_job(job: dict) -> None:
         if to_grade:
             breakpoints = la._breakpoints()
             sem = asyncio.Semaphore(int(settings.leadoff_grade_all_concurrency))
-            # per-market CPC local modifier (valuation plan §3): one national
-            # median for this sweep's category + the bounds, loaded once.
+            # per-market local modifier (valuation plan §3): one national CPC
+            # median for this sweep's category + the bounds, loaded once; income
+            # is per-city, batch-loaded once for the live remainder.
             from services import leadoff_cpc
+            from services import leadoff_income_modifier as lim
             _cpc_bounds = leadoff_cpc.bounds()
             _cpc_median = leadoff_cpc.baseline_map().get(
                 str(lead_category or keyword).lower())
+            _income_params = lim.params()
+            _income_by_city = (lim.income_map([c["city_id"] for c in to_grade])
+                               if _income_params["enabled"] else {})
 
             async def one(c: dict[str, Any]) -> Optional[dict[str, Any]]:
                 async with sem:
@@ -413,7 +429,9 @@ async def run_grade_all_job(job: dict) -> None:
                         service_query=payload.get("service_query") or "",
                         cpl=cpl, cpl_default=cpl_default, breakpoints=breakpoints,
                         capture=capture, lead_tier=lead_tier, user_id=user_id,
-                        cpc_median=_cpc_median, cpc_bounds=_cpc_bounds)
+                        cpc_median=_cpc_median, cpc_bounds=_cpc_bounds,
+                        city_income=_income_by_city.get(c["city_id"]),
+                        income_params=_income_params)
 
             async with httpx.AsyncClient() as client:
                 gathered = await asyncio.gather(*(one(c) for c in to_grade))
