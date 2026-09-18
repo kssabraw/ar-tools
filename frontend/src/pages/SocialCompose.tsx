@@ -629,8 +629,8 @@ function CreateTab({ clientId, accounts, onFannedOut }: {
           <label style={label}>Tone (optional)</label>
           <input style={{ ...input, width: 180 }} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="upbeat, expert" />
         </div>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: isStoryFmt ? 'not-allowed' : 'pointer', paddingBottom: 9, opacity: isStoryFmt ? 0.7 : 1 }}
-          title={isStoryFmt ? 'A Story needs media, so an image is always generated.' : undefined}>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: (isStoryFmt || isCarouselFmt) ? 'not-allowed' : 'pointer', paddingBottom: 9, opacity: (isStoryFmt || isCarouselFmt) ? 0.7 : 1 }}
+          title={isStoryFmt ? 'A Story needs media, so an image is always generated.' : isCarouselFmt ? 'A carousel is images, so its slides are always generated.' : undefined}>
           <input type="checkbox" checked={effectiveIncludeImage} disabled={isStoryFmt || isCarouselFmt}
             onChange={(e) => setIncludeImage(e.target.checked)} />
           {isCarouselFmt ? 'Generate the carousel slides' : 'Also generate an image for each'}

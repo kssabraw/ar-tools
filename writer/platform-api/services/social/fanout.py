@@ -214,9 +214,16 @@ async def _generate_carousel_images(
                 client_id, req, user_id=user_id, client=client, policy_template=policy_template
             )
         except HTTPException as exc:
+            # Budget exhaustion (402) or a missing image config (503) won't clear on the
+            # next slide, so stop reserving; a transient per-slide generation failure
+            # (502, or an unexpected 4xx) is worth trying the remaining slides for.
+            if getattr(exc, "status_code", 0) in (402, 503):
+                logger.info("social.carousel_slides_stopped",
+                            extra={"platform": platform, "detail": str(exc.detail)[:120]})
+                break
             logger.info("social.carousel_slide_skipped",
                         extra={"platform": platform, "detail": str(exc.detail)[:120]})
-            break  # a budget/limit failure won't clear on the next slide — stop reserving
+            continue
         except Exception as exc:  # noqa: BLE001 — one slide is best-effort
             logger.info("social.carousel_slide_error", extra={"platform": platform, "error": str(exc)[:160]})
             continue
@@ -300,7 +307,7 @@ async def run_fanout_job(job: dict) -> None:
         # Stories have no caption — skip the (discarded) copy generation entirely and
         # keep the draft caption empty so the Drafts UI + publish never show/post one.
         if d_fmt == "story":
-            copy, voice_warnings, spec_warnings = "", [], []
+            copy, voice_warnings, spec_warnings = "", [], []  # type: str, list[str], list[str]
         else:
             try:
                 copy, voice_warnings, spec_warnings = await creator.draft_platform_copy(
