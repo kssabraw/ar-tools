@@ -1,5 +1,24 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-18 · **LeadOff — Market Valuation v1 BUILT (exclusive CPL re-anchor + per-market CPC modifier + monetization print). Draft PR; owner reviews the before→after, then activates.**
+
+The valuation half of LeadOff, built to the plan (`docs/modules/leadoff-valuation-plan-v1_0.md`; owner chose "full v1 in one PR"). Fixes the code-verified defect: the grade value was `leads × flat_national_CPL` anchored to *shared*-lead economics, and the grader pulled per-market CPC then **discarded it** (Manhattan == Mobile).
+
+**Built (all three v1 steps):**
+1. **Exclusive CPL re-anchor** (`services/leadoff_lead_values.py`, pure, §4 ladder: Service Direct exclusive ranges → 2026 observed averages → cluster-floor inheritance → flagged manual; every row records `source`+`confidence`, nothing fabricated). Delivered as **`writer/platform-api/scripts/leadoff_lead_values.csv`** (the scanner's `inputs/lead_values.csv` = source of truth; reload-wiped) + **`scripts/build_lead_values.py`** (writes the CSV, prints the **before→after**, `--upsert` interim Supabase mirror + re-grant DDL in `--help`, `--board-compare` full re-rank diff via `leadoff_export`). Measured re-rank: water damage **×7.7**, remodeling ×6, roofing ×2.9, plumbing/HVAC/electrical ×2.3 (25 high / 27 medium / 55 low across 107 categories).
+2. **Per-market CPC modifier** (`services/leadoff_cpc.py`, pure `cpc_modifier`): `CPL = anchor × clamp(market_cpc ÷ national_median_cpc, 0.7, 1.5)`, bounded/conservative/calibratable (the `leadoff_scoring` precedent). National median in the app-owned **`public.leadoff_cpc_baseline`** (migration `20260918210000_leadoff_cpc_baseline.sql` **applied live + populated** from `market_opportunity_master.category_cpc`, 98 categories, $0; refresh via `scripts/build_cpc_baseline.py`). Wired through the shared `tryout_rows` seam → tryout + on-demand grade + grade-all all get it; **×1.0 (byte-identical) on an empty baseline / any thin CPC**, so it never penalizes a market. The board stays a national-anchor view.
+3. **Monetization print** (`services/leadoff_monetization.py`, pure): PPL-exclusive / rank-and-rent / PPL-shared on the grade card + market brief (NOT board columns, plan §7), honesty-rule copy in the UI (`MonetizationBlock` in `pages/LeadOff.tsx`). Enigma affordability ceiling deliberately v2.
+
+**Config** (`leadoff_cpl_margin_share`, `leadoff_cpc_modifier_*`, `leadoff_monetization_*`) all calibratable. **Verified:** 384 leadoff backend tests green (3 new test files + modifier assertions in the existing ones), ruff (CI select + default) clean, `tsc -b` + `vite build` clean, `LeadOff.tsx` at its pre-existing 4 errors / 1 warning (**zero new**).
+
+**Guardrails — nothing auto-applies the big re-rank.** The CSV + the mirror-upsert + the board re-export are **owner-run after reviewing the before→after** (the plan's "never blind-swap"); merging this PR does NOT push exclusive CPLs to the live `lead_values` table. The CPC modifier ships enabled + the baseline is already populated, so on deploy the **live grade paths** (tryout / on-demand grade / grade-all) gain bounded per-market CPC variation on the CURRENT CPLs; the exclusive re-anchor lands when the owner runs the mirror-upsert.
+
+**Activation order (owner):** review `python scripts/build_lead_values.py` before→after → `--upsert` (interim) *or* copy the CSV to the scanner's `inputs/` + reload → re-run `scripts/export_leadoff_board.py` (board re-rank). The paid/scanner paths + the board re-export are the owner's (sandbox egress-blocked from DataForSEO; the board recompute reads all 34k master rows).
+
+**Open (plan §10, unchanged):** the raw 713-row HomeAdvisor CSV (→ more categories off flagged manual); `review_rate` calibration + Shovels.ai per-contractor-permit eval + the Enigma pilot result (all v2 — revenue estimation + affordability ceiling).
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff — Market Valuation Plan v1.0 written (draft PR [#1230](https://github.com/kssabraw/ar-tools/pull/1230); design phase, no grade code yet).**
 
 The valuation half of LeadOff, capturing the session's pricing discussion as a buildable spec: **`docs/modules/leadoff-valuation-plan-v1_0.md`**. The counterpart to the Enigma pilot plan.

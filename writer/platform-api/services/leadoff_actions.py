@@ -143,26 +143,41 @@ def field_stats(items: list[dict[str, Any]], category_name: str,
 
 def tryout_rows(demand: dict[str, dict[str, Any]], field: dict[str, dict[str, Any]],
                 cpl: dict[str, float], breakpoints: list[float],
-                capture: float) -> list[dict[str, Any]]:
+                capture: float,
+                cpl_multipliers: dict[str, float] | None = None) -> list[dict[str, Any]]:
     """Economics + grade per measured category (mirrors check_city step 3).
     Note: tryout uses RAW observed volume (a single city can't be regressed
     to a category expectation), so grades are slightly optimistic for
-    outlier-demand cities vs the board's xdemand — same as the source tool."""
+    outlier-demand cities vs the board's xdemand — same as the source tool.
+
+    ``cpl_multipliers`` (per category key) is the per-market CPC local modifier
+    (valuation plan §3 — ``leadoff_cpc.modifier_for``): the effective CPL is
+    ``cpl[cat] × multiplier`` and everything downstream (value/exp_val/grade)
+    follows from it. Omitted / 1.0 ⇒ byte-identical to the flat-CPL behavior; the
+    row always carries ``cpl_base`` / ``cpl_modifier`` / ``cpl`` (effective) for
+    transparency."""
+    mults = cpl_multipliers or {}
     rows: list[dict[str, Any]] = []
     for cat, v in field.items():
         vol = demand.get(cat, {}).get("vol")
         leadval = cpl.get(cat)
+        mult = float(mults.get(cat, 1.0))
+        eff = leadval * mult if leadval is not None else None
         leads = round((vol or 0) * capture)
-        value = leads * leadval if leadval is not None else None
+        value = leads * eff if eff is not None else None
         rankab = round(0.75 / (1 + v["avg5"] / 50) + 0.25 / (1 + v["holders"] / 5), 2)
         ev = round((value or 0) * rankab)
-        grade, pct = grade_for(percentile_of(ev, breakpoints), leads, rankab, leadval)
+        grade, pct = grade_for(percentile_of(ev, breakpoints), leads, rankab, eff)
         rows.append({
             "grade": grade, "natl_pct": pct, "exp_val": ev, "value_mo": value,
+            "est_leads_mo": leads,  # exposed so the monetization print can size PPL-shared
             "roi": round(ev / max(v["rev_win"], 10), 1), "rankab": rankab,
             "category": cat, "vol": vol, "supply": v["supply"],
             "rev_win": v["rev_win"], "rating": v["rating"],
             "namekw": v["namekw"], "exact_open": v["holders"],
+            "cpl_base": round(leadval, 2) if leadval is not None else None,
+            "cpl_modifier": round(mult, 3),
+            "cpl": round(eff, 2) if eff is not None else None,
         })
     rows.sort(key=lambda r: r["exp_val"], reverse=True)
     return rows
@@ -565,11 +580,20 @@ async def run_tryout_job(job: dict) -> None:
                 logger.warning("leadoff_tryout.footprint_failed",
                                extra={"error": str(exc)})
 
-        # 3) economics + grade vs the national reference
+        # 3) economics + grade vs the national reference — with the per-market
+        # CPC local modifier on CPL (valuation plan §3; inert until the
+        # public.leadoff_cpc_baseline is populated, ×1.0 on any thin CPC).
+        from services import leadoff_cpc, leadoff_monetization
+        _baseline = leadoff_cpc.baseline_map()
+        _bounds = leadoff_cpc.bounds()
+        cpl_mults = {c: leadoff_cpc.modifier_for(demand.get(c, {}).get("cpc"),
+                                                 c, _baseline, _bounds)
+                     for c in field}
         rows = tryout_rows(demand, field, _lead_values(lead_tier),
-                           _breakpoints(), capture)
+                           _breakpoints(), capture, cpl_multipliers=cpl_mults)
         for r in rows:  # so the frontend can open each row's live-GBP map
             r["category_id"] = name_to_id.get(r["category"])
+            leadoff_monetization.attach(r)  # PPL / rank-and-rent / shared print
         try:
             site_lookup, mention_rows = footprint_lookups(all_biz)
             rows = attach_footprint(

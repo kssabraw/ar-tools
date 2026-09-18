@@ -240,7 +240,10 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
                           on_catalog: bool, service_query: str, cpl: float,
                           cpl_default: bool, breakpoints: list[float],
                           capture: float, lead_tier: str,
-                          user_id: Optional[str]) -> Optional[dict[str, Any]]:
+                          user_id: Optional[str],
+                          cpc_median: Optional[float] = None,
+                          cpc_bounds: Optional[dict[str, float]] = None
+                          ) -> Optional[dict[str, Any]]:
     """Live-grade one city on the LITERAL keyword (mirrors
     leadoff_grade.run_grade_job's body), enrich, persist to leadoff_grades
     (cache/resume), and return the normalized row. Exact-category holders are
@@ -283,10 +286,17 @@ async def _grade_one_live(client: httpx.AsyncClient, city: dict[str, Any], *,
                        extra={"city": city.get("city_name"), "error": str(exc)})
         return None
 
+    # per-market CPC local modifier (valuation plan §3): the national median for
+    # this sweep's category is loaded once (cpc_median); ×1.0 when absent/thin.
+    cpl_mult = 1.0
+    if cpc_bounds is not None:
+        from services import leadoff_cpc
+        cpl_mult = leadoff_cpc.cpc_modifier(cpc, cpc_median, **cpc_bounds)
     row = lg.build_grade_row(
         keyword=keyword, category_id=category_id, lead_category=lead_category,
         vol=vol, cpc=cpc, field=field, cpl=cpl, cpl_default=cpl_default,
-        breakpoints=breakpoints, capture=capture, competitors=competitors)
+        breakpoints=breakpoints, capture=capture, competitors=competitors,
+        cpl_multiplier=cpl_mult)
     try:
         from services.leadoff_beatability import attach_beatability
         from services.leadoff_roi import attach_roi
@@ -388,6 +398,12 @@ async def run_grade_all_job(job: dict) -> None:
         if to_grade:
             breakpoints = la._breakpoints()
             sem = asyncio.Semaphore(int(settings.leadoff_grade_all_concurrency))
+            # per-market CPC local modifier (valuation plan §3): one national
+            # median for this sweep's category + the bounds, loaded once.
+            from services import leadoff_cpc
+            _cpc_bounds = leadoff_cpc.bounds()
+            _cpc_median = leadoff_cpc.baseline_map().get(
+                str(lead_category or keyword).lower())
 
             async def one(c: dict[str, Any]) -> Optional[dict[str, Any]]:
                 async with sem:
@@ -396,7 +412,8 @@ async def run_grade_all_job(job: dict) -> None:
                         category_id=category_id, on_catalog=on_catalog,
                         service_query=payload.get("service_query") or "",
                         cpl=cpl, cpl_default=cpl_default, breakpoints=breakpoints,
-                        capture=capture, lead_tier=lead_tier, user_id=user_id)
+                        capture=capture, lead_tier=lead_tier, user_id=user_id,
+                        cpc_median=_cpc_median, cpc_bounds=_cpc_bounds)
 
             async with httpx.AsyncClient() as client:
                 gathered = await asyncio.gather(*(one(c) for c in to_grade))

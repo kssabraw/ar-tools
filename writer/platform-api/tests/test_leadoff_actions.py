@@ -122,6 +122,21 @@ class TestTryoutEconomics:
         assert r["exp_val"] == round(1250 * 0.48)
         assert r["grade"] in ("D", "C", "B", "B+", "A", "A+")
         assert r["roi"] == round(r["exp_val"] / 36, 1)
+        # no multiplier → flat CPL exposed, value unchanged (byte-identical path)
+        assert r["cpl_base"] == 25.0 and r["cpl_modifier"] == 1.0 and r["cpl"] == 25.0
+        # leads exposed so the monetization print can size PPL-shared
+        assert r["est_leads_mo"] == 50
+
+    def test_cpc_local_modifier_scales_cpl_and_value(self):
+        field = {"Locksmith": {"supply": 20, "avg5": 60.0, "rev_win": 36,
+                               "rating": 4.7, "namekw": 2, "holders": 4}}
+        demand = {"Locksmith": {"vol": 500, "cpc": 45.0}}
+        rows = tryout_rows(demand, field, {"Locksmith": 25.0}, BREAKPOINTS, 0.10,
+                           cpl_multipliers={"Locksmith": 1.5})
+        r = rows[0]
+        assert r["cpl_base"] == 25.0 and r["cpl_modifier"] == 1.5
+        assert r["cpl"] == 37.5                 # 25 × 1.5, effective exclusive CPL
+        assert r["value_mo"] == round(50 * 37.5)  # leads × effective CPL
 
     def test_no_lead_value_is_f(self):
         field = {"Oddity": {"supply": 3, "avg5": 5.0, "rev_win": 4,

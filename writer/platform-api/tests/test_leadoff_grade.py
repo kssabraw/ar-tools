@@ -110,8 +110,23 @@ class TestBuildGradeRow:
         assert "grade" in row and "exp_val" in row
         assert row["exp_val"] > 0                    # real demand + value → graded
         assert row["thin_demand"] is False
-        assert row["cpl"] == 75.0 and row["cpl_default"] is False
+        assert row["cpl"] == 75.0 and row["cpl_default"] is False   # default mult 1.0
+        assert row["cpl_modifier"] == 1.0 and row["cpl_base"] == 75.0
         assert row["competitors"] == [{"business_name": "ACME Roofing"}]
+
+    def test_cpc_modifier_applies_to_the_grade(self):
+        base = build_grade_row(
+            keyword="roofer", category_id="roofing_contractor",
+            lead_category="Roofing contractor", vol=300, cpc=30.0,
+            field=_field(), cpl=100.0, cpl_default=False,
+            breakpoints=BREAKPOINTS, capture=0.10)
+        hot = build_grade_row(
+            keyword="roofer", category_id="roofing_contractor",
+            lead_category="Roofing contractor", vol=300, cpc=45.0,
+            field=_field(), cpl=100.0, cpl_default=False,
+            breakpoints=BREAKPOINTS, capture=0.10, cpl_multiplier=1.4)
+        assert hot["cpl"] == 140.0 and hot["cpl_base"] == 100.0
+        assert hot["exp_val"] > base["exp_val"]   # a hotter ad-market grades higher
 
     def test_thin_demand_market_still_grades(self):
         # the whole point of on-demand: a below-gate cell is graded, not withheld

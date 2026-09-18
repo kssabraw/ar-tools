@@ -860,3 +860,79 @@ Decisions:
 
 Backend + frontend + tests (`TestTryoutScout`, 8 pure cases); the live paid scout
 pulls are worker-verified post-deploy (sandbox egress-blocked from DataForSEO).
+
+## LeadOff — valuation v1: exclusive CPL re-anchor + CPC modifier + monetization (2026-09-18)
+
+**Context.** LeadOff's grade value is `leads × CPL × rankability`, but the CPL
+was a flat, national, hand-authored `market_scanner.lead_values` estimate
+anchored to *shared*-lead (low) economics, and the grader pulled per-market CPC
+then **discarded it** — so a painting lead in Manhattan and Mobile graded
+identically, and the board under-ranked the high-ticket emergency trades a
+rank-and-rent operator most wants. Plan (the authority):
+`docs/modules/leadoff-valuation-plan-v1_0.md`; owner chose "build full v1 in one
+PR" (2026-09-18).
+
+**DECIDED + BUILT (this session):**
+- **Exclusive CPL re-anchor via the §4 ladder** (`services/leadoff_lead_values.py`,
+  pure): rung 1 = Service Direct published exclusive ranges (mid = geomean of the
+  published low/high — grounded, not a model), rung 2 = observed 2026 CPI-adjusted
+  averages (+ remodeling's §3 CPL tier), rung 3 = cluster-sibling inheritance at
+  the anchor's floor (only where sane), rung 4 = keep the flagged manual estimate.
+  Every row records `source` + `confidence`. Delivered as
+  `scripts/leadoff_lead_values.csv` (the scanner's `inputs/lead_values.csv` is the
+  source of truth — reload-wiped) + `scripts/build_lead_values.py` (writes the
+  CSV, prints the before→after, `--upsert` interim mirror, `--board-compare`).
+  Measured re-rank: water damage ×7.7, remodeling ×6, roofing ×2.9,
+  plumbing/HVAC/electrical ×2.3; a few over-priced low-ticket trades (handyman,
+  carpet cleaning) settle DOWN to observed exclusive averages — the re-anchor
+  corrects both directions, grounded > manual.
+- **Deliberate divergence from the plan (recorded honestly):** the §4 rung-2
+  *formula* (`job value × close rate × margin`) over-shoots the mid-ticket
+  non-emergency trades (validated only for HVAC in the spec), so v1 anchors to
+  **observed** network prices/averages where they exist and keeps `formula_cpl`
+  as a cross-check / v2 lever. More categories stay on flagged manual than the
+  plan's "~15" target (small finishing sub-trades have no reliable sub-job value
+  without the raw 713-row HomeAdvisor CSV, an open item) — safer than an
+  inheritance scale that would fabricate a number. Net: 25 high / 27 medium /
+  55 low across 107 categories.
+- **Per-market CPC local modifier** (`services/leadoff_cpc.py`, pure
+  `cpc_modifier`): `CPL = anchor × clamp(market_cpc ÷ national_median_cpc(cat),
+  0.7, 1.5)`, bounded + conservative + calibratable per the `leadoff_scoring`
+  precedent. National median per category lives in the app-owned
+  `public.leadoff_cpc_baseline` (migration `20260918210000`, applied live +
+  populated from `market_opportunity_master.category_cpc` — $0, no paid call;
+  refreshable via `scripts/build_cpc_baseline.py`). Wired into the shared
+  `tryout_rows` seam (so tryout + on-demand grade + grade-all all get it) with the
+  caller passing a per-key multiplier; **×1.0 (byte-identical) when the baseline
+  is unpopulated or any CPC is thin** — a missing signal never penalizes a market.
+  The precomputed board stays a national-anchor view (no live CPC); the live grade
+  is the per-market view — the `demand_basis` board-vs-live distinction already
+  surfaced. Flag `leadoff_cpc_modifier_enabled` (default True).
+- **Monetization print** (`services/leadoff_monetization.py`, pure): the three
+  grounded models (PPL-exclusive = `value_mo`; rank-and-rent = × `rent_discount`
+  0.6; PPL-shared = leads × exclusive×`shared_price_ratio` 0.35 × `n_buyers` 4) on
+  the grade card + market brief (NOT board columns, per plan §7). Honesty rule
+  rendered in the UI copy — same lead flow, different billing, not independent
+  streams; the speculative Enigma affordability ceiling is deliberately v2.
+  Constants config + calibratable.
+
+**Guardrails held (nothing auto-applies the big re-rank).** The CSV + the
+mirror-upsert + the board re-export are **owner-run after reviewing the
+before→after** (the plan's "never blind-swap"); shipping the code does not push
+exclusive CPLs to the live table. The CPC modifier ships enabled but is **inert
+until the owner runs `build_cpc_baseline.py`** — though this session populated the
+baseline live, so on deploy the live grade paths gain bounded per-market CPC
+variation on the CURRENT CPLs; the exclusive re-anchor lands when the owner runs
+the mirror-upsert. No grade *weight* shipped unearned (the modifier is bounded +
+flag-gated; monetization is display).
+
+**Activation order (owner, documented in HANDOFF):** review the before→after
+(`build_lead_values.py`) → run `--upsert` (interim) or reload the scanner from the
+new CSV → re-run `export_leadoff_board.py` (board re-rank). The `build_cpc_baseline`
+baseline is already populated (run it again after a scanner re-scan).
+
+**Open (unchanged from the plan §10):** the raw 713-row HomeAdvisor CSV (sharpens
+the ladder to sub-job level → more categories off flagged manual); `review_rate`
+calibration + a Shovels.ai per-contractor-permit eval + the Enigma pilot result
+(all v2 — revenue estimation + the affordability ceiling). The
+`market_scanner.lead_values` DataForSEO/scanner side is the owner's machine.

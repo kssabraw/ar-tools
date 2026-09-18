@@ -2946,6 +2946,32 @@ class Settings(BaseSettings):
     # compares each market's field against comparable-size, comparable-income
     # cities. See services/leadoff_income.py + services/leadoff_peer_cohort.py.
     leadoff_income_enabled: bool = True
+    # --- Valuation: exclusive CPL re-anchor + per-market CPC modifier +
+    #     monetization print (leadoff-valuation-plan-v1_0.md) ------------------
+    # (1) The §4 CPL ladder's formula margin share (CPL = job value × close rate
+    #     × margin_share). Used by scripts/build_lead_values.py; the CSV it emits
+    #     is the source of truth (a market_scanner reload recreates lead_values
+    #     from it), so this only affects a re-generation. Calibratable.
+    leadoff_cpl_margin_share: float = 0.22
+    # (2) Per-market CPC local modifier on CPL (plan §3): CPL(city,cat) =
+    #     anchor(cat) × clamp(market_cpc ÷ national_median_cpc(cat), min, max).
+    #     Restores the per-market CPC the grader already pulls but discarded
+    #     (Manhattan ≠ Mobile). Bounded + conservative + calibration-tunable, per
+    #     the leadoff_scoring precedent. Applied on the LIVE grade paths (tryout /
+    #     grade / grade-all — where a live CPC is in hand); the board is a
+    #     national-anchor view. INERT until the national-median baseline is
+    #     populated (scripts/build_cpc_baseline.py → public.leadoff_cpc_baseline),
+    #     and degrades to ×1.0 on any missing/thin CPC (never penalizes a market).
+    leadoff_cpc_modifier_enabled: bool = True
+    leadoff_cpc_modifier_min: float = 0.7     # a cold ad-market caps the discount here
+    leadoff_cpc_modifier_max: float = 1.5     # a hot ad-market caps the premium here
+    leadoff_cpc_modifier_min_cpc: float = 0.5  # below this (market or national) the ratio is noise → ×1.0
+    # (3) Monetization print (plan §7): three grounded models on the grade card +
+    #     market brief (NOT board columns). Same lead flow, different billing —
+    #     not independent streams. Constants calibratable.
+    leadoff_monetization_rent_discount: float = 0.6    # rank-and-rent rent ≈ PPL-exclusive × this (one recurring buyer)
+    leadoff_monetization_shared_price_ratio: float = 0.35  # shared per-lead price ≈ exclusive CPL × this
+    leadoff_monetization_shared_n_buyers: int = 4      # a shared lead is resold to ~N buyers
     # --- Outreach pipeline (the Outreacher project) --------------------------
     # A SEPARATE Supabase PROJECT, not a second schema — the difference from
     # LeadOff's market_scanner client. The pipeline's storage projection is

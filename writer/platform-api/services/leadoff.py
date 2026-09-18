@@ -484,8 +484,22 @@ def get_market_brief(city_id: int, category_id: str) -> dict[str, Any] | None:
     # Cost-to-win ROI — the brief holds the scouted RD field, so its link
     # component is MEASURED (not modelled) when RD is cached.
     from services.leadoff_roi import attach_roi, rd_gap_from_enrichment
-    return attach_roi(scored,
-                      rd_gap_true=rd_gap_from_enrichment(scored.get("enrichment")))
+    final = attach_roi(scored,
+                       rd_gap_true=rd_gap_from_enrichment(scored.get("enrichment")))
+    # Monetization print (valuation plan §7): PPL-exclusive / rank-and-rent /
+    # shared, from the exclusive CPL LeadOff already applies. The board is a
+    # national-anchor view (no live CPC), so no CPC modifier here — the CPL is
+    # the flat exclusive anchor for this category.
+    from services import leadoff_monetization
+    cpl_mid = _lead_values(DEFAULT_TIER).get(final.get("category"))
+    leads_mo = final.get("est_leads_mo")
+    if leads_mo is None:
+        leads_mo = round(float(final.get("xdem") or 0) * DEFAULT_CAPTURE)
+    final["cpl"] = round(float(cpl_mid), 2) if cpl_mid is not None else None
+    final["monetization"] = leadoff_monetization.monetization(
+        value_mo=final.get("value_mo"), leads_mo=leads_mo, cpl=cpl_mid,
+        **leadoff_monetization.params())
+    return final
 
 
 def scout_enrichment(city_id: int, category_name: str,
