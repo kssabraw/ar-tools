@@ -2497,6 +2497,10 @@ export interface CostClientRow extends CostMetrics {
 export interface CostMemberRow extends CostMetrics {
   member: string
 }
+export interface CostModelRow extends CostMetrics {
+  model: string
+  label: string
+}
 export interface CostDay {
   date: string
   cost: number
@@ -2514,6 +2518,7 @@ export interface CostReport {
   by_type: CostTypeRow[]
   by_client: CostClientRow[]
   by_member: CostMemberRow[]
+  by_model: CostModelRow[]
   daily: CostDay[]
 }
 

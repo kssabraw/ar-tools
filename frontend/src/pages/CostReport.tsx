@@ -16,6 +16,17 @@ type Metric = 'cost' | 'tokens'
 
 function isoDay(d: Date): string { return d.toISOString().slice(0, 10) }
 function daysAgo(n: number): string { const d = new Date(); d.setDate(d.getDate() - n); return isoDay(d) }
+function currentMonth(): string { return isoDay(new Date()).slice(0, 7) } // "YYYY-MM"
+// Calendar-month → [first day, last day], capping the end at today so the current
+// month doesn't render a tail of future empty days.
+function monthRange(month: string): { from: string; to: string } {
+  const [y, m] = month.split('-').map(Number)
+  if (!y || !m) return { from: '', to: '' }
+  const first = isoDay(new Date(Date.UTC(y, m - 1, 1)))
+  const last = isoDay(new Date(Date.UTC(y, m, 0))) // day 0 of next month = last day of this one
+  const today = isoDay(new Date())
+  return { from: first, to: last > today ? today : last }
+}
 
 type Preset = { key: string; label: string; from: () => string; to: () => string }
 const PRESETS: Preset[] = [
@@ -23,7 +34,7 @@ const PRESETS: Preset[] = [
   { key: '60d', label: 'Last 60 days', from: () => daysAgo(59), to: () => isoDay(new Date()) },
   { key: '90d', label: 'Last 90 days', from: () => daysAgo(89), to: () => isoDay(new Date()) },
 ]
-const GROUP_ORDER = ['Content pages', 'Research', 'Market research', 'Agents', 'Automation', 'Other']
+const GROUP_ORDER = ['Content pages', 'Research', 'Market research', 'AI visibility', 'Agents', 'Automation', 'Other']
 
 function qs(params: Record<string, string>): string {
   const p = new URLSearchParams()
@@ -64,6 +75,7 @@ function buildCsv(data: CostReport, clientLabel: string, cmp: boolean): string {
   for (const r of data.by_type) line('Type', r.label, r.group, r)
   for (const r of data.by_client) line('Client', r.client_name, '', r)
   for (const r of data.by_member) line('Member', r.member, '', r)
+  for (const r of data.by_model) line('Model', r.label, '', r)
   return L.join('\n')
 }
 function csvFilename(from: string, to: string, clientLabel: string | null): string {
@@ -83,13 +95,17 @@ export function CostReport() {
   const [preset, setPreset] = useState('30d')
   const [customFrom, setCustomFrom] = useState('')
   const [customTo, setCustomTo] = useState('')
+  const [month, setMonth] = useState(currentMonth())
   const [compare, setCompare] = useState(true)
   const [clientId, setClientId] = useState('')
   const [metric, setMetric] = useState<Metric>('cost')
 
-  const active = PRESETS.find((p) => p.key === preset)
-  const from = preset === 'custom' ? customFrom : active?.from() ?? daysAgo(29)
-  const to = preset === 'custom' ? customTo : active?.to() ?? isoDay(new Date())
+  const { from, to } = useMemo(() => {
+    if (preset === 'custom') return { from: customFrom, to: customTo }
+    if (preset === 'month') return monthRange(month)
+    const p = PRESETS.find((x) => x.key === preset)
+    return { from: p?.from() ?? daysAgo(29), to: p?.to() ?? isoDay(new Date()) }
+  }, [preset, customFrom, customTo, month])
   const rangeValid = !!from && !!to
 
   const { data: clients } = useQuery<ClientListItem[]>({
@@ -121,6 +137,7 @@ export function CostReport() {
   const typeMax = Math.max(1, ...(data?.by_type ?? []).map((r) => rowValue(metric, r)))
   const clientMax = Math.max(1, ...(data?.by_client ?? []).map((r) => rowValue(metric, r)))
   const memberMax = Math.max(1, ...(data?.by_member ?? []).map((r) => rowValue(metric, r)))
+  const modelMax = Math.max(1, ...(data?.by_model ?? []).map((r) => rowValue(metric, r)))
 
   return (
     <div style={{ padding: 32, maxWidth: 1200, margin: '0 auto' }}>
@@ -156,7 +173,11 @@ export function CostReport() {
         {PRESETS.map((p) => (
           <button key={p.key} onClick={() => setPreset(p.key)} style={rangeBtn(preset === p.key)}>{p.label}</button>
         ))}
+        <button onClick={() => setPreset('month')} style={rangeBtn(preset === 'month')}>Month</button>
         <button onClick={() => setPreset('custom')} style={rangeBtn(preset === 'custom')}>Custom</button>
+        {preset === 'month' && (
+          <input type="month" value={month} max={currentMonth()} onChange={(e) => setMonth(e.target.value)} style={dateInput} />
+        )}
         {preset === 'custom' && (
           <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={dateInput} />
@@ -240,6 +261,22 @@ export function CostReport() {
                     ))}
                   </div>
                 ))
+              )}
+            </Panel>
+
+            <Panel title="By model">
+              {data.by_model.length === 0 ? <Empty /> : (
+                <>
+                  {data.by_model.map((r) => (
+                    <Bar key={r.model} label={r.label} value={rowValue(metric, r)} max={modelMax} color="#db2777" metric={metric}
+                      muted={r.model === 'non_llm'} delta={cmp ? rowDelta(metric, r) : undefined} />
+                  ))}
+                  <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 8, lineHeight: 1.4 }}>
+                    Model = the primary generation model. The blog/service pipeline spans several
+                    models per run, so it’s one “mixed” bucket; DataForSEO &amp; other paid non-LLM
+                    APIs carry cost but no tokens.
+                  </div>
+                </>
               )}
             </Panel>
 

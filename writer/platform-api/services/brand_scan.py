@@ -37,7 +37,7 @@ from fastapi import HTTPException
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import brand_analysis
+from services import brand_analysis, llm_usage
 
 logger = logging.getLogger("brand_scan")
 
@@ -255,7 +255,11 @@ async def _execute_chatgpt(keyword: str, brand: str) -> tuple[str, list[str]]:
         )
     except openai.APIStatusError as exc:  # pragma: no cover - thin provider wrapper
         raise ProviderError(exc.status_code, str(exc))
-    return _extract_openai(resp.model_dump().get("output") or [])
+    out = resp.model_dump()
+    _it, _ot = llm_usage.openai_usage_dict(out)
+    llm_usage.record(provider="openai", model=settings.brand_engine_chatgpt_model,
+                     operation="engine:chatgpt", input_tokens=_it, output_tokens=_ot)
+    return _extract_openai(out.get("output") or [])
 
 
 async def _execute_claude(keyword: str, brand: str) -> tuple[str, list[str]]:
@@ -276,6 +280,9 @@ async def _execute_claude(keyword: str, brand: str) -> tuple[str, list[str]]:
         )
     except anthropic.APIStatusError as exc:  # pragma: no cover
         raise ProviderError(exc.status_code, str(exc))
+    _it, _ot = llm_usage.anthropic_usage(resp)
+    llm_usage.record(provider="anthropic", model=settings.brand_engine_claude_model,
+                     operation="engine:claude", input_tokens=_it, output_tokens=_ot)
     return _extract_claude(resp.model_dump().get("content") or [])
 
 
@@ -295,7 +302,11 @@ async def _execute_gemini(keyword: str, brand: str) -> tuple[str, list[str]]:
         resp = await http.post(url, headers={"x-goog-api-key": settings.gemini_api_key}, json=body)
     if resp.status_code != 200:
         raise ProviderError(resp.status_code, resp.text)
-    return _extract_gemini(resp.json())
+    data = resp.json()
+    _it, _ot = llm_usage.gemini_usage(data)
+    llm_usage.record(provider="gemini", model=settings.brand_engine_gemini_model,
+                     operation="engine:gemini", input_tokens=_it, output_tokens=_ot)
+    return _extract_gemini(data)
 
 
 async def _execute_perplexity(keyword: str, brand: str) -> tuple[str, list[str]]:
@@ -317,6 +328,9 @@ async def _execute_perplexity(keyword: str, brand: str) -> tuple[str, list[str]]
     if resp.status_code != 200:
         raise ProviderError(resp.status_code, resp.text)
     data = resp.json()
+    _it, _ot = llm_usage.openai_usage_dict(data)
+    llm_usage.record(provider="perplexity", model=settings.brand_engine_perplexity_model,
+                     operation="engine:perplexity", input_tokens=_it, output_tokens=_ot)
     text = (((data.get("choices") or [{}])[0]).get("message") or {}).get("content") or ""
     citations = data.get("citations") or []
     return text, citations
@@ -353,6 +367,10 @@ async def _execute_dataforseo(keyword: str, brand: str, ai_mode: bool) -> tuple[
     tasks = data.get("tasks") or []
     if not tasks or not (tasks[0].get("result") or []):
         raise ProviderError(500, "No SERP results returned")
+    # DataForSEO returns an exact USD cost — record it directly (no tokens).
+    _dfs_cost = float((tasks[0] or {}).get("cost") or data.get("cost") or 0.0)
+    llm_usage.record(provider="dataforseo", model=None, cost_usd=_dfs_cost, priced=True,
+                     operation="engine:google_ai_mode" if ai_mode else "engine:google_ai_overview")
     items = (tasks[0]["result"][0] or {}).get("items") or []
     text, citations, feature_present = _extract_dataforseo_ai(
         items, keyword, brand, "AI Mode" if ai_mode else "AI Overview")
@@ -617,6 +635,9 @@ async def analyze_mention(
             tools=[tool],
             tool_choice={"type": "function", "function": {"name": "report_brand_visibility"}},
         )
+        _it, _ot = llm_usage.openai_usage(resp)
+        llm_usage.record(provider="openai", model=settings.brand_classifier_model,
+                         operation="classifier", input_tokens=_it, output_tokens=_ot)
         tool_calls = resp.choices[0].message.tool_calls
         if not tool_calls or tool_calls[0].function.name != "report_brand_visibility":
             return _fallback_analysis(response_text, brand, citations, raw_response)
@@ -1088,7 +1109,15 @@ async def run_brand_scan_job(job: dict) -> None:
                 if done >= total_cells or done % progress_step == 0:
                     _write_progress()
 
-        await asyncio.gather(*(_process_cell(rid, kw, eng) for rid, kw, eng in rows_to_process))
+        # Record every per-cell LLM/paid-API call (engine + classifier + diagnose)
+        # to the shared usage ledger under one context, so AI-visibility spend
+        # surfaces in the Cost & Usage report. Child tasks inherit this context at
+        # creation; recording is best-effort and never affects the scan.
+        with llm_usage.usage_context(
+            source="ai_visibility_scan", client_id=client_id, actor_id=user_id,
+            metadata={"scan_batch_id": scan_batch_id},
+        ):
+            await asyncio.gather(*(_process_cell(rid, kw, eng) for rid, kw, eng in rows_to_process))
 
         supabase.table("async_jobs").update({
             "status": "complete",

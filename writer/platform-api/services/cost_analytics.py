@@ -50,14 +50,71 @@ TYPE_LABELS: dict[str, str] = {
     "leadoff_tryout": "LeadOff tryout",
     "leadoff_city_finder": "LeadOff city finder",
     "leadoff_ai_probe": "LeadOff AI probe",
+    "ai_visibility_scan": "AI visibility scan",
+    "ai_visibility_suggest": "AI visibility suggestions",
+    "keyword_research_llm": "Keyword research (LLM)",
+    "keyword_topic_llm": "Topic research (LLM)",
+    "sermastr_chat": "SerMaStr chat",
+    "pace_chat": "PACE chat",
+    "director_chat": "DORA chat",
 }
 _PAGE_TYPES = {
     "blog_post", "service_page", "location_page", "local_seo_page",
     "local_seo_reoptimize", "ecommerce_product", "ecommerce_collection",
     "ecommerce_reoptimize",
 }
-_RESEARCH_TYPES = {"keyword_research", "keyword_topic_research", "domain_intel"}
-_AGENT_TYPES = {"autonomy_run", "strategist_review", "qa_review"}
+_RESEARCH_TYPES = {
+    "keyword_research", "keyword_topic_research", "domain_intel",
+    "keyword_research_llm", "keyword_topic_llm",
+}
+_AGENT_TYPES = {
+    "autonomy_run", "strategist_review", "qa_review",
+    "sermastr_chat", "pace_chat", "director_chat",
+}
+_AI_VISIBILITY_TYPES = {"ai_visibility_scan", "ai_visibility_suggest"}
+
+# ── model presentation ─────────────────────────────────────────────────────────
+# The cost_events view emits a raw model id per event (or 'mixed' for the
+# multi-model blog/service pipeline, or NULL for non-LLM paid APIs). Friendly
+# labels live here so a new model shows up (readably) without a migration.
+MODEL_LABELS: dict[str, str] = {
+    "claude-sonnet-4-6": "Claude Sonnet 4.6",
+    "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+    "gpt-5.6-luna": "OpenAI GPT-5.6 (Luna)",
+    "gpt-5.4": "OpenAI GPT-5.4",
+    "gpt-5.4-mini": "OpenAI GPT-5.4 mini",
+    "sonar": "Perplexity Sonar",
+    "dataforseo": "DataForSEO (non-LLM API)",
+    "mixed": "Blog/service pipeline (mixed models)",
+}
+# The bucket key we use for a NULL model (non-LLM paid APIs — DataForSEO, etc.).
+_NON_LLM_KEY = "non_llm"
+
+
+def model_label_for(model: Optional[str]) -> str:
+    """Human label for a raw model id. NULL/empty → the non-LLM bucket. Pure.
+
+    Falls back to a readable, provider-prefixed label for an unmapped id so a
+    future model (e.g. a new OpenAI or Claude version) still shows up without a
+    code change."""
+    if not model:
+        return "Non-LLM APIs (DataForSEO, etc.)"
+    if model in MODEL_LABELS:
+        return MODEL_LABELS[model]
+    lo = model.lower()
+    if "haiku" in lo:
+        return "Claude Haiku"
+    if "opus" in lo:
+        return "Claude Opus"
+    if "sonnet" in lo:
+        return "Claude Sonnet"
+    if "gemini" in lo:
+        return f"Google {model}"
+    if "sonar" in lo or "perplexity" in lo:
+        return f"Perplexity {model}"
+    if lo.startswith("gpt-") or lo.startswith("o1") or lo.startswith("o3") or "openai" in lo:
+        return f"OpenAI {model}"
+    return model
 
 
 def label_for(cost_type: str) -> str:
@@ -80,6 +137,8 @@ def group_for(cost_type: str) -> str:
         return "Market research"
     if cost_type in _AGENT_TYPES:
         return "Agents"
+    if cost_type in _AI_VISIBILITY_TYPES:
+        return "AI visibility"
     return "Other"
 
 
@@ -102,6 +161,7 @@ def aggregate(events: list[dict]) -> dict[str, Any]:
     by_type: dict[str, dict] = {}
     by_client: dict[Optional[str], dict] = {}
     by_member: dict[tuple[str, Optional[str]], dict] = {}
+    by_model: dict[str, dict] = {}
     by_day: dict[str, dict] = {}
     total = _blank()
 
@@ -114,12 +174,15 @@ def aggregate(events: list[dict]) -> dict[str, Any]:
         cid = str(ev["client_id"]) if ev.get("client_id") else None
         _acc(by_client.setdefault(cid, _blank()), cost, tin, tout)
         _acc(by_member.setdefault(da.member_key(ev), _blank()), cost, tin, tout)
+        # NULL/empty model → the non-LLM sentinel, so keys stay plain strings.
+        _acc(by_model.setdefault((ev.get("model") or "").strip() or _NON_LLM_KEY, _blank()), cost, tin, tout)
         day = da._occurred_date(ev.get("occurred_at"))  # reuse the shared parser
         if day:
             _acc(by_day.setdefault(day, _blank()), cost, tin, tout)
         _acc(total, cost, tin, tout)
 
-    return {"by_type": by_type, "by_client": by_client, "by_member": by_member, "by_day": by_day, "total": total}
+    return {"by_type": by_type, "by_client": by_client, "by_member": by_member,
+            "by_model": by_model, "by_day": by_day, "total": total}
 
 
 def _metrics(cur: dict, prev: dict) -> dict[str, Any]:
@@ -162,6 +225,22 @@ def build_client_rows(by_client: dict, names: dict[str, str], prev_by_client: Op
             **m,
         })
     rows.sort(key=lambda r: (-r["cost"], -r["tokens"], r["client_name"].lower()))
+    return rows
+
+
+def build_model_rows(by_model: dict, prev_by_model: Optional[dict] = None) -> list[dict]:
+    """By-model rows with a friendly label + cost/token metrics and deltas. Pure.
+
+    The non-LLM sentinel bucket resolves through model_label_for(None); it carries
+    paid-API cost (DataForSEO, etc.) and zero tokens, so it sorts last on tokens
+    but still shows its spend."""
+    prev = prev_by_model or {}
+    rows = []
+    for key in set(by_model) | set(prev):
+        m = _metrics(by_model.get(key, _blank()), prev.get(key, _blank()))
+        raw = None if key == _NON_LLM_KEY else key
+        rows.append({"model": key, "label": model_label_for(raw), **m})
+    rows.sort(key=lambda r: (-r["cost"], -r["tokens"], r["label"]))
     return rows
 
 
@@ -232,7 +311,7 @@ def _fetch_events(supabase, start: date, end: date, client_id: Optional[str]) ->
     while True:
         q = (
             supabase.table("cost_events")
-            .select("event_id, cost_type, client_id, actor_id, actor_name, occurred_at, cost_usd, input_tokens, output_tokens")
+            .select("event_id, cost_type, client_id, actor_id, actor_name, occurred_at, cost_usd, input_tokens, output_tokens, model")
             .gte("occurred_at", lo)
             .lt("occurred_at", hi)
         )
@@ -254,7 +333,7 @@ def _fetch_events(supabase, start: date, end: date, client_id: Optional[str]) ->
     return events, truncated
 
 
-_EMPTY = {"by_type": {}, "by_client": {}, "by_member": {}, "by_day": {}, "total": _blank()}
+_EMPTY = {"by_type": {}, "by_client": {}, "by_member": {}, "by_model": {}, "by_day": {}, "total": _blank()}
 
 
 def build_report(
@@ -307,5 +386,6 @@ def build_report(
         "by_type": build_type_rows(tallies["by_type"], prev["by_type"]),
         "by_client": build_client_rows(tallies["by_client"], names, prev["by_client"]),
         "by_member": build_member_rows(tallies["by_member"], profile_names, prev["by_member"]),
+        "by_model": build_model_rows(tallies["by_model"], prev["by_model"]),
         "daily": build_daily_series(tallies["by_day"], start, end),
     }

@@ -16,7 +16,7 @@ import httpx
 
 from config import settings
 from db.supabase_client import get_supabase
-from services import maps_reporting
+from services import llm_usage, maps_reporting
 from services.slack_assistant.actions import _ACTION_TOOLS, _ACTIONS, _pending
 from services.slack_assistant.context import (
     _MEMORY_TOOL,
@@ -687,7 +687,7 @@ def _log_cache_usage(usage) -> None:
 
 async def _one_llm_call(
     api, system: str, messages: list[dict], tools: list[dict],
-    kwargs: dict, on_text=None,
+    kwargs: dict, on_text=None, usage_meta: Optional[dict] = None,
 ):
     """One messages call — plain create, or a token stream when `on_text` is set.
 
@@ -717,12 +717,19 @@ async def _one_llm_call(
                 await on_text(delta)
             resp = await stream.get_final_message()
     _log_cache_usage(getattr(resp, "usage", None))
+    # Record this turn's token spend to the shared usage ledger when the caller
+    # opted in (a persona passed usage_meta with its source/client/actor). Each
+    # pause_turn continuation is a real billed call, so recording per call is right.
+    if usage_meta:
+        _it, _ot = llm_usage.anthropic_usage(resp)
+        llm_usage.record(provider="anthropic", model=call_kwargs.get("model"),
+                         input_tokens=_it, output_tokens=_ot, **usage_meta)
     return resp
 
 
 async def _create_with_continuation(
     api, system: str, messages: list[dict], tools: list[dict],
-    tool_choice: Optional[dict] = None, on_text=None,
+    tool_choice: Optional[dict] = None, on_text=None, usage_meta: Optional[dict] = None,
 ):
     """messages call with bounded `pause_turn` continuation.
 
@@ -733,12 +740,12 @@ async def _create_with_continuation(
     fetch_live_gsc) keeps a consistent history. Bounded so a pathological
     turn can't spin forever — on exhaustion the last response is used as-is."""
     kwargs = {"tool_choice": tool_choice} if tool_choice else {}
-    resp = await _one_llm_call(api, system, messages, tools, kwargs, on_text)
+    resp = await _one_llm_call(api, system, messages, tools, kwargs, on_text, usage_meta=usage_meta)
     for _ in range(_PAUSE_TURN_CONTINUATIONS):
         if getattr(resp, "stop_reason", None) != "pause_turn":
             break
         messages.append({"role": "assistant", "content": resp.content})
-        resp = await _one_llm_call(api, system, messages, tools, kwargs, on_text)
+        resp = await _one_llm_call(api, system, messages, tools, kwargs, on_text, usage_meta=usage_meta)
     return resp
 
 
@@ -846,6 +853,7 @@ async def interpret(
                     c, system, messages, tools,
                     tool_choice={"type": "none"} if final_round else None,
                     on_text=on_text if on_event else None,
+                    usage_meta={"source": "sermastr_chat", "client_id": client.get("id")},
                 ),
                 log_tag="assistant_llm",
             )
@@ -961,6 +969,7 @@ async def interpret_portfolio(
                     c, system, messages, [] if final else tools,
                     {"tool_choice": {"type": "none"}} if final else {},
                     on_text if on_event else None,
+                    usage_meta={"source": "sermastr_chat"},
                 ),
                 log_tag="assistant_portfolio",
             )

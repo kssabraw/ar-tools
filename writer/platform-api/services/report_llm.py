@@ -39,9 +39,27 @@ import logging
 from typing import Callable, Optional
 
 from config import settings
-from services import prompt_cache
+from services import llm_usage, prompt_cache
 
 logger = logging.getLogger(__name__)
+
+
+def _rec(provider: str, model: str, resp_or_data, *, dict_shape: bool = False) -> None:
+    """Record this call's token usage to the shared ledger, best-effort. No-op
+    unless the caller set an ambient llm_usage.usage_context (so the many report_llm
+    callers that don't opt in record nothing, and there's no double-counting)."""
+    try:
+        if provider == "gemini":
+            it, ot = llm_usage.gemini_usage(resp_or_data)
+        elif dict_shape:
+            it, ot = llm_usage.openai_usage_dict(resp_or_data)
+        elif provider == "anthropic":
+            it, ot = llm_usage.anthropic_usage(resp_or_data)
+        else:
+            it, ot = llm_usage.openai_usage(resp_or_data)
+        llm_usage.record(provider=provider, model=model, input_tokens=it, output_tokens=ot)
+    except Exception:  # pragma: no cover - metering never breaks a call
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +348,7 @@ async def _run_anthropic(
         tool_choice={"type": "tool", "name": tool_name},
         messages=[{"role": "user", "content": user}],
     )
+    _rec("anthropic", model, response)
     for block in response.content:
         if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
             return (block.input or {}), response.stop_reason
@@ -356,6 +375,7 @@ async def _run_openai(
         }],
         tool_choice={"type": "function", "function": {"name": tool_name}},
     )
+    _rec("openai", model, response)
     choice = response.choices[0]
     calls = choice.message.tool_calls or []
     if not calls or calls[0].function.name != tool_name:
@@ -382,6 +402,7 @@ async def _run_gemini(
     if system:
         body["system_instruction"] = {"parts": [{"text": system}]}
     data = await _gemini_post(model, body)
+    _rec("gemini", model, data)
     return _gemini_function_args(data, tool_name), _gemini_finish(data)
 
 
@@ -396,6 +417,7 @@ async def _run_anthropic_text(*, model: str, system: str, user: str, max_tokens:
     if system:
         kwargs["system"] = prompt_cache.cache_text(system)  # cache the (invariant) system prefix
     resp = await client.messages.create(**kwargs)
+    _rec("anthropic", model, resp)
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
 
@@ -405,6 +427,7 @@ async def _run_openai_text(*, model: str, system: str, user: str, max_tokens: in
     client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
     messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
     resp = await client.chat.completions.create(model=model, max_completion_tokens=max_tokens, messages=messages)
+    _rec("openai", model, resp)
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -416,6 +439,7 @@ async def _run_gemini_text(*, model: str, system: str, user: str, max_tokens: in
     if system:
         body["system_instruction"] = {"parts": [{"text": system}]}
     data = await _gemini_post(model, body)
+    _rec("gemini", model, data)
     return _gemini_text(data)
 
 
@@ -438,6 +462,7 @@ def _run_anthropic_sync(
         tool_choice={"type": "tool", "name": tool_name},
         messages=[{"role": "user", "content": user}],
     )
+    _rec("anthropic", model, response)
     for block in response.content:
         if getattr(block, "type", None) == "tool_use" and block.name == tool_name:
             return (block.input or {}), response.stop_reason
@@ -464,6 +489,7 @@ def _run_openai_sync(
         }],
         tool_choice={"type": "function", "function": {"name": tool_name}},
     )
+    _rec("openai", model, response)
     choice = response.choices[0]
     calls = choice.message.tool_calls or []
     if not calls or calls[0].function.name != tool_name:
@@ -490,6 +516,7 @@ def _run_gemini_sync(
     if system:
         body["system_instruction"] = {"parts": [{"text": system}]}
     data = _gemini_post_sync(model, body)
+    _rec("gemini", model, data)
     return _gemini_function_args(data, tool_name), _gemini_finish(data)
 
 
@@ -501,6 +528,7 @@ def _run_anthropic_text_sync(*, model: str, system: str, user: str, max_tokens: 
     if system:
         kwargs["system"] = prompt_cache.cache_text(system)  # cache the (invariant) system prefix
     resp = client.messages.create(**kwargs)
+    _rec("anthropic", model, resp)
     return "".join(b.text for b in resp.content if getattr(b, "type", None) == "text").strip()
 
 
@@ -510,6 +538,7 @@ def _run_openai_text_sync(*, model: str, system: str, user: str, max_tokens: int
     client = openai.OpenAI(api_key=settings.openai_api_key)
     messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
     resp = client.chat.completions.create(model=model, max_completion_tokens=max_tokens, messages=messages)
+    _rec("openai", model, resp)
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -521,6 +550,7 @@ def _run_gemini_text_sync(*, model: str, system: str, user: str, max_tokens: int
     if system:
         body["system_instruction"] = {"parts": [{"text": system}]}
     data = _gemini_post_sync(model, body)
+    _rec("gemini", model, data)
     return _gemini_text(data)
 
 

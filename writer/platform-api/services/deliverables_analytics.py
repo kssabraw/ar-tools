@@ -341,12 +341,15 @@ def _profile_names(supabase, profile_ids: set[str]) -> dict[str, str]:
     if not profile_ids:
         return {}
     try:
+        # NOTE: profiles has no `email` column — selecting it 400s and the whole
+        # lookup would fall through to {}, collapsing every logged-in member into
+        # "Unknown user" on the Cost & Activity reports. Select only what exists.
         rows = (
-            supabase.table("profiles").select("id, full_name, email").in_("id", list(profile_ids)).execute()
+            supabase.table("profiles").select("id, full_name").in_("id", list(profile_ids)).execute()
         ).data or []
         out: dict[str, str] = {}
         for r in rows:
-            out[str(r["id"])] = (r.get("full_name") or r.get("email") or "Unknown user")
+            out[str(r["id"])] = (r.get("full_name") or "Unknown user")
         return out
     except Exception as exc:  # pragma: no cover - best effort
         logger.warning("deliverables_analytics.profile_names_failed", extra={"error": str(exc)})

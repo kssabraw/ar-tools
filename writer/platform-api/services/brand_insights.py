@@ -13,6 +13,7 @@ import time
 from typing import Optional
 
 from config import settings
+from services import llm_usage
 
 
 # How far back to summarize Google Search Console performance for the keyword
@@ -391,6 +392,9 @@ async def diagnose_invisibility(
         )
     except Exception as exc:  # pragma: no cover - thin provider wrapper
         raise InsightUnavailable(str(exc))
+    _it, _ot = llm_usage.openai_usage(resp)
+    llm_usage.record(provider="openai", model=settings.brand_diagnose_model,
+                     operation="diagnose", input_tokens=_it, output_tokens=_ot)
     return (resp.choices[0].message.content or "").strip()
 
 
@@ -498,6 +502,10 @@ async def suggest_keywords(
         )
     except Exception as exc:  # pragma: no cover
         raise InsightUnavailable(str(exc))
+    _it, _ot = llm_usage.openai_usage(resp)
+    llm_usage.record(provider="openai", model=settings.brand_suggest_model,
+                     source="ai_visibility_suggest", operation="suggest_keywords",
+                     input_tokens=_it, output_tokens=_ot)
     return _drop_near_me(_parse_keyword_list(resp.choices[0].message.content or ""))
 
 
@@ -602,6 +610,10 @@ async def suggest_conversational_queries(
         )
     except Exception as exc:  # pragma: no cover
         raise InsightUnavailable(str(exc))
+    _it, _ot = llm_usage.openai_usage(resp)
+    llm_usage.record(provider="openai", model=settings.brand_suggest_model,
+                     source="ai_visibility_suggest", operation="suggest_conversational",
+                     input_tokens=_it, output_tokens=_ot)
     cap = len(seed_keywords) * _QUERIES_PER_KEYWORD_MAX
     parsed = _drop_near_me(_parse_string_list(resp.choices[0].message.content or "", cap=cap))
     seen: set[str] = set()
