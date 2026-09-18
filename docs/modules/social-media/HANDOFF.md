@@ -12,12 +12,19 @@ The owner set the **next build order** to these five, top-to-bottom:
 1. **Instagram scope-out — Reels + Stories** (decision b1: BOTH) — **✅ BUILT + MERGED (PR
    [#1206](https://github.com/kssabraw/ar-tools/pull/1206))**, see the 2026-09-18 update below.
 2. **IG carousel Draft type** (decision b2: YES) — **✅ BUILT + MERGED (same PR #1206)**, see below.
-3. **YouTube poster** — **re-scope against PostForMe** (the old blocker was PostPeer's
-   YouTube docs; on PostForMe a YouTube post **requires a `title` via
-   `platform_configurations`**). Uploads existing videos, **not** generation.
-4. **Big-video direct-to-R2 (presign)** — the `POST …/social/media/presign` endpoint already
-   exists; the UI still uses server upload. Wiring the browser PUT needs an **R2 CORS policy**
-   allowing PUT from the Netlify origin to the R2 S3 endpoint. Provider-agnostic.
+3. **YouTube poster** — **✅ BUILT + MERGED (PR [#1211](https://github.com/kssabraw/ar-tools/pull/1211),
+   squash `44c5e06`)**. A YouTube post = a video + a required `title` via
+   `platform_configurations.youtube` (first-class field, folded in by `publish.build_youtube_config`
+   which forces only the `public` privacy default; `validate_post` YouTube rule; fanout excludes YT;
+   migration `20260918130000` fixed the seeded spec). Deployed-only: verify the `privacy_status` field
+   name + one live end-to-end post. Uploads existing videos, **not** generation.
+4. **Big-video direct-to-R2 (presign)** — **✅ BUILT (PR pending), needs the R2 CORS policy applied +
+   live verify.** The composer now routes a video **over the 200 MB server cap** (up to a 2 GB advisory
+   client cap) through the existing `POST …/social/media/presign` → a browser `fetch` PUT straight to R2
+   → `public_url`; images + videos ≤ 200 MB keep the server path (no CORS dependency). Presign expiry
+   bumped to 2 h (`social_presign_expiry_seconds`) for slow multi-GB uploads. **Prerequisite (owner
+   infra, deployed-only): apply the R2 bucket CORS policy** (below) — until then the big-video PUT fails
+   its preflight (surfaced as a clear error). Provider-agnostic.
 5. **Mixed image path** (deferred cost optimization, owner: "later") — 2.5-Flash-for-square /
    nano-banana-Pro-for-aspect-ratio, halves the dominant image cost. Lowest of the five.
 
@@ -25,6 +32,53 @@ The owner set the **next build order** to these five, top-to-bottom:
 > confidence checks (a real test post on the PostForMe path; a live P1 competitor-research
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
+
+## Update (2026-09-18) — **Queue #4 (big-video direct-to-R2 presign) BUILT** (PR pending) — needs the R2 CORS policy applied
+
+The composer now uploads a **video over the 200 MB server multipart cap** (up to a **2 GB** advisory
+client cap; R2's real single-PUT limit is ~5 GB) **straight to R2** via the pre-existing
+`POST …/social/media/presign` endpoint: `presignAndPutVideo` requests the presigned URL then does a
+cross-origin `fetch` **PUT** of the file to the R2 S3 endpoint (no auth header — the URL carries the
+signature; the exact `Content-Type` it was signed with is sent back), and passes the returned
+`public_url` into the post. **Additive — nothing that works today changes:** images and videos ≤ 200 MB
+keep the server multipart path (PIL-verified, no CORS dependency); only the previously-impossible
+>200 MB video path is new. Backend: `presign_upload` now signs a **2 h** URL
+(`social_presign_expiry_seconds`=7200) so a multi-GB upload on a slow link doesn't outlast it. A failed
+direct PUT (e.g. CORS not yet applied) surfaces a clear "tell an admin" error, not a silent hang.
+
+### ⚠️ Prerequisite — apply the R2 bucket CORS policy (owner, deployed-only)
+
+The browser PUT is cross-origin (Netlify origin → `<account>.r2.cloudflarestorage.com`), so it triggers
+a CORS preflight the bucket must allow. **Until this is applied, big-video upload fails its preflight.**
+The sandbox is egress-blocked from R2/Cloudflare and this is the shared prod `smm-media` bucket, so it's
+an owner step (not applied here). Set this CORS policy on the bucket:
+
+```json
+{
+  "CORSRules": [
+    {
+      "AllowedOrigins": ["https://<the suite's Netlify prod origin>"],
+      "AllowedMethods": ["PUT"],
+      "AllowedHeaders": ["content-type"],
+      "MaxAgeSeconds": 3600
+    }
+  ]
+}
+```
+
+Replace `<…prod origin>` with the live frontend origin (and add any custom domain; **`deploy-preview-*.netlify.app`
+preview origins are NOT covered** unless added — the browser PUT won't work from a preview build until then).
+Apply either via the **Cloudflare dashboard** (R2 → `smm-media` → Settings → CORS Policy) or the S3 API:
+
+```
+aws s3api put-bucket-cors --bucket smm-media \
+  --cors-configuration file://r2-cors.json \
+  --endpoint-url https://<R2_ACCOUNT_ID>.r2.cloudflarestorage.com
+```
+
+Then verify from the deployed app: upload a >200 MB video in a client's Social → Compose → it PUTs to R2
+and the post publishes with that video. (`AllowedHeaders: ["*"]` also works if you prefer; `content-type`
+is the minimal set the presigned PUT needs.)
 
 ## Update (2026-09-18) — **Queue #1 (Reels + Stories) + #2 (IG carousel) BUILT + MERGED** (PR [#1206](https://github.com/kssabraw/ar-tools/pull/1206))
 

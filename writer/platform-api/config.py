@@ -105,7 +105,13 @@ class Settings(BaseSettings):
     social_enabled: bool = False                # SOCIAL_ENABLED — module master gate
     social_monthly_ceiling_default_usd: float = 75.0   # per-client fail-closed default (PRD §11)
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
-    social_max_upload_mb: float = 200.0   # media upload cap (video-sized)
+    social_max_upload_mb: float = 200.0   # server multipart upload cap (video-sized)
+    # Big-video direct-to-R2 (queue #4): videos over social_max_upload_mb are PUT
+    # straight to R2 from the browser via a presigned URL (bytes never route through
+    # the API). A multi-GB upload on a slow link can outlast the S3 default 1h URL
+    # lifetime, so the presign endpoint signs a longer window. NOTE: the browser PUT
+    # also requires an R2 bucket CORS policy allowing PUT from the Netlify origin.
+    social_presign_expiry_seconds: int = 7200   # presigned PUT lifetime (2h)
     # AI copy drafting (Creator P2 first slice): one Sonnet call per platform,
     # grounded in a source + the client's voice card. Our own Anthropic key — not
     # a per-client-metered external spend (mirrors the blog/GBP writers).

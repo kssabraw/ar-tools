@@ -176,6 +176,26 @@ def test_estimate_cost_usd():
     assert publish.estimate_cost_usd("facebook", "anything", 0.01) == 0.01
 
 
+def test_presign_upload_passes_configured_expiry(monkeypatch):
+    """Big-video presign signs a long-lived URL from config (not the SDK's 1h
+    default), so a multi-GB direct upload on a slow link doesn't outlast it."""
+    from config import settings
+
+    captured = {}
+
+    class _Store:
+        def presigned_put_url(self, key, content_type, expires=3600):
+            captured["expires"] = expires
+            return {"upload_url": "https://r2/x", "public_url": "https://cdn/x",
+                    "headers": {"Content-Type": content_type}}
+
+    monkeypatch.setattr(settings, "social_enabled", True)
+    monkeypatch.setattr(publish, "get_media_store", lambda: _Store())
+    out = publish.presign_upload("video/mp4")
+    assert captured["expires"] == settings.social_presign_expiry_seconds
+    assert out["type"] == "video" and out["upload_url"] == "https://r2/x"
+
+
 def test_ensure_future_iso():
     now = datetime(2026, 9, 5, 12, 0, tzinfo=timezone.utc)
     out = publish._ensure_future_iso(now + timedelta(hours=1), now)

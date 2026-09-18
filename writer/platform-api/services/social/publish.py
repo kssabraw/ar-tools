@@ -425,7 +425,9 @@ def presign_upload(content_type: str) -> dict:
         ext, media_type = resolve_media_type(ct)
     except ValueError:
         raise HTTPException(status_code=422, detail="unsupported_media_type")
-    signed = get_media_store().presigned_put_url(media_key(ext, "upload"), ct)
+    signed = get_media_store().presigned_put_url(
+        media_key(ext, "upload"), ct, expires=int(settings.social_presign_expiry_seconds)
+    )
     return {**signed, "type": media_type}
 
 
