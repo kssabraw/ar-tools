@@ -1126,7 +1126,8 @@ function CoverageTable({ submarketId, submarketName }: { submarketId: string; su
                       controller={enrich} batchRunning={batchRunning}
                       nameController={nameScrape} nameBatchRunning={nameBatchRunning}
                       nameSearchController={nameSearch} nameSearchBatchRunning={nameSearchBatchRunning}
-                      provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null} />
+                      provided={contactsBatch?.by_prospect?.[s.prospect_id] ?? null}
+                      mainPhone={s.phone} />
                   </td>
                 )}
                 {showAnalyst && (

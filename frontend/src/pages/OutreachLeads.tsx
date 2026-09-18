@@ -928,7 +928,8 @@ function LeadDrawer({ id, stages, onClose, onAdvance }: {
                   <Script prospectId={lead.prospect_id} />
                 </div>
               )}
-              <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} isStaff={isStaff} />
+              <LeadContacts prospectId={lead.prospect_id} isAdmin={isAdmin} isStaff={isStaff}
+                mainPhone={lead.phone ?? lead.prospect?.phone} />
             </div>
           ) : isStaff ? (
             // T2.5: a manual/inbound lead has no scan behind it, so no hook/report/enrich. Offer to

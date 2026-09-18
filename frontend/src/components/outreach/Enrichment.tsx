@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Globe, Loader2, Mail, Phone, Search, Sparkles, User } from 'lucide-react'
 import { api } from '../../lib/api'
 import { useResumableBatch } from '../../lib/useResumableBatch'
+import { pickBestContact, additionalNamedCount } from './bestContact'
 
 // Lead enrichment — contact names / phones / emails via Outscraper. Placing an order BILLS on the
 // outreach job's next tick (order-driven, admin-only, budget-guarded), so this UI mirrors the scan
@@ -494,8 +495,8 @@ export function EnrichmentBar({
 
 // ── A single prospect's contacts block (the CRM lead drawer) ────────────────────────────────────
 export function LeadContacts(
-  { prospectId, isAdmin, isStaff = true }:
-  { prospectId: string; isAdmin: boolean; isStaff?: boolean },
+  { prospectId, isAdmin, isStaff = true, mainPhone }:
+  { prospectId: string; isAdmin: boolean; isStaff?: boolean; mainPhone?: string | null },
 ) {
   const controller = useEnrichment(`lead-${prospectId}`)
   const nameController = useNameScrape(`lead-${prospectId}`)
@@ -508,7 +509,8 @@ export function LeadContacts(
       <ContactCell prospectId={prospectId} isAdmin={isAdmin} isStaff={isStaff} controller={controller}
         batchRunning={controller.batch.running}
         nameController={nameController} nameBatchRunning={nameController.batch.running}
-        nameSearchController={nameSearchController} nameSearchBatchRunning={nameSearchController.batch.running} />
+        nameSearchController={nameSearchController} nameSearchBatchRunning={nameSearchController.batch.running}
+        mainPhone={mainPhone} />
     </div>
   )
 }
@@ -558,6 +560,7 @@ export function ContactCell({
   nameSearchController,
   nameSearchBatchRunning,
   provided,
+  mainPhone,
 }: {
   prospectId: string
   isAdmin: boolean
@@ -569,6 +572,9 @@ export function ContactCell({
   nameSearchController?: NameSearchController
   nameSearchBatchRunning?: boolean
   provided?: ProspectContacts | null
+  // The business's main listing phone (the switchboard). Used as the click-to-dial fallback when
+  // the resolved person has no direct line of their own — so a caller always has a number.
+  mainPhone?: string | null
 }) {
   const self = useQuery<ContactsResp>({
     queryKey: ['outreach-contacts', prospectId],
@@ -588,76 +594,113 @@ export function ContactCell({
   const website = (provided !== undefined ? provided?.website : self.data?.website) ?? null
   const searchCitation = nameSearch?.citations?.[0] ?? null
 
+  // ONE resolved contact line instead of the dense multi-contact cell. `pickBestContact` chooses
+  // the best decision-maker deterministically (full_name + title/phone), or reports there's no
+  // named person; the click-to-dial prefers the person's OWN direct line, falling back to the
+  // business main line. No new enrichment call — this reads the contacts already returned.
+  const best = pickBestContact(contacts)
+  const moreNamed = additionalNamedCount(contacts)
+  // A resolved-empty state ("enriched, no named person") — distinct from not-yet-loaded — shows the
+  // main line so the caller still has a number to dial.
+  const mainLine = mainPhone && mainPhone.trim() ? mainPhone.trim() : null
+  const businessOnlyLine = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
+      <span style={{ fontSize: 12, color: '#94a3b8' }}>No named contact — main line only</span>
+      {mainLine && (
+        <a href={`tel:${mainLine}`} title="Business main line"
+          style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: 12, color: '#0369a1', fontWeight: 600 }}>
+          <Phone size={11} /> {mainLine}
+        </a>
+      )}
+      {best.email && (
+        <a href={`mailto:${best.email}`}
+          style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: 12, color: '#0369a1' }}
+          title="Scraped mailbox — the business, not a named person">
+          <Mail size={11} /> {best.email}
+        </a>
+      )}
+    </div>
+  )
+
+  const body = (() => {
+    if (best.kind === 'person') {
+      const c = best.contact!
+      const dial = best.phone ?? mainLine
+      const directKnown = !!best.phone
+      return (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, alignItems: 'flex-start' }}>
+          <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
+            <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontWeight: 600, color: '#0f172a' }}>
+              <User size={11} color="#64748b" /> {best.name}
+            </span>
+            {best.title ? <span style={{ color: '#64748b' }}>· {best.title}</span> : null}
+            {dial ? (
+              <>
+                <span style={{ color: '#94a3b8' }}>·</span>
+                <a href={`tel:${dial}`} title={directKnown ? 'Direct line' : 'Business main line'}
+                  style={{ display: 'inline-flex', gap: 3, alignItems: 'center', color: '#0369a1', fontWeight: 600 }}>
+                  <Phone size={11} /> {dial}
+                </a>
+                <span style={{ fontSize: 10, color: '#94a3b8' }}>{directKnown ? 'direct' : 'main line'}</span>
+              </>
+            ) : null}
+            {c.source === 'site_scrape' ? (
+              <span title="Found by scanning the business's own website — verify before using"
+                style={{ fontSize: 10, color: '#2563eb', background: '#eff6ff', border: '1px solid #bfdbfe',
+                  borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+                <Globe size={9} /> from website
+              </span>
+            ) : null}
+            {c.source === 'web_search' ? (
+              searchCitation ? (
+                <a href={searchCitation} target="_blank" rel="noreferrer"
+                  title="Found by a web search — click to verify at the cited source"
+                  style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a',
+                    borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+                  <Search size={9} /> from web search — verify
+                </a>
+              ) : (
+                <span title="Found by a web search — verify before using"
+                  style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a',
+                    borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}>
+                  <Search size={9} /> from web search — verify
+                </span>
+              )
+            ) : null}
+            {c.confidence != null ? <ConfidenceChip score={c.confidence} band={c.confidence_band} /> : null}
+          </span>
+          {best.email && (
+            <a href={`mailto:${best.email}`}
+              style={{ display: 'inline-flex', gap: 3, alignItems: 'center', fontSize: 12, color: '#0369a1' }}
+              title={c.email_is_generic ? 'generic mailbox' : (c.email_status ?? 'unverified')}>
+              <Mail size={11} /> {best.email}
+              {c.email_is_generic ? <span style={{ color: '#94a3b8' }}>(generic)</span> : null}
+            </a>
+          )}
+          {moreNamed > 0 && (
+            <span style={{ fontSize: 11, color: '#94a3b8' }}>+{moreNamed} more contact{moreNamed > 1 ? 's' : ''}</span>
+          )}
+        </div>
+      )
+    }
+    // Contacts exist, but none names a person (business-name / scraped-email fallback).
+    return businessOnlyLine
+  })()
+
   // The state-specific part (contacts / status / Enrich button) rendered UNDER the website line,
   // so the website shows in every state (enriched, not-yet, no-contacts, failed).
-  let body: ReactElement
+  let stateBody: ReactElement
   if (contacts.length > 0) {
-    body = (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-        {contacts.map((c) => (
-          <div key={c.id} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, flexWrap: 'wrap' }}>
-            {(c.full_name || c.name_for_emails) && (
-              <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-                <User size={11} color="#64748b" />
-                {c.full_name || c.name_for_emails}
-                {c.title ? <span style={{ color: '#94a3b8' }}>· {c.title}</span> : null}
-                {c.source === 'site_scrape' ? (
-                  <span
-                    title="Found by scanning the business's own website — verify before using"
-                    style={{ fontSize: 10, color: '#2563eb', background: '#eff6ff', border: '1px solid #bfdbfe',
-                      borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}
-                  >
-                    <Globe size={9} /> from website
-                  </span>
-                ) : null}
-                {c.source === 'web_search' ? (
-                  searchCitation ? (
-                    <a
-                      href={searchCitation} target="_blank" rel="noreferrer"
-                      title="Found by a web search — click to verify at the cited source"
-                      style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a',
-                        borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}
-                    >
-                      <Search size={9} /> from web search — verify
-                    </a>
-                  ) : (
-                    <span
-                      title="Found by a web search — verify before using"
-                      style={{ fontSize: 10, color: '#b45309', background: '#fffbeb', border: '1px solid #fde68a',
-                        borderRadius: 4, padding: '0 4px', display: 'inline-flex', gap: 2, alignItems: 'center' }}
-                    >
-                      <Search size={9} /> from web search — verify
-                    </span>
-                  )
-                ) : null}
-                {c.confidence != null ? <ConfidenceChip score={c.confidence} band={c.confidence_band} /> : null}
-              </span>
-            )}
-            {c.email && (
-              <a href={`mailto:${c.email}`} style={{ display: 'inline-flex', gap: 3, alignItems: 'center', color: '#0369a1' }}
-                title={`${c.email_status ?? 'unverified'}${c.email_is_generic ? ' · generic mailbox' : ''}`}>
-                <Mail size={11} /> {c.email}
-                {c.email_is_generic ? <span style={{ color: '#94a3b8' }}>(generic)</span> : null}
-              </a>
-            )}
-            {c.phone && (
-              <span style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }}>
-                <Phone size={11} color="#64748b" /> {c.phone}
-                {c.phone_type ? <span style={{ color: '#94a3b8' }}>· {c.phone_type}</span> : null}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-    )
+    stateBody = body
   } else if (enrichment?.status === 'no_contacts') {
-    body = <span style={{ fontSize: 12, color: '#94a3b8' }}>no contacts found</span>
+    // Enriched, and enrichment found no contacts at all — resolved-empty, main line only.
+    stateBody = businessOnlyLine
   } else if (enrichment?.status === 'failed') {
-    body = <span style={{ fontSize: 12, color: '#b45309' }}>enrichment failed</span>
+    stateBody = <span style={{ fontSize: 12, color: '#b45309' }}>enrichment failed</span>
   } else if (batchRunning) {
-    body = <span style={{ fontSize: 12, color: '#1d4ed8' }}>queued…</span>
+    stateBody = <span style={{ fontSize: 12, color: '#1d4ed8' }}>queued…</span>
   } else if (isAdmin) {
-    body = (
+    stateBody = (
       <button
         onClick={() => controller.create.mutate([prospectId])}
         disabled={controller.create.isPending}
@@ -672,7 +715,7 @@ export function ContactCell({
       </button>
     )
   } else {
-    body = <span style={{ fontSize: 12, color: '#cbd5e1' }}>—</span>
+    stateBody = <span style={{ fontSize: 12, color: '#cbd5e1' }}>—</span>
   }
 
   // ── The FREE owner/manager fallback: scan the business's own site for a name when Outscraper
@@ -781,11 +824,11 @@ export function ContactCell({
 
   const bodyWithFallback = (nameFallback || searchFallback) ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 3, alignItems: 'flex-start' }}>
-      {body}
+      {stateBody}
       {nameFallback}
       {searchFallback}
     </div>
-  ) : body
+  ) : stateBody
 
   if (!website) return bodyWithFallback
   return (
