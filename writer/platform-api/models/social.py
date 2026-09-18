@@ -47,6 +47,7 @@ class SocialPostCreateRequest(BaseModel):
     platform_specific: Optional[dict] = None
     format: str = "feed"
     title: Optional[str] = None   # YouTube video title (required for YouTube; ignored elsewhere)
+    board_id: Optional[str] = None   # Pinterest board id (required for Pinterest; ignored elsewhere)
     scheduled_at: Optional[datetime] = None   # future time to publish; omit = now
 
 
@@ -137,6 +138,7 @@ class SocialDraftUpdateRequest(BaseModel):
     copy: Optional[str] = None
     image_urls: Optional[list[str]] = None
     platform_metadata: Optional[dict] = None
+    board_id: Optional[str] = None   # Pinterest board id (folds into platform_metadata)
 
 
 class SocialDraftPublishRequest(BaseModel):

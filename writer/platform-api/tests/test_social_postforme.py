@@ -76,6 +76,36 @@ def test_build_post_payload_youtube_title_config():
     }
 
 
+def test_map_pinterest_board_id_to_board_ids_array():
+    # Our module-internal single board_id → PostForMe's board_ids ARRAY, in place.
+    assert pfm.map_pinterest_board("pinterest", {"board_id": "123"}) == {"board_ids": ["123"]}
+    # A non-string id is coerced to str inside the array.
+    assert pfm.map_pinterest_board("pinterest", {"board_id": 999}) == {"board_ids": ["999"]}
+    # No board_id → nothing synthesized (the validator blocks a boardless Pin upstream).
+    assert pfm.map_pinterest_board("pinterest", {}) == {}
+    # A user who already supplied the provider-shaped field is left untouched (board_id popped).
+    assert pfm.map_pinterest_board("pinterest", {"board_id": "1", "board_ids": ["2"]}) == {"board_ids": ["2"]}
+    # Non-Pinterest blocks pass through unchanged (a stray board_id is not mapped).
+    assert pfm.map_pinterest_board("instagram", {"board_id": "1"}) == {"board_id": "1"}
+
+
+def test_build_post_payload_maps_pinterest_board():
+    # Compose folds board_id into platform_metadata; the adapter maps it to board_ids[].
+    p = pfm.build_post_payload(
+        "spc_p", "pinterest", "pin caption",
+        media=[{"type": "image", "url": "https://img/a.png"}],
+        platform_specific={"board_id": "998877", "link": "https://client.example"},
+    )
+    assert p["media"] == [{"url": "https://img/a.png"}]
+    assert p["platform_configurations"] == {
+        "pinterest": {"board_ids": ["998877"], "link": "https://client.example"}
+    }
+    # A Pinterest post with no board carries no board_ids (blocked at validate before here).
+    p2 = pfm.build_post_payload("spc_p", "pinterest", "cap",
+                                media=[{"type": "image", "url": "u"}])
+    assert "platform_configurations" not in p2
+
+
 def test_placement_config_reels_stories_ig_fb_only():
     # Instagram + Facebook route reel/story via placement; timeline is the default.
     assert pfm.placement_config("instagram", "reel") == {"placement": "reels"}

@@ -156,6 +156,13 @@ class Settings(BaseSettings):
     # MUST be re-verified on the first live YouTube post.
     social_youtube_title_max: int = 100          # YouTube title hard cap (2–100 chars)
     social_youtube_default_privacy: str = "public"       # privacy_status when unset (owner: Public)
+    # Pinterest board field: PostForMe takes a `board_ids` ARRAY (owner read this off the
+    # live OpenAPI spec 2026-09-18; there is NO board-list endpoint, so the board id is
+    # user-supplied). Our module stores a single internal `board_id`; the adapter edge
+    # maps it to `{social_pinterest_board_field: [board_id]}`. Overridable (no redeploy)
+    # if the live field turns out `board_id`; the exact NESTING (under
+    # platform_configurations.pinterest, our default) is confirmed on the first live Pin.
+    social_pinterest_board_field: str = "board_ids"      # SOCIAL_PINTEREST_BOARD_FIELD
     # Social media store (ADR-0004): Cloudflare R2 (S3 API, zero egress) when
     # all five are set, else the Supabase fallback (images only). Reuses the
     # suite's existing Cloudflare account.

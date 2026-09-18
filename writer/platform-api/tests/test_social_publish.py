@@ -149,6 +149,40 @@ def test_build_youtube_config_uses_settings_default():
     assert "made_for_kids" not in cfg
 
 
+def test_validate_pinterest_board_required():
+    # A Pin with an image but NO board is blocked (owner ruling: block, don't warn).
+    v = publish.validate_post("pinterest", "cap", img("https://i/a.jpg"), PIN)
+    assert "pinterest_board_required" in v["hard"]
+    # A board present → no board violation.
+    v2 = publish.validate_post("pinterest", "cap", img("https://i/a.jpg"), PIN, board_id="12345")
+    assert "pinterest_board_required" not in v2["hard"]
+    assert v2["hard"] == []
+    # Whitespace-only board is treated as missing.
+    assert "pinterest_board_required" in publish.validate_post(
+        "pinterest", "cap", img("https://i/a.jpg"), PIN, board_id="  ")["hard"]
+    # The rule is Pinterest-only — other platforms never see it.
+    assert "pinterest_board_required" not in publish.validate_post("facebook", "hi", [], FB)["hard"]
+
+
+def test_build_pinterest_config_folds_board_id():
+    # The internal board_id is folded into platform_metadata; provider shape (board_ids[])
+    # is applied later at the adapter edge, NOT here.
+    assert publish.build_pinterest_config("  123 ", None) == {"board_id": "123"}
+    # User advanced JSON preserved; the first-class board_id wins for its key.
+    cfg = publish.build_pinterest_config("456", {"link": "https://c", "board_id": "old"})
+    assert cfg == {"link": "https://c", "board_id": "456"}
+    # No board → no board_id key (validator blocks it upstream).
+    assert publish.build_pinterest_config("", {"link": "https://c"}) == {"link": "https://c"}
+    assert publish.build_pinterest_config(None, None) == {}
+
+
+def test_pinterest_board_id_reader():
+    assert publish._pinterest_board_id({"board_id": "789"}) == "789"
+    assert publish._pinterest_board_id({"board_id": "  "}) is None
+    assert publish._pinterest_board_id({}) is None
+    assert publish._pinterest_board_id(None) is None
+
+
 def test_validate_feed_default_unchanged():
     assert publish.validate_post("facebook", "hi", [], FB)["hard"] == []
     assert publish.validate_post("facebook", "hi", [], FB, fmt="feed")["hard"] == []

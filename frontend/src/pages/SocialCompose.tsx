@@ -424,7 +424,7 @@ function AiImagePanel({
 
 // ── Angle fan-out (Create with AI) + Drafts ───────────────────────────────────
 interface Angle { title: string; hook: string; description: string }
-type DraftStatus = 'generating' | 'ready' | 'needs_image' | 'generation_failed' | 'published' | 'archived'
+type DraftStatus = 'generating' | 'ready' | 'needs_image' | 'needs_board' | 'generation_failed' | 'published' | 'archived'
 interface Draft {
   id: string
   angle_set_id: string | null
@@ -434,6 +434,7 @@ interface Draft {
   copy: string | null
   image_urls: string[]
   media: { type: string; url: string }[]
+  platform_metadata: { board_id?: string; [k: string]: unknown } | null
   voice_verdict: { warnings?: string[] } | null
   spec_verdict: { warnings?: string[] } | null
   status: DraftStatus
@@ -443,6 +444,7 @@ const DRAFT_STATUS_STYLE: Record<string, { bg: string; fg: string; label: string
   generating: { bg: '#fffbeb', fg: '#b45309', label: 'Generating…' },
   ready: { bg: '#ecfdf5', fg: '#047857', label: 'Ready' },
   needs_image: { bg: '#fff7ed', fg: '#c2410c', label: 'Needs image' },
+  needs_board: { bg: '#fff7ed', fg: '#c2410c', label: 'Needs board' },
   generation_failed: { bg: '#fef2f2', fg: '#b91c1c', label: 'Failed' },
   published: { bg: '#eff6ff', fg: '#1d4ed8', label: 'Published' },
 }
@@ -703,6 +705,8 @@ function DraftRow({ draft, accounts, onChanged }: {
   draft: Draft; accounts: SocialAccount[]; onChanged: () => void
 }) {
   const [copy, setCopy] = useState(draft.copy ?? '')
+  const isPin = draft.platform.toLowerCase() === 'pinterest'
+  const [board, setBoard] = useState(draft.platform_metadata?.board_id ?? '')
   const [dirty, setDirty] = useState(false)
   const [acct, setAcct] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -713,7 +717,8 @@ function DraftRow({ draft, accounts, onChanged }: {
   const image = draft.image_urls?.[0] || draft.media?.find((m) => m.type === 'image')?.url
 
   const saveMut = useMutation({
-    mutationFn: () => api.patch<Draft>(`/social/drafts/${draft.id}`, { copy }),
+    // Saving a Pinterest board flips a needs_board draft → ready on the server.
+    mutationFn: () => api.patch<Draft>(`/social/drafts/${draft.id}`, isPin ? { copy, board_id: board } : { copy }),
     onSuccess: () => { setDirty(false); onChanged() },
     onError: (e) => setError(e instanceof Error ? e.message : 'save_failed'),
   })
@@ -753,6 +758,17 @@ function DraftRow({ draft, accounts, onChanged }: {
             </div>
             {draft.status === 'needs_image' && (
               <p style={{ margin: '4px 0 0', fontSize: 12, color: '#c2410c' }}>{spec.label} needs an image before it can publish — add one on the Compose tab, or delete this draft.</p>
+            )}
+            {isPin && (
+              <div style={{ marginTop: 8 }}>
+                <label style={{ ...label, fontSize: 11 }}>Board ID <span style={{ color: '#b91c1c' }}>*</span></label>
+                <input style={{ ...input, padding: '6px 8px', fontSize: 13 }} value={board}
+                  placeholder="e.g. 1234567890123456789"
+                  onChange={(e) => { setBoard(e.target.value); setDirty(true) }} />
+                {draft.status === 'needs_board' && (
+                  <p style={{ margin: '4px 0 0', fontSize: 12, color: '#c2410c' }}>A Pin needs a board — paste the board ID and Save, then publish.</p>
+                )}
+              </div>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
               {dirty && (
@@ -1186,6 +1202,7 @@ export function SocialCompose() {
 
   const [copy, setCopy] = useState('')
   const [youtubeTitle, setYoutubeTitle] = useState('')
+  const [boardId, setBoardId] = useState('')
   const [images, setImages] = useState<string[]>([])
   const [video, setVideo] = useState<string | null>(null)
   const [format, setFormat] = useState('feed')
@@ -1202,6 +1219,9 @@ export function SocialCompose() {
   // YouTube posts an existing video with a REQUIRED title (distinct from the caption,
   // which becomes the video description). Compose-only — no AI video, no fan-out.
   const isYouTube = platform === 'youtube'
+  // Pinterest pins REQUIRE a board. PostForMe has no board-list endpoint, so the board
+  // id is user-supplied (paste it); the backend maps our single board_id to board_ids[].
+  const isPinterest = platform === 'pinterest'
   const [scheduleMode, setScheduleMode] = useState<'now' | 'later'>('now')
   const [scheduledLocal, setScheduledLocal] = useState('')
   // Min selectable schedule time (~now + 1 min), computed once at mount so render
@@ -1270,6 +1290,7 @@ export function SocialCompose() {
     } else {
       if (!copy.trim() && !hasMedia) out.push('Add some copy or media — an empty post can’t publish.')
       if (spec.requiresImage && !hasMedia) out.push(spec.note ?? `${spec.label} requires at least one image or video.`)
+      if (isPinterest && !boardId.trim()) out.push('A Pin needs a board — paste the board ID to publish.')
     }
     if (!isStory && spec.charLimit && copy.length > spec.charLimit)
       out.push(`Copy is ${copy.length} / ${spec.charLimit} characters — over the ${spec.label} limit.`)
@@ -1277,7 +1298,7 @@ export function SocialCompose() {
       out.push(`${images.length} images — ${spec.label} allows at most ${spec.maxImages}.`)
     if (video && spec.maxVideos === 0) out.push(`${spec.label} doesn’t support video.`)
     return out
-  }, [copy, images, video, spec, isStory, isReel, isCarousel, isYouTube, youtubeTitle])
+  }, [copy, images, video, spec, isStory, isReel, isCarousel, isYouTube, youtubeTitle, isPinterest, boardId])
 
   const warnings = useMemo(() => {
     const out: string[] = []
@@ -1317,11 +1338,12 @@ export function SocialCompose() {
         platform_specific,
         format,
         title: isYouTube ? youtubeTitle.trim() : undefined,   // YouTube video title (required)
+        board_id: isPinterest ? boardId.trim() : undefined,   // Pinterest board (required)
         scheduled_at,
       })
     },
     onSuccess: () => {
-      setCopy(''); setYoutubeTitle(''); setImages([]); setVideo(null); setPlatformSpecificText('')
+      setCopy(''); setYoutubeTitle(''); setBoardId(''); setImages([]); setVideo(null); setPlatformSpecificText('')
       setScheduleMode('now'); setScheduledLocal(''); setFormat('feed')
       void qc.invalidateQueries({ queryKey: ['social-posts', clientId] })
     },
@@ -1421,6 +1443,24 @@ export function SocialCompose() {
                   {youtubeTitle.trim().length} / {YOUTUBE_TITLE_MAX}
                 </span>
               </div>
+            </div>
+          )}
+
+          {/* Pinterest board — REQUIRED. PostForMe can't list a connected account's
+              boards, so the board ID is pasted (find it on Pinterest, below). */}
+          {isPinterest && (
+            <div style={{ marginBottom: 14 }}>
+              <label style={label}>Board ID <span style={{ color: '#b91c1c' }}>*</span></label>
+              <input
+                style={input}
+                value={boardId}
+                onChange={(e) => setBoardId(e.target.value)}
+                placeholder="e.g. 1234567890123456789"
+              />
+              <span style={{ fontSize: 11, color: '#94a3b8', display: 'block', marginTop: 4 }}>
+                Required — a Pin must go to a board. Open the board on Pinterest and copy the numeric
+                ID from its URL (or the board’s share/API details); PostForMe can’t list your boards.
+              </span>
             </div>
           )}
 
@@ -1567,7 +1607,7 @@ export function SocialCompose() {
                 <textarea style={{ ...input, minHeight: 80, fontFamily: 'monospace', fontSize: 12 }}
                   value={platformSpecificText}
                   onChange={(e) => setPlatformSpecificText(e.target.value)}
-                  placeholder={'Optional JSON passed to the provider, e.g.\n{ "boardId": "123", "firstComment": "…" }'} />
+                  placeholder={'Optional JSON passed to the provider, e.g.\n{ "firstComment": "…" }'} />
                 <p style={{ margin: '4px 0 0', fontSize: 11, color: '#94a3b8' }}>
                   Passed through verbatim as the provider’s platformSpecificData. Leave blank for none.
                 </p>

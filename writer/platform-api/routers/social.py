@@ -132,7 +132,7 @@ async def create_social_post(
         str(client_id), body.platform, body.account_id,
         copy=body.copy, image_urls=body.image_urls, video_urls=body.video_urls,
         platform_specific=body.platform_specific, fmt=body.format,
-        title=body.title, scheduled_at=body.scheduled_at,
+        title=body.title, board_id=body.board_id, scheduled_at=body.scheduled_at,
     )
 
 
@@ -198,7 +198,7 @@ async def update_social_draft(
     social_publish._assert_enabled()
     return social_fanout.update_draft(
         str(draft_id), copy=body.copy, image_urls=body.image_urls,
-        platform_metadata=body.platform_metadata,
+        platform_metadata=body.platform_metadata, board_id=body.board_id,
     )
 
 

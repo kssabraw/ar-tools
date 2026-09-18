@@ -165,6 +165,25 @@ def placement_config(platform: str, fmt: str) -> dict:
     return {"placement": val} if val else {}
 
 
+def map_pinterest_board(platform: str, config_block: dict) -> dict:
+    """Map the module-internal single ``board_id`` onto PostForMe's Pinterest board
+    field IN PLACE, at this adapter edge (provider shape lives only here). PostForMe
+    takes a **``board_ids`` array** (owner-confirmed from the live OpenAPI spec —
+    there is no board-list endpoint, so the id is user-supplied); the field name is
+    ``settings.social_pinterest_board_field`` (overridable without a redeploy). A user
+    who already put the provider-shaped key in the advanced JSON is left untouched.
+    Non-Pinterest blocks pass through unchanged. Pure."""
+    if (platform or "").lower() != "pinterest":
+        return config_block
+    field = settings.social_pinterest_board_field or "board_ids"
+    board_id = config_block.pop("board_id", None)
+    # Only synthesize the array when a bare board_id was carried AND the user didn't
+    # already supply the provider-shaped field themselves.
+    if board_id and field not in config_block:
+        config_block[field] = [str(board_id)]
+    return config_block
+
+
 def build_post_payload(
     account_id: str,
     platform: str,
@@ -185,6 +204,7 @@ def build_post_payload(
         payload["media"] = items
     config_block = dict(platform_specific or {})
     config_block.update(placement_config(platform, fmt))
+    config_block = map_pinterest_board(platform, config_block)
     if config_block:
         payload["platform_configurations"] = {to_pfm_platform(platform): config_block}
     if external_id:

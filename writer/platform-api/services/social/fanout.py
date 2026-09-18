@@ -80,17 +80,26 @@ def build_source_ref(source_type: str, source_id: Optional[str], url: Optional[s
 
 
 def draft_status(
-    has_media: bool, requires_image: bool, generation_ok: bool, enough_media: bool = True
+    has_media: bool,
+    requires_image: bool,
+    generation_ok: bool,
+    enough_media: bool = True,
+    board_required_missing: bool = False,
 ) -> str:
     """The Draft's status after generation. Pure:
     generation_failed → the copy call failed;
     needs_image → the platform needs media and none/too-few was produced (a carousel
       passes enough_media=False until it has ≥2 slides);
+    needs_board → a Pinterest draft has media but no board yet (fan-out can't pick a
+      board; the user sets it in the Drafts tab before publishing). Ordered AFTER the
+      media check, so a Pinterest draft still missing its image is needs_image first;
     ready → good to review/publish."""
     if not generation_ok:
         return "generation_failed"
     if requires_image and (not has_media or not enough_media):
         return "needs_image"
+    if board_required_missing:
+        return "needs_board"
     return "ready"
 
 
@@ -366,7 +375,13 @@ async def run_fanout_job(job: dict) -> None:
             image_urls = [image_url] if image_url else []
             media = [{"type": "image", "url": image_url}] if image_url else []
             requires_image = bool((spec or {}).get("requires_image"))
-            status = draft_status(bool(media), requires_image, generation_ok=True)
+            # Fan-out can't pick a Pinterest board, so a Pinterest draft with its image
+            # still needs a board set in the Drafts tab before it can publish.
+            board_missing = (platform or "").lower() == "pinterest"
+            status = draft_status(
+                bool(media), requires_image, generation_ok=True,
+                board_required_missing=board_missing,
+            )
 
         update.update({
             "copy": copy, "media": media,
@@ -412,10 +427,13 @@ def update_draft(
     copy: Optional[str] = None,
     image_urls: Optional[list[str]] = None,
     platform_metadata: Optional[dict] = None,
+    board_id: Optional[str] = None,
 ) -> dict:
-    """Human edit of a Draft before publish (copy / images / platform options).
-    Recomputes status (needs_image ↔ ready) from the new media. Only provided
-    fields change."""
+    """Human edit of a Draft before publish (copy / images / platform options / a
+    Pinterest board). Recomputes status (needs_image / needs_board ↔ ready) from the
+    new media + board. Only provided fields change. ``board_id`` folds into
+    platform_metadata's internal ``board_id`` key (setting a board on a Pinterest draft
+    flips needs_board → ready)."""
     from services.social import publish
 
     draft = get_draft(draft_id)
@@ -426,14 +444,26 @@ def update_draft(
         media = publish.build_media(image_urls, None)
         fields["image_urls"] = [u for u in image_urls if u]
         fields["media"] = media
+    # Merge platform_metadata + the first-class board_id (board_id wins for its key).
+    new_metadata = draft.get("platform_metadata")
     if platform_metadata is not None:
-        fields["platform_metadata"] = platform_metadata
+        new_metadata = platform_metadata
+    if board_id is not None:
+        merged = dict(new_metadata or {})
+        bid = board_id.strip()
+        if bid:
+            merged["board_id"] = bid
+        else:
+            merged.pop("board_id", None)   # clearing the field
+        new_metadata = merged
+    if platform_metadata is not None or board_id is not None:
+        fields["platform_metadata"] = new_metadata
 
     # Recompute status when the draft is in a reviewable state (don't resurrect a
     # generating/failed/published row). Generation already succeeded, so this only
-    # decides ready ↔ needs_image from the new media — never generation_failed.
+    # decides ready ↔ needs_image/needs_board — never generation_failed.
     new_media = fields.get("media", draft.get("media") or [])
-    if draft.get("status") in ("ready", "needs_image"):
+    if draft.get("status") in ("ready", "needs_image", "needs_board"):
         d_fmt = (draft.get("format") or "feed").lower()
         if d_fmt == "carousel":
             # A carousel always needs ≥2 slides, regardless of the platform spec.
@@ -443,7 +473,15 @@ def update_draft(
         else:
             spec = publish._platform_spec(draft["platform"])
             requires_image = bool((spec or {}).get("requires_image"))
-            fields["status"] = draft_status(bool(new_media), requires_image, generation_ok=True)
+            board_missing = (
+                (draft.get("platform") or "").lower() == "pinterest"
+                and not publish._pinterest_board_id(new_metadata if new_metadata is not None
+                                                     else draft.get("platform_metadata"))
+            )
+            fields["status"] = draft_status(
+                bool(new_media), requires_image, generation_ok=True,
+                board_required_missing=board_missing,
+            )
 
     row = (_sb().table("social_drafts").update(fields).eq("id", draft_id).execute()).data
     return row[0] if row else get_draft(draft_id)
@@ -483,7 +521,10 @@ def publish_existing_draft(
     fmt = (draft.get("format") or "feed").lower()
     media = draft.get("media") or publish.build_media(draft.get("image_urls"), None)
     copy = draft.get("copy") or ""
-    verdict = publish.validate_post(platform, copy, media, publish._platform_spec(platform), fmt=fmt)
+    board_id = publish._pinterest_board_id(draft.get("platform_metadata"))
+    verdict = publish.validate_post(
+        platform, copy, media, publish._platform_spec(platform), fmt=fmt, board_id=board_id
+    )
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
 

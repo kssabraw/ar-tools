@@ -314,6 +314,15 @@ Creator exists.
   per-platform), so **no migration** was needed. (IG still has **no text-only posts** — an image-less IG
   Draft is `needs_image`.) Live-verify the placement + Business-account + carousel behavior on the
   deployed post path (sandbox egress-blocked from PostForMe + Gemini).
+- **Pinterest board is now FIRST-CLASS (BUILT + MERGED 2026-09-18, PR #1228, post-queue
+  task 1)** — don't re-add raw-JSON board handling. A Pin carries a required `board_id` (Compose field + the
+  Pinterest Draft's Board ID field; validated by `validate_post`'s `pinterest_board_required`
+  rule; a fan-out Pinterest draft lands `needs_board` until set). Stored module-internal as a
+  single `platform_metadata.board_id`; the **adapter edge** (`map_pinterest_board`) maps it to
+  PostForMe's `board_ids: [id]` ARRAY (there is NO board-list endpoint — owner-confirmed vs
+  the live spec — so the id is user-pasted). Field name = `social_pinterest_board_field`
+  (`board_ids`); the exact **placement** (nested under `platform_configurations.pinterest`) is
+  a first-live-Pin confirm. Scope: `pinterest-board-first-class-scope-v1_0.md`.
 - **Don't hand PostPeer the schedule (`scheduledFor`)** — publish with `publishNow` from our own
   freeze-gated job so the inline account-health check + `source_changed` guard run first.
 - **Don't use the old 2.5-Flash `nano_banana.generate_image` for a non-1:1 ratio** (it's 1:1-only) —
