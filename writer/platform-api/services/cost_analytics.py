@@ -62,6 +62,8 @@ TYPE_LABELS: dict[str, str] = {
     "brand_guide": "Brand guide generation",
     "content_gap": "Content gap analysis",
     "website_builder": "Website builder",
+    "brand_voice_scan": "Brand voice scan",
+    "icp_scan": "ICP scan",
 }
 _PAGE_TYPES = {
     "blog_post", "service_page", "location_page", "local_seo_page",
@@ -71,6 +73,7 @@ _PAGE_TYPES = {
 _RESEARCH_TYPES = {
     "keyword_research", "keyword_topic_research", "domain_intel",
     "keyword_research_llm", "keyword_topic_llm", "content_gap",
+    "brand_voice_scan", "icp_scan",
 }
 _AGENT_TYPES = {
     "autonomy_run", "strategist_review", "qa_review",

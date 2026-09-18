@@ -1,6 +1,6 @@
 # LLM cost instrumentation — capturing the unrecorded LLM spend
 
-**Status:** Increments 1–4 built 2026-09-18 (foundation + AI Visibility + KW/Topic-research LLM layers + the conversational agents + the ancillary sources: maps/rank-analysis narratives, Brand Guide generation, Content Gap, Website Builder theme+core-pages). Brand-voice/ICP scans deferred (need an nlp-api change to return usage).
+**Status:** Increments 1–5 built 2026-09-18 (foundation + AI Visibility + KW/Topic-research LLM layers + the conversational agents + the ancillary sources: maps/rank-analysis narratives, Brand Guide generation, Content Gap, Website Builder theme+core-pages + the **brand-voice / ICP scans** via an nlp-api change). Only the Website-Builder nlp page-generation usage remains (lower priority).
 
 ## Problem
 
@@ -79,13 +79,14 @@ recorded by platform-api. pipeline-api + platform-api both write the ledger.
    direct Anthropic call recorded explicitly; **Content Gap** records the nlp `/score-page`
    `token_usage` it already receives. Sources: `maps_report`, `rank_analysis`, `brand_guide`,
    `content_gap`, `website_builder`.
-5. **Deferred (need an nlp-api change).** The **brand-voice** (`/analyze-brand-voice`) and
-   **ICP** (`/analyze-business`) scans run 3 Claude calls *inside* nlp, whose responses don't
-   return token usage today (unlike `/score-page`). Capturing them means summing + returning
-   usage from those nlp handlers (a deploy of the critical nlp service) + recording platform-
-   side. Also deferred: recording the nlp page-generation usage for Website Builder's
-   service/location/matrix pages (it returns usage, same pattern as Content Gap). Both are
-   low-frequency / lower-priority.
+5. **Brand-voice / ICP scans (built — the one nlp-api change).** `analyze_brand_voice_with_anthropic`
+   (up to 3 Haiku calls) and `analyze_business_with_anthropic` (1 Haiku call) now sum their
+   Claude usage and return it; `BrandVoiceResponse` / `BusinessAnalysisResponse` gained a
+   `token_usage` field (lifted OUT of the voice/ICP blob so it's never persisted into the
+   client record). platform-api `brand_voice_service` / `icp_service` record it after the nlp
+   call (sources `brand_voice_scan` / `icp_scan`).
+6. **Deferred (lower-priority).** Recording the nlp page-generation usage for Website Builder's
+   service/location/matrix pages (it returns usage, same pattern as Content Gap).
 
 ## Open item — pricing for non-Anthropic models
 
