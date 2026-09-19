@@ -758,6 +758,36 @@ def _build_service_writer_payload(
     return payload
 
 
+async def _apply_reference_page_override(run: dict, snapshot: dict) -> None:
+    """If the run carries a per-run "mirror this page" URL (set on the service /
+    location page creation card), scrape it and override the client's stored
+    reference structure for this run's page type — in the in-memory snapshot the
+    brief payload reads. Best-effort: a failed / empty scrape leaves the frozen
+    snapshot untouched, so generation falls back to the client's saved reference
+    (or the default structure). Runs in the background orchestration, so the
+    scrape never blocks run creation."""
+    url = (run.get("reference_page_url") or "").strip()
+    if not url:
+        return
+    page_type = _page_type_for(run)  # 'service' | 'location'
+    from services.page_structure_scraper import scrape_reference_structure
+
+    entry = await scrape_reference_structure(url, page_type)
+    if not entry:
+        logger.info(
+            "service_page_reference_override_skipped",
+            extra={"run_id": run["id"], "page_type": page_type, "url": url},
+        )
+        return
+    structures = dict(snapshot.get("page_structures") or {})
+    structures[page_type] = entry
+    snapshot["page_structures"] = structures
+    logger.info(
+        "service_page_reference_override_applied",
+        extra={"run_id": run["id"], "page_type": page_type, "url": url},
+    )
+
+
 async def _orchestrate_service_page(
     run_id: str, run: dict, snapshot: dict, completed: dict[str, dict]
 ) -> None:
@@ -769,6 +799,9 @@ async def _orchestrate_service_page(
         raise CancellationError()
     brief_result: Any = completed.get("service_brief")
     if brief_result is None:
+        # Per-run reference-page mirror: scrape the pasted URL and override the
+        # client's stored reference before the brief synthesizes the layout.
+        await _apply_reference_page_override(run, snapshot)
         await _set_run_status(run_id, "service_brief_running")
         brief_result = await _call_module(
             "service_brief", run_id, _build_service_brief_payload(run, snapshot)

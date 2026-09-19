@@ -36,6 +36,11 @@ class RunCreateRequest(BaseModel):
     # into the writer's section/intro/conclusion prompts - deliberately never
     # part of the brief, which is client-agnostic and globally cached.
     writer_notes: Optional[str] = Field(default=None, max_length=4000)
+    # Optional per-run "Mirror an existing page's structure" URL (service /
+    # location pages). When set, the service-page orchestrator scrapes this
+    # page's section layout and mirrors it for this run only, overriding the
+    # client's saved reference structure. Blank ⇒ the client's saved reference.
+    reference_page_url: Optional[str] = Field(default=None, max_length=500)
     # Per-run override of which provider writes the DRAFT prose. None ⇒ inherit
     # the client's content_writer_provider default (which itself defaults to
     # "anthropic"). "openai" routes the draft to gpt-5.6-luna; quality gates stay
@@ -182,6 +187,9 @@ class RunBulkCreateRequest(BaseModel):
     content_type: Literal["blog_post", "service_page"] = "service_page"
     # One head query per item. Blanks/dupes are dropped server-side.
     keywords: list[str] = Field(..., min_length=1, max_length=BULK_RUNS_MAX)
+    # Optional "Mirror an existing page's structure" URL applied to every page in
+    # this batch (service pages). Blank ⇒ the client's saved reference structure.
+    reference_page_url: Optional[str] = Field(default=None, max_length=500)
 
 
 class RunBulkCreateResponse(BaseModel):

@@ -26,10 +26,12 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Optional
 
 from bs4 import BeautifulSoup, Comment
 
+from config import settings
 from services.page_structure_eval import extract_outline_from_html
 
 logger = logging.getLogger(__name__)
@@ -326,3 +328,71 @@ async def analyze_page_structure(html: str, page_type: str) -> dict[str, Any]:
         "structure_summary": (annotations.get("structure_summary") or "").strip(),
         "elements": elements,
     }
+
+
+async def scrape_reference_structure(url: str, page_type: str) -> Optional[dict]:
+    """Fetch + analyze one ad-hoc reference URL into a store-shaped
+    ``page_structures`` entry, WITHOUT writing to any client row.
+
+    This backs the per-run "Mirror an existing page's structure" field on the
+    service / location page creation cards: the operator pastes a URL and the
+    writer follows that page's section layout for THIS run only, overriding the
+    client's saved reference. It mirrors the ``page_structure_scrape`` job's
+    fetch + premium-retry, but returns the entry instead of persisting it.
+
+    Best-effort: returns ``None`` when the URL is blank / non-http, the page type
+    is unknown, the fetch fails, or the page yields zero usable sections — the
+    caller then falls back to the client's stored reference (or the default
+    structure). It never raises.
+    """
+    # Imported here to avoid a module-level import cycle (website_scraper pulls in
+    # config + httpx and is a heavier leaf than this analysis module).
+    from services.website_scraper import scrapeowl_fetch
+
+    clean = (url or "").strip()
+    if not clean.lower().startswith(("http://", "https://")):
+        return None
+    if page_type not in PAGE_TYPES:
+        return None
+
+    try:
+        html = await scrapeowl_fetch(clean, timeout=45)
+        if not html:
+            return None
+        analysis = await analyze_page_structure(html, page_type)
+
+        # Empty first pass = likely a bot-blocked shell. Retry once with JS
+        # rendering + premium proxies (bounded cost, gated on the same flag the
+        # scrape job uses), keeping the retry only if it actually found sections.
+        if settings.page_structure_premium_fallback and not (analysis.get("outline") or []):
+            try:
+                html2 = await scrapeowl_fetch(clean, timeout=90, render_js=True, premium=True)
+                if html2:
+                    analysis2 = await analyze_page_structure(html2, page_type)
+                    if analysis2.get("outline"):
+                        analysis = analysis2
+            except Exception as exc:  # noqa: BLE001 — best-effort retry
+                logger.warning(
+                    "reference_structure_premium_retry_failed error=%s", str(exc)[:300]
+                )
+
+        # Zero sections isn't a usable reference — fall back rather than mirror an
+        # empty layout (which would produce a worse page than the default).
+        if not (analysis.get("outline") or []):
+            logger.info("reference_structure_scrape_empty url=%s", clean)
+            return None
+
+        return {
+            "url": clean,
+            "source": "scrape",
+            "status": "complete",
+            "error": None,
+            "empty": False,
+            "analysis": analysis,
+            "analyzed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:  # noqa: BLE001 — never break run creation over a scrape
+        logger.warning(
+            "reference_structure_scrape_failed url=%s error=%s", clean, str(exc)[:300]
+        )
+        return None
