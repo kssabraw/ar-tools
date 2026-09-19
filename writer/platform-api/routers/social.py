@@ -362,7 +362,8 @@ async def get_social_policy(client_id: UUID, auth: dict = Depends(require_auth))
 async def put_social_policy(
     client_id: UUID, body: SocialPolicyUpdateRequest, auth: dict = Depends(require_staff)
 ):
-    """Set the Social Policy consumer fields (ceiling + prompt templates). Only fields
+    """Set the Social Policy: consumer fields (ceiling + prompt templates) and the P4
+    planning fields (autonomy_tier + topic bank + tone/competitor focus). Only fields
     present in the request change (an explicit null clears)."""
     social_publish._assert_enabled()
     return social_policy.upsert_policy(str(client_id), body.model_dump(exclude_unset=True))

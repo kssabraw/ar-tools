@@ -676,6 +676,16 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'The monthly ceiling must be a number.',
     steps: ['Enter a dollar amount (e.g. 100), or leave it blank for the default.'],
   },
+  social_autonomy_tier_out_of_range: {
+    title: 'That autonomy tier isn’t allowed',
+    meaning: 'The Social Manager autonomy tier must be within the supported range (0 = off up to the current ceiling).',
+    steps: ['Pick a tier from the dropdown (0, 1, or 2).'],
+  },
+  social_autonomy_tier_invalid: {
+    title: 'That autonomy tier isn’t a valid value',
+    meaning: 'The autonomy tier must be a whole number.',
+    steps: ['Choose a tier from the dropdown rather than typing a value.'],
+  },
   social_schedule_platform_required: {
     title: 'Pick a platform for the schedule',
     meaning: 'A cadence schedule is set per platform.',

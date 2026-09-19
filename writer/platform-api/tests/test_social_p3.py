@@ -291,11 +291,13 @@ def test_upsert_policy_filters_and_validates_ceiling(monkeypatch):
         policy.upsert_policy("c1", {"monthly_ceiling_usd": 0})
     assert e.value.detail == "social_ceiling_must_be_positive"
 
-    # non-editable keys are dropped; editable ones are upserted
-    policy.upsert_policy("c1", {"autonomy_tier": 3, "image_prompt_template": "brand look"})
+    # non-editable keys are dropped; editable ones are upserted. `cadence` lives in
+    # social_post_schedules, not social_policy, so it stays non-editable here (P4 Phase A
+    # opened autonomy_tier/topics/tone/competitor_focus, but NOT cadence).
+    policy.upsert_policy("c1", {"cadence": {"weekly": 3}, "image_prompt_template": "brand look"})
     up = store["upserts"][-1][1]
     assert up["image_prompt_template"] == "brand look"
-    assert "autonomy_tier" not in up
+    assert "cadence" not in up
     assert up["client_id"] == "c1"
 
 

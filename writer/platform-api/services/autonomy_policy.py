@@ -41,13 +41,26 @@ ACTION_TIERS: dict[str, int] = {
     "start_content_run": 2,
     "generate_local_seo_page": 2,
     "reoptimize_page": 2,
-    # Tier 3 — client-site-facing / irreversible (held for a later decision)
+    # Social autonomy (P4 — the Social Manager loop). generate = produce a per-platform
+    # Draft (owned, reversible, but it SPENDS on an image → tier 1, like schedule_gbp_posts);
+    # queue = auto-approve a produced Draft into the cadence queue (owned content → tier 2).
+    # Neither PUBLISHES — P3's own gates (social_auto_publish_enabled + a schedule's
+    # auto_fill + a queued draft) govern the unattended publish, so queuing at tier 2 only
+    # reaches the queue, not the platform.
+    "generate_social_drafts": 1,
+    "queue_social_draft": 2,
+    # Tier 3 — client-site-facing / irreversible (held for a later decision). Registered
+    # for completeness; NOT executed in v1 (the social loop stops at produce/queue, and
+    # the global cap is 2, so a tier-3 action can never auto-run).
     "publish_to_client_site": 3,
+    "publish_social_post": 3,
 }
 
-# The content actions the weekly rate cap applies to.
+# The content actions the weekly rate cap applies to (spend-bearing generation). The social
+# loop feeds its own social content_this_week/cap into classify, so generate_social_drafts is
+# rate-capped per its own caller without affecting the SEO executor.
 CONTENT_ACTIONS: frozenset[str] = frozenset(
-    {"start_content_run", "generate_local_seo_page", "reoptimize_page"}
+    {"start_content_run", "generate_local_seo_page", "reoptimize_page", "generate_social_drafts"}
 )
 
 # Passthrough territory (_ORCHESTRATOR.md §3): decisions the agent may brief but
