@@ -1205,6 +1205,70 @@ def _prov_content(supabase, client_id: str, today: date, now: datetime) -> Optio
     return out
 
 
+def _prov_social(supabase, client_id: str, today: date, now: datetime) -> Optional[dict]:
+    """Social Media module (PRD §12) — the client's social publishing state so a
+    strategy review can *propose* a social push (never publish): recent
+    scheduled/published post volume, the approval-queue depth, the autonomy tier,
+    and the latest competitor signals (themes / what's working) to ground the
+    angle. A quiet or empty module returns None (nothing to hold against)."""
+    if not settings.social_enabled:
+        return None
+    out: dict = {}
+
+    since = (now - timedelta(days=30)).isoformat()
+    recent_posts = (
+        supabase.table("social_posts").select("status")
+        .eq("client_id", client_id).gte("created_at", since)
+        .limit(500).execute()
+    ).data or []
+    if recent_posts:
+        out["posts_last_30d"] = len(recent_posts)
+        out["published_last_30d"] = sum(1 for p in recent_posts if p.get("status") == "published")
+
+    drafts = (
+        supabase.table("social_drafts").select("status")
+        .eq("client_id", client_id)
+        .in_("status", ["queued", "ready"]).limit(500).execute()
+    ).data or []
+    if drafts:
+        out["approval_queue"] = {
+            "queued": sum(1 for d in drafts if d.get("status") == "queued"),
+            "ready_for_review": sum(1 for d in drafts if d.get("status") == "ready"),
+        }
+
+    pol = (
+        supabase.table("social_policy").select("autonomy_tier")
+        .eq("client_id", client_id).limit(1).execute()
+    ).data or []
+    if pol:
+        out["autonomy_tier"] = int(pol[0].get("autonomy_tier") or 0)
+
+    signals = (
+        supabase.table("social_competitor_signals")
+        .select("platform, themes, whats_working, captured_at")
+        .eq("client_id", client_id).eq("status", "ok")
+        .order("captured_at", desc=True).limit(4).execute()
+    ).data or []
+    if signals:
+        out["competitor_signals"] = [
+            {"platform": s.get("platform"), "themes": s.get("themes"),
+             "whats_working": s.get("whats_working")}
+            for s in signals
+        ]
+
+    if not out:
+        return None
+    out["note"] = (
+        "The client's social publishing state. You may PROPOSE a social push (a "
+        "repurpose angle, a cadence bump, a topic gap to fill) grounded in the "
+        "competitor signals and the content inventory — but you NEVER publish and "
+        "never queue a post; the Social Manager + a human own that. A low "
+        "posts_last_30d against active competitor signals, or an empty approval "
+        "queue on a client measured on social, is a gap worth a proposal."
+    )
+    return out
+
+
 def _pct_change(cur: Optional[int], prev: Optional[int]) -> Optional[float]:
     """Percent change, or None when there's no comparable prior window (prev is
     None = not covered) or the prior window was zero (no baseline)."""
@@ -1396,6 +1460,7 @@ _PROVIDERS: list[tuple[str, object]] = [
     ("backlinks", _prov_backlinks),
     ("gbp_metrics", _prov_gbp_metrics),
     ("ga4", _prov_ga4),
+    ("social", _prov_social),
 ]
 
 

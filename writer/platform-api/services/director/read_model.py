@@ -65,6 +65,11 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         # depends on which client was asked about.
         "qa": _isolate("qa", providers.prov_qa, supabase, today),
         "content": _isolate("content", providers.prov_content, supabase, client_ids, today),
+        # Social Media module seams (Phase D) — aging approved-but-unqueued
+        # drafts + gone-quiet accounts. None (empty flag list) while the module
+        # is off; the domain-aware `autonomy` block above surfaces social
+        # autonomy proposals through the shared autonomy seam.
+        "social": _isolate("social", providers.prov_social, supabase, client_ids, today),
         "duplicates": _isolate("duplicates", providers.prov_duplicates, supabase, client_ids, today),
         # WS2/WS4: PACE's process-efficiency findings addressed to DORA.
         "pace_efficiency": _isolate("pace_efficiency", providers.prov_pace_efficiency,
@@ -99,6 +104,8 @@ def build_read_model(client_id: Optional[str], today: Optional[date] = None) -> 
         "proposal_pending_days": settings.director_seam_proposal_pending_days,
         "qa_idle_days": settings.director_seam_qa_idle_days,
         "autonomy_unactioned_days": settings.director_seam_autonomy_unactioned_days,
+        "social_draft_aging_days": settings.director_seam_social_draft_aging_days,
+        "social_account_idle_days": settings.director_seam_social_account_idle_days,
     }
     model["flow"] = _isolate("flow", seams.compute_flags, model, today, thresholds) or {
         "flags": [],

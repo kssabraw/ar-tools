@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 KNOWN_PRODUCER_SOURCES = frozenset({
     "manual", "monthly", "asana_import", "rank_drop", "maps_alert", "action_plan",
     "content_run", "scan_health", "task_plan", "strategy_proposal", "director_seam",
+    "social_calendar", "social_drafts_review",
 })
 
 # Graduated verdicts (2026-09-08 added 'advisory' + 'revisions'; 2026-09-17 split
@@ -180,10 +181,18 @@ def prov_strategy(supabase, client_ids: Optional[list[str]], today: date) -> Opt
 # autonomy — proposed-but-unactioned candidates (§5 autonomy_proposed_unactioned)
 # ---------------------------------------------------------------------------
 def prov_autonomy(supabase, client_ids: Optional[list[str]], today: date) -> Optional[dict]:
+    """Both domain executors write to ``autonomy_runs`` — the SEO executor
+    (``domain='seo'``, the historical default) and the Social Manager
+    (``domain='social'``). This provider is domain-aware: it splits the
+    executed/proposed/escalated counts by domain (``by_domain``) so DORA can
+    tell SEO autonomy from social autonomy, and tags each ``proposed_unactioned``
+    row with its ``domain`` (the ``autonomy_proposed_unactioned`` seam then
+    surfaces both, evidence-tagged; the social-SPECIFIC seams — aging drafts /
+    idle accounts — live in ``prov_social``)."""
     try:
         q = (
             supabase.table("autonomy_runs")
-            .select("id, client_id, trigger, decisions, actions_taken, cost_usd, created_at")
+            .select("id, client_id, domain, trigger, decisions, actions_taken, cost_usd, created_at")
             .order("created_at", desc=True)
             .limit(1000)
         )
@@ -197,24 +206,32 @@ def prov_autonomy(supabase, client_ids: Optional[list[str]], today: date) -> Opt
         return None
 
     lookback = max(settings.director_autonomy_ledger_lookback_runs, 1)
-    per_client: dict[Optional[str], list[dict]] = {}
+    # Lookback is per (client, domain) so a busy SEO client's runs can't crowd
+    # out its (newer, sparser) social runs — each executor's recent window is read.
+    per_bucket: dict[tuple[Optional[str], str], list[dict]] = {}
     for row in rows:
-        bucket = per_client.setdefault(row.get("client_id"), [])
+        key = (row.get("client_id"), (row.get("domain") or "seo"))
+        bucket = per_bucket.setdefault(key, [])
         if len(bucket) < lookback:
             bucket.append(row)
 
     executed = proposed = escalated = 0
+    by_domain: dict[str, dict[str, int]] = {}
     unactioned: list[dict] = []
-    for cid, runs in per_client.items():
+    for (cid, domain), runs in per_bucket.items():
+        dom = by_domain.setdefault(domain, {"executed": 0, "proposed": 0, "escalated": 0})
         for run in runs:
             for decision in run.get("decisions") or []:
                 outcome = decision.get("outcome")
                 if outcome == "auto" and decision.get("executed"):
                     executed += 1
+                    dom["executed"] += 1
                 elif outcome == "propose":
                     proposed += 1
+                    dom["proposed"] += 1
                     unactioned.append({
                         "client_id": cid,
+                        "domain": domain,
                         "run_id": run["id"],
                         "action": decision.get("action"),
                         "keyword": decision.get("keyword"),
@@ -222,12 +239,14 @@ def prov_autonomy(supabase, client_ids: Optional[list[str]], today: date) -> Opt
                     })
                 elif outcome == "escalate":
                     escalated += 1
+                    dom["escalated"] += 1
     return {
         "executed": executed,
         "proposed": proposed,
         "escalated": escalated,
+        "by_domain": by_domain,
         "proposed_unactioned": unactioned,
-        "runs_considered": sum(len(v) for v in per_client.values()),
+        "runs_considered": sum(len(v) for v in per_bucket.values()),
     }
 
 
@@ -632,6 +651,71 @@ def prov_audit_health(supabase, client_id: Optional[str], today: date) -> Option
             "board-task seams."
         ),
     }
+
+
+# ---------------------------------------------------------------------------
+# social — the Social Media module's own seams (Phase D). Two things the
+# domain-aware autonomy seam can't see: an approved-but-unqueued Draft aging in
+# `ready`, and a connected account (a platform with published history) that has
+# gone quiet. Evidence only — the seam predicate applies the day thresholds.
+# ---------------------------------------------------------------------------
+def prov_social(supabase, client_ids: Optional[list[str]], today: date) -> Optional[dict]:
+    if not settings.social_enabled:
+        return None
+
+    aging: list[dict] = []
+    try:
+        q = (
+            supabase.table("social_drafts")
+            .select("id, client_id, platform, angle, updated_at")
+            .eq("status", "ready")
+            .order("updated_at", desc=False)
+            .limit(1000)
+        )
+        if client_ids:
+            q = q.in_("client_id", client_ids)
+        for row in q.execute().data or []:
+            aging.append({
+                "client_id": row.get("client_id"),
+                "draft_id": row.get("id"),
+                "platform": row.get("platform"),
+                "angle": row.get("angle"),
+                "since": row.get("updated_at"),
+            })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("director.social_drafts_read_failed", extra={"error": str(exc)})
+
+    # Idle accounts: for each (client, platform) that HAS published history, the
+    # most-recent published_at. A never-published platform is not "idle" (it's a
+    # fresh/unstarted setup), so it's excluded — the seam only flags a platform
+    # that used to post and went quiet.
+    idle: list[dict] = []
+    try:
+        q2 = (
+            supabase.table("social_posts")
+            .select("client_id, platform, published_at")
+            .eq("status", "published")
+            .order("published_at", desc=True)
+            .limit(2000)
+        )
+        if client_ids:
+            q2 = q2.in_("client_id", client_ids)
+        latest: dict[tuple[Optional[str], str], str] = {}
+        for row in q2.execute().data or []:
+            pub = row.get("published_at")
+            if not pub:
+                continue
+            key = (row.get("client_id"), (row.get("platform") or "").lower())
+            if key not in latest:  # rows are published_at-desc, so first wins
+                latest[key] = pub
+        for (cid, platform), pub in latest.items():
+            idle.append({"client_id": cid, "platform": platform, "last_published_at": pub, "since": pub})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("director.social_posts_read_failed", extra={"error": str(exc)})
+
+    if not aging and not idle:
+        return None
+    return {"aging_drafts": aging, "idle_accounts": idle}
 
 
 # ---------------------------------------------------------------------------

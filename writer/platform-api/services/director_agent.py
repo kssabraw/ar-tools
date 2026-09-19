@@ -52,10 +52,13 @@ _DORA_SYSTEM = (
     "a `client_id`, `evidence`, and `since`. The other blocks are the supporting "
     "detail: `delivery` and `assignment` (the PACE board — overdue / stuck / "
     "unassigned / workload), `strategy` (approved-but-unplaced proposals), "
-    "`autonomy` (proposed-but-unactioned candidates), `producers` (task sources, "
-    "including unrecognized ones), `interventions` (outcome tracking), `qa` "
-    "(whether anything is reaching review at all), `content` (degraded ships), "
-    "`duplicates` (same-target collisions), `pace_efficiency` (process leaks PACE "
+    "`autonomy` (proposed-but-unactioned candidates, split by `by_domain` into "
+    "SEO vs social — the two domain executors write one ledger), `producers` "
+    "(task sources, including unrecognized ones), `interventions` (outcome "
+    "tracking), `qa` (whether anything is reaching review at all), `content` "
+    "(degraded ships), `social` (the Social Media module's own seams — an "
+    "approved-but-unqueued draft aging in `ready`, a connected account gone "
+    "quiet), `duplicates` (same-target collisions), `pace_efficiency` (process leaks PACE "
     "flagged — slip/bottleneck, rework, cadence, producer-noise), `coordination` "
     "(agent-to-agent bus health — open blockers, stalled handoffs, back-and-forth "
     "loops), and two agent TRACK-RECORD blocks — `pace_audit` (how humans "
@@ -130,6 +133,8 @@ _SEAM_LABELS = {
     "duplicate_target": "Two agents acting on the same target",
     "qa_idle": "QA idle — nothing reaching review",
     "unwatched_seam": "Tasks from an unrecognized producer source",
+    "social_draft_aging": "Social draft approved but not queued — sitting unused",
+    "social_account_idle": "Connected social account has gone quiet",
 }
 
 

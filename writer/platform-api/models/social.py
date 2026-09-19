@@ -316,6 +316,22 @@ class SocialPolicyUpdateRequest(BaseModel):
     qa_gate: Optional[bool] = None
 
 
+class SocialAutonomyRunResponse(BaseModel):
+    """One Social Manager (autonomy) ledger row, shaped for the activity view:
+    produced/queued/proposed + cost, most-recent first."""
+    id: UUID
+    trigger: Optional[str] = None
+    tier: Optional[int] = None
+    produced: int = 0
+    auto_queued: bool = False
+    proposed: int = 0
+    platforms: list[str] = Field(default_factory=list)
+    cost_usd: Optional[float] = None
+    at: Optional[datetime] = None
+
+    model_config = {"extra": "ignore"}
+
+
 class SocialScheduleItem(BaseModel):
     id: Optional[UUID] = None
     platform: str

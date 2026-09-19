@@ -123,6 +123,7 @@ class Settings(BaseSettings):
     social_autonomy_target_queue: int = 2     # desired queued-draft depth per platform
     social_autonomy_max_per_week: int = 14    # rate cap on autonomy-produced drafts / client / week
     social_autonomy_source_cooldown_days: int = 30  # don't re-repurpose a source within this window
+    social_autonomy_activity_limit: int = 20  # recent social_autonomy_run ledger rows the activity view reads
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
     social_max_upload_mb: float = 200.0   # server multipart upload cap (video-sized)
     # Big-video direct-to-R2 (queue #4): videos over social_max_upload_mb are PUT
@@ -2338,6 +2339,15 @@ class Settings(BaseSettings):
     # Only the top-N plan actions become tasks (the plan is priority-sorted).
     task_producer_action_plan_max: int = 10
     task_producer_content_run_enabled: bool = False
+    # Social P4 (Phase D) — PACE producers over the Social Media module. Both
+    # double-gated on native_tasks_enabled AND their own flag (ship dark), like
+    # every other producer. The weekly "approve this week's social calendar"
+    # nudge fires per client with an active social cadence schedule; the
+    # "review N generated social drafts" nudge is filed by the autonomy loop
+    # after it produces drafts for a human to approve.
+    task_producer_social_calendar_enabled: bool = False
+    task_producer_social_calendar_weekday: int = 0   # weekly calendar-review nudge day (Mon=0)
+    task_producer_social_drafts_review_enabled: bool = False
     # Plan → PACE handoff (services/plan_handoff.py): the on-demand bridge that
     # pushes a client's Action Plan (and/or open strategist proposals) onto the
     # native board and hands each task to PACE's placement engine. Cap on how many
@@ -3310,6 +3320,11 @@ class Settings(BaseSettings):
     director_seam_proposal_pending_days: int = 21          # a strategist proposal nobody approves/dismisses (raised 5→21 so DORA flags only genuinely-languishing proposals, near the 30-day expiry)
     director_seam_qa_idle_days: int = 7
     director_seam_autonomy_unactioned_days: int = 7
+    # Social P4 (Phase D) — the social seam thresholds (prov_social):
+    # an approved-but-unqueued Draft sitting in `ready` past this, and a
+    # connected social account with no published post in this many days.
+    director_seam_social_draft_aging_days: int = 5
+    director_seam_social_account_idle_days: int = 21
     # content_shipped_degraded is immediate (no dwell) — no threshold key.
     director_content_degraded_lookback_days: int = 14      # how far back to scan for degraded ships
     director_autonomy_ledger_lookback_runs: int = 8        # per-client autonomy_runs rows to read

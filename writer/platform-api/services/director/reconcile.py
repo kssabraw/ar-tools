@@ -38,6 +38,8 @@ _TITLES = {
     "autonomy_proposed_unactioned": "Autonomy proposed an action nobody has picked up",
     "content_shipped_degraded": "Content shipped without full brand context",
     "duplicate_target": "Two agents are acting on the same target",
+    "social_draft_aging": "Social draft approved but not queued — sitting unused",
+    "social_account_idle": "Connected social account has gone quiet",
 }
 
 

@@ -361,3 +361,101 @@ def on_scan_health(alerting: list[dict]) -> None:
                 task_service.close_task_by_source("scan_health", ref)
     except Exception as exc:
         logger.warning("task_producer_scan_health_failed", extra={"error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Social Media (Phase D) — the two PACE producers over the Social module.
+# A weekly "approve this week's social calendar" nudge per active-cadence
+# client, and a "review the drafts the Social Manager generated" nudge the
+# autonomy loop files after producing. Both weekly-idempotent (source_ref keyed
+# on the ISO week) so a burst never stacks tasks; both fire-once-per-week with
+# no auto-close (the human completes them, like a monthly task).
+# ---------------------------------------------------------------------------
+def _iso_week_ref(client_id: str, today: date) -> str:
+    iso_year, iso_week, _ = today.isocalendar()
+    return f"{client_id}:{iso_year}-W{iso_week:02d}"
+
+
+def on_social_calendar(client_id: str, today: Optional[date] = None) -> None:
+    """File this week's "approve the social calendar" task for one client
+    (idempotent per ISO week). Best-effort; double-gated by the sweep."""
+    today = today or date.today()
+    _create(
+        client_id,
+        "Approve this week's social calendar",
+        source="social_calendar",
+        source_ref=_iso_week_ref(client_id, today),
+        description=(
+            "Review the upcoming week of scheduled + queued social posts for "
+            "this client — confirm the cadence, the copy, and the media before "
+            "they publish.\n\n"
+            f"Open the calendar: /clients/{client_id}/social"
+        ),
+    )
+
+
+def run_social_calendar_sweep(today: Optional[date] = None) -> int:
+    """Weekly (``task_producer_social_calendar_weekday``): one calendar-approval
+    task per client with an active social cadence schedule. Double-gated
+    (``native_tasks_enabled`` AND ``task_producer_social_calendar_enabled``) and
+    self-gated on the weekday, so a daily scheduler call no-ops off-day.
+    Best-effort — never raises into the scheduler."""
+    today = today or date.today()
+    if not _enabled(settings.task_producer_social_calendar_enabled):
+        return 0
+    if today.weekday() != int(settings.task_producer_social_calendar_weekday):
+        return 0
+    try:
+        rows = (
+            get_supabase()
+            .table("social_post_schedules")
+            .select("client_id")
+            .eq("is_active", True)
+            .neq("cadence", "disabled")
+            .limit(2000)
+            .execute()
+        ).data or []
+    except Exception as exc:
+        logger.warning("task_producer_social_calendar_read_failed", extra={"error": str(exc)})
+        return 0
+    seen: set[str] = set()
+    for r in rows:
+        cid = r.get("client_id")
+        if not cid or cid in seen:
+            continue
+        seen.add(cid)
+        try:
+            on_social_calendar(cid, today)
+        except Exception as exc:
+            logger.warning("task_producer_social_calendar_failed",
+                           extra={"client_id": cid, "error": str(exc)})
+    return len(seen)
+
+
+def on_social_drafts_generated(client_id: str, count: int, today: Optional[date] = None) -> None:
+    """File a "review the AI-generated social drafts" task after the Social
+    Manager loop produces drafts a human still needs to approve. Idempotent per
+    ISO week (a second run the same week is a no-op — the human clears one task
+    for the week's batch). Double-gated; best-effort — a task failure never
+    breaks the autonomy run that calls it."""
+    if not _enabled(settings.task_producer_social_drafts_review_enabled):
+        return
+    if count <= 0:
+        return
+    today = today or date.today()
+    try:
+        _create(
+            client_id,
+            "Review this week's AI-generated social drafts",
+            source="social_drafts_review",
+            source_ref=_iso_week_ref(client_id, today),
+            description=(
+                f"The Social Manager generated {count} social draft batch(es) this "
+                "week for this client. Review each on the Drafts tab, edit as needed, "
+                "then approve/publish (or queue) the ones you want to run.\n\n"
+                f"Open the Drafts tab: /clients/{client_id}/social"
+            ),
+        )
+    except Exception as exc:
+        logger.warning("task_producer_social_drafts_failed",
+                       extra={"client_id": client_id, "error": str(exc)})

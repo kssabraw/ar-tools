@@ -296,7 +296,12 @@ Creator exists.
   **`social_policy` write path** (Settings tab: ceiling + image/text prompt templates). See
   `HANDOFF.md` (2026-09-18 P3 entry) + `p3-manager-plan-v1_0.md`. Auto-fill's unattended publish is
   deployed-only (sandbox egress-blocked from PostForMe).
-- **P4 Agents, autonomy, analytics** — ⬜ not built.
+- **P4 Agents, autonomy** — ✅ **BUILT (ships dark behind `social_autonomy_enabled`)**. The Social
+  Manager orchestrator + opt-in QA rubric (Phases A–C, PR #1240 `661c02c`) + the SerMaStr/PACE/DORA
+  agent integration + the autonomy activity UI (Phase D, this PR). The loop generates/queues drafts;
+  it NEVER publishes (the four-opt-in gate still governs the unattended drip). See
+  `p4-autonomy-plan-v1_0.md` + the HANDOFF 2026-09-19 entry. **Analytics read-back is DEFERRED** (Q5 —
+  PostForMe has no analytics endpoint; its own later slice).
 - **P5 Deferred** — **YouTube poster ✅ BUILT + MERGED** (PR #1211, re-scoped against PostForMe — a YT
   post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
   (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end) and the **mixed image path

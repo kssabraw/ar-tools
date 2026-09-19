@@ -4,6 +4,45 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
+## Update (2026-09-19) — **P4 Autonomy COMPLETE** (Phases A–C via PR #1240 `661c02c`; Phase D pending PR) — ships DARK
+
+The module's autonomy layer is now **fully built** (plan: `p4-autonomy-plan-v1_0.md`). It ships
+**dark** behind `social_autonomy_enabled` (default False) and NEVER publishes — the four-opt-in
+gate (`social_autonomy_enabled` + `social_policy.autonomy_tier ≥ 2` + a schedule's `auto_fill` +
+`social_auto_publish_enabled`) still governs any unattended publish; the loop stops at
+producing/queuing drafts.
+
+- **Phases A–C (PR #1240, squash `661c02c`)** — the Social Manager orchestrator
+  (`services/social/manager.py`) + the opt-in QA rubric (`services/social/qa.py`); migrations
+  `20260919120000` (`autonomy_runs.domain` + `social_autonomy_run` job) + `20260919130000`
+  (`social_policy.qa_gate` + `social_drafts.qa_verdict`) applied live. See that PR's notes for the
+  two deliberate deviations (verdict on `social_drafts.qa_verdict` not `qa_reviews`; manual-publish
+  gate blocks on a CRITICAL fail only).
+- **Phase D (this PR) — agent integration + activity UI.** SerMaStr `_ctx_social` (context) +
+  `_prov_social` (strategy digest — propose a social push, never publish). DORA: `prov_autonomy` is
+  **domain-aware** (`by_domain` SEO/social; each proposed row tagged `domain`) and a new
+  `prov_social` + `social_seams` predicate opens two per-client board seams — **`social_draft_aging`**
+  (an approved-but-unqueued `ready` draft aging) and **`social_account_idle`** (a platform with
+  published history gone quiet) — wired through the read model, reconcile titles, and the DORA
+  prompt; `KNOWN_PRODUCER_SOURCES` gained the two PACE sources. PACE: `task_producers.on_social_calendar`
+  (weekly `social_calendar` nudge per active-cadence client via `run_social_calendar_sweep`) +
+  `on_social_drafts_generated` (a `social_drafts_review` nudge the manager files after a tier-1
+  produce) — both weekly-idempotent per ISO week, double-gated (`native_tasks_enabled` + own flag),
+  ship dark. Activity: `GET /clients/{id}/social/autonomy-runs` → a "Social Manager activity" panel
+  + a `produced_by:autonomy` "AI Manager" Drafts badge in `SocialCompose.tsx`. **No migration** for
+  Phase D. Tests `tests/test_social_p4_phase_d.py` (17). **v1 P4 is COMPLETE.**
+
+**Config (Phase D, all dark-safe):** `director_seam_social_draft_aging_days` (5) /
+`director_seam_social_account_idle_days` (21) · `task_producer_social_calendar_enabled` (False) /
+`_weekday` (Mon) / `task_producer_social_drafts_review_enabled` (False) ·
+`social_autonomy_activity_limit` (20).
+
+**Deployed-only (sandbox egress-blocked from PostForMe/R2/Apify/Gemini):** live verification of the
+loop + QA is deployed-only — flip `SOCIAL_AUTONOMY_ENABLED=true` on PLATFORM + set a client's
+`social_policy.autonomy_tier > 0`. The PACE producers additionally need `NATIVE_TASKS_ENABLED` +
+`TASK_PRODUCER_SOCIAL_CALENDAR_ENABLED` / `_DRAFTS_REVIEW_ENABLED`. **Analytics read-back stays
+DEFERRED** (Q5 — PostForMe exposes no analytics endpoint; its own later slice).
+
 ## Next priority (owner-set 2026-09-18) — the build queue, in order
 
 Everything through P2 + P1 is built/merged/live and the PostForMe swap is activated (below).
