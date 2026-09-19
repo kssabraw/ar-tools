@@ -4,7 +4,7 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
-## Update (2026-09-19) — **P5 slice (a): Video Storyboard BUILT** (draft PR on `claude/p5-video-scope-vendor-ancksb`) — a brief, NO rendered video, NO new vendor
+## Update (2026-09-19) — **P5 slice (a): Video Storyboard BUILT + MERGED** (PR [#1245](https://github.com/kssabraw/ar-tools/pull/1245), squash `b1eabef`) — a brief, NO rendered video, NO new vendor
 
 The first P5 slice, built to the owner's 2026-09-19 AskUserQuestion decisions (scope:
 `p5-video-scope-v1_0.md`; plan: `p5-video-plan-v1_0.md`). **Owner forks locked:** Q1 = **(a)
@@ -37,8 +37,11 @@ the client shoots. A **planning deliverable**, not a publishable post.
 - **Cost:** storyboard text is **not metered** (our own Anthropic key, like draft-copy); only an
   **opt-in thumbnail** spends (reuses the fail-closed image budget).
 - **Tests** `tests/test_social_storyboard.py` (12) — pure guidance/prompt/sanitize + DB/LLM-mocked
-  generate + CRUD. **Verified locally in a minimal venv: 12/12 pass; 64 other social tests green;
-  ruff clean; frontend `tsc -b` + eslint clean (SocialCompose 0 problems).**
+  generate + CRUD. **CI green on the merged head (`c193f99`): pytest ✅ · mypy ✅ · ruff ✅ ·
+  Netlify build ✅** (locally: 157 social tests pass; `tsc -b` + eslint clean, SocialCompose 0
+  problems). Squash-merged to `main` as `b1eabef`; the `social_storyboards` migration is live.
+  An adversarial self-review before merge found + fixed two frontend issues (a dead/misleading
+  "include thumbnail" toggle removed; `FORMAT_LABELS` gained `short: 'Short'`); backend traced clean.
 
 **Deferred (in the plan, not this slice):** the autonomy-propose seam (Q4); a Google-Doc export
 of the storyboard; shot-level UI editing beyond title/caption/hashtags/CTA. Phase (b) assembled

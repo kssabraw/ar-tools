@@ -306,7 +306,7 @@ Creator exists.
   post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
   (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end) and the **mixed image path
   ✅ BUILT + MERGED** (PR #1216 — all social images → Nano Banana 2). **Video production — slice (a)
-  Video Storyboard ✅ BUILT** (draft PR on `claude/p5-video-scope-vendor-ancksb`; owner forks
+  Video Storyboard ✅ BUILT + MERGED** (PR #1245, squash `b1eabef`; owner forks
   2026-09-19: Q1=storyboard-only / Q2=defer-vendor / Q3=Reels+Shorts, Compose-first / Q4=autonomy
   may-propose): a shoot-ready shot-by-shot **brief** (NO rendered video, no new vendor) —
   `services/social/storyboard.py` + `social_storyboards` table + a Storyboard tab. Scope/plan:
