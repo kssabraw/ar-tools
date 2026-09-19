@@ -460,6 +460,26 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'The strategist model didn’t return angles — usually a temporary provider hiccup.',
     steps: ['Try “Suggest angles” again, or write your own angle and fan out.'],
   },
+  social_storyboard_failed: {
+    title: 'The AI couldn’t build the storyboard',
+    meaning: 'The model didn’t return a usable shot list — usually a temporary provider hiccup.',
+    steps: ['Try “Generate storyboard” again in a moment.', 'If it keeps failing, tell an admin.'],
+  },
+  social_storyboard_bad_platform: {
+    title: 'Pick a video platform',
+    meaning: 'Storyboards are for Instagram / Facebook Reels or YouTube Shorts.',
+    steps: ['Choose Instagram, Facebook, or YouTube (a connected account for one of them is required).'],
+  },
+  social_storyboard_empty: {
+    title: 'The storyboard came back empty',
+    meaning: 'The model returned no usable shots — often too little source material to work from.',
+    steps: ['Add more detail to the source (a fuller topic, a blog post, or a page), then try again.'],
+  },
+  social_storyboard_no_thumbnail_seed: {
+    title: 'Nothing to base a thumbnail on',
+    meaning: 'This storyboard has no title or hook to generate a thumbnail image from.',
+    steps: ['Add a working title or edit the hook, then generate the thumbnail.'],
+  },
   social_fanout_failed: {
     title: 'Couldn’t start the fan-out',
     meaning: 'The request to generate drafts across platforms failed to start.',

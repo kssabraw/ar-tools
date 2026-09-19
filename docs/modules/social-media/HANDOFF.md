@@ -4,6 +4,48 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
+## Update (2026-09-19) — **P5 slice (a): Video Storyboard BUILT** (draft PR on `claude/p5-video-scope-vendor-ancksb`) — a brief, NO rendered video, NO new vendor
+
+The first P5 slice, built to the owner's 2026-09-19 AskUserQuestion decisions (scope:
+`p5-video-scope-v1_0.md`; plan: `p5-video-plan-v1_0.md`). **Owner forks locked:** Q1 = **(a)
+storyboard/brief only** (no rendered/assembled video; phase (b)/(c) are later, separate
+decisions); Q2 = **defer the AI-video vendor** (none chosen — consistent with (a) first);
+Q3 = **Reels + Shorts, Compose-first** (IG/FB Reels + YouTube Shorts, human-initiated, not
+fan-out); Q4 = **autonomy may PROPOSE** (never auto-generate/auto-publish — a later sub-slice;
+this slice is the human Compose path).
+
+**What shipped:** a **Video Storyboard** Creator surface — Source (topic/URL/blog run/Local SEO
+page) + platform (IG Reel / FB Reel / YT Short) + optional angle/tone → a structured,
+brand-voiced, competitor-informed **shot-by-shot storyboard** (hook + shot list w/ visual /
+on-screen text / voiceover / duration + music + caption + hashtags + CTA + optional thumbnail)
+the client shoots. A **planning deliverable**, not a publishable post.
+- **Migration `20260919140000_social_storyboards.sql`** (**applied live**) — a dedicated
+  `social_storyboards` table (shot list as JSONB; RLS service-role only), NOT an overload of
+  `social_drafts` (a storyboard publishes nothing). **No `async_jobs` type** — generation is one
+  synchronous forced-tool Sonnet call, like `draft-copy`/`angles`.
+- **`services/social/storyboard.py`** — pure `platform_video_guidance` / `build_storyboard_prompt`
+  / `sanitize_storyboard` + impure `generate_storyboard` (reuses `creator.load_source` +
+  `resolve_voice_context` + P1 `render_competitor_signals_block` + `report_llm.run_forced_tool`
+  verbatim; voice is **advisory** — a storyboard is edited by a human, not auto-corrected) +
+  CRUD + `generate_thumbnail` (reuses the built freeze-gated, fail-closed image path).
+- **Models/router/config** — `SocialStoryboard{Request,Response,Body,Shot,UpdateRequest}`; routes
+  `POST/GET/GET/PATCH/DELETE /clients/{id}/social/storyboard[s]` + `.../{id}/thumbnail` (writes
+  `require_staff`, generate + thumbnail freeze-gated); `social_storyboard_model` (Sonnet 5) /
+  `_max_tokens` (2000) / `_max_shots` (12).
+- **Frontend** — a **Storyboard** tab in `SocialCompose.tsx` (source picker → platform/angle/tone
+  → generate → editable storyboard cards w/ thumbnail + archive); `errorGuidance.ts` codes.
+- **Cost:** storyboard text is **not metered** (our own Anthropic key, like draft-copy); only an
+  **opt-in thumbnail** spends (reuses the fail-closed image budget).
+- **Tests** `tests/test_social_storyboard.py` (12) — pure guidance/prompt/sanitize + DB/LLM-mocked
+  generate + CRUD. **Verified locally in a minimal venv: 12/12 pass; 64 other social tests green;
+  ruff clean; frontend `tsc -b` + eslint clean (SocialCompose 0 problems).**
+
+**Deferred (in the plan, not this slice):** the autonomy-propose seam (Q4); a Google-Doc export
+of the storyboard; shot-level UI editing beyond title/caption/hashtags/CTA. Phase (b) assembled
+video + (c) AI video generation remain separate owner decisions (scope doc §"load-bearing fork"
++ vendor map). **Deployed-only:** a live thumbnail render (sandbox egress-blocked from Gemini) —
+same confidence as image gen; no new external dependency.
+
 ## Update (2026-09-19) — **P4 Autonomy COMPLETE + MERGED** (Phases A–C via PR #1240 `661c02c`; Phase D via PR #1243 `102be8c`) — ships DARK
 
 The module's autonomy layer is now **fully built** (plan: `p4-autonomy-plan-v1_0.md`). It ships

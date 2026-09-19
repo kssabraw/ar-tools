@@ -1803,6 +1803,260 @@ function SettingsTab({ clientId, accounts }: { clientId: string; accounts: Socia
   )
 }
 
+// ── P5 (slice a): Video Storyboard — a shoot-ready brief (NO rendered video) ──
+
+interface StoryboardShot {
+  n?: number
+  visual: string
+  on_screen_text?: string | null
+  voiceover?: string | null
+  duration_seconds?: number | null
+  b_roll?: boolean | null
+}
+interface StoryboardBody {
+  hook?: string
+  duration_seconds?: number | null
+  shots?: StoryboardShot[]
+  music?: string | null
+  caption?: string | null
+  hashtags?: string[]
+  cta?: string | null
+}
+interface Storyboard {
+  id: string
+  platform: string
+  format: string
+  source_title?: string | null
+  angle?: string | null
+  title?: string | null
+  storyboard: StoryboardBody
+  thumbnail_url?: string | null
+  voice_warnings?: string[] | null
+  status: string
+  created_at?: string | null
+}
+
+// The three video platforms this slice storyboards (Reels + Shorts). YouTube → Short.
+const STORYBOARD_PLATFORMS = ['instagram', 'facebook', 'youtube']
+const storyboardFormatFor = (p: string) => (p === 'youtube' ? 'short' : 'reel')
+
+function StoryboardCard({ clientId, sb, onChanged }: {
+  clientId: string; sb: Storyboard; onChanged: () => void
+}) {
+  const [editing, setEditing] = useState(false)
+  const [title, setTitle] = useState(sb.title ?? '')
+  const [caption, setCaption] = useState(sb.storyboard?.caption ?? '')
+  const [cta, setCta] = useState(sb.storyboard?.cta ?? '')
+  const [hashtags, setHashtags] = useState((sb.storyboard?.hashtags ?? []).join(' '))
+  const [error, setError] = useState<string | null>(null)
+  const body = sb.storyboard ?? {}
+  const shots = body.shots ?? []
+
+  const saveMut = useMutation({
+    mutationFn: () => {
+      setError(null)
+      const nextBody: StoryboardBody = {
+        ...body,
+        caption: caption.trim() || null,
+        cta: cta.trim() || null,
+        hashtags: hashtags.split(/\s+/).map((h) => h.replace(/^#/, '').trim()).filter(Boolean),
+      }
+      return api.patch<Storyboard>(`/social/storyboards/${sb.id}`, { title: title.trim() || null, storyboard: nextBody })
+    },
+    onSuccess: () => { setEditing(false); onChanged() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'update_failed'),
+  })
+  const thumbMut = useMutation({
+    mutationFn: () => { setError(null); return api.post<Storyboard>(`/clients/${clientId}/social/storyboards/${sb.id}/thumbnail`, {}) },
+    onSuccess: () => onChanged(),
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_image_generation_failed'),
+  })
+  const archiveMut = useMutation({
+    mutationFn: () => api.delete(`/social/storyboards/${sb.id}`),
+    onSuccess: () => onChanged(),
+  })
+
+  return (
+    <div style={{ ...card, marginBottom: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10 }}>
+        <div>
+          <div style={{ fontSize: 14, fontWeight: 700, color: '#0f172a' }}>{sb.title || sb.source_title || 'Untitled storyboard'}</div>
+          <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+            {specFor(sb.platform).label} · {FORMAT_LABELS[sb.format] ?? sb.format}
+            {sb.created_at ? ` · ${new Date(sb.created_at).toLocaleDateString()}` : ''}
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={() => setEditing((v) => !v)} style={{ ...btn('#eef2ff', '#4f46e5'), padding: '5px 10px', fontSize: 12 }}>{editing ? 'Cancel' : 'Edit'}</button>
+          <button onClick={() => archiveMut.mutate()} title="Archive" style={{ ...btn('#fef2f2', '#dc2626'), padding: '5px 10px', fontSize: 12 }}><X size={13} /></button>
+        </div>
+      </div>
+
+      {sb.thumbnail_url && (
+        <img src={sb.thumbnail_url} alt="thumbnail" style={{ marginTop: 10, maxWidth: 120, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+      )}
+
+      {body.hook && (
+        <div style={{ marginTop: 10 }}>
+          <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase' }}>Hook</span>
+          <div style={{ fontSize: 13, color: '#0f172a' }}>{body.hook}</div>
+        </div>
+      )}
+
+      {shots.length > 0 && (
+        <ol style={{ margin: '10px 0 0', paddingLeft: 18, display: 'grid', gap: 8 }}>
+          {shots.map((s, i) => (
+            <li key={i} style={{ fontSize: 13, color: '#334155' }}>
+              <div style={{ fontWeight: 600 }}>{s.visual}{s.b_roll ? ' (b-roll)' : ''}{s.duration_seconds ? ` · ~${s.duration_seconds}s` : ''}</div>
+              {s.on_screen_text && <div style={{ fontSize: 12, color: '#475569' }}>On-screen: {s.on_screen_text}</div>}
+              {s.voiceover && <div style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>VO: {s.voiceover}</div>}
+            </li>
+          ))}
+        </ol>
+      )}
+
+      {body.music && <p style={{ margin: '10px 0 0', fontSize: 12, color: '#64748b' }}>🎵 {body.music}</p>}
+
+      {editing ? (
+        <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
+          <div><label style={label}>Working title</label><input style={input} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+          <div><label style={label}>Caption</label><textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={caption} onChange={(e) => setCaption(e.target.value)} /></div>
+          <div><label style={label}>Hashtags (space-separated)</label><input style={input} value={hashtags} onChange={(e) => setHashtags(e.target.value)} /></div>
+          <div><label style={label}>Call to action</label><input style={input} value={cta} onChange={(e) => setCta(e.target.value)} /></div>
+          <button disabled={saveMut.isPending} onClick={() => saveMut.mutate()} style={{ ...btn('#4f46e5'), width: 'fit-content' }}>
+            {saveMut.isPending ? <Loader2 size={14} className="spin" /> : <Send size={14} />} Save
+          </button>
+        </div>
+      ) : (
+        <>
+          {body.caption && <p style={{ margin: '10px 0 0', fontSize: 13, color: '#0f172a', whiteSpace: 'pre-wrap' }}>{body.caption}</p>}
+          {(body.hashtags ?? []).length > 0 && (
+            <p style={{ margin: '6px 0 0', fontSize: 12, color: '#4f46e5' }}>{(body.hashtags ?? []).map((h) => `#${h}`).join(' ')}</p>
+          )}
+          {body.cta && <p style={{ margin: '6px 0 0', fontSize: 12, color: '#64748b' }}>CTA: {body.cta}</p>}
+        </>
+      )}
+
+      {(sb.voice_warnings ?? []).length > 0 && (
+        <p style={{ margin: '10px 0 0', fontSize: 11, color: '#b45309' }}>
+          Brand-voice advisory: {(sb.voice_warnings ?? []).join(', ')} — edit before shooting.
+        </p>
+      )}
+
+      <div style={{ marginTop: 12 }}>
+        {!sb.thumbnail_url && (
+          <button disabled={thumbMut.isPending} onClick={() => thumbMut.mutate()}
+            style={{ ...btn('#7c3aed'), padding: '6px 12px', fontSize: 12 }}>
+            {thumbMut.isPending ? <Loader2 size={13} className="spin" /> : <ImageIcon size={13} />}
+            {thumbMut.isPending ? 'Generating…' : 'Generate thumbnail'}
+          </button>
+        )}
+      </div>
+      {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}
+    </div>
+  )
+}
+
+function StoryboardTab({ clientId, accounts }: { clientId: string; accounts: SocialAccount[] }) {
+  const src = useSourceState(clientId, true)
+  const [platform, setPlatform] = useState('')
+  const [angle, setAngle] = useState('')
+  const [tone, setTone] = useState('')
+  const [includeThumbnail, setIncludeThumbnail] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Platforms the client can storyboard for = connected accounts among the three
+  // video platforms (IG/FB Reels + YouTube Shorts).
+  const availablePlatforms = useMemo(
+    () => Array.from(new Set(accounts.map((a) => a.platform.toLowerCase())))
+      .filter((p) => STORYBOARD_PLATFORMS.includes(p)), [accounts])
+  // Default the platform to the first available once accounts load (adjust-during-render).
+  if (!platform && availablePlatforms.length > 0) setPlatform(availablePlatforms[0])
+
+  const listQ = useQuery<Storyboard[]>({
+    queryKey: ['social-storyboards', clientId],
+    queryFn: () => api.get<Storyboard[]>(`/clients/${clientId}/social/storyboards`),
+    enabled: Boolean(clientId),
+  })
+
+  const genMut = useMutation({
+    mutationFn: () => {
+      setError(null)
+      return api.post<Storyboard>(`/clients/${clientId}/social/storyboard`, {
+        ...src.payload(), platform, format: storyboardFormatFor(platform),
+        angle: angle.trim() || undefined, tone: tone.trim() || undefined,
+      })
+    },
+    onSuccess: async () => {
+      await listQ.refetch()
+      if (includeThumbnail) { /* thumbnail is opt-in per card after generation */ }
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_storyboard_failed'),
+  })
+
+  const canGenerate = src.ready && Boolean(platform) && !genMut.isPending
+
+  return (
+    <>
+      <div style={card}>
+        <h3 style={{ margin: '0 0 4px', fontSize: 15 }}>Video Storyboard</h3>
+        <p style={{ margin: '0 0 14px', fontSize: 13, color: '#64748b' }}>
+          Turn a source into a shoot-ready storyboard for a Reel or Short — a shot-by-shot brief the
+          client films. No video is generated; this is the plan to shoot.
+        </p>
+
+        <div style={{ marginBottom: 14 }}>{src.ui}</div>
+
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 14, alignItems: 'flex-end' }}>
+          <div>
+            <label style={label}>Platform</label>
+            {availablePlatforms.length === 0 ? (
+              <p style={{ fontSize: 12, color: '#94a3b8', margin: 0 }}>No connected Instagram / Facebook / YouTube account.</p>
+            ) : (
+              <select style={{ ...input, width: 200 }} value={platform} onChange={(e) => setPlatform(e.target.value)}>
+                {availablePlatforms.map((p) => (
+                  <option key={p} value={p}>{specFor(p).label} — {storyboardFormatFor(p) === 'short' ? 'Short' : 'Reel'}</option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div>
+            <label style={label}>Tone (optional)</label>
+            <input style={{ ...input, width: 180 }} value={tone} onChange={(e) => setTone(e.target.value)} placeholder="upbeat, expert" />
+          </div>
+        </div>
+        <div style={{ marginBottom: 14 }}>
+          <label style={label}>Angle / hook (optional)</label>
+          <input style={input} value={angle} onChange={(e) => setAngle(e.target.value)}
+            placeholder="e.g. show a 30-second before/after of a roof restoration" />
+        </div>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', marginBottom: 14 }}>
+          <input type="checkbox" checked={includeThumbnail} onChange={(e) => setIncludeThumbnail(e.target.checked)} />
+          Prompt me to generate a thumbnail after (a thumbnail uses the client’s image budget ~$0.10)
+        </label>
+
+        <div>
+          <button disabled={!canGenerate} onClick={() => genMut.mutate()}
+            style={{ ...btn(canGenerate ? '#4f46e5' : '#c7d2fe'), cursor: canGenerate ? 'pointer' : 'not-allowed' }}>
+            {genMut.isPending ? <Loader2 size={15} className="spin" /> : <Video size={15} />}
+            {genMut.isPending ? 'Building storyboard…' : 'Generate storyboard'}
+          </button>
+        </div>
+        {error && <div style={{ marginTop: 12 }}><ErrorDetails message={error} /></div>}
+      </div>
+
+      {(listQ.data ?? []).length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <h4 style={{ margin: '0 0 10px', fontSize: 13, color: '#475569' }}>Storyboards</h4>
+          {(listQ.data ?? []).map((sb) => (
+            <StoryboardCard key={sb.id} clientId={clientId} sb={sb} onChanged={() => listQ.refetch()} />
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 export function SocialCompose() {
   const { id } = useParams<{ id: string }>()
   const clientId = id as string
@@ -1832,7 +2086,7 @@ export function SocialCompose() {
   })
 
   const accounts = useMemo(() => accountsQ.data ?? [], [accountsQ.data])
-  const [tab, setTab] = useState<'compose' | 'create' | 'drafts' | 'calendar' | 'settings' | 'competitors'>('compose')
+  const [tab, setTab] = useState<'compose' | 'create' | 'storyboard' | 'drafts' | 'calendar' | 'settings' | 'competitors'>('compose')
   // Compose + Create need a connected account; the rest don't.
   const needsAccounts = tab === 'compose' || tab === 'create'
   const [activeAngleSet, setActiveAngleSet] = useState<string | null>(null)
@@ -2009,7 +2263,7 @@ export function SocialCompose() {
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 16, borderBottom: '1px solid #e2e8f0' }}>
-        {([['compose', 'Compose'], ['create', 'Create with AI'], ['drafts', 'Drafts'], ['calendar', 'Calendar'], ['settings', 'Settings'], ['competitors', 'Competitors']] as const).map(([key, lbl]) => (
+        {([['compose', 'Compose'], ['create', 'Create with AI'], ['storyboard', 'Storyboard'], ['drafts', 'Drafts'], ['calendar', 'Calendar'], ['settings', 'Settings'], ['competitors', 'Competitors']] as const).map(([key, lbl]) => (
           <button key={key} onClick={() => setTab(key)}
             style={{ padding: '8px 14px', background: 'none', border: 'none', borderBottom: `2px solid ${tab === key ? '#4f46e5' : 'transparent'}`, color: tab === key ? '#4f46e5' : '#64748b', fontSize: 13, fontWeight: 600, cursor: 'pointer', marginBottom: -1 }}>
             {lbl}
@@ -2044,6 +2298,7 @@ export function SocialCompose() {
       {tab === 'drafts' && (
         <DraftsTab clientId={clientId} accounts={accounts} angleSetId={activeAngleSet} />
       )}
+      {tab === 'storyboard' && <StoryboardTab clientId={clientId} accounts={accounts} />}
       {tab === 'calendar' && <CalendarTab clientId={clientId} accounts={accounts} />}
       {tab === 'settings' && <SettingsTab clientId={clientId} accounts={accounts} />}
       {tab === 'competitors' && <CompetitorsTab clientId={clientId} />}

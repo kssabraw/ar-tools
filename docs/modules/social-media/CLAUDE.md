@@ -305,8 +305,15 @@ Creator exists.
 - **P5 Deferred** — **YouTube poster ✅ BUILT + MERGED** (PR #1211, re-scoped against PostForMe — a YT
   post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
   (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end) and the **mixed image path
-  ✅ BUILT + MERGED** (PR #1216 — all social images → Nano Banana 2). Still deferred: full video
-  production (Reels/Shorts generation) + cobalt self-host.
+  ✅ BUILT + MERGED** (PR #1216 — all social images → Nano Banana 2). **Video production — slice (a)
+  Video Storyboard ✅ BUILT** (draft PR on `claude/p5-video-scope-vendor-ancksb`; owner forks
+  2026-09-19: Q1=storyboard-only / Q2=defer-vendor / Q3=Reels+Shorts, Compose-first / Q4=autonomy
+  may-propose): a shoot-ready shot-by-shot **brief** (NO rendered video, no new vendor) —
+  `services/social/storyboard.py` + `social_storyboards` table + a Storyboard tab. Scope/plan:
+  `p5-video-scope-v1_0.md` / `p5-video-plan-v1_0.md`. **Still deferred (separate owner decisions):**
+  phase (b) deterministic assembled short-form (stills + captions + owned clips via ffmpeg, no AI
+  video model) + phase (c) true AI text/image-to-video generation (needs a NEW vendor — none chosen;
+  the scope doc has the vendor map) + cobalt self-host.
 
 ## Things NOT to do (module-specific)
 
@@ -345,8 +352,10 @@ Creator exists.
 ## When stuck / ask the owner
 
 Still open (owner "let's discuss" as of 2026-09-16): the **default per-client monthly cost ceiling**
-(b3); the **P4 autonomy build** (c2); the **P5 Video Studio** (c3); the mixed 2.5-Flash/Pro image cost
-lever (deferred). Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
+(b3); the mixed 2.5-Flash/Pro image cost lever (deferred). **P4 autonomy (c2) is BUILT + MERGED**
+(ships dark). **P5 Video Studio (c3):** slice (a) Video Storyboard is **BUILT** (owner forks locked
+2026-09-19 — see the P5 line above + `p5-video-scope-v1_0.md`); phase (b) assembled video and phase
+(c) AI-video generation (+ its vendor choice) remain the next P5 owner decisions. Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
 (b2), autonomy case-by-case (b4), PostPeer PAYG (b5), P1 = Apify-only / TwelveLabs dropped (c1, **BUILT +
 LIVE**); the mixed image path is now **BUILT** (queue #5, PR #1216 — Nano Banana 2, superseding the
 earlier Pro-only ruling). The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
