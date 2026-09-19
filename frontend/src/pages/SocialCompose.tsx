@@ -72,7 +72,7 @@ const FORMATS_BY_PLATFORM: Record<string, string[]> = {
   threads: ['feed'],
 }
 const FORMAT_LABELS: Record<string, string> = {
-  feed: 'Feed post', carousel: 'Carousel', reel: 'Reel', story: 'Story',
+  feed: 'Feed post', carousel: 'Carousel', reel: 'Reel', story: 'Story', short: 'Short',
 }
 const formatsFor = (platform: string): string[] =>
   FORMATS_BY_PLATFORM[(platform || '').toLowerCase()] ?? ['feed']
@@ -1962,7 +1962,6 @@ function StoryboardTab({ clientId, accounts }: { clientId: string; accounts: Soc
   const [platform, setPlatform] = useState('')
   const [angle, setAngle] = useState('')
   const [tone, setTone] = useState('')
-  const [includeThumbnail, setIncludeThumbnail] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Platforms the client can storyboard for = connected accounts among the three
@@ -1987,10 +1986,9 @@ function StoryboardTab({ clientId, accounts }: { clientId: string; accounts: Soc
         angle: angle.trim() || undefined, tone: tone.trim() || undefined,
       })
     },
-    onSuccess: async () => {
-      await listQ.refetch()
-      if (includeThumbnail) { /* thumbnail is opt-in per card after generation */ }
-    },
+    // The new storyboard lands at the top of the list; a thumbnail is opt-in per card
+    // via its "Generate thumbnail" button (an explicit, budgeted action).
+    onSuccess: () => { listQ.refetch() },
     onError: (e) => setError(e instanceof Error ? e.message : 'social_storyboard_failed'),
   })
 
@@ -2030,10 +2028,10 @@ function StoryboardTab({ clientId, accounts }: { clientId: string; accounts: Soc
           <input style={input} value={angle} onChange={(e) => setAngle(e.target.value)}
             placeholder="e.g. show a 30-second before/after of a roof restoration" />
         </div>
-        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer', marginBottom: 14 }}>
-          <input type="checkbox" checked={includeThumbnail} onChange={(e) => setIncludeThumbnail(e.target.checked)} />
-          Prompt me to generate a thumbnail after (a thumbnail uses the client’s image budget ~$0.10)
-        </label>
+        <p style={{ margin: '0 0 14px', fontSize: 11, color: '#94a3b8' }}>
+          The storyboard is free to generate. A thumbnail is optional — generate one per storyboard
+          below (it uses the client’s image budget, ~$0.10).
+        </p>
 
         <div>
           <button disabled={!canGenerate} onClick={() => genMut.mutate()}
