@@ -4,7 +4,7 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
-## Update (2026-09-19) — **P4 Autonomy COMPLETE** (Phases A–C via PR #1240 `661c02c`; Phase D pending PR) — ships DARK
+## Update (2026-09-19) — **P4 Autonomy COMPLETE + MERGED** (Phases A–C via PR #1240 `661c02c`; Phase D via PR #1243 `102be8c`) — ships DARK
 
 The module's autonomy layer is now **fully built** (plan: `p4-autonomy-plan-v1_0.md`). It ships
 **dark** behind `social_autonomy_enabled` (default False) and NEVER publishes — the four-opt-in
@@ -18,7 +18,7 @@ producing/queuing drafts.
   (`social_policy.qa_gate` + `social_drafts.qa_verdict`) applied live. See that PR's notes for the
   two deliberate deviations (verdict on `social_drafts.qa_verdict` not `qa_reviews`; manual-publish
   gate blocks on a CRITICAL fail only).
-- **Phase D (PR #1243) — agent integration + activity UI.** SerMaStr `_ctx_social` (context) +
+- **Phase D (PR #1243, squash `102be8c`, MERGED) — agent integration + activity UI.** SerMaStr `_ctx_social` (context) +
   `_prov_social` (strategy digest — propose a social push, never publish). DORA: `prov_autonomy` is
   **domain-aware** (`by_domain` SEO/social; each proposed row tagged `domain`) and a new
   `prov_social` + `social_seams` predicate opens two per-client board seams — **`social_draft_aging`**
