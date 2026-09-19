@@ -37,6 +37,83 @@ The owner set the **next build order** to these five, top-to-bottom:
 > run) and the human/deployed-only PostForMe follow-ups (below) are **not** build work — they
 > happen whenever a real key + account are in place, independent of this queue.
 
+## Update (2026-09-19) — **P4 Autonomy — Phases A–C BUILT + MERGED** (PR [#1240](https://github.com/kssabraw/ar-tools/pull/1240), squash `661c02c`) — the Social Manager orchestrator + guardrails (plan: `p4-autonomy-plan-v1_0.md`)
+
+The autonomy phase (ADR-0003) — a headless per-client **Social Manager** loop that plans a
+period, dispatches the Creator to produce drafts, and (at tier 2) auto-queues them, all
+reusing the shared autonomy primitives. **Ships DARK** behind `social_autonomy_enabled`
+(default False) and the loop **never publishes** — P3's drip still governs the unattended
+publish. Scope/rulings/design in `p4-autonomy-plan-v1_0.md`.
+
+**Owner rulings (locked 2026-09-19, via AskUserQuestion):** Full P4 (orchestrator + graduated
+approval + SerMaStr/PACE/DORA integration + opt-in QA rubric) with **analytics DEFERRED**
+(PostForMe exposes no analytics endpoint — the PRD's "analytics reads 1 credit/call" was a
+PostPeer assumption killed by the ADR-0006 swap; its own later slice); **generate + auto-queue**
+(autonomy_tier gates the generative half, P3's gates still govern publish); **hybrid source**
+(recent client content → topic-bank fallback); **both triggers** (weekly baseline + empty-queue
+top-up); **manual-publish QA blocks on CRITICAL only, with a force override**.
+
+**What merged (Phases A–C; D deferred):**
+- **A — policy planning fields + tier plumbing.** Migration `20260919120000` (**applied live**):
+  `autonomy_runs.domain` (`default 'seo'`) so the social loop shares the SEO executor's ledger +
+  DORA can split by domain; `social_autonomy_run` async-job type (CHECK rebuilt from LIVE).
+  `autonomy_policy.ACTION_TIERS` += `generate_social_drafts` (T1) / `queue_social_draft` (T2) /
+  `publish_social_post` (T3, registered but **never executed** in v1); `generate_social_drafts`
+  joins `CONTENT_ACTIONS`. Social Policy write path opened to `autonomy_tier`/`allowed_topics`/
+  `blocked_topics`/`tone_prefs`/`competitor_focus` + Settings-tab UI. Config
+  `social_autonomy_enabled` (False, independent of the SEO `autonomy_enabled`) + `_cap_tier` (2).
+- **B — the orchestrator loop** (`services/social/manager.py`, ships dark). Pure core
+  (`platform_deficits`/`plan_batches`/`select_source` hybrid/`filter_candidates`/`compose_angle`)
+  → the run (gate → plan → classify `generate_social_drafts` + `queue_social_draft` → dispatch one
+  **fan-out** job per batch with a rotated source + a `propose_angles` angle, tagged
+  `produced_by='autonomy'` + `auto_queue`=tier-2). Budget is **advisory** (the fan-out image path
+  reserves atomically per image via the fail-closed social meter). Triggers: `enqueue_due_social_autonomy_runs`
+  (weekly, self-clocked off the ledger) on `gsc_scheduler` + an empty-queue top-up folded into the
+  P3 sweep's `empty` branch (deduped via `_in_flight_run`). `auto_queue`/`produced_by` threaded
+  through `enqueue_fanout`→`run_fanout_job` (additive; default off = byte-identical manual behavior);
+  at tier 2 a fully-`ready` draft becomes `queued` (never `needs_image`/`needs_board`).
+  `build_source_ref` now carries a topic's text so the source cooldown covers the topic bank.
+  Config `social_autonomy_weekly_weekday` (Wed) / `_target_queue` (2) / `_max_per_week` (14) /
+  `_source_cooldown_days` (30).
+- **C — the opt-in QA rubric.** Migration `20260919130000` (**applied live**): `social_policy.qa_gate`
+  + `social_drafts.qa_verdict`. `qa_signals.RUBRIC_SOCIAL` + `check_social_draft` (voice /
+  banned-claims / CTA / platform / image) folded by the shared `build_verdict`; voice+claims added
+  to `CRITICAL_CHECK_KEYS`. `services/social/qa.py` reuses `voice_forbidden_hits` /
+  `content_compliance.scan_text` / `validate_post` / `has_cta` (deterministic — the verdict is code,
+  never an LLM's). **Auto-queue gate**: `run_fanout_job` holds any failing draft at `ready` instead
+  of `queued` (+ `social_qa_failed` digest). **Manual-publish gate**: `publish_existing_draft` blocks
+  a CRITICAL fail (forbidden voice term / banned claim) with a `force_qa` override; other misses
+  advisory. Settings `qa_gate` toggle + Drafts QA badge + "Publish anyway" + `errorGuidance`.
+
+**Deliberate deviations (surfaced to the owner):** (1) the DORA pre-flight veto is
+keyword-collision-based and a social generate candidate carries no keyword target → a guaranteed
+no-op → **not wired** (the other primitives — `classify`, the fail-closed budget meter, freeze —
+are all wired); (2) `qa_reviews.task_id` is `NOT NULL` (task-scoped) so the social verdict lives on
+`social_drafts.qa_verdict`, not `qa_reviews`. Both in the plan doc.
+
+**Tests:** `test_social_p4` / `test_social_manager` / `test_social_qa` (+ the `qa_signals` /
+`social_fanout` / `social_p3` additions). 168 social+QA tests pass; ruff/mypy/pytest/tsc/eslint
+green in CI at merge.
+
+**Remaining — Phase D (NOT built):** the agent integration + activity UI. See the "Next" note at
+the very bottom of this section.
+- `social` context providers: `slack_assistant/context.py::_ctx_social` (per-client: scheduled/
+  published posts, queue depth, latest competitor signals, autonomy tier + last run) +
+  `strategy_digest.py::_prov_social` (SerMaStr may *propose* a push, never publish).
+- **PACE**: a `task_producers.on_social_*` producer — an "approve this week's social calendar" task
+  (`source="social_calendar"`, idempotent) + a "review N generated drafts" task.
+- **DORA**: make `prov_autonomy` **`domain`-aware** (split SEO vs social — the `autonomy_runs.domain`
+  column is already there) + a new `prov_social` seam (approved-but-unqueued drafts aging, idle
+  connected accounts).
+- **Frontend**: an autonomy activity view (recent `social_autonomy_run` ledger rows) + a Drafts
+  `produced_by:autonomy` provenance badge.
+
+**Deployed-only activation (independent of the build):** flip `SOCIAL_AUTONOMY_ENABLED=true` on
+PLATFORM to turn the loop on (still dark per-client until a client's `social_policy.autonomy_tier`
+> 0; auto-publish still needs the four-opt-in gate — `social_autonomy_enabled` + tier≥2 + a
+schedule's `auto_fill` + `social_auto_publish_enabled`). Live-verify a loop run + the QA gate on the
+deployed worker (sandbox egress-blocked from PostForMe/Gemini).
+
 ## Update (2026-09-18) — **P3 Manager BUILT + MERGED** (PR [#1235](https://github.com/kssabraw/ar-tools/pull/1235), squash `f326f196`) — Calendar / cadence / approval queue / policy write path (post-queue task 2; scope: `p3-manager-scope-v1_0.md`; plan: `p3-manager-plan-v1_0.md`)
 
 The second post-queue item. Scope-doc → **AskUserQuestion** → plan-doc → build, per the
@@ -91,10 +168,9 @@ could save with no account → defaults once accounts load.
   the Calendar/approval-queue/policy surfaces against real accounts. Cadence + management + policy work
   today with `SOCIAL_ENABLED` alone; only the unattended drip needs the extra flag.
 
-**Next:** P4 autonomy (owner c2, "discuss") / P5 video (c3) remain the module's discuss-first items.
-
-**Next:** P4 autonomy (owner c2, "discuss") / P5 video (c3). The deployed-only confidence checks
-below are unchanged.
+**Next:** P4 autonomy Phases A–C are BUILT + MERGED (see the 2026-09-19 update above); **Phase D**
+(SerMaStr/PACE/DORA integration + the autonomy activity UI) is the remaining P4 slice, then P5 video
+(c3). The deployed-only confidence checks below are unchanged.
 
 ## Update (2026-09-18) — **Pinterest board made first-class — BUILT + MERGED** (PR [#1228](https://github.com/kssabraw/ar-tools/pull/1228); post-queue task 1; scope: `pinterest-board-first-class-scope-v1_0.md`)
 

@@ -43,8 +43,9 @@
 > **Owner decisions (2026-09-16):** IG scope = **feed + Reels + Stories** (b1); **IG carousel in v1** (b2);
 > autonomy rollout **case-by-case** (b4); PostPeer billing **PAYG** (b5); **P1 competitor research
 > Apify-ONLY — TwelveLabs is DROPPED** (c1, BUILT). Owner-confirmed P1 platform scope: Instagram, Facebook,
-> X, YouTube, Pinterest (LinkedIn deferred). Still to discuss: default per-client monthly ceiling (b3),
-> the P4 autonomy build (c2), the P5 Video Studio (c3).
+> X, YouTube, Pinterest (LinkedIn deferred). **P4 autonomy Phases A–C are BUILT + MERGED
+> (PR #1240, 2026-09-19)** — only **Phase D** (agent integration + activity UI) remains of P4.
+> Still to discuss: default per-client monthly ceiling (b3), the P5 Video Studio (c3).
 > **Next build queue (owner-set 2026-09-18), in order:** (1) **IG Reels + Stories** — **✅ BUILT + MERGED
 > (PR #1206)**; (2) **IG carousel Draft type** — **✅ BUILT + MERGED (same PR #1206)**; (3) **YouTube
 > poster** — **✅ BUILT + MERGED (PR #1211, squash `44c5e06`)** — a YT post = video + required `title` via
@@ -296,7 +297,24 @@ Creator exists.
   **`social_policy` write path** (Settings tab: ceiling + image/text prompt templates). See
   `HANDOFF.md` (2026-09-18 P3 entry) + `p3-manager-plan-v1_0.md`. Auto-fill's unattended publish is
   deployed-only (sandbox egress-blocked from PostForMe).
-- **P4 Agents, autonomy, analytics** — ⬜ not built.
+- **P4 Agents, autonomy, analytics** — **Phases A–C BUILT + MERGED (PR #1240, squash `661c02c`,
+  2026-09-19); ships DARK behind `social_autonomy_enabled`.** The **Social Manager orchestrator**
+  (`services/social/manager.py`): a headless per-client loop reusing the shared autonomy primitives
+  (`autonomy_policy.classify` / the fail-closed social budget meter / freeze) — plans a period from
+  cadence + queue depth, picks a hybrid source (recent content → topic bank), dispatches the Creator
+  (fan-out) to produce drafts, and at tier 2 auto-QUEUES them; **never publishes** (P3's drip +
+  `auto_fill` + `social_auto_publish_enabled` still gate the unattended publish — a four-opt-in gate).
+  Triggers: weekly self-clocked pass + empty-queue top-up. Plus the **opt-in QA rubric**
+  (`qa_signals.check_social_draft` + `services/social/qa.py`, deterministic: voice / banned-claims /
+  CTA / platform / image): the auto-queue holds any failing draft at `ready`; a manual publish blocks
+  a CRITICAL fail (forbidden voice term / banned claim) with a `force_qa` override. Per-client tuning
+  via the Social Policy planning fields + `qa_gate`. **Analytics DEFERRED** (PostForMe has no analytics
+  endpoint — its own later slice). Migrations `20260919120000` + `20260919130000` applied live.
+  Plan + owner rulings + the two deliberate deviations (DORA veto not wired — keyword-based, a no-op
+  for social; verdict on `social_drafts.qa_verdict` not `qa_reviews`) in `p4-autonomy-plan-v1_0.md`.
+  **Remaining — Phase D (⬜ not built):** the `social` context providers for SerMaStr
+  (`_ctx_social`/`_prov_social`, propose-only), a PACE "approve this week's social calendar" task, a
+  `domain`-aware DORA `prov_autonomy` split + a `prov_social` seam, and the autonomy activity UI.
 - **P5 Deferred** — **YouTube poster ✅ BUILT + MERGED** (PR #1211, re-scoped against PostForMe — a YT
   post = video + required `title`; not generation) and **big-video direct-to-R2 presign ✅ BUILT + MERGED**
   (PR #1213 — ⚠️ still needs the R2 CORS policy applied to work end-to-end) and the **mixed image path
@@ -340,8 +358,10 @@ Creator exists.
 ## When stuck / ask the owner
 
 Still open (owner "let's discuss" as of 2026-09-16): the **default per-client monthly cost ceiling**
-(b3); the **P4 autonomy build** (c2); the **P5 Video Studio** (c3); the mixed 2.5-Flash/Pro image cost
-lever (deferred). Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
+(b3); the **P5 Video Studio** (c3); the mixed 2.5-Flash/Pro image cost lever (deferred). **P4 autonomy
+Phases A–C are BUILT + MERGED (PR #1240)** — Phase D (agent integration + activity UI) is an agreed
+remaining slice, not a discuss item; **analytics is deferred** (no PostForMe analytics endpoint).
+Already decided — don't re-ask: IG scope = feed+Reels+Stories (b1), IG carousel in v1
 (b2), autonomy case-by-case (b4), PostPeer PAYG (b5), P1 = Apify-only / TwelveLabs dropped (c1, **BUILT +
 LIVE**); the mixed image path is now **BUILT** (queue #5, PR #1216 — Nano Banana 2, superseding the
 earlier Pro-only ruling). The PostPeer P0 questions are closed. See `HANDOFF.md` (this folder) for the live
