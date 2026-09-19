@@ -1,8 +1,8 @@
 category_name,cluster,cpl_low,cpl_mid,cpl_high,source,confidence
-House cleaning service,Cleaning,15,32,50,manual_estimate,low
-Pressure washing service,Cleaning,20,40,60,manual_estimate,low
-Interior decorator,Design/Professional,30,60,90,manual_estimate,low
-Interior designer,Design/Professional,40,80,120,manual_estimate,low
+House cleaning service,Cleaning,14,23,34,job_value_formula,low
+Pressure washing service,Cleaning,13,21,32,job_value_formula,low
+Interior decorator,Design/Professional,90,150,225,job_value_formula,low
+Interior designer,Design/Professional,90,150,225,job_value_formula,low
 Electrical installation service,Electrical,55,98,175,service_direct_range,high
 Electrician,Electrical,55,98,175,service_direct_range,high
 Lighting contractor,Electrical,55,98,175,service_direct_range,high
@@ -11,15 +11,15 @@ Home automation company,Electrical/Home Tech,33,55,98,cluster:electrical,low
 Home cinema installation,Electrical/Home Tech,33,55,98,cluster:electrical,low
 Home theater store,Electrical/Home Tech,33,55,98,cluster:electrical,low
 Security system installer,Electrical/Home Tech,33,55,98,cluster:electrical,low
-Awning supplier,Exterior,25,48,70,manual_estimate,low
+Awning supplier,Exterior,43,72,108,job_value_formula,low
 Gutter cleaning service,Exterior,39,65,117,service_direct_avg_2026,medium
 Siding contractor,Exterior,63,105,189,service_direct_avg_2026,medium
-Window cleaning service,Exterior,15,32,50,manual_estimate,low
-Stucco contractor,Exterior/Finishing,30,58,85,manual_estimate,low
-Asphalt contractor,Exterior/Paving,30,60,90,manual_estimate,low
-Paving contractor,Exterior/Paving,30,60,90,manual_estimate,low
-Chimney services,Exterior/Roofing,25,50,75,manual_estimate,low
-Chimney sweep,Exterior/Roofing,20,40,60,manual_estimate,low
+Window cleaning service,Exterior,12,20,30,job_value_formula,low
+Stucco contractor,Exterior/Finishing,90,150,225,job_value_formula,low
+Asphalt contractor,Exterior/Paving,90,150,225,job_value_formula,low
+Paving contractor,Exterior/Paving,90,150,225,job_value_formula,low
+Chimney services,Exterior/Roofing,21,35,52,job_value_formula,low
+Chimney sweep,Exterior/Roofing,14,23,34,job_value_formula,low
 Carpet fitter,Flooring,51,85,153,service_direct_avg_2026,medium
 Carpet installer,Flooring,51,85,153,service_direct_avg_2026,medium
 Floor refinishing service,Flooring,51,85,153,service_direct_avg_2026,medium
@@ -39,14 +39,14 @@ Handyman,Handyman/Repair,18,30,54,service_direct_avg_2026,medium
 Home repair contractor,Handyman/Repair,18,30,54,service_direct_avg_2026,medium
 Asbestos testing service,Inspection/Environmental,40,75,110,manual_estimate,low
 Carpet cleaning service,Interior/Cleaning,15,25,45,service_direct_avg_2026,medium
-Countertop contractor,Interior/Finishing,30,60,90,manual_estimate,low
-Dry wall contractor,Interior/Finishing,25,48,70,manual_estimate,low
-Marble contractor,Interior/Finishing,30,60,90,manual_estimate,low
-Masonry contractor,Interior/Finishing,30,60,90,manual_estimate,low
-Plasterer,Interior/Finishing,25,48,70,manual_estimate,low
+Countertop contractor,Interior/Finishing,90,150,225,job_value_formula,low
+Dry wall contractor,Interior/Finishing,55,91,136,job_value_formula,low
+Marble contractor,Interior/Finishing,90,150,225,job_value_formula,low
+Masonry contractor,Interior/Finishing,90,150,225,job_value_formula,low
+Plasterer,Interior/Finishing,90,150,225,job_value_formula,low
 Tile contractor,Interior/Finishing,25,50,75,manual_estimate,low
 Arborist and tree surgeon,Landscaping/Outdoor,39,65,117,service_direct_avg_2026,medium
-Fence contractor,Landscaping/Outdoor,30,58,85,manual_estimate,low
+Fence contractor,Landscaping/Outdoor,55,98,175,homeadvisor_lead_range,medium
 Fountain contractor,Landscaping/Outdoor,25,48,70,manual_estimate,low
 Gardener,Landscaping/Outdoor,27,45,81,service_direct_avg_2026,medium
 Landscape architect,Landscaping/Outdoor,40,80,120,manual_estimate,low
@@ -64,11 +64,11 @@ Moving and storage service,Moving,25,50,75,manual_estimate,low
 Moving company,Moving,25,50,75,manual_estimate,low
 Custom home builder,New Construction,162,270,425,cluster:remodeling,low
 Home builder,New Construction,162,270,425,cluster:remodeling,low
-Demolition contractor,New Construction/General,40,70,100,manual_estimate,low
+Demolition contractor,New Construction/General,63,105,158,job_value_formula,low
 Snow removal service,Outdoor/Seasonal,15,32,50,manual_estimate,low
 Painter,Painting,25,48,70,manual_estimate,low
 Painter and decorator,Painting,25,48,70,manual_estimate,low
-Wallpaper installer,Painting/Interior,20,40,60,manual_estimate,low
+Wallpaper installer,Painting/Interior,29,48,72,job_value_formula,low
 Bird control service,Pest Control,40,88,195,service_direct_range,high
 Pest control service,Pest Control,40,88,195,service_direct_range,high
 Drainage service,Plumbing,60,124,255,service_direct_range,high
@@ -76,14 +76,14 @@ Plumber,Plumbing,60,124,255,service_direct_range,high
 Plumbing,Plumbing,60,124,255,service_direct_range,high
 Septic system service,Plumbing,60,124,255,service_direct_range,high
 Septic tank cleaning service,Plumbing,60,124,255,service_direct_range,high
-Pool cleaning service,Pool/Outdoor,20,40,60,manual_estimate,low
-Swimming pool contractor,Pool/Outdoor,40,95,150,manual_estimate,low
-Building consultant,Professional/Consulting,50,100,150,manual_estimate,low
-Building inspector,Professional/Consulting,30,60,90,manual_estimate,low
+Pool cleaning service,Pool/Outdoor,40,67,100,job_value_formula,low
+Swimming pool contractor,Pool/Outdoor,90,150,225,job_value_formula,low
+Building consultant,Professional/Consulting,34,56,84,job_value_formula,low
+Building inspector,Professional/Consulting,17,29,44,job_value_formula,low
 Bathroom remodeler,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Bathroom renovator,Remodeling/Renovation,270,425,550,cpl_tier,medium
-Cabinet maker,Remodeling/Renovation,35,62,90,manual_estimate,low
-Deck builder,Remodeling/Renovation,35,62,90,manual_estimate,low
+Cabinet maker,Remodeling/Renovation,90,150,225,job_value_formula,low
+Deck builder,Remodeling/Renovation,90,150,225,job_value_formula,low
 General contractor,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Interior construction contractor,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Kitchen remodeler,Remodeling/Renovation,270,425,550,cpl_tier,medium
@@ -91,7 +91,7 @@ Kitchen renovator,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Remodeler,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Remodeller,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Renovation contractor,Remodeling/Renovation,270,425,550,cpl_tier,medium
-Stair contractor,Remodeling/Renovation,35,62,90,manual_estimate,low
+Stair contractor,Remodeling/Renovation,90,150,225,job_value_formula,low
 Sunroom contractor,Remodeling/Renovation,270,425,550,cpl_tier,medium
 Appliance repair service,Repair/Maintenance,22,43,85,service_direct_range,high
 Furniture repair shop,Repair/Maintenance,15,32,50,manual_estimate,low
@@ -101,7 +101,7 @@ Water damage restoration service,Restoration,500,1061,2250,service_direct_range,
 Roofing contractor,Roofing,85,216,550,service_direct_range,high
 Roofing service,Roofing,85,216,550,service_direct_range,high
 Skylight contractor,Roofing,85,216,550,service_direct_range,high
-Solar energy contractor,Solar,40,170,300,manual_estimate,low
+Solar energy contractor,Solar,100,100,100,homeadvisor_lead_range,low
 Piano tuner,Specialty/Niche,15,30,45,manual_estimate,low
 Piano tuning service,Specialty/Niche,15,30,45,manual_estimate,low
 Double glazing installer,Windows/Exterior,30,102,350,service_direct_range,high

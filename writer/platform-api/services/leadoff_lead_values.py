@@ -29,18 +29,29 @@ fabricated**; a niche with no defensible signal keeps its flagged manual estimat
      0.6×anchor low, ``high`` = anchor mid. Applied only where the anchor floor
      is a *sane* value for the sub-trade; small finishing sub-trades that would be
      over-priced by inheritance keep their manual estimate instead.
+  3.5 **Observed HomeAdvisor lead-cost range** (``homeadvisor_lead_range``) — a
+     previously-manual category whose GENUINE trade carries a published Service
+     Direct resale range in the HomeAdvisor CSV (Fence → $55–175, ``medium``;
+     Solar → $100, ``low`` — single-sourced). ``mid`` = geomean(low, high); the
+     confidence is per-category (see ``_CATEGORY_OBSERVED``). Requires
+     ``homeadvisor_rows``.
+  3.6 **HomeAdvisor job-value formula** (``job_value_formula``, ``low``) — a
+     previously-manual *project* trade with no observed price but a real job value
+     in the CSV. ``CPL = weighted_job_value × close_rate × margin_share`` clamped
+     to ``[FORMULA_CPL_FLOOR, FORMULA_CPL_CAP]`` (the cap is the load-bearing
+     guardrail — the formula over-shoots high-ticket trades, so a $40k pool and a
+     $10k cabinet both cap at the observed local-project ceiling). Requires
+     ``homeadvisor_rows``; mapped conservatively (see ``_CATEGORY_JOB_MATCH``).
   4. **Keep manual, flagged** (``manual_estimate``, ``low``) — genuine niches
-     with no published price, no observed average, and no sane sibling anchor
-     (moving — spec §5 has zero lead-price signal, CPC-proxy is the v2 path;
-     pools, design/consulting, piano tuning, finishing sub-trades…). Never invent
-     a number.
+     with no published price, no observed average, no sane sibling anchor, and no
+     HomeAdvisor job-value mapping (moving — spec §5 has zero lead-price signal,
+     CPC-proxy is the v2 path; piano tuning, furniture repair, upholstery, ponds,
+     fountains, sprinklers, snow removal…). Never invent a number.
 
-The §4 rung-2 *formula* (``CPL = job_value × close_rate × margin_share``) is kept
-as ``formula_cpl`` for the market brief's monetization cross-check and for v2
-(the verticals with a job value but no observed price). In v1 we anchor to
-**observed** network prices wherever they exist — grounded beats modeled, and
-the formula over-shoots the mid-ticket non-emergency trades (validated only for
-HVAC in the spec) — so the formula is not the primary v1 anchor.
+Rungs 3.5/3.6 run only when ``homeadvisor_rows`` is passed; without it the ladder
+is byte-identical to the observed-price-only v1 (no behaviour change). The §4
+formula (``formula_cpl``) also stays available as the market brief's monetization
+cross-check; the rung-1/2 observed anchors remain published prices, never modelled.
 
 **Source of truth is the scanner's ``inputs/lead_values.csv``** (a
 ``market_scanner`` reload drops/recreates the table from that CSV, so the two new
@@ -51,6 +62,7 @@ columns ride on the CSV schema); the Supabase mirror-upsert in
 from __future__ import annotations
 
 import math
+from collections import Counter
 from typing import Any
 
 # Default margin share for the §4 CPL formula (spec §4 worked example: HVAC
@@ -60,6 +72,29 @@ DEFAULT_MARGIN_SHARE = 0.22
 
 # CPI-U cumulative inflation 2023→2026 (spec §1 "Inflation-adjusted 2023 averages").
 _INFLATION_2023_TO_2026 = 1.0959
+
+# ── The HomeAdvisor formula rung (valuation "full rung", built 2026-09-19) ──────
+# For a currently-manual category with NO observed resale price but a real
+# HomeAdvisor True Cost Guide job value (the raw 713-row
+# ``homeadvisor_true_cost_guide_full.csv``), the §4 formula gives a grounded, low-
+# confidence CPL estimate — better than a hand-guess: ``CPL = weighted_job_value ×
+# close_rate × margin_share``, clamped to [floor, cap]. All three knobs are
+# config-calibratable (``leadoff_cpl_margin_share`` / ``_formula_close_rate`` /
+# ``_formula_cpl_cap`` / ``_formula_cpl_floor``).
+#
+# The blended book/close rate (spec §3 SearchLight, all trades ~42%). One uniform
+# knob rather than per-trade rates — the cap does the heavy lifting on the high
+# end, and the owner tunes close/margin/cap from the printed before→after.
+FORMULA_CLOSE_RATE = 0.42
+# The CAP is the empirical CPL ceiling for high-ticket local *project* trades:
+# the observed Service Direct / GC-remodel lead range tops out at ~$150 (spec §1),
+# and CPL **decouples from job value at the top** — roofing's $7,696 job resells
+# at $85–550, not thousands. So a $40k pool job and a $10k cabinet job both cap
+# here (conservative — understates the truly big-ticket ones rather than inventing
+# a four-figure CPL), while mid/low-ticket trades differentiate below it.
+FORMULA_CPL_CAP = 150
+# Floor so a low-ticket recurring trade (cleaning) doesn't collapse to a few $.
+FORMULA_CPL_FLOOR = 20
 
 
 def geomean(low: float, high: float) -> float:
@@ -244,8 +279,159 @@ def _inherit(anchor: str) -> tuple[int, int, int, str, str]:
     return round(lo * 0.6), round(lo), round(mid), f"cluster:{anchor}", "low"
 
 
+# ── Rung: observed HomeAdvisor lead-cost range ─────────────────────────────────
+# A currently-manual category whose GENUINE trade carries a Service Direct resale
+# range in the HomeAdvisor CSV (``industry`` → lead_cost_low/high). Only these two
+# manual categories have a real, same-trade observed price; the ``industry`` on a
+# cross-mapped row (e.g. a chimney page filed under HVAC) is NOT that trade's price
+# and is deliberately not used here.
+# Value = (industry, confidence). Fence is many-rowed + corroborated (medium);
+# Solar's lead price is single-sourced/thin in the research (low) — so the tier
+# is honest per category rather than a blanket "medium".
+_CATEGORY_OBSERVED: dict[str, tuple[str, str]] = {
+    "Fence contractor": ("Fencing", "medium"),
+    "Solar energy contractor": ("Solar", "low"),
+}
+
+# ── Rung: HomeAdvisor job-value formula (low) ──────────────────────────────────
+# A currently-manual category → the url-slug substrings that select its
+# representative HomeAdvisor sub-job cost pages. The weighted job value of the
+# matched rows (samples>0) feeds the §4 formula. Only unambiguous, genuine
+# project-lead trades are mapped; recurring/no-signal trades (moving — spec §5
+# gap, piano tuning, furniture repair, upholstery, ponds, fountains, sprinklers,
+# snow removal) are intentionally absent → they keep their flagged manual estimate
+# (nothing fabricated). Matching is on the stable url path, not the title.
+_CATEGORY_JOB_MATCH: dict[str, list[str]] = {
+    "Asphalt contractor": ["asphalt-driveway", "tar-and-chip-driveway",
+                            "driveway-repaving", "resurface-an-asphalt-driveway"],
+    "Paving contractor": ["driveway-paving", "install-a-driveway",
+                          "install-driveway-pavers", "install-a-concrete-driveway"],
+    "Awning supplier": ["/awning"],
+    "Cabinet maker": ["cabinet-installation", "custom-cabinets",
+                      "cabinet-refacing", "cabinet-refinishing"],
+    "Countertop contractor": ["countertop"],
+    "Marble contractor": ["marble-countertops"],
+    # "Tile contractor" is deliberately NOT mapped: the CSV's only tile pages are
+    # grout/repair (a tile INSTALLER's job value is flooring-class, not captured),
+    # so a formula off them under-values it — it keeps its flagged manual estimate.
+    "Deck builder": ["deck-building", "deck-replacement", "composite-decking",
+                     "cedar-deck", "aluminum-deck", "floating-deck"],
+    "Demolition contractor": ["gut-a-house", "remove-concrete"],
+    "Dry wall contractor": ["drywall"],
+    "Plasterer": ["plaster"],
+    "Masonry contractor": ["brick-wall", "cinder-block-wall",
+                           "install-a-brick-stone-or-block-wall", "repoint",
+                           "stamped-concrete-wall"],
+    "Stucco contractor": ["stucco"],
+    "Stair contractor": ["build-stairs-or-railings", "hardwood-stairs",
+                         "stair-railing", "wrought-iron-railings",
+                         "concrete-steps", "spiral-staircase"],
+    "House cleaning service": ["housekeeping-services", "/apartment/",
+                               "deep-cleaning-a-house", "move-out-cleaning"],
+    "Window cleaning service": ["clean-windows"],
+    "Pressure washing service": ["pressure-wash-driveway", "clean-a-roof",
+                                 "powerwashing"],
+    "Interior decorator": ["hire-an-interior-decorator-or-designer",
+                           "staging-a-home"],
+    "Interior designer": ["hire-an-interior-decorator-or-designer",
+                          "staging-a-home"],
+    "Swimming pool contractor": ["build-a-swimming-pool", "inground-pool",
+                                 "fiberglass-pool"],
+    "Pool cleaning service": ["maintain-a-swimming-pool", "repair-a-swimming-pool"],
+    "Wallpaper installer": ["wallpaper"],
+    "Building inspector": ["hire-a-home-inspector", "thermal-imaging-inspection"],
+    "Building consultant": ["hire-an-engineer", "hire-a-draftsperson", "test-soil"],
+    "Chimney sweep": ["clean-chimney"],
+    # Chimney *services* = the common small repair/cap lead; the rare full rebuild
+    # ($9k) is excluded so an n=0 outlier can't pin it to the cap.
+    "Chimney services": ["chimney-repair", "install-replace-chimney-cap"],
+}
+
+
+def _to_float(x: Any) -> float | None:
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def weighted_job_value(rows: list[dict[str, Any]]) -> float | None:
+    """Sample-weighted mean HomeAdvisor job value over ``rows`` (spec §4: use the
+    vertical-weighted value, not a single flagship sub-job page). Weights by
+    ``job_value_sample_n`` for rows with a real sample (n>0); falls back to a plain
+    mean of ``job_value_avg`` when none of the matched rows carry a sample (still a
+    grounded directional). ``None`` when nothing usable. Pure."""
+    weighted: list[tuple[float, float]] = []
+    plain: list[float] = []
+    for r in rows:
+        v = _to_float(r.get("job_value_avg"))
+        if v is None or v <= 0:
+            continue
+        plain.append(v)
+        n = _to_float(r.get("job_value_sample_n"))
+        if n is not None and n > 0:
+            weighted.append((v, n))
+    if weighted:
+        tot = sum(n for _, n in weighted)
+        return sum(v * n for v, n in weighted) / tot
+    if plain:
+        return sum(plain) / len(plain)
+    return None
+
+
+def match_job_rows(homeadvisor_rows: list[dict[str, Any]],
+                   patterns: list[str]) -> list[dict[str, Any]]:
+    """HomeAdvisor rows whose ``url`` contains any of ``patterns``. Pure."""
+    return [r for r in homeadvisor_rows
+            if any(p in str(r.get("url", "")) for p in patterns)]
+
+
+def observed_range(industry: str,
+                   homeadvisor_rows: list[dict[str, Any]]) -> tuple[int, int, int] | None:
+    """The Service Direct exclusive lead-cost range published for ``industry`` in
+    the HomeAdvisor CSV → (low, geomean, high). ``None`` if that industry carries
+    no lead-cost figure (e.g. Garage door). Pure.
+
+    Returns the **most common** published (low, high) pair across the industry's
+    rows, not the first — the price is uniform per industry today (all Fencing
+    rows are 55–175), so this is order-independent and robust to a stray
+    non-uniform row rather than depending on DictReader order. Deterministic
+    tiebreak: the smaller (more conservative) pair wins."""
+    pairs: list[tuple[float, float]] = []
+    for r in homeadvisor_rows:
+        if r.get("industry") != industry:
+            continue
+        lo = _to_float(r.get("lead_cost_low"))
+        hi = _to_float(r.get("lead_cost_high"))
+        if lo is not None and hi is not None:
+            pairs.append((lo, hi))
+    if not pairs:
+        return None
+    (lo, hi), _n = max(Counter(pairs).items(),
+                       key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))
+    return round(lo), round(geomean(lo, hi)), round(hi)
+
+
+def job_value_formula_cpl(job_value: float, *, close_rate: float = FORMULA_CLOSE_RATE,
+                          margin_share: float = DEFAULT_MARGIN_SHARE,
+                          cap: int = FORMULA_CPL_CAP,
+                          floor: int = FORMULA_CPL_FLOOR) -> int:
+    """The §4 formula CPL for one weighted job value, **clamped** to [floor, cap]
+    — the rung-3.6 anchor. Wraps the raw ``formula_cpl`` cross-check. Pure. The
+    clamp is the load-bearing guardrail: the raw formula over-shoots high-ticket
+    trades (a $40k pool at 9% ≈ $3,600, absurd for a resale CPL), so it is capped
+    at the observed local-project ceiling; the floor keeps a low-ticket recurring
+    trade off a nonsense few-dollar value."""
+    raw = round(formula_cpl(job_value, close_rate, margin_share))
+    return max(int(floor), min(int(cap), raw))
+
+
 def build_lead_values(existing_rows: list[dict[str, Any]], *,
-                      margin_share: float = DEFAULT_MARGIN_SHARE) -> list[dict[str, Any]]:
+                      margin_share: float = DEFAULT_MARGIN_SHARE,
+                      homeadvisor_rows: list[dict[str, Any]] | None = None,
+                      formula_close_rate: float = FORMULA_CLOSE_RATE,
+                      formula_cpl_cap: int = FORMULA_CPL_CAP,
+                      formula_cpl_floor: int = FORMULA_CPL_FLOOR) -> list[dict[str, Any]]:
     """Recalibrate the lead_values rows to exclusive CPLs via the §4 ladder.
 
     ``existing_rows`` are the current market_scanner.lead_values rows
@@ -254,19 +440,43 @@ def build_lead_values(existing_rows: list[dict[str, Any]], *,
     its existing cpl values flagged ``manual_estimate`` / ``low`` (nothing
     fabricated). Sorted by (cluster, category_name) for a stable diff. Pure.
 
-    ``margin_share`` is accepted for the formula cross-check; v1 anchors to
-    observed prices, so it does not change the output rows (kept for v2 + tests).
+    When ``homeadvisor_rows`` (the raw HomeAdvisor True Cost Guide CSV rows) is
+    provided, two extra rungs run for the previously-manual categories BEFORE the
+    manual fallback: an **observed lead-cost range** (medium) where the trade has a
+    genuine Service Direct price (Fence, Solar), and a **job-value formula** (low)
+    for the mapped project trades. When it is ``None`` these rungs are skipped, so
+    the output is byte-identical to the observed-price-only ladder (existing tests
+    unchanged, no behaviour change unless the CSV is passed).
+
+    ``margin_share`` also feeds the formula rung (with ``formula_close_rate`` and
+    the ``formula_cpl_cap``/``_floor`` clamp). It still does not touch the rung-1/2
+    observed anchors (those are published prices, not modelled).
     """
-    _ = margin_share  # formula cross-check input; not the v1 anchor (see docstring)
+    ha = homeadvisor_rows or []
     out: list[dict[str, Any]] = []
     for r in existing_rows:
         name = r.get("category_name")
         cluster = r.get("cluster")
         vert = _CATEGORY_VERTICAL.get(name)
+        obs = obs_conf = None
+        if ha and name in _CATEGORY_OBSERVED:
+            _industry, obs_conf = _CATEGORY_OBSERVED[name]
+            obs = observed_range(_industry, ha)
+        jv = weighted_job_value(match_job_rows(ha, _CATEGORY_JOB_MATCH[name])) if (
+            ha and name in _CATEGORY_JOB_MATCH) else None
         if vert is not None:
             lo, mid, hi, source, conf = VERTICALS[vert]
         elif name in _CATEGORY_INHERIT:
             lo, mid, hi, source, conf = _inherit(_CATEGORY_INHERIT[name])
+        elif obs is not None:
+            lo, mid, hi = obs
+            source, conf = "homeadvisor_lead_range", obs_conf
+        elif jv is not None:
+            mid = job_value_formula_cpl(jv, close_rate=formula_close_rate,
+                                        margin_share=margin_share,
+                                        cap=formula_cpl_cap, floor=formula_cpl_floor)
+            lo, hi = round(mid * 0.6), round(mid * 1.5)
+            source, conf = "job_value_formula", "low"
         else:
             lo = r.get("cpl_low")
             mid = r.get("cpl_mid")
