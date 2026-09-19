@@ -701,6 +701,90 @@ def _ctx_gbp_posts(supabase, client_id: str, today: date) -> Optional[dict]:
     return out or None
 
 
+def _ctx_social(supabase, client_id: str, today: date) -> Optional[dict]:
+    """Social Media module (PRD §12) — the per-client repurpose/publish state:
+    scheduled + published posts, the approval-queue depth (queued vs
+    still-being-reviewed drafts), the latest competitor signals grounding, and
+    the autonomy tier + last Social Manager run. SerMastr may *propose* a social
+    push from this; publishing stays the module's gated job."""
+    if not settings.social_enabled:
+        return None
+    out: dict = {}
+
+    posts = (
+        supabase.table("social_posts")
+        .select("platform, status, scheduled_at, published_at, created_at")
+        .eq("client_id", client_id)
+        .order("created_at", desc=True)
+        .limit(200)
+        .execute()
+    ).data or []
+    if posts:
+        by_status: dict[str, int] = {}
+        for p in posts:
+            by_status[p.get("status") or "scheduled"] = by_status.get(p.get("status") or "scheduled", 0) + 1
+        out["post_count"] = len(posts)
+        out["by_status"] = by_status
+        out["last_published_at"] = next(
+            (p.get("published_at") for p in posts if p.get("published_at")), None
+        )
+
+    drafts = (
+        supabase.table("social_drafts")
+        .select("platform, status")
+        .eq("client_id", client_id)
+        .in_("status", ["queued", "ready", "needs_image", "needs_board", "needs_revision"])
+        .limit(500)
+        .execute()
+    ).data or []
+    if drafts:
+        queued = sum(1 for d in drafts if d.get("status") == "queued")
+        awaiting = len(drafts) - queued
+        out["approval_queue"] = {"queued": queued, "awaiting_review": awaiting}
+
+    pol = (
+        supabase.table("social_policy")
+        .select("autonomy_tier, qa_gate")
+        .eq("client_id", client_id)
+        .limit(1)
+        .execute()
+    ).data or []
+    if pol:
+        out["autonomy_tier"] = int(pol[0].get("autonomy_tier") or 0)
+        out["qa_gate"] = bool(pol[0].get("qa_gate"))
+
+    last_run = (
+        supabase.table("autonomy_runs")
+        .select("trigger, decisions, created_at")
+        .eq("client_id", client_id).eq("domain", "social")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    ).data or []
+    if last_run:
+        out["last_autonomy_run"] = {
+            "trigger": last_run[0].get("trigger"),
+            "at": last_run[0].get("created_at"),
+        }
+
+    signals = (
+        supabase.table("social_competitor_signals")
+        .select("platform, themes, whats_working, captured_at")
+        .eq("client_id", client_id).eq("status", "ok")
+        .order("captured_at", desc=True)
+        .limit(4)
+        .execute()
+    ).data or []
+    if signals:
+        out["competitor_signals"] = [
+            {"platform": s.get("platform"), "themes": s.get("themes"),
+             "whats_working": s.get("whats_working")}
+            for s in signals
+        ]
+
+    return out or None
+
+
 def _ctx_native_tasks(supabase, client_id: str, today: date) -> Optional[dict]:
     """Native task board — open top-level tasks by status, overdue/unassigned,
     and the nearest-due open items. (`asana`/`task_plan` are separate reads.)
@@ -2085,6 +2169,7 @@ _CONTEXT_PROVIDERS = [
     ("websites", _ctx_websites),
     ("ecommerce", _ctx_ecommerce),
     ("gbp_posts", _ctx_gbp_posts),
+    ("social", _ctx_social),
     ("native_tasks", _ctx_native_tasks),
     ("leadoff", _ctx_leadoff),
     ("response_episodes", _ctx_response_episodes),

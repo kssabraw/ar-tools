@@ -20,6 +20,7 @@ from models.social import (
     SocialAddHandleRequest,
     SocialAngle,
     SocialAnglesRequest,
+    SocialAutonomyRunResponse,
     SocialBatchPublishRequest,
     SocialBatchPublishResult,
     SocialCompetitorHandle,
@@ -58,6 +59,7 @@ from services.social import competitor_research as social_research
 from services.social import creator as social_creator
 from services.social import fanout as social_fanout
 from services.social import image as social_image
+from services.social import manager as social_manager
 from services.social import policy as social_policy
 from services.social import publish as social_publish
 from services.social import schedules as social_schedules
@@ -468,3 +470,16 @@ async def list_social_competitor_signals(client_id: UUID, auth: dict = Depends(r
     """Stored competitor signals for a client, most-recent first."""
     social_publish._assert_enabled()
     return social_research.list_signals(str(client_id))
+
+
+@router.get(
+    "/clients/{client_id}/social/autonomy-runs",
+    response_model=list[SocialAutonomyRunResponse],
+)
+async def list_social_autonomy_runs(client_id: UUID, auth: dict = Depends(require_auth)):
+    """Recent Social Manager (autonomy loop) runs for this client — produced /
+    auto-queued / proposed + cost, most-recent first. Empty until the loop has
+    run (ships dark behind social_autonomy_enabled). Reads the shared
+    autonomy_runs ledger scoped to domain='social'."""
+    social_publish._assert_enabled()
+    return social_manager.list_autonomy_runs(str(client_id))

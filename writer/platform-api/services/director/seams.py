@@ -101,12 +101,60 @@ def autonomy_proposed_unactioned(model: dict, today: date, threshold_days: int) 
             "ident": f"{item.get('run_id')}:{item.get('action')}",
             "evidence": {
                 "action": item.get("action"),
+                "domain": item.get("domain") or "seo",
                 "keyword": item.get("keyword"),
                 "run_id": item.get("run_id"),
                 "days_unactioned": age,
             },
             "since": item.get("since"),
             "threshold_days": threshold_days,
+        })
+    return flags
+
+
+def social_seams(model: dict, today: date, aging_days: int, idle_days: int) -> list[dict]:
+    """The Social Media module's two seams (Phase D), over ``prov_social`` evidence:
+
+    * ``social_draft_aging`` — an approved-but-unqueued Draft sitting in
+      ``ready`` past ``aging_days`` (produced or hand-made, nobody queued it).
+    * ``social_account_idle`` — a platform that used to publish for this client
+      but has gone quiet past ``idle_days``.
+
+    Nudge-to-a-human only; the reconciler opens/auto-closes a board task as the
+    condition trips/clears. Pure."""
+    social = model.get("social") or {}
+    flags: list[dict] = []
+    for item in social.get("aging_drafts") or []:
+        age = age_days(item.get("since"), today)
+        if age is None or age < aging_days:
+            continue
+        flags.append({
+            "seam": "social_draft_aging",
+            "client_id": item.get("client_id"),
+            "ident": str(item.get("draft_id")),
+            "evidence": {
+                "platform": item.get("platform"),
+                "angle": item.get("angle"),
+                "days_ready": age,
+            },
+            "since": item.get("since"),
+            "threshold_days": aging_days,
+        })
+    for item in social.get("idle_accounts") or []:
+        age = age_days(item.get("since"), today)
+        if age is None or age < idle_days:
+            continue
+        flags.append({
+            "seam": "social_account_idle",
+            "client_id": item.get("client_id"),
+            "ident": (item.get("platform") or "account"),
+            "evidence": {
+                "platform": item.get("platform"),
+                "last_published_at": item.get("last_published_at"),
+                "days_idle": age,
+            },
+            "since": item.get("since"),
+            "threshold_days": idle_days,
         })
     return flags
 
@@ -194,8 +242,11 @@ def compute_flags(model: dict, today: date, thresholds: dict) -> dict:
     """Assemble every seam predicate into one ``{flags: [...], count}`` block.
 
     ``thresholds`` = {"approved_unplaced_days", "proposal_pending_days",
-    "qa_idle_days", "autonomy_unactioned_days"} — callers pass the
-    ``settings.director_seam_*`` values (or overrides in tests). Pure."""
+    "qa_idle_days", "autonomy_unactioned_days", "social_draft_aging_days",
+    "social_account_idle_days"} — callers pass the ``settings.director_seam_*``
+    values (or overrides in tests). Missing social keys default off (a large
+    threshold) so an older caller degrades to "no social flags", never a crash.
+    Pure."""
     flags: list[dict] = []
     flags += strategist_approved_unplaced(model, today, thresholds["approved_unplaced_days"])
     flags += strategist_proposal_pending(model, today, thresholds["proposal_pending_days"])
@@ -204,6 +255,11 @@ def compute_flags(model: dict, today: date, thresholds: dict) -> dict:
     if idle:
         flags.append(idle)
     flags += content_shipped_degraded(model)
+    flags += social_seams(
+        model, today,
+        thresholds.get("social_draft_aging_days", 10_000),
+        thresholds.get("social_account_idle_days", 10_000),
+    )
     flags += duplicate_target(model)
     flags += unwatched_seam(model)
     return {"flags": flags, "count": len(flags)}

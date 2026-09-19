@@ -280,9 +280,35 @@ misses are advisory (owner ruling 2026-09-19). Settings `qa_gate` toggle + Draft
 > by `validate_post`; adding the voice + banned-claims block closes the real gap that social
 > manual publish had no voice/claims guard, without blocking a human on a CTA nitpick.
 
-**D — Agent integration + activity UI.** `_ctx_social`/`_prov_social`, the DORA `domain`-aware
-autonomy split + `prov_social` seam, the PACE `on_social_calendar` producer, and the
-frontend autonomy activity view + Drafts provenance badge.
+**D — Agent integration + activity UI. ✅ BUILT (PR #1243).** SerMaStr
+`slack_assistant/context.py::_ctx_social` + `strategy_digest.py::_prov_social` (propose a
+social push, never publish; each isolated + best-effort, registered in the provider lists).
+DORA: `providers.prov_autonomy` is now domain-aware (`by_domain` SEO/social rollup + each
+`proposed_unactioned` row tagged `domain`; `autonomy_proposed_unactioned` carries it in
+evidence) and a new `providers.prov_social` + `seams.social_seams` predicate opens two
+per-client board seams — `social_draft_aging` (an approved-but-unqueued `ready` draft past
+`director_seam_social_draft_aging_days`=5) and `social_account_idle` (a platform with
+published history gone quiet past `director_seam_social_account_idle_days`=21) — wired through
+`read_model` + `reconcile._TITLES` + the DORA system prompt/`_SEAM_LABELS`;
+`KNOWN_PRODUCER_SOURCES` gained the two PACE sources. PACE: `task_producers.on_social_calendar`
+(weekly `social_calendar` nudge per active-cadence client, `run_social_calendar_sweep` on the
+scheduler, `task_producer_social_calendar_enabled` + `_weekday`) + `on_social_drafts_generated`
+(a `social_drafts_review` nudge the manager files after a tier-1 produce,
+`task_producer_social_drafts_review_enabled`) — both weekly-idempotent per ISO week, double-gated,
+ship dark. Activity: `manager.list_autonomy_runs` + `GET /clients/{id}/social/autonomy-runs`
+(`SocialAutonomyRunResponse`) → a `SocialCompose.tsx` "Social Manager activity" panel + a
+`produced_by:autonomy` "AI Manager" Drafts badge. Config: the two `director_seam_social_*`
+thresholds, the three `task_producer_social_*` flags, `social_autonomy_activity_limit`. Tests
+`tests/test_social_p4_phase_d.py` (17). **v1 P4 is now COMPLETE** (analytics read-back stays deferred).
+
+> **Design notes (surfaced to the owner):** (1) the DORA veto stays unwired (Phase-B deviation —
+> no keyword target); (2) **social autonomy proposals surface through the domain-aware
+> `autonomy_proposed_unactioned` seam** (evidence-tagged `domain:"social"`), not `prov_social` —
+> `prov_social` owns the two social-SPECIFIC seams (aging drafts / idle accounts) so nothing
+> double-surfaces (one `director_seam` task per condition); (3) the weekly PACE calendar producer
+> is eligibility-gated on an **active social cadence schedule** (`social_post_schedules`), not on
+> autonomy — a manual-cadence client still benefits; the "review drafts" nudge fires only on a
+> **tier-1** (awaiting-approval) produce, since a tier-2 auto-queued run drips on its own.
 
 (Analytics read-back is a **separate later slice**, gated on the Q5 metric-source decision.)
 

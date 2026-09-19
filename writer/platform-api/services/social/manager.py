@@ -130,6 +130,32 @@ def compose_angle(angle: dict) -> tuple[str, str]:
     return (text or title or hook), (title or hook[:120] or "Social angle")
 
 
+def activity_item(row: dict) -> dict:
+    """Shape one ``autonomy_runs`` (domain='social') ledger row into a compact
+    activity item for the UI/API: produced/auto-queued/proposed + the targeted
+    platforms + cost. Pure — mirrors what ``_write_ledger`` stores."""
+    snap = row.get("goal_snapshot") if isinstance(row.get("goal_snapshot"), dict) else {}
+    decisions = row.get("decisions") or []
+    produced = len(row.get("actions_taken") or [])
+    proposed = 0
+    for d in decisions:
+        if isinstance(d, dict) and d.get("proposed_batches"):
+            proposed += len(d["proposed_batches"])
+    deficits = snap.get("deficits") if isinstance(snap, dict) else None
+    platforms = sorted(deficits.keys()) if isinstance(deficits, dict) else []
+    return {
+        "id": row.get("id"),
+        "trigger": row.get("trigger"),
+        "tier": row.get("tier"),
+        "produced": produced,
+        "auto_queued": bool(snap.get("auto_queue")),
+        "proposed": proposed,
+        "platforms": platforms,
+        "cost_usd": row.get("cost_usd"),
+        "at": row.get("created_at"),
+    }
+
+
 def select_source(
     candidates: list[dict], used_keys: set[str], topics: list[str]
 ) -> Optional[dict]:
@@ -300,6 +326,25 @@ def _in_flight_run(client_id: str) -> bool:
     return bool(rows)
 
 
+def list_autonomy_runs(client_id: str, limit: Optional[int] = None) -> list[dict]:
+    """Recent Social Manager runs for a client (the activity view), most-recent
+    first. Reads the shared ``autonomy_runs`` ledger scoped to ``domain='social'``
+    and shapes each row via ``activity_item``. Best-effort — [] on error."""
+    lim = max(1, int(limit or settings.social_autonomy_activity_limit))
+    try:
+        rows = (
+            _sb().table("autonomy_runs")
+            .select("id, trigger, tier, goal_snapshot, decisions, actions_taken, cost_usd, created_at")
+            .eq("client_id", client_id).eq("domain", "social")
+            .order("created_at", desc=True).limit(lim).execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — the activity read is best-effort
+        logger.warning("social.autonomy_activity_read_failed",
+                       extra={"client_id": client_id, "error": str(exc)[:200]})
+        return []
+    return [activity_item(r) for r in rows]
+
+
 # ── the run ──────────────────────────────────────────────────────────────────
 
 async def _angle_for_source(client_id: str, src: dict, user_id: Optional[str]) -> tuple[str, str]:
@@ -433,6 +478,13 @@ async def run_social_autonomy_for_client(
     _write_ledger(client_id, trigger, tier, deficits, decisions, dispatched, auto_queue)
     _emit_digest(client_id, trigger, produced=len(dispatched), queued=auto_queue,
                  batches=[d["platforms"] for d in dispatched], proposed=False)
+    # PACE hand-off (Phase D): when the drafts land awaiting human approval
+    # (tier 1 — not auto-queued), file a "review the generated drafts" task so
+    # the work is owned on the board, not just a notification. A tier-2
+    # auto-queued run drips on its own; the weekly calendar-approval task covers
+    # its oversight. Best-effort + double-gated inside the producer.
+    if dispatched and not auto_queue:
+        _file_pace_review_task(client_id, len(dispatched))
     return {
         "status": "ran", "tier": tier, "auto_queue": auto_queue,
         "dispatched": len(dispatched), "platforms": sorted({p for d in dispatched for p in d["platforms"]}),
@@ -450,6 +502,18 @@ def _write_ledger(client_id, trigger, tier, deficits, decisions, dispatched, aut
         }).execute()
     except Exception as exc:  # noqa: BLE001 — the ledger is best-effort
         logger.warning("social.autonomy_ledger_failed", extra={"client_id": client_id, "error": str(exc)[:200]})
+
+
+def _file_pace_review_task(client_id: str, count: int) -> None:
+    """Best-effort PACE hand-off — a "review the generated social drafts" board
+    task (double-gated inside the producer; off by default). Never raises."""
+    try:
+        from services import task_producers
+
+        task_producers.on_social_drafts_generated(client_id, count)
+    except Exception as exc:  # noqa: BLE001 — the PACE hand-off is best-effort
+        logger.warning("social.autonomy_pace_task_failed",
+                       extra={"client_id": client_id, "error": str(exc)[:200]})
 
 
 def _emit_digest(client_id, trigger, *, produced, queued, batches, proposed) -> None:
