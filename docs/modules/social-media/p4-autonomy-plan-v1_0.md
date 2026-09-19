@@ -280,7 +280,7 @@ misses are advisory (owner ruling 2026-09-19). Settings `qa_gate` toggle + Draft
 > by `validate_post`; adding the voice + banned-claims block closes the real gap that social
 > manual publish had no voice/claims guard, without blocking a human on a CTA nitpick.
 
-**D — Agent integration + activity UI. ✅ BUILT (PR #<pending>).** SerMaStr
+**D — Agent integration + activity UI. ✅ BUILT (PR #1243).** SerMaStr
 `slack_assistant/context.py::_ctx_social` + `strategy_digest.py::_prov_social` (propose a
 social push, never publish; each isolated + best-effort, registered in the provider lists).
 DORA: `providers.prov_autonomy` is now domain-aware (`by_domain` SEO/social rollup + each

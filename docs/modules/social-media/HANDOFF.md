@@ -18,7 +18,7 @@ producing/queuing drafts.
   (`social_policy.qa_gate` + `social_drafts.qa_verdict`) applied live. See that PR's notes for the
   two deliberate deviations (verdict on `social_drafts.qa_verdict` not `qa_reviews`; manual-publish
   gate blocks on a CRITICAL fail only).
-- **Phase D (this PR) — agent integration + activity UI.** SerMaStr `_ctx_social` (context) +
+- **Phase D (PR #1243) — agent integration + activity UI.** SerMaStr `_ctx_social` (context) +
   `_prov_social` (strategy digest — propose a social push, never publish). DORA: `prov_autonomy` is
   **domain-aware** (`by_domain` SEO/social; each proposed row tagged `domain`) and a new
   `prov_social` + `social_seams` predicate opens two per-client board seams — **`social_draft_aging`**
