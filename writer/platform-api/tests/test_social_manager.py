@@ -75,6 +75,9 @@ def _enabled(monkeypatch):
     monkeypatch.setattr(settings, "social_autonomy_cap_tier", 2)
     monkeypatch.setattr(settings, "social_autonomy_target_queue", 2)
     monkeypatch.setattr(settings, "social_autonomy_max_per_week", 14)
+    # The storyboard-propose seam (P5 a.1) adds a new impure read into the run path; stub
+    # it to "none recent" by default so run tests stay network-free (seam tests override it).
+    monkeypatch.setattr(manager, "_platforms_with_recent_storyboard", lambda c, d: set())
 
 
 # ── pure core ──────────────────────────────────────────────────────────────
@@ -418,3 +421,83 @@ def test_run_fanout_job_qa_holds_failing_draft(monkeypatch):
     draft_update = next(u for u in store_updates if u.get("status") in ("queued", "ready"))
     assert draft_update["status"] == "ready"          # QA held it — NOT auto-queued
     assert draft_update["qa_verdict"]["verdict"] == "minor_revisions"
+
+
+# ── P5 (slice a.1): the storyboard-PROPOSE seam ──────────────────────────────
+
+def test_gather_storyboard_proposals_video_only_and_capped():
+    # instagram + facebook + youtube are video platforms; linkedin is not. facebook has a
+    # recent storyboard (excluded). cap = 1 → only the first eligible (instagram) is proposed.
+    props = manager.gather_storyboard_proposals(
+        ["linkedin", "facebook", "instagram", "youtube"],
+        recent_platforms={"facebook"}, max_proposals=1,
+    )
+    assert [p["platform"] for p in props] == ["instagram"]
+    assert props[0]["format"] == "reel"
+
+
+def test_gather_storyboard_proposals_youtube_is_short():
+    props = manager.gather_storyboard_proposals(["youtube"], set(), max_proposals=3)
+    assert props == [{"platform": "youtube", "format": "short",
+                      "reason": "no recent video storyboard for this platform"}]
+
+
+def test_gather_storyboard_proposals_none_when_all_recent_or_off_topic():
+    assert manager.gather_storyboard_proposals(["instagram"], {"instagram"}, 5) == []
+    assert manager.gather_storyboard_proposals(["linkedin", "x"], set(), 5) == []
+    assert manager.gather_storyboard_proposals(["instagram"], set(), 0) == []
+
+
+def test_storyboard_proposal_decisions_are_propose_never_auto(monkeypatch):
+    monkeypatch.setattr(manager, "_platforms_with_recent_storyboard", lambda c, d: set())
+    monkeypatch.setattr(settings, "social_autonomy_storyboard_proposals", True)
+    monkeypatch.setattr(settings, "social_autonomy_storyboard_max_per_run", 2)
+    decisions = manager._storyboard_proposal_decisions("c1", ["facebook", "youtube"], tier=1)
+    assert [d["platform"] for d in decisions] == ["facebook", "youtube"]
+    assert all(d["action"] == "propose_social_storyboard" for d in decisions)
+    assert all(d["outcome"] == "propose" for d in decisions)   # requires=approval ⇒ never auto
+    # and never in AUTO_EXECUTE (belt + suspenders)
+    assert "propose_social_storyboard" not in manager.AUTO_EXECUTE
+
+
+def test_storyboard_proposal_decisions_gated_off(monkeypatch):
+    monkeypatch.setattr(settings, "social_autonomy_storyboard_proposals", False)
+    assert manager._storyboard_proposal_decisions("c1", ["facebook"], tier=2) == []
+
+
+def test_activity_item_counts_storyboard_proposals():
+    row = {
+        "id": "r1", "trigger": "scheduled", "tier": 1, "cost_usd": 0,
+        "goal_snapshot": {"deficits": {"facebook": 1}},
+        "decisions": [
+            {"proposed_batches": [["facebook"]]},
+            {"action": "propose_social_storyboard", "outcome": "propose", "platform": "youtube"},
+        ],
+        "actions_taken": [],
+    }
+    item = manager.activity_item(row)
+    assert item["storyboards"] == 1
+    assert item["proposed"] == 1
+    assert item["platforms"] == ["facebook", "youtube"]   # deficit + storyboard platforms merged
+
+
+def test_run_records_storyboard_proposal_even_when_queues_full(monkeypatch):
+    # draft queues full (deficit 0) → normally a bare noop; a storyboard proposal still
+    # surfaces as a "proposed" run that records the decision + digests it.
+    monkeypatch.setattr(manager, "_policy_row", lambda c: {"autonomy_tier": 1})
+    import services.freeze as freeze
+    monkeypatch.setattr(freeze, "is_frozen", lambda c: False)
+    monkeypatch.setattr(manager, "_active_cadence_platforms", lambda c: ["facebook"])
+    monkeypatch.setattr(manager, "_queued_counts", lambda c: {"facebook": 2})   # deficit 0 → no batches
+    monkeypatch.setattr(manager, "_autonomy_drafts_this_week", lambda c: 0)
+    monkeypatch.setattr(manager, "_platforms_with_recent_storyboard", lambda c, d: set())
+    monkeypatch.setattr(settings, "social_autonomy_storyboard_proposals", True)
+    monkeypatch.setattr(settings, "social_autonomy_storyboard_max_per_run", 1)
+    ledger: dict = {}
+    monkeypatch.setattr(manager, "_write_ledger",
+                        lambda cid, tr, ti, defs, decs, dispatched, auto_queue: ledger.update(decisions=decs))
+    monkeypatch.setattr(manager, "_emit_digest", lambda *a, **k: None)
+    out = _run()
+    assert out["status"] == "proposed" and out["storyboards"] == 1 and out["batches"] == 0
+    sb = [d for d in ledger["decisions"] if d.get("action") == "propose_social_storyboard"]
+    assert len(sb) == 1 and sb[0]["platform"] == "facebook" and sb[0]["outcome"] == "propose"

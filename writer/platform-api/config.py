@@ -124,6 +124,11 @@ class Settings(BaseSettings):
     social_autonomy_max_per_week: int = 14    # rate cap on autonomy-produced drafts / client / week
     social_autonomy_source_cooldown_days: int = 30  # don't re-repurpose a source within this window
     social_autonomy_activity_limit: int = 20  # recent social_autonomy_run ledger rows the activity view reads
+    # P5 (slice a.1) — the loop MAY PROPOSE a video storyboard (owner Q4; never auto-generate
+    # video, never publish). A requires="approval" proposal only; a human shoots it.
+    social_autonomy_storyboard_proposals: bool = True     # sub-toggle within the autonomy loop
+    social_autonomy_storyboard_cooldown_days: int = 14    # don't re-propose a platform's storyboard within this window
+    social_autonomy_storyboard_max_per_run: int = 1       # storyboard proposals surfaced per run
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
     social_max_upload_mb: float = 200.0   # server multipart upload cap (video-sized)
     # Big-video direct-to-R2 (queue #4): videos over social_max_upload_mb are PUT

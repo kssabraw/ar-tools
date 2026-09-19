@@ -4,6 +4,48 @@
 > Not the root `/HANDOFF.md` (the suite-wide one). Read `CLAUDE.md` (this folder) for the
 > build primer; this file is **current state + what to do next**.
 
+## Update (2026-09-19) — **P5 slice (a.1): the three storyboard follow-ups BUILT** (branch `claude/ar-tools-social-p5-video-8tndc2`) — no new vendor, no rendered video
+
+The deferred follow-ups to the merged Video Storyboard slice (a), all three chosen by the
+owner via AskUserQuestion (2026-09-19): **(1) the Q4 autonomy-PROPOSE seam**, **(2) a
+Google-Doc export**, **(3) deeper shot-level UI editing**. Plan: `p5-storyboard-followups-plan-v1_0.md`.
+
+- **(1) Autonomy-PROPOSE seam (owner Q4 = "may propose"):** the P4 Social Manager loop
+  (`services/social/manager.py`) now surfaces a **video storyboard** as a
+  `requires="approval"` proposal — which `autonomy_policy.classify` deterministically returns
+  **`propose`** for (never `auto`, whatever the tier/budget). It **generates nothing, spends
+  nothing** (no LLM, no thumbnail, no video); a human makes the video from the Storyboard tab.
+  Pure `gather_storyboard_proposals` (video platforms not recently storyboarded, capped) +
+  impure `_platforms_with_recent_storyboard` (cooldown, best-effort) + `_storyboard_proposal_decisions`
+  (gated on `social_autonomy_storyboard_proposals`); threaded into all three run exits (incl.
+  a "queues full" run now surfacing a storyboard proposal). `propose_social_storyboard` is
+  **NOT** in `AUTO_EXECUTE` (belt + suspenders). **DORA needs no change** — `prov_autonomy`
+  already counts domain='social' `propose` decisions (they surface in the
+  `autonomy_proposed_unactioned` seam + ops digest + the Social Manager activity view, which
+  gained a `storyboards` count). Ships dark behind the existing `social_autonomy_enabled`.
+  Config: `social_autonomy_storyboard_proposals` (True) / `_cooldown_days` (14) / `_max_per_run` (1).
+- **(2) Google-Doc export:** `POST /clients/{id}/social/storyboards/{id}/export-doc` renders the
+  storyboard to markdown (pure `storyboard.render_storyboard_markdown`) and creates a Google Doc
+  in the client's Drive folder (`google_docs.create_google_doc`, `resolve_drive_folder(client,
+  "social_storyboard")`, `dedupe_by_name` → idempotent re-export), persisting `doc_url` on the
+  row. `require_staff`, **not** freeze-gated (spends nothing, publishes nothing). Migration
+  `20260919160000_social_storyboard_doc_url.sql` (**applied live**) adds `social_storyboards.doc_url`;
+  `SocialStoryboardResponse` gained `doc_url`; new `SocialStoryboardExportResponse`.
+- **(3) Shot-level UI editing:** `StoryboardCard` in `SocialCompose.tsx` now edits the full shot
+  list (per-shot visual/on-screen-text/voiceover/duration/b-roll, add/reorder/delete) + hook +
+  target length + music (the backend PATCH already accepted a full body); plus an **Export to
+  Google Doc** button + a persistent **Open Doc** link.
+- **Tests:** `tests/test_social_manager.py` (seam: `gather_storyboard_proposals`,
+  `_storyboard_proposal_decisions` propose-never-auto + gated-off, `activity_item` storyboards,
+  a run test recording a proposal when queues are full) + `tests/test_social_storyboard.py`
+  (`render_storyboard_markdown` full/minimal, `export_storyboard_doc` happy/422/404). **268
+  social tests pass; ruff clean; frontend `tsc -b` + eslint clean (SocialCompose 0 problems).**
+  `errorGuidance` gained `social_storyboard_export_failed`.
+- **Deployed-only (sandbox egress-blocked from the Apps Script webhook + Gemini):** a live Doc
+  export + a live thumbnail render — same deployed-only confidence as the merged slice; no new
+  external dependency. Phase (b) assembled video + (c) AI-video generation remain separate owner
+  decisions (scope doc §"load-bearing fork").
+
 ## Update (2026-09-19) — **P5 slice (a): Video Storyboard BUILT + MERGED** (PR [#1245](https://github.com/kssabraw/ar-tools/pull/1245), squash `b1eabef`) — a brief, NO rendered video, NO new vendor
 
 The first P5 slice, built to the owner's 2026-09-19 AskUserQuestion decisions (scope:

@@ -480,6 +480,11 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     meaning: 'This storyboard has no title or hook to generate a thumbnail image from.',
     steps: ['Add a working title or edit the hook, then generate the thumbnail.'],
   },
+  social_storyboard_export_failed: {
+    title: 'Couldn’t export the storyboard to Google Docs',
+    meaning: 'The Google Docs webhook didn’t create the doc — usually a temporary hiccup.',
+    steps: ['Try “Export to Google Doc” again in a moment.', 'If it keeps failing, tell an admin.'],
+  },
   social_fanout_failed: {
     title: 'Couldn’t start the fan-out',
     meaning: 'The request to generate drafts across platforms failed to start.',

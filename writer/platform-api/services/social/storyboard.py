@@ -356,6 +356,130 @@ def delete_storyboard(storyboard_id: str) -> dict:
     return {"ok": True}
 
 
+# ── Google-Doc export (slice a.1) ────────────────────────────────────────────
+
+def render_storyboard_markdown(row: dict) -> tuple[str, str]:
+    """Render a stored storyboard row to (doc_title, markdown). Pure (unit-tested).
+
+    Produces a clean, shoot-ready brief a client or videographer can open + mark up:
+    a header (platform / format / target length), the hook, a numbered shot list (each
+    shot's visual + on-screen text + voiceover + duration + b-roll), music, caption,
+    hashtags, CTA, the source, and any brand-voice advisory. Empty fields are omitted."""
+    body = row.get("storyboard") or {}
+    platform = (row.get("platform") or "").strip()
+    fmt = (row.get("format") or "reel").strip()
+    title = (row.get("title") or row.get("source_title") or "Video storyboard").strip() or "Video storyboard"
+
+    meta_bits = [b for b in (platform.title() if platform else "", fmt.title() if fmt else "") if b]
+    total = _coerce_int(body.get("duration_seconds"))
+    if total and total > 0:
+        meta_bits.append(f"~{total}s")
+
+    lines: list[str] = [f"# {title}", ""]
+    if meta_bits:
+        lines += [f"**{' · '.join(meta_bits)}**", ""]
+    if (row.get("angle") or "").strip():
+        lines += [f"_Angle: {row['angle'].strip()}_", ""]
+
+    hook = (body.get("hook") or "").strip()
+    if hook:
+        lines += ["## Hook (first ~3 seconds)", "", hook, ""]
+
+    shots = [s for s in (body.get("shots") or []) if isinstance(s, dict)]
+    if shots:
+        lines += ["## Shot list", ""]
+        for i, s in enumerate(shots, start=1):
+            visual = (s.get("visual") or "").strip()
+            if not visual:
+                continue
+            tags: list[str] = []
+            if s.get("b_roll") is True:
+                tags.append("b-roll")
+            dur = _coerce_int(s.get("duration_seconds"))
+            if dur and dur > 0:
+                tags.append(f"~{dur}s")
+            suffix = f" ({', '.join(tags)})" if tags else ""
+            lines.append(f"{i}. **{visual}**{suffix}")
+            ost = (s.get("on_screen_text") or "").strip()
+            if ost:
+                lines.append(f"   - On-screen text: {ost}")
+            vo = (s.get("voiceover") or "").strip()
+            if vo:
+                lines.append(f"   - Voiceover: {vo}")
+        lines.append("")
+
+    music = (body.get("music") or "").strip()
+    if music:
+        lines += ["## Music / audio", "", music, ""]
+
+    caption = (body.get("caption") or "").strip()
+    if caption:
+        lines += ["## Caption", "", caption, ""]
+
+    hashtags = [h for h in (body.get("hashtags") or []) if isinstance(h, str) and h.strip()]
+    if hashtags:
+        lines += ["**Hashtags:** " + " ".join(f"#{h.lstrip('#').strip()}" for h in hashtags), ""]
+
+    cta = (body.get("cta") or "").strip()
+    if cta:
+        lines += [f"**Call to action:** {cta}", ""]
+
+    if (row.get("source_title") or "").strip():
+        lines += [f"_Source: {row['source_title'].strip()}_", ""]
+
+    warnings = [w for w in (row.get("voice_warnings") or []) if isinstance(w, str) and w.strip()]
+    if warnings:
+        lines += ["> **Brand-voice advisory:** " + ", ".join(warnings) + " — review before shooting.", ""]
+
+    return title, "\n".join(lines).strip() + "\n"
+
+
+def _client_for_export(client_id: str) -> dict:
+    rows = (
+        _sb().table("clients")
+        .select("id, name, drive_folders, google_drive_folder_id")
+        .eq("id", client_id).limit(1).execute()
+    ).data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="client_not_found")
+    return rows[0]
+
+
+async def export_storyboard_doc(client_id: str, storyboard_id: str, user_id: Optional[str] = None) -> dict:
+    """Export a storyboard as a Google Doc in the client's Drive folder and persist the
+    Doc URL. Reuses ``google_docs.create_google_doc`` (dedupe_by_name → idempotent
+    re-export). No paid API, no publish — an internal planning-brief deliverable."""
+    _assert_enabled()
+    row = get_storyboard(storyboard_id)
+    if str(row.get("client_id")) != str(client_id):
+        raise HTTPException(status_code=404, detail="social_storyboard_not_found")
+
+    from services import google_docs
+
+    client = _client_for_export(client_id)
+    folder_id = google_docs.resolve_drive_folder(client, "social_storyboard")
+    if not folder_id:
+        raise HTTPException(status_code=422, detail="missing_google_drive_folder_id")
+
+    doc_title, markdown = render_storyboard_markdown(row)
+    try:
+        result = await google_docs.create_google_doc(
+            folder_id, doc_title, markdown, content_format="markdown", dedupe_by_name=True
+        )
+    except google_docs.GoogleDocError as exc:
+        logger.warning("social.storyboard_export_failed", extra={"error": str(exc)[:200]})
+        raise HTTPException(status_code=502, detail="social_storyboard_export_failed") from exc
+
+    doc_url = result.get("doc_url")
+    if doc_url:
+        (
+            _sb().table("social_storyboards")
+            .update({"doc_url": doc_url, "updated_at": "now()"})
+            .eq("id", storyboard_id).execute()
+        )
+    return {"doc_id": result.get("doc_id"), "doc_url": doc_url, "reused": bool(result.get("reused"))}
+
+
 async def generate_thumbnail(client_id: str, storyboard_id: str, user_id: Optional[str] = None) -> dict:
     """Generate + attach a 9:16 thumbnail for a storyboard. Reuses the built social
     image path (freeze-gated + fail-closed budget-metered). The description is derived
