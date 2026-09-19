@@ -227,7 +227,9 @@ async def publish_social_draft(
     social_publish._assert_enabled()
     draft = social_fanout.get_draft(str(draft_id))
     assert_not_frozen(str(draft["client_id"]))
-    return social_fanout.publish_existing_draft(str(draft_id), body.account_id, body.scheduled_at)
+    return social_fanout.publish_existing_draft(
+        str(draft_id), body.account_id, body.scheduled_at, force_qa=body.force_qa
+    )
 
 
 @router.post("/clients/{client_id}/social/generate-image", response_model=SocialGenerateImageResponse)

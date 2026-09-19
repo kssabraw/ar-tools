@@ -260,8 +260,25 @@ off = manual behavior). `social_autonomy_run` job + `job_worker` dispatch. Ships
 > deferred until social candidates gain a target. (The plan listed it as a reused primitive;
 > the other primitives — `classify`, the fail-closed budget meter, freeze — are all wired.)
 
-**C — QA rubric.** `RUBRIC_SOCIAL` + `review_social_draft` + the `qa_gate` opt-in + the block
-on auto-queue. Deterministic-check tests.
+**C — QA rubric. ✅ BUILT (PR #1240).** `qa_signals.RUBRIC_SOCIAL` + `check_social_draft`
+(voice / banned-claims / CTA / platform / image, folded by the shared `build_verdict`; the
+voice + claims keys added to `CRITICAL_CHECK_KEYS`) + `services/social/qa.py` (the
+deterministic orchestration reusing `voice_forbidden_hits` / `content_compliance.scan_text` /
+`validate_post` / `has_cta`). Per-client opt-in via `social_policy.qa_gate` (migration
+`20260919130000`, applied live). **Auto-queue gate**: `run_fanout_job` runs the rubric before
+auto-queuing (tier 2) and holds any non-pass/advisory draft at `ready` (+ a `social_qa_failed`
+digest). **Manual-publish gate**: `publish_existing_draft` blocks a CRITICAL fail (a
+guide-forbidden voice term or a banned regulated claim) with a `force_qa` override; other
+misses are advisory (owner ruling 2026-09-19). Settings `qa_gate` toggle + Drafts QA badge +
+"Publish anyway" override + `errorGuidance`. 168 social+QA tests pass.
+
+> **Deviations (both deliberate, surfaced to the owner):** (1) `qa_reviews.task_id` is
+> `NOT NULL references tasks(id)` — a social draft isn't a task, so the plan's "reuse
+> `qa_reviews`" was infeasible; the verdict is persisted on **`social_drafts.qa_verdict`**
+> (a migration column) instead — cleaner + isolated. (2) The manual-publish gate blocks on a
+> **CRITICAL fail only** (owner ruling): platform/char/image-required are already hard-blocked
+> by `validate_post`; adding the voice + banned-claims block closes the real gap that social
+> manual publish had no voice/claims guard, without blocking a human on a CTA nitpick.
 
 **D — Agent integration + activity UI.** `_ctx_social`/`_prov_social`, the DORA `domain`-aware
 autonomy split + `prov_social` seam, the PACE `on_social_calendar` producer, and the

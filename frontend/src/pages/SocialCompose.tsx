@@ -439,6 +439,7 @@ interface Draft {
   platform_metadata: { board_id?: string; [k: string]: unknown } | null
   voice_verdict: { warnings?: string[] } | null
   spec_verdict: { warnings?: string[] } | null
+  qa_verdict: { verdict?: string; failed?: string[]; critical?: string[] } | null
   status: DraftStatus
 }
 
@@ -730,7 +731,10 @@ function DraftRow({ draft, accounts, onChanged }: {
     onSuccess: onChanged,
   })
   const pubMut = useMutation({
-    mutationFn: async () => { setError(null); return api.post(`/social/drafts/${draft.id}/publish`, { account_id: acct }) },
+    mutationFn: async (forceQa: boolean) => {
+      setError(null)
+      return api.post(`/social/drafts/${draft.id}/publish`, { account_id: acct, force_qa: forceQa })
+    },
     onSuccess: onChanged,
     onError: (e) => setError(e instanceof Error ? e.message : 'publish_failed'),
   })
@@ -768,6 +772,11 @@ function DraftRow({ draft, accounts, onChanged }: {
               <span style={{ fontSize: 11, color: '#94a3b8' }}>{voiceWarn.length ? `⚠ ${voiceWarn.map((w) => w.replace('forbidden_term:', '')).join(', ')}` : ''}</span>
               <span style={{ fontSize: 11, color: copy.length > spec.charLimit ? '#b91c1c' : '#94a3b8' }}>{copy.length} / {spec.charLimit}</span>
             </div>
+            {draft.qa_verdict?.verdict && draft.qa_verdict.verdict !== 'pass' && draft.qa_verdict.verdict !== 'advisory' && (
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: (draft.qa_verdict.critical?.length ? '#b91c1c' : '#c2410c') }}>
+                QA: {draft.qa_verdict.critical?.length ? 'critical — ' : ''}{(draft.qa_verdict.failed ?? []).join('; ') || draft.qa_verdict.verdict}
+              </p>
+            )}
             {draft.status === 'needs_image' && (
               <p style={{ margin: '4px 0 0', fontSize: 12, color: '#c2410c' }}>{spec.label} needs an image before it can publish — add one on the Compose tab, or delete this draft.</p>
             )}
@@ -795,7 +804,7 @@ function DraftRow({ draft, accounts, onChanged }: {
                       {platAccounts.map((a) => <option key={a.account_id} value={a.account_id}>{a.handle || a.account_id}</option>)}
                     </select>
                   )}
-                  <button onClick={() => pubMut.mutate()} disabled={!publishable || pubMut.isPending || dirty}
+                  <button onClick={() => pubMut.mutate(false)} disabled={!publishable || pubMut.isPending || dirty}
                     title={dirty ? 'Save your edit first' : platAccounts.length === 0 ? 'No connected account for this platform' : ''}
                     style={{ ...btn(publishable && !dirty ? '#4f46e5' : '#c7d2fe'), padding: '6px 12px', cursor: publishable && !dirty ? 'pointer' : 'not-allowed' }}>
                     {pubMut.isPending ? <Loader2 size={13} className="spin" /> : <Send size={13} />} Publish now
@@ -819,7 +828,12 @@ function DraftRow({ draft, accounts, onChanged }: {
               </button>
               {pubMut.isSuccess && <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>Submitted — publishing…</span>}
             </div>
-            {error && <div style={{ marginTop: 8 }}><ErrorDetails message={error} /></div>}
+            {error && (
+              <div style={{ marginTop: 8 }}>
+                <ErrorDetails message={error}
+                  onOverride={() => pubMut.mutate(true)} overriding={pubMut.isPending} />
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1408,6 +1422,7 @@ interface SocialPolicy {
   blocked_topics: string[]
   tone_prefs: string | null
   competitor_focus: string[]
+  qa_gate: boolean
   autonomy_cap_tier: number
   autonomy_enabled: boolean
 }
@@ -1455,6 +1470,7 @@ function PolicyCard({ clientId }: { clientId: string }) {
   const [blocked, setBlocked] = useState<string | null>(null)
   const [tone, setTone] = useState<string | null>(null)
   const [competitors, setCompetitors] = useState<string | null>(null)
+  const [qaGate, setQaGate] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Prefill once from the loaded policy (adjust-during-render, guarded on ceiling===null).
   if (ceiling === null && polQ.data) {
@@ -1466,6 +1482,7 @@ function PolicyCard({ clientId }: { clientId: string }) {
     setBlocked((polQ.data.blocked_topics ?? []).join('\n'))
     setTone(polQ.data.tone_prefs ?? '')
     setCompetitors((polQ.data.competitor_focus ?? []).join('\n'))
+    setQaGate(polQ.data.qa_gate ?? false)
   }
   const saveMut = useMutation({
     mutationFn: () => api.put(`/clients/${clientId}/social/policy`, {
@@ -1477,6 +1494,7 @@ function PolicyCard({ clientId }: { clientId: string }) {
       blocked_topics: linesToList(blocked ?? ''),
       tone_prefs: tone && tone.trim() ? tone : null,
       competitor_focus: linesToList(competitors ?? ''),
+      qa_gate: qaGate ?? false,
     }),
     onSuccess: () => { setError(null); void polQ.refetch() },
     onError: (e) => setError(e instanceof Error ? e.message : 'save_failed'),
@@ -1548,6 +1566,17 @@ function PolicyCard({ clientId }: { clientId: string }) {
               <label style={label}>Competitor focus (one per line)</label>
               <textarea style={{ ...input, minHeight: 50, resize: 'vertical' }} value={competitors ?? ''} placeholder="Which competitors’ signals to lean on for angles" onChange={(e) => setCompetitors(e.target.value)} />
             </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 14, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={Boolean(qaGate)} onChange={(e) => setQaGate(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>
+                <strong>QA gate</strong>
+                <span style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                  Run a quality check (brand voice, no banned claims, a CTA, platform rules, an image) on each draft.
+                  A failing auto-fill draft is held for your review instead of queued; a manual publish is blocked only
+                  on a serious issue (a forbidden voice term or a banned claim), with a “Publish anyway” override.
+                </span>
+              </span>
+            </label>
           </div>
 
           <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={{ ...btn('#4f46e5') }}>

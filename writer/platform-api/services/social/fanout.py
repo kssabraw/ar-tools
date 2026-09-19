@@ -317,6 +317,15 @@ async def run_fanout_job(job: dict) -> None:
     # P4 autonomy provenance + auto-queue (absent for a manual fan-out).
     produced_by = payload.get("produced_by")
     auto_queue = bool(payload.get("auto_queue"))
+    # P4 QA gate — only relevant when auto-queuing (QA-at-generation guards the
+    # UNREVIEWED auto-queue; a human-published draft is QA'd at publish time). Loaded
+    # once. Off → today's behavior (auto-queue any ready draft).
+    from services.social import qa as social_qa
+
+    qa_gate = social_qa.qa_gate_enabled(client_id) if auto_queue else False
+    # Resolve the compliance mode ONCE (the fan-out client row omits the column, so the
+    # per-draft QA can't read it from `client`). Only needed when the gate is on.
+    qa_mode = social_qa.resolve_compliance_mode(client_id) if qa_gate else "off"
     # Load the client's image-prompt template ONCE (reused for every platform's image).
     policy_template = None
     if include_image:
@@ -333,7 +342,7 @@ async def run_fanout_job(job: dict) -> None:
         .eq("angle_set_id", angle_set_id).eq("status", "generating").execute()
     ).data or []
 
-    ready = failed = 0
+    ready = failed = qa_blocked = 0
     for draft in pending:
         platform = draft["platform"]
         spec = _platform_spec(platform)
@@ -407,9 +416,22 @@ async def run_fanout_job(job: dict) -> None:
         # so P3's drip can publish them — but ONLY a fully-ready draft (a needs_image /
         # needs_board draft is never silently queued). Publishing still needs the
         # platform's auto_fill + the global auto-publish switch (P3), so tier 2 alone
-        # only reaches the queue.
+        # only reaches the queue. When the QA gate is on, a draft that fails ANY check is
+        # held at 'ready' (a human decides) instead of auto-queued — never queue
+        # unreviewed content that fails. The verdict rides on the draft either way.
         if auto_queue and status == "ready":
-            status = "queued"
+            if qa_gate:
+                qa_verdict = social_qa.review_draft(
+                    client_id=client_id, platform=platform, copy=copy, media=media,
+                    fmt=d_fmt, card=card, compliance_mode=qa_mode,
+                )
+                update["qa_verdict"] = qa_verdict
+                if social_qa.blocks_auto_queue(qa_verdict):
+                    qa_blocked += 1          # status stays 'ready' — held for a human
+                else:
+                    status = "queued"
+            else:
+                status = "queued"
         update.update({
             "copy": copy, "media": media,
             "image_urls": image_urls,
@@ -426,12 +448,21 @@ async def run_fanout_job(job: dict) -> None:
         sb.table("social_drafts").update(update).eq("id", draft["id"]).execute()
         ready += 1
 
-    _settle("complete", result={"angle_set_id": angle_set_id, "ready": ready, "failed": failed})
+    _settle("complete", result={"angle_set_id": angle_set_id, "ready": ready,
+                                "failed": failed, "qa_blocked": qa_blocked})
     if ready:
         notifications.emit(
             client_id, "social_fanout_ready", "Social drafts are ready to review",
             summary=f"{ready} platform draft(s) generated from your angle.",
             severity="info", payload={"angle_set_id": angle_set_id},
+        )
+    if qa_blocked:
+        # QA held one or more auto-fill drafts back from the queue — a human decides.
+        notifications.emit(
+            client_id, "social_qa_failed", "Auto-fill drafts held by QA",
+            summary=(f"{qa_blocked} auto-generated draft(s) failed the QA check and were "
+                     "left for your review instead of queued."),
+            severity="warning", payload={"angle_set_id": angle_set_id, "qa_blocked": qa_blocked},
         )
 
 
@@ -536,12 +567,19 @@ def delete_draft(draft_id: str) -> dict:
 
 
 def publish_existing_draft(
-    draft_id: str, account_id: str, scheduled_at: Optional[datetime] = None
+    draft_id: str, account_id: str, scheduled_at: Optional[datetime] = None,
+    *, force_qa: bool = False,
 ) -> dict:
     """Approve & publish a Draft to one connected account (reuses the publish
     lifecycle). Validates against the Platform Spec, creates the Post, enqueues the
     freeze-gated publish job (or leaves it for the due sweep when scheduled), and
-    marks the Draft published."""
+    marks the Draft published.
+
+    When the client's QA gate is on, a CRITICAL rubric fail (a guide-forbidden voice term
+    or a banned regulated claim) blocks the publish (409 ``social_qa_violation``) unless
+    ``force_qa`` — the 'Publish anyway' override. Non-critical misses (CTA / image) are
+    advisory on this human path (platform/char/image-required are already hard-blocked by
+    ``validate_post`` below)."""
     _assert_enabled()
     from services.social import publish
 
@@ -568,6 +606,22 @@ def publish_existing_draft(
     )
     if verdict["hard"]:
         raise HTTPException(status_code=422, detail="social_spec_violation:" + verdict["hard"][0])
+
+    # P4 QA gate (opt-in): block a CRITICAL fail (forbidden voice term / banned claim)
+    # unless force_qa. Advisory misses don't block a deliberate human publish. The verdict
+    # is persisted on the draft either way (surfaced in the Drafts UI).
+    if not force_qa:
+        from services.social import qa as social_qa
+
+        if social_qa.qa_gate_enabled(str(draft["client_id"])):
+            qa_verdict = social_qa.review_draft(
+                client_id=str(draft["client_id"]), platform=platform, copy=copy,
+                media=media, fmt=fmt, board_id=board_id,
+            )
+            social_qa.persist_verdict(draft_id, qa_verdict)
+            if social_qa.is_critical_fail(qa_verdict):
+                reason = " | ".join(social_qa.critical_terms(qa_verdict))[:300]
+                raise HTTPException(status_code=409, detail="social_qa_violation:" + reason)
 
     scheduled_iso = publish._ensure_future_iso(scheduled_at) if scheduled_at else None
     post = (

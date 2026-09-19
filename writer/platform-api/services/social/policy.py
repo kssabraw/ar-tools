@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _EDITABLE = (
     "monthly_ceiling_usd", "image_prompt_template", "text_prompt_template",
     "autonomy_tier", "allowed_topics", "blocked_topics", "tone_prefs", "competitor_focus",
+    "qa_gate",
 )
 
 # The jsonb "list of tags" planning fields (topic bank + competitor focus).
@@ -82,7 +83,8 @@ def get_policy(client_id: str) -> dict:
     rows = (
         _sb().table("social_policy")
         .select("monthly_ceiling_usd, image_prompt_template, text_prompt_template, "
-                "autonomy_tier, allowed_topics, blocked_topics, tone_prefs, competitor_focus")
+                "autonomy_tier, allowed_topics, blocked_topics, tone_prefs, "
+                "competitor_focus, qa_gate")
         .eq("client_id", client_id).limit(1).execute()
     ).data or []
     row = rows[0] if rows else {}
@@ -98,6 +100,7 @@ def get_policy(client_id: str) -> dict:
         "blocked_topics": clean_str_list(row.get("blocked_topics")),
         "tone_prefs": row.get("tone_prefs"),
         "competitor_focus": clean_str_list(row.get("competitor_focus")),
+        "qa_gate": bool(row.get("qa_gate")),
         "autonomy_cap_tier": cap,
         "autonomy_enabled": bool(settings.social_autonomy_enabled),
     }
@@ -150,6 +153,8 @@ def upsert_policy(client_id: str, fields: dict) -> dict:
             update[k] = clean_str_list(update[k])   # null/[] → [] (clears the list)
     if "tone_prefs" in update and update["tone_prefs"] is not None:
         update["tone_prefs"] = str(update["tone_prefs"]).strip()[:2000] or None
+    if "qa_gate" in update:
+        update["qa_gate"] = bool(update["qa_gate"])   # null → False (gate off)
     if not update:
         return get_policy(client_id)
     update["client_id"] = client_id

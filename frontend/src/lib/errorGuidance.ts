@@ -427,6 +427,19 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Trim the copy, adjust the media to fit the platform, then publish again.',
     ],
   },
+  social_qa_violation: {
+    title: 'QA flagged a serious issue with this post',
+    meaning:
+      'The QA gate is on for this client and the post failed a CRITICAL check — a ' +
+      'brand-voice-forbidden term, or a banned regulated claim. The exact finding is ' +
+      'after the code. This is the same class of block the brand-voice gate uses.',
+    steps: [
+      'Read the detail after the code to see the forbidden term(s) / claim(s) flagged.',
+      'Edit the copy to remove them, then publish again.',
+      'If the finding is wrong (the term is fine for this client), use “Publish anyway” to override.',
+    ],
+    override: 'Publish anyway',
+  },
   pinterest_board_required: {
     title: 'This pin needs a board',
     meaning:

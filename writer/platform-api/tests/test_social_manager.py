@@ -338,6 +338,8 @@ def test_run_fanout_job_auto_queues_and_stamps(monkeypatch):
     monkeypatch.setattr(fanout, "_platform_spec", lambda p: {"requires_image": False})
     from services import notifications
     monkeypatch.setattr(notifications, "emit", lambda *a, **k: None)
+    from services.social import qa as social_qa
+    monkeypatch.setattr(social_qa, "qa_gate_enabled", lambda c: False)   # gate off → queue as before
 
     job = {"id": "job1", "payload": {
         "client_id": "c1", "angle_set_id": "as1", "angle": "a", "angle_title": "A",
@@ -349,3 +351,70 @@ def test_run_fanout_job_auto_queues_and_stamps(monkeypatch):
     draft_update = next(u for u in store_updates if u.get("status") in ("queued", "ready"))
     assert draft_update["status"] == "queued"                       # auto_queue: ready → queued
     assert draft_update["platform_metadata"]["produced_by"] == "autonomy"
+
+
+def test_run_fanout_job_qa_holds_failing_draft(monkeypatch):
+    """QA gate on + a blocking verdict → an auto_queue draft is HELD at 'ready' (not
+    queued), and the verdict rides on the draft."""
+    from services.social import creator
+
+    store_updates: list = []
+
+    class _FJQ:
+        def __init__(self, tbl):
+            self.tbl = tbl
+            self._op = None
+
+        def update(self, fields):
+            self._op = "update"
+            if self.tbl == "social_drafts":
+                store_updates.append(fields)
+            return self
+
+        def select(self, *a, **k):
+            self._op = "select"
+            return self
+
+        def eq(self, *a, **k):
+            return self
+
+        def execute(self):
+            if self.tbl == "social_drafts" and self._op == "select":
+                return SimpleNamespace(data=[{"id": "d1", "platform": "facebook", "format": "feed"}])
+            return SimpleNamespace(data=[{"id": "job1"}])
+
+    monkeypatch.setattr(fanout, "_sb", lambda: SimpleNamespace(table=lambda t: _FJQ(t)))
+    import services.freeze as freeze
+    monkeypatch.setattr(freeze, "is_frozen", lambda c: False)
+
+    async def _load_source(cid, st, **k):
+        return ("Title", "body", {"type": "blog_run", "run_id": "r1"})
+    monkeypatch.setattr(creator, "load_source", _load_source)
+    monkeypatch.setattr(creator, "source_version_of", lambda t: "v1")
+    monkeypatch.setattr(creator, "_client_row", lambda c: {"id": c})
+
+    async def _voice(client, uid):
+        return ({}, "", "")
+    monkeypatch.setattr(creator, "resolve_voice_context", _voice)
+
+    async def _copy(**k):
+        return ("copy without a hook", [], [])
+    monkeypatch.setattr(creator, "draft_platform_copy", _copy)
+    monkeypatch.setattr(fanout, "_platform_spec", lambda p: {"requires_image": False})
+    from services import notifications
+    monkeypatch.setattr(notifications, "emit", lambda *a, **k: None)
+    from services.social import qa as social_qa
+    monkeypatch.setattr(social_qa, "qa_gate_enabled", lambda c: True)
+    monkeypatch.setattr(social_qa, "review_draft",
+                        lambda **k: {"verdict": "minor_revisions", "critical": [], "failed": ["Has a call to action"]})
+
+    job = {"id": "job1", "payload": {
+        "client_id": "c1", "angle_set_id": "as1", "angle": "a", "angle_title": "A",
+        "format": "feed", "include_image": False, "source_type": "blog_run",
+        "source_id": "r1", "produced_by": "autonomy", "auto_queue": True,
+    }}
+    asyncio.run(fanout.run_fanout_job(job))
+
+    draft_update = next(u for u in store_updates if u.get("status") in ("queued", "ready"))
+    assert draft_update["status"] == "ready"          # QA held it — NOT auto-queued
+    assert draft_update["qa_verdict"]["verdict"] == "minor_revisions"
