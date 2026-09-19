@@ -52,6 +52,9 @@ from models.social import (
     SocialScheduleUpsertRequest,
     SocialSchedulesResponse,
     SocialSetCredentialRequest,
+    SocialStoryboardRequest,
+    SocialStoryboardResponse,
+    SocialStoryboardUpdateRequest,
 )
 from services.freeze import assert_not_frozen
 from services.social import credentials as social_credentials
@@ -63,6 +66,7 @@ from services.social import manager as social_manager
 from services.social import policy as social_policy
 from services.social import publish as social_publish
 from services.social import schedules as social_schedules
+from services.social import storyboard as social_storyboard
 
 logger = logging.getLogger(__name__)
 
@@ -483,3 +487,73 @@ async def list_social_autonomy_runs(client_id: UUID, auth: dict = Depends(requir
     autonomy_runs ledger scoped to domain='social'."""
     social_publish._assert_enabled()
     return social_manager.list_autonomy_runs(str(client_id))
+
+
+# ── P5 (slice a): Video Storyboard — a shoot-ready brief (NO rendered video) ──
+
+@router.post(
+    "/clients/{client_id}/social/storyboard",
+    response_model=SocialStoryboardResponse,
+)
+async def generate_social_storyboard(
+    client_id: UUID, body: SocialStoryboardRequest, auth: dict = Depends(require_staff)
+):
+    """Generate a shot-by-shot video storyboard (a brief the client shoots) from a
+    Source for a Reel / Short. Freeze-gated (a later thumbnail can spend); the
+    storyboard text itself is not metered. No video is generated."""
+    social_publish._assert_enabled()
+    assert_not_frozen(str(client_id))
+    return await social_storyboard.generate_storyboard(
+        str(client_id), body, user_id=auth.get("user_id")
+    )
+
+
+@router.get(
+    "/clients/{client_id}/social/storyboards",
+    response_model=list[SocialStoryboardResponse],
+)
+async def list_social_storyboards(client_id: UUID, auth: dict = Depends(require_auth)):
+    social_publish._assert_enabled()
+    return social_storyboard.list_storyboards(str(client_id))
+
+
+@router.get("/social/storyboards/{storyboard_id}", response_model=SocialStoryboardResponse)
+async def get_social_storyboard(storyboard_id: UUID, auth: dict = Depends(require_auth)):
+    social_publish._assert_enabled()
+    return social_storyboard.get_storyboard(str(storyboard_id))
+
+
+@router.patch("/social/storyboards/{storyboard_id}", response_model=SocialStoryboardResponse)
+async def update_social_storyboard(
+    storyboard_id: UUID, body: SocialStoryboardUpdateRequest, auth: dict = Depends(require_staff)
+):
+    """Human edit of a storyboard (title / the shot-list body / thumbnail)."""
+    social_publish._assert_enabled()
+    return social_storyboard.update_storyboard(
+        str(storyboard_id),
+        title=body.title,
+        storyboard=body.storyboard.model_dump() if body.storyboard is not None else None,
+        thumbnail_url=body.thumbnail_url,
+    )
+
+
+@router.delete("/social/storyboards/{storyboard_id}")
+async def delete_social_storyboard(storyboard_id: UUID, auth: dict = Depends(require_staff)):
+    social_publish._assert_enabled()
+    return social_storyboard.delete_storyboard(str(storyboard_id))
+
+
+@router.post(
+    "/clients/{client_id}/social/storyboards/{storyboard_id}/thumbnail",
+    response_model=SocialStoryboardResponse,
+)
+async def generate_social_storyboard_thumbnail(
+    client_id: UUID, storyboard_id: UUID, auth: dict = Depends(require_staff)
+):
+    """Generate + attach a 9:16 thumbnail for a storyboard (reuses the freeze-gated,
+    fail-closed-budget-metered image path)."""
+    social_publish._assert_enabled()
+    assert_not_frozen(str(client_id))
+    return await social_storyboard.generate_thumbnail(
+        str(client_id), str(storyboard_id), user_id=auth.get("user_id")
+    )

@@ -166,6 +166,13 @@ class Settings(BaseSettings):
     social_carousel_max_slides: int = 10         # provider cap (≤10 items)
     social_carousel_default_slides: int = 3      # slides a carousel fan-out defaults to
     social_carousel_slides_max_tokens: int = 900 # slide-description LLM budget
+    # P5 slice (a): Video Storyboard — a shoot-ready brief for a Reel/Short (NO rendered
+    # video, no new vendor). One bounded forced-tool Sonnet call, NOT metered (our own
+    # Anthropic key, like draft-copy/angles); only an OPTIONAL thumbnail spends (it reuses
+    # the freeze-gated, fail-closed image path).
+    social_storyboard_model: str = "claude-sonnet-5"   # SOCIAL_STORYBOARD_MODEL
+    social_storyboard_max_tokens: int = 2000     # a shot list is bigger than a caption
+    social_storyboard_max_shots: int = 12        # cap the shot list length
     # YouTube poster (Compose-only — uploads an EXISTING video; no generation). A
     # YouTube post REQUIRES a `title` via platform_configurations, distinct from the
     # caption (which maps to the video description). `title` is the only first-class

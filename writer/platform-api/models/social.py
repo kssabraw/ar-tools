@@ -363,3 +363,67 @@ class SocialScheduleUpsertRequest(BaseModel):
     hour_local: int = 9
     is_active: bool = True
     auto_fill: bool = False                  # drip queued drafts (gated + opt-in)
+
+
+# ── P5 (slice a): Video Storyboard — a brief the client shoots (NO rendered video) ─
+
+class SocialStoryboardRequest(BaseModel):
+    """Generate a shot-by-shot video storyboard from a Source for a Reel / Short."""
+    platform: str                            # instagram | facebook | youtube
+    source_type: str = "topic"               # topic | url | blog_run | local_seo_page
+    source_id: Optional[str] = None          # run_id (blog_run) or page_id (local_seo_page)
+    url: Optional[str] = None                # source_type=url
+    text: Optional[str] = None               # source_type=topic — freeform topic/notes
+    angle: Optional[str] = None
+    tone: Optional[str] = None
+    format: str = "reel"                     # reel | short
+
+
+class SocialStoryboardShot(BaseModel):
+    n: Optional[int] = None
+    visual: str
+    on_screen_text: Optional[str] = None
+    voiceover: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    b_roll: Optional[bool] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialStoryboardBody(BaseModel):
+    hook: str = ""
+    duration_seconds: Optional[int] = None
+    shots: list[SocialStoryboardShot] = Field(default_factory=list)
+    music: Optional[str] = None
+    caption: Optional[str] = None
+    hashtags: list[str] = Field(default_factory=list)
+    cta: Optional[str] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialStoryboardResponse(BaseModel):
+    id: UUID
+    client_id: UUID
+    platform: str
+    format: str = "reel"
+    source_type: Optional[str] = None
+    source_title: Optional[str] = None
+    angle: Optional[str] = None
+    tone: Optional[str] = None
+    title: Optional[str] = None
+    storyboard: dict = Field(default_factory=dict)
+    thumbnail_url: Optional[str] = None
+    voice_warnings: Optional[list[str]] = None
+    status: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = {"extra": "ignore"}
+
+
+class SocialStoryboardUpdateRequest(BaseModel):
+    """Human edit of a storyboard. Only fields present are changed."""
+    title: Optional[str] = None
+    storyboard: Optional[SocialStoryboardBody] = None
+    thumbnail_url: Optional[str] = None
