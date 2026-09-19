@@ -1077,3 +1077,33 @@ push these CPLs live. Every rung-3.6 row is flagged `low` confidence.
 
 **Open (v2, plan §10, unchanged):** median home value (B25077 backfill); revenue
 estimation + Enigma top-down + affordability ceiling (gated on the un-run pilot).
+
+## LeadOff — on-machine `inputs/lead_values.csv` was stale, now repaired (2026-09-19)
+
+**Context.** The exclusive-CPL re-anchor above updated the repo mirror
+(`scripts/leadoff_lead_values.csv`) and the live `market_scanner.lead_values`
+table (owner-applied out-of-band), but the scanner LOADER drop/recreates
+`lead_values` and reloads it from the owner's on-machine
+`inputs/lead_values.csv` — the source of truth on reload. A durability check of
+that on-machine file (run by a Cowork session on the scanner machine — it is an
+external Windows box, unreachable from the cloud sessions) found it **still
+carrying the old placeholder CPLs**: 263 of 321 `cpl_low/mid/high` cells differed
+from the reviewed prices (e.g. Water damage restoration service 75/138/200 vs.
+500/1061/2250; all remodel categories flat 40/70/100 vs. the tiered 270/425/550).
+So the next natural `market_scanner` reload **would have reverted the correct
+live DB values back to the stale placeholders**.
+
+**Fix.** The on-machine `inputs/lead_values.csv` (at
+`OneDrive\Desktop\Projects\GBP Demographics Script\inputs\` — NOT under the
+`market-scanner-data` folder, which holds only pipeline outputs/logs) was
+overwritten with the reviewed 107-row values, preserving the loader's by-name
+column contract (`category_name`/`cpl_low`/`cpl_mid`/`cpl_high`; `cluster`/
+`source`/`confidence` ride along) and CRLF + trailing newline. Category sets
+matched exactly (107/107, none missing/extra — the safe cpl-only overwrite path,
+not a guess), a timestamped backup was made first
+(`inputs/lead_values.csv.bak-20260919-202927`), and the five marquee spot-checks
+pass. **No reload / pipeline / DB touch** — input file only.
+
+**State.** All three artifacts now agree (repo mirror = live DB = on-machine
+input), so a future scanner reload is safe (keeps the exclusive CPLs instead of
+reverting them). Keep the backup until the next natural reload is confirmed clean.
