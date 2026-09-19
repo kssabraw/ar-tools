@@ -1017,12 +1017,15 @@ granularity** the vertical average couldn't carry.
 `services/leadoff_lead_values.py`, running only when `homeadvisor_rows` is passed
 (so `homeadvisor_rows=None` is **byte-identical to v1** — no behaviour change; the
 17-case `tests/test_leadoff_lead_values.py` pins it):
-- **Rung 3.5 — observed HomeAdvisor lead range** (`homeadvisor_lead_range`,
-  `medium`): a previously-manual category whose GENUINE trade carries a published
-  Service Direct resale range in the CSV → `mid = geomean(low, high)`. Only two
-  qualify: **Fence contractor** ($55–175 → $98) and **Solar energy contractor**
-  ($100). The `industry` on a cross-mapped row (a chimney page filed under HVAC)
-  is deliberately NOT trusted as that trade's price.
+- **Rung 3.5 — observed HomeAdvisor lead range** (`homeadvisor_lead_range`): a
+  previously-manual category whose GENUINE trade carries a published Service
+  Direct resale range in the CSV → `mid = geomean(low, high)`. Only two qualify:
+  **Fence contractor** ($55–175 → $98, `medium`) and **Solar energy contractor**
+  ($100, `low` — single-sourced/thin; confidence is per-category in
+  `_CATEGORY_OBSERVED`). `observed_range` returns the **modal** published pair
+  across the industry's rows (order-independent, robust to a stray non-uniform
+  row), not the first. The `industry` on a cross-mapped row (a chimney page filed
+  under HVAC) is deliberately NOT trusted as that trade's price.
 - **Rung 3.6 — HomeAdvisor job-value formula** (`job_value_formula`, `low`): a
   previously-manual *project* trade with a real job value but no observed price →
   `CPL = weighted_job_value × close_rate(0.42) × margin_share(0.22)`, **clamped to
@@ -1043,7 +1046,7 @@ granularity** the vertical average couldn't carry.
   config-calibratable — the owner tunes them from the printed before→after.
 
 **Result.** **27 of 45** manual categories moved onto grounded data (18 remain
-manual). Confidence tiers: 25 high / 29 medium / 53 low. Direction is honest and
+manual). Confidence tiers: 25 high / 28 medium / 54 low. Direction is honest and
 two-way: 19 lifted (the high-ticket project trades, 1.5–3.1×), and a handful
 grounded DOWN where the manual guess was high (Solar 170→100, building
 inspector 60→29, cleaning trades → ~$20–23) — grounded > guess, consistent with

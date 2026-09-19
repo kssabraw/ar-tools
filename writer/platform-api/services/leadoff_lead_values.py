@@ -29,10 +29,12 @@ fabricated**; a niche with no defensible signal keeps its flagged manual estimat
      0.6×anchor low, ``high`` = anchor mid. Applied only where the anchor floor
      is a *sane* value for the sub-trade; small finishing sub-trades that would be
      over-priced by inheritance keep their manual estimate instead.
-  3.5 **Observed HomeAdvisor lead-cost range** (``homeadvisor_lead_range``,
-     ``medium``) — a previously-manual category whose GENUINE trade carries a
-     published Service Direct resale range in the HomeAdvisor CSV (Fence → $55–175,
-     Solar → $100). ``mid`` = geomean(low, high). Requires ``homeadvisor_rows``.
+  3.5 **Observed HomeAdvisor lead-cost range** (``homeadvisor_lead_range``) — a
+     previously-manual category whose GENUINE trade carries a published Service
+     Direct resale range in the HomeAdvisor CSV (Fence → $55–175, ``medium``;
+     Solar → $100, ``low`` — single-sourced). ``mid`` = geomean(low, high); the
+     confidence is per-category (see ``_CATEGORY_OBSERVED``). Requires
+     ``homeadvisor_rows``.
   3.6 **HomeAdvisor job-value formula** (``job_value_formula``, ``low``) — a
      previously-manual *project* trade with no observed price but a real job value
      in the CSV. ``CPL = weighted_job_value × close_rate × margin_share`` clamped
@@ -60,6 +62,7 @@ columns ride on the CSV schema); the Supabase mirror-upsert in
 from __future__ import annotations
 
 import math
+from collections import Counter
 from typing import Any
 
 # Default margin share for the §4 CPL formula (spec §4 worked example: HVAC
@@ -276,15 +279,18 @@ def _inherit(anchor: str) -> tuple[int, int, int, str, str]:
     return round(lo * 0.6), round(lo), round(mid), f"cluster:{anchor}", "low"
 
 
-# ── Rung: observed HomeAdvisor lead-cost range (medium) ────────────────────────
+# ── Rung: observed HomeAdvisor lead-cost range ─────────────────────────────────
 # A currently-manual category whose GENUINE trade carries a Service Direct resale
 # range in the HomeAdvisor CSV (``industry`` → lead_cost_low/high). Only these two
 # manual categories have a real, same-trade observed price; the ``industry`` on a
 # cross-mapped row (e.g. a chimney page filed under HVAC) is NOT that trade's price
 # and is deliberately not used here.
-_CATEGORY_OBSERVED: dict[str, str] = {
-    "Fence contractor": "Fencing",
-    "Solar energy contractor": "Solar",
+# Value = (industry, confidence). Fence is many-rowed + corroborated (medium);
+# Solar's lead price is single-sourced/thin in the research (low) — so the tier
+# is honest per category rather than a blanket "medium".
+_CATEGORY_OBSERVED: dict[str, tuple[str, str]] = {
+    "Fence contractor": ("Fencing", "medium"),
+    "Solar energy contractor": ("Solar", "low"),
 }
 
 # ── Rung: HomeAdvisor job-value formula (low) ──────────────────────────────────
@@ -384,15 +390,26 @@ def observed_range(industry: str,
                    homeadvisor_rows: list[dict[str, Any]]) -> tuple[int, int, int] | None:
     """The Service Direct exclusive lead-cost range published for ``industry`` in
     the HomeAdvisor CSV → (low, geomean, high). ``None`` if that industry carries
-    no lead-cost figure (e.g. Garage door). Pure."""
+    no lead-cost figure (e.g. Garage door). Pure.
+
+    Returns the **most common** published (low, high) pair across the industry's
+    rows, not the first — the price is uniform per industry today (all Fencing
+    rows are 55–175), so this is order-independent and robust to a stray
+    non-uniform row rather than depending on DictReader order. Deterministic
+    tiebreak: the smaller (more conservative) pair wins."""
+    pairs: list[tuple[float, float]] = []
     for r in homeadvisor_rows:
         if r.get("industry") != industry:
             continue
         lo = _to_float(r.get("lead_cost_low"))
         hi = _to_float(r.get("lead_cost_high"))
         if lo is not None and hi is not None:
-            return round(lo), round(geomean(lo, hi)), round(hi)
-    return None
+            pairs.append((lo, hi))
+    if not pairs:
+        return None
+    (lo, hi), _n = max(Counter(pairs).items(),
+                       key=lambda kv: (kv[1], -kv[0][0], -kv[0][1]))
+    return round(lo), round(geomean(lo, hi)), round(hi)
 
 
 def job_value_formula_cpl(job_value: float, *, close_rate: float = FORMULA_CLOSE_RATE,
@@ -441,8 +458,10 @@ def build_lead_values(existing_rows: list[dict[str, Any]], *,
         name = r.get("category_name")
         cluster = r.get("cluster")
         vert = _CATEGORY_VERTICAL.get(name)
-        obs = observed_range(_CATEGORY_OBSERVED[name], ha) if (
-            ha and name in _CATEGORY_OBSERVED) else None
+        obs = obs_conf = None
+        if ha and name in _CATEGORY_OBSERVED:
+            _industry, obs_conf = _CATEGORY_OBSERVED[name]
+            obs = observed_range(_industry, ha)
         jv = weighted_job_value(match_job_rows(ha, _CATEGORY_JOB_MATCH[name])) if (
             ha and name in _CATEGORY_JOB_MATCH) else None
         if vert is not None:
@@ -451,7 +470,7 @@ def build_lead_values(existing_rows: list[dict[str, Any]], *,
             lo, mid, hi, source, conf = _inherit(_CATEGORY_INHERIT[name])
         elif obs is not None:
             lo, mid, hi = obs
-            source, conf = "homeadvisor_lead_range", "medium"
+            source, conf = "homeadvisor_lead_range", obs_conf
         elif jv is not None:
             mid = job_value_formula_cpl(jv, close_rate=formula_close_rate,
                                         margin_share=margin_share,

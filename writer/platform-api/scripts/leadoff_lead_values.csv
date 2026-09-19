@@ -101,7 +101,7 @@ Water damage restoration service,Restoration,500,1061,2250,service_direct_range,
 Roofing contractor,Roofing,85,216,550,service_direct_range,high
 Roofing service,Roofing,85,216,550,service_direct_range,high
 Skylight contractor,Roofing,85,216,550,service_direct_range,high
-Solar energy contractor,Solar,100,100,100,homeadvisor_lead_range,medium
+Solar energy contractor,Solar,100,100,100,homeadvisor_lead_range,low
 Piano tuner,Specialty/Niche,15,30,45,manual_estimate,low
 Piano tuning service,Specialty/Niche,15,30,45,manual_estimate,low
 Double glazing installer,Windows/Exterior,30,102,350,service_direct_range,high

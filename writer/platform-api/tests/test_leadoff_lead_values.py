@@ -181,3 +181,26 @@ def test_observed_range_none_when_industry_has_no_lead_cost():
     ha = [_ha("https://x/cost/garages/garage-door-prices/", "Garage door", 725, 0)]
     assert llv.observed_range("Garage door", ha) is None
     assert llv.observed_range("Nonexistent", ha) is None
+
+
+def test_observed_lead_range_solar_is_low_confidence():
+    # Solar's lead price is single-sourced/thin → tagged low, not medium.
+    ha = [_ha("https://x/cost/energy-efficiency/install-solar-panels/", "Solar",
+              23275, 0, "100", "100")]
+    r = llv.build_lead_values(
+        [_row("Solar energy contractor", "Solar", 100, 170, 250)],
+        homeadvisor_rows=ha)[0]
+    assert r["source"] == "homeadvisor_lead_range" and r["confidence"] == "low"
+    assert r["cpl_mid"] == 100
+
+
+def test_observed_range_picks_modal_pair_regardless_of_row_order():
+    # Two rows of the majority price + one stray → the modal pair wins, and the
+    # result does not depend on which row DictReader yields first.
+    stray = _ha("https://x/cost/fencing/odd/", "Fencing", 4000, 0, "40", "200")
+    a = _ha("https://x/cost/fencing/a/", "Fencing", 4300, 0, "55", "175")
+    b = _ha("https://x/cost/fencing/b/", "Fencing", 4100, 0, "55", "175")
+    assert llv.observed_range("Fencing", [stray, a, b]) == (55, round(llv.geomean(55, 175)), 175)
+    assert llv.observed_range("Fencing", [a, b, stray]) == (55, round(llv.geomean(55, 175)), 175)
+    # single stray only → that pair (no majority to prefer)
+    assert llv.observed_range("Fencing", [stray]) == (40, round(llv.geomean(40, 200)), 200)
