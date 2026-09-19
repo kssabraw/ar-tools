@@ -111,6 +111,18 @@ class Settings(BaseSettings):
     # SOCIAL_AUTO_PUBLISH_ENABLED=true on PLATFORM to activate. (P4 will additionally consult
     # social_policy.autonomy_tier; until then these three gates are stricter than a tier check.)
     social_auto_publish_enabled: bool = False   # SOCIAL_AUTO_PUBLISH_ENABLED
+    # P4 Social Manager autonomy loop (the generative half). Independent of the SEO
+    # `autonomy_enabled` — enabling one never enables the other. Ships DARK: the loop does
+    # nothing while False. The tier ladder (social_policy.autonomy_tier) is capped here:
+    # tier 1 = generate drafts → ready; tier 2 = generate → auto-queued (publish still needs
+    # P3's social_auto_publish_enabled + a schedule's auto_fill). Cap 2 — tier 3
+    # (auto-publish without auto_fill) is out of scope this build.
+    social_autonomy_enabled: bool = False   # SOCIAL_AUTONOMY_ENABLED — the loop's kill switch
+    social_autonomy_cap_tier: int = 2       # effective-tier ceiling for the social loop
+    social_autonomy_weekly_weekday: int = 2   # weekly baseline pass day (Wed; Mon=0)
+    social_autonomy_target_queue: int = 2     # desired queued-draft depth per platform
+    social_autonomy_max_per_week: int = 14    # rate cap on autonomy-produced drafts / client / week
+    social_autonomy_source_cooldown_days: int = 30  # don't re-repurpose a source within this window
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
     social_max_upload_mb: float = 200.0   # server multipart upload cap (video-sized)
     # Big-video direct-to-R2 (queue #4): videos over social_max_upload_mb are PUT

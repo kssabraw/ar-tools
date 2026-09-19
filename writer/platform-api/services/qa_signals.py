@@ -64,6 +64,9 @@ SKIPPED = "skipped"
 CRITICAL_CHECK_KEYS: frozenset[str] = frozenset({
     "client_name", "nap", "link_back", "map_embed", "keyword_in_url",
     "visual_render",
+    # Social (P4 QA rubric): a guide-forbidden voice term or a banned regulated
+    # claim needs a human, not a VA tick — and is what blocks a manual publish.
+    "social_voice", "social_claims",
 })
 
 # Count safety net: even when no single failed check is CRITICAL, a deliverable
@@ -94,6 +97,10 @@ RUBRIC_MAP_EMBEDS = "map_embeds"
 RUBRIC_SKIP = "skip"
 RUBRIC_HANDOFF = "handoff_sermastr"
 RUBRIC_GENERIC = "generic"
+# Social draft rubric (P4). NOT a task rubric — it's not name-matched or a valid
+# tasks.qa_rubric override; it's the label stored on social_drafts.qa_verdict and
+# used by services/social/qa.py. Kept out of _NAME_RULES / RUBRIC_KEYS on purpose.
+RUBRIC_SOCIAL = "social_post"
 
 # Owner rulings from QA_Checklists.md — matched against the task/library name
 # (casefold substring, first match wins; order matters: "hyperlocal gbp blast"
@@ -958,6 +965,35 @@ def _name_present(text: Optional[str], name: Optional[str]) -> Optional[bool]:
 # ---------------------------------------------------------------------------
 # Verdict assembly — the deterministic decision (never the LLM's)
 # ---------------------------------------------------------------------------
+def check_social_draft(
+    *,
+    forbidden_terms: list[str],
+    banned_claims: list[str],
+    has_cta_flag: bool,
+    platform_ok: bool,
+    has_media: bool,
+) -> list[dict]:
+    """Deterministic social-draft checks (PRD §9), folded by ``build_verdict``. Pure — the
+    caller computes each signal (``voice_forbidden_hits`` / ``content_compliance.scan_text``
+    / ``has_cta`` / ``validate_post`` hard list / media-present) and passes it in.
+
+    ``social_voice`` + ``social_claims`` are CRITICAL (a guide-forbidden term / a banned
+    regulated claim → a manual publish is blocked, an auto-queue never happens).
+    ``social_cta`` + ``social_platform`` are standard blocking (a revisions-band fix that
+    still blocks the auto-queue). ``social_image`` is ADVISORY (a text-only post where the
+    platform allows one is fine — it never blocks, just nudges); the platform's own
+    image-REQUIRED rule is enforced by ``social_platform`` (validate_post's hard list)."""
+    return [
+        _check("social_voice", "On brand voice (no forbidden terms)", not forbidden_terms,
+               note=("forbidden: " + ", ".join(forbidden_terms[:8])) if forbidden_terms else ""),
+        _check("social_claims", "No banned regulated claims", not banned_claims,
+               note=("claims: " + "; ".join(banned_claims[:5])) if banned_claims else ""),
+        _check("social_cta", "Has a call to action", bool(has_cta_flag)),
+        _check("social_platform", "Meets the platform's constraints", bool(platform_ok)),
+        _check("social_image", "Has an image", bool(has_media), blocking=False),
+    ]
+
+
 def build_verdict(
     checks: list[dict],
     fail_count_threshold: int = DEFAULT_FAIL_COUNT_THRESHOLD,

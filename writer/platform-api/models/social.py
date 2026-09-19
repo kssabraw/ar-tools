@@ -144,6 +144,7 @@ class SocialDraftUpdateRequest(BaseModel):
 class SocialDraftPublishRequest(BaseModel):
     account_id: str
     scheduled_at: Optional[datetime] = None
+    force_qa: bool = False   # 'Publish anyway' — override a CRITICAL QA block
 
 
 class SocialJobStatusResponse(BaseModel):
@@ -285,14 +286,34 @@ class SocialPolicyResponse(BaseModel):
     text_prompt_template: Optional[str] = None
     effective_ceiling_usd: float
     default_ceiling_usd: float
+    # P4 planning fields (the autonomy loop's tuning).
+    autonomy_tier: int = 0
+    allowed_topics: list[str] = Field(default_factory=list)
+    blocked_topics: list[str] = Field(default_factory=list)
+    tone_prefs: Optional[str] = None
+    competitor_focus: list[str] = Field(default_factory=list)
+    qa_gate: bool = False
+    # Read-only context for the UI: the effective tier ceiling + whether the loop is on
+    # globally (so the Settings tab can explain why a tier is/isn't live).
+    autonomy_cap_tier: int = 2
+    autonomy_enabled: bool = False
 
 
 class SocialPolicyUpdateRequest(BaseModel):
-    """PUT the Social Policy consumer fields (owner Q3). Only fields present in the
-    request are changed; an explicit null clears that field. Unset fields are untouched."""
+    """PUT the Social Policy fields. Only fields present in the request are changed; an
+    explicit null clears that field (ceiling→default, templates/tone→none, topic lists→empty).
+    Unset fields are untouched. Consumer fields (owner Q3): ceiling + prompt templates. P4
+    planning fields: autonomy_tier + topic bank + tone/competitor focus."""
     monthly_ceiling_usd: Optional[float] = None
     image_prompt_template: Optional[str] = None
     text_prompt_template: Optional[str] = None
+    # P4 planning fields.
+    autonomy_tier: Optional[int] = None
+    allowed_topics: Optional[list[str]] = None
+    blocked_topics: Optional[list[str]] = None
+    tone_prefs: Optional[str] = None
+    competitor_focus: Optional[list[str]] = None
+    qa_gate: Optional[bool] = None
 
 
 class SocialScheduleItem(BaseModel):

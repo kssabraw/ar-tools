@@ -242,6 +242,19 @@ def _fire_slot(client_id: str, sched: dict, now: datetime, notifications, fanout
             severity="info", payload={"platform": platform, "draft_id": queued["id"]},
         )
     elif action == "empty":
+        # P4 top-up: if this client has the Social Manager on (tier > 0 + the loop
+        # enabled), kick a platform-scoped autonomy run to REFILL the queue ahead of the
+        # next slot (deduped against an in-flight run). This slot is already empty, so we
+        # still emit the nudge — the top-up generates for next time; if the loop can't fill
+        # it (tier 0 / disabled), the nudge is all that fires. Best-effort — a failed
+        # enqueue never sinks the sweep.
+        try:
+            from services.social import manager as social_manager
+
+            social_manager.enqueue_social_autonomy_run(client_id, trigger="empty_queue", platform=platform)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("social.empty_topup_failed",
+                           extra={"client_id": client_id, "platform": platform, "error": str(exc)[:160]})
         notifications.emit(
             client_id, "social_slot_empty",
             f"{platform.title()} slot fired with no queued draft",

@@ -439,6 +439,7 @@ interface Draft {
   platform_metadata: { board_id?: string; [k: string]: unknown } | null
   voice_verdict: { warnings?: string[] } | null
   spec_verdict: { warnings?: string[] } | null
+  qa_verdict: { verdict?: string; failed?: string[]; critical?: string[] } | null
   status: DraftStatus
 }
 
@@ -730,7 +731,10 @@ function DraftRow({ draft, accounts, onChanged }: {
     onSuccess: onChanged,
   })
   const pubMut = useMutation({
-    mutationFn: async () => { setError(null); return api.post(`/social/drafts/${draft.id}/publish`, { account_id: acct }) },
+    mutationFn: async (forceQa: boolean) => {
+      setError(null)
+      return api.post(`/social/drafts/${draft.id}/publish`, { account_id: acct, force_qa: forceQa })
+    },
     onSuccess: onChanged,
     onError: (e) => setError(e instanceof Error ? e.message : 'publish_failed'),
   })
@@ -768,6 +772,11 @@ function DraftRow({ draft, accounts, onChanged }: {
               <span style={{ fontSize: 11, color: '#94a3b8' }}>{voiceWarn.length ? `⚠ ${voiceWarn.map((w) => w.replace('forbidden_term:', '')).join(', ')}` : ''}</span>
               <span style={{ fontSize: 11, color: copy.length > spec.charLimit ? '#b91c1c' : '#94a3b8' }}>{copy.length} / {spec.charLimit}</span>
             </div>
+            {draft.qa_verdict?.verdict && draft.qa_verdict.verdict !== 'pass' && draft.qa_verdict.verdict !== 'advisory' && (
+              <p style={{ margin: '4px 0 0', fontSize: 11, color: (draft.qa_verdict.critical?.length ? '#b91c1c' : '#c2410c') }}>
+                QA: {draft.qa_verdict.critical?.length ? 'critical — ' : ''}{(draft.qa_verdict.failed ?? []).join('; ') || draft.qa_verdict.verdict}
+              </p>
+            )}
             {draft.status === 'needs_image' && (
               <p style={{ margin: '4px 0 0', fontSize: 12, color: '#c2410c' }}>{spec.label} needs an image before it can publish — add one on the Compose tab, or delete this draft.</p>
             )}
@@ -795,7 +804,7 @@ function DraftRow({ draft, accounts, onChanged }: {
                       {platAccounts.map((a) => <option key={a.account_id} value={a.account_id}>{a.handle || a.account_id}</option>)}
                     </select>
                   )}
-                  <button onClick={() => pubMut.mutate()} disabled={!publishable || pubMut.isPending || dirty}
+                  <button onClick={() => pubMut.mutate(false)} disabled={!publishable || pubMut.isPending || dirty}
                     title={dirty ? 'Save your edit first' : platAccounts.length === 0 ? 'No connected account for this platform' : ''}
                     style={{ ...btn(publishable && !dirty ? '#4f46e5' : '#c7d2fe'), padding: '6px 12px', cursor: publishable && !dirty ? 'pointer' : 'not-allowed' }}>
                     {pubMut.isPending ? <Loader2 size={13} className="spin" /> : <Send size={13} />} Publish now
@@ -819,7 +828,12 @@ function DraftRow({ draft, accounts, onChanged }: {
               </button>
               {pubMut.isSuccess && <span style={{ fontSize: 12, color: '#047857', fontWeight: 600 }}>Submitted — publishing…</span>}
             </div>
-            {error && <div style={{ marginTop: 8 }}><ErrorDetails message={error} /></div>}
+            {error && (
+              <div style={{ marginTop: 8 }}>
+                <ErrorDetails message={error}
+                  onOverride={() => pubMut.mutate(true)} overriding={pubMut.isPending} />
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1402,6 +1416,25 @@ interface SocialPolicy {
   text_prompt_template: string | null
   effective_ceiling_usd: number
   default_ceiling_usd: number
+  // P4 planning fields (the autonomy loop's tuning).
+  autonomy_tier: number
+  allowed_topics: string[]
+  blocked_topics: string[]
+  tone_prefs: string | null
+  competitor_focus: string[]
+  qa_gate: boolean
+  autonomy_cap_tier: number
+  autonomy_enabled: boolean
+}
+
+// A textarea (one entry per line) ↔ a clean string[] for topic-bank / competitor fields.
+const linesToList = (s: string): string[] =>
+  s.split('\n').map((x) => x.trim()).filter(Boolean)
+
+const AUTONOMY_TIER_LABELS: Record<number, string> = {
+  0: 'Off — no auto-generation',
+  1: 'Generate drafts (you approve, queue & publish each)',
+  2: 'Generate + auto-queue (see the note below on publishing)',
 }
 interface SocialSchedule {
   id?: string
@@ -1432,22 +1465,41 @@ function PolicyCard({ clientId }: { clientId: string }) {
   const [ceiling, setCeiling] = useState<string | null>(null)
   const [imgTmpl, setImgTmpl] = useState<string | null>(null)
   const [txtTmpl, setTxtTmpl] = useState<string | null>(null)
+  const [tier, setTier] = useState<number | null>(null)
+  const [allowed, setAllowed] = useState<string | null>(null)
+  const [blocked, setBlocked] = useState<string | null>(null)
+  const [tone, setTone] = useState<string | null>(null)
+  const [competitors, setCompetitors] = useState<string | null>(null)
+  const [qaGate, setQaGate] = useState<boolean | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Prefill once from the loaded policy (adjust-during-render, guarded).
+  // Prefill once from the loaded policy (adjust-during-render, guarded on ceiling===null).
   if (ceiling === null && polQ.data) {
     setCeiling(polQ.data.monthly_ceiling_usd == null ? '' : String(polQ.data.monthly_ceiling_usd))
     setImgTmpl(polQ.data.image_prompt_template ?? '')
     setTxtTmpl(polQ.data.text_prompt_template ?? '')
+    setTier(polQ.data.autonomy_tier ?? 0)
+    setAllowed((polQ.data.allowed_topics ?? []).join('\n'))
+    setBlocked((polQ.data.blocked_topics ?? []).join('\n'))
+    setTone(polQ.data.tone_prefs ?? '')
+    setCompetitors((polQ.data.competitor_focus ?? []).join('\n'))
+    setQaGate(polQ.data.qa_gate ?? false)
   }
   const saveMut = useMutation({
     mutationFn: () => api.put(`/clients/${clientId}/social/policy`, {
       monthly_ceiling_usd: ceiling && ceiling.trim() ? Number(ceiling) : null,
       image_prompt_template: imgTmpl && imgTmpl.trim() ? imgTmpl : null,
       text_prompt_template: txtTmpl && txtTmpl.trim() ? txtTmpl : null,
+      autonomy_tier: tier ?? 0,
+      allowed_topics: linesToList(allowed ?? ''),
+      blocked_topics: linesToList(blocked ?? ''),
+      tone_prefs: tone && tone.trim() ? tone : null,
+      competitor_focus: linesToList(competitors ?? ''),
+      qa_gate: qaGate ?? false,
     }),
     onSuccess: () => { setError(null); void polQ.refetch() },
     onError: (e) => setError(e instanceof Error ? e.message : 'save_failed'),
   })
+  const cap = polQ.data?.autonomy_cap_tier ?? 2
 
   return (
     <div style={card}>
@@ -1470,6 +1522,63 @@ function PolicyCard({ clientId }: { clientId: string }) {
             <label style={label}>Copy prompt template</label>
             <textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={txtTmpl ?? ''} placeholder="Steer AI copy WITHIN the brand voice (never over it)…" onChange={(e) => setTxtTmpl(e.target.value)} />
           </div>
+
+          <div style={{ borderTop: '1px solid #e2e8f0', margin: '16px 0 12px', paddingTop: 14 }}>
+            <h4 style={{ margin: '0 0 4px', fontSize: 13, fontWeight: 700 }}>Autonomy (Social Manager)</h4>
+            <p style={{ margin: '0 0 12px', fontSize: 12, color: '#94a3b8' }}>
+              How much the Social Manager does on its own for this client. Off by default.
+            </p>
+            <div style={{ marginBottom: 12, maxWidth: 420 }}>
+              <label style={label}>Autonomy tier</label>
+              <select style={input} value={tier ?? 0} onChange={(e) => setTier(Number(e.target.value))}>
+                {Array.from({ length: cap + 1 }, (_, t) => (
+                  <option key={t} value={t}>{t} — {AUTONOMY_TIER_LABELS[t] ?? `Tier ${t}`}</option>
+                ))}
+              </select>
+              {!polQ.data?.autonomy_enabled && (
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#b45309' }}>
+                  Social autonomy is off globally — a tier won’t run until an admin enables it.
+                </p>
+              )}
+              {tier === 2 && (
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#94a3b8' }}>
+                  Tier 2 auto-<em>queues</em> drafts. Unattended <em>publishing</em> still requires that platform’s
+                  cadence “auto-fill” <em>and</em> the global auto-publish switch — a queued draft otherwise waits for you.
+                </p>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 200px', minWidth: 180 }}>
+                <label style={label}>Allowed topics (one per line)</label>
+                <textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={allowed ?? ''} placeholder="roof restoration&#10;storm damage&#10;gutter repair" onChange={(e) => setAllowed(e.target.value)} />
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#94a3b8' }}>The topic bank the loop draws from when the client’s recent content runs dry.</p>
+              </div>
+              <div style={{ flex: '1 1 200px', minWidth: 180 }}>
+                <label style={label}>Blocked topics (one per line)</label>
+                <textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={blocked ?? ''} placeholder="pricing&#10;competitors by name" onChange={(e) => setBlocked(e.target.value)} />
+              </div>
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Tone / angle preferences</label>
+              <input style={input} value={tone ?? ''} placeholder="e.g. warm, expert, no hype" onChange={(e) => setTone(e.target.value)} />
+            </div>
+            <div style={{ marginTop: 12 }}>
+              <label style={label}>Competitor focus (one per line)</label>
+              <textarea style={{ ...input, minHeight: 50, resize: 'vertical' }} value={competitors ?? ''} placeholder="Which competitors’ signals to lean on for angles" onChange={(e) => setCompetitors(e.target.value)} />
+            </div>
+            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', marginTop: 14, fontSize: 13, cursor: 'pointer' }}>
+              <input type="checkbox" checked={Boolean(qaGate)} onChange={(e) => setQaGate(e.target.checked)} style={{ marginTop: 3 }} />
+              <span>
+                <strong>QA gate</strong>
+                <span style={{ display: 'block', fontSize: 11, color: '#94a3b8', marginTop: 2 }}>
+                  Run a quality check (brand voice, no banned claims, a CTA, platform rules, an image) on each draft.
+                  A failing auto-fill draft is held for your review instead of queued; a manual publish is blocked only
+                  on a serious issue (a forbidden voice term or a banned claim), with a “Publish anyway” override.
+                </span>
+              </span>
+            </label>
+          </div>
+
           <button onClick={() => saveMut.mutate()} disabled={saveMut.isPending} style={{ ...btn('#4f46e5') }}>
             {saveMut.isPending ? <Loader2 size={13} className="spin" /> : null} Save policy
           </button>

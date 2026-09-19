@@ -427,6 +427,19 @@ const REGISTRY: Record<string, ErrorGuidance> = {
       'Trim the copy, adjust the media to fit the platform, then publish again.',
     ],
   },
+  social_qa_violation: {
+    title: 'QA flagged a serious issue with this post',
+    meaning:
+      'The QA gate is on for this client and the post failed a CRITICAL check — a ' +
+      'brand-voice-forbidden term, or a banned regulated claim. The exact finding is ' +
+      'after the code. This is the same class of block the brand-voice gate uses.',
+    steps: [
+      'Read the detail after the code to see the forbidden term(s) / claim(s) flagged.',
+      'Edit the copy to remove them, then publish again.',
+      'If the finding is wrong (the term is fine for this client), use “Publish anyway” to override.',
+    ],
+    override: 'Publish anyway',
+  },
   pinterest_board_required: {
     title: 'This pin needs a board',
     meaning:
@@ -675,6 +688,16 @@ const REGISTRY: Record<string, ErrorGuidance> = {
     title: 'That ceiling isn’t a valid number',
     meaning: 'The monthly ceiling must be a number.',
     steps: ['Enter a dollar amount (e.g. 100), or leave it blank for the default.'],
+  },
+  social_autonomy_tier_out_of_range: {
+    title: 'That autonomy tier isn’t allowed',
+    meaning: 'The Social Manager autonomy tier must be within the supported range (0 = off up to the current ceiling).',
+    steps: ['Pick a tier from the dropdown (0, 1, or 2).'],
+  },
+  social_autonomy_tier_invalid: {
+    title: 'That autonomy tier isn’t a valid value',
+    meaning: 'The autonomy tier must be a whole number.',
+    steps: ['Choose a tier from the dropdown rather than typing a value.'],
   },
   social_schedule_platform_required: {
     title: 'Pick a platform for the schedule',

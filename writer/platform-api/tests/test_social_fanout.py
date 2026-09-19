@@ -30,6 +30,12 @@ def test_build_source_ref_per_type():
     assert fanout.build_source_ref("local_seo_page", "pg-1", None) == {"type": "local_seo_page", "page_id": "pg-1"}
     # unknown type falls back to topic
     assert fanout.build_source_ref("mystery", "x", None) == {"type": "topic"}
+    # a topic ref carries its text when provided (autonomy source cooldown keys on it);
+    # a topicless call is unchanged.
+    assert fanout.build_source_ref("topic", None, None, "roof restoration") == {
+        "type": "topic", "text": "roof restoration"
+    }
+    assert fanout.build_source_ref("topic", None, None, "  ") == {"type": "topic"}
 
 
 def test_draft_status():
