@@ -2960,6 +2960,19 @@ class Settings(BaseSettings):
     #     is the source of truth (a market_scanner reload recreates lead_values
     #     from it), so this only affects a re-generation. Calibratable.
     leadoff_cpl_margin_share: float = 0.22
+    # (1b) HomeAdvisor job-value formula rung (valuation "full rung"): for a
+    #      previously-manual project trade with a real HomeAdvisor True Cost Guide
+    #      job value but no observed resale price, CPL = weighted_job_value ×
+    #      close_rate × margin_share, clamped to [floor, cap]. The cap is the
+    #      empirical local-project CPL ceiling (the formula over-shoots high-ticket
+    #      trades — a $40k pool at 9% ≈ $3,600, absurd for a resale CPL). Only
+    #      affects a re-generation of inputs/lead_values.csv (owner-run), and only
+    #      when the raw scripts/homeadvisor_true_cost_guide_full.csv is present.
+    #      Every knob calibratable; flagged confidence=low; owner reviews the
+    #      before→after before activating.
+    leadoff_formula_close_rate: float = 0.42   # spec §3 blended lead→appointment book rate
+    leadoff_formula_cpl_cap: int = 150         # observed GC/remodel lead-range high (§1)
+    leadoff_formula_cpl_floor: int = 20        # low-ticket recurring-trade floor
     # (2) Per-market CPC local modifier on CPL (plan §3): CPL(city,cat) =
     #     anchor(cat) × clamp(market_cpc ÷ national_median_cpc(cat), min, max).
     #     Restores the per-market CPC the grader already pulls but discarded

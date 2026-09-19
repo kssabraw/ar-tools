@@ -52,6 +52,11 @@ from services import leadoff_lead_values as llv  # noqa: E402  (pure — safe an
 
 DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "leadoff_lead_values.csv")
+# The raw HomeAdvisor True Cost Guide dataset (713 sub-job rows) — the build input
+# for the job-value formula + observed-lead-range rungs. Committed next to this
+# script; regenerate/refresh it from the owner's scrape_true_cost_guide.py.
+DEFAULT_HOMEADVISOR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "homeadvisor_true_cost_guide_full.csv")
 CSV_COLUMNS = ["category_name", "cluster", "cpl_low", "cpl_mid", "cpl_high",
                "source", "confidence"]
 # The optional interim DDL (grant-preserving; ride on the CSV on the next reload).
@@ -62,14 +67,39 @@ MIRROR_DDL = (
 )
 
 
-def _read_existing_rows(from_json: str | None) -> list[dict]:
+def _read_existing_rows(from_json: str | None, from_csv: str | None) -> list[dict]:
     if from_json:
         with open(from_json, encoding="utf-8") as fh:
             return json.load(fh)
+    if from_csv:
+        # Offline regeneration from a prior CSV (e.g. the committed
+        # leadoff_lead_values.csv): the ladder re-derives the vertical/inherit rows
+        # identically (it ignores the input cpl for those) and reads the input cpl
+        # only for still-manual rows, so a round-trip is faithful with no DB egress.
+        with open(from_csv, newline="", encoding="utf-8") as fh:
+            out = []
+            for r in csv.DictReader(fh):
+                out.append({
+                    "category_name": r.get("category_name"),
+                    "cluster": r.get("cluster"),
+                    "cpl_low": int(r["cpl_low"]) if (r.get("cpl_low") or "").strip() else None,
+                    "cpl_mid": int(r["cpl_mid"]) if (r.get("cpl_mid") or "").strip() else None,
+                    "cpl_high": int(r["cpl_high"]) if (r.get("cpl_high") or "").strip() else None,
+                })
+            return out
     from services.leadoff_db import get_leadoff_client
     return (get_leadoff_client().table("lead_values")
             .select("category_name,cluster,cpl_low,cpl_mid,cpl_high")
             .execute().data or [])
+
+
+def _read_homeadvisor_rows(path: str | None) -> list[dict]:
+    """The raw HomeAdvisor True Cost Guide rows (job value + observed lead range).
+    Missing file → [] (the ladder degrades to observed-price-only, no formula)."""
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, newline="", encoding="utf-8") as fh:
+        return list(csv.DictReader(fh))
 
 
 def _write_csv(rows: list[dict], path: str) -> None:
@@ -178,6 +208,12 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from-json", help="read existing lead_values rows from a JSON dump")
+    ap.add_argument("--from-csv",
+                    help="read existing rows from a prior CSV (offline regen, no DB)")
+    ap.add_argument("--homeadvisor", default=DEFAULT_HOMEADVISOR,
+                    help="raw HomeAdvisor True Cost Guide CSV (job-value formula rung)")
+    ap.add_argument("--no-homeadvisor", action="store_true",
+                    help="skip the HomeAdvisor rungs (observed-price-only ladder)")
     ap.add_argument("--out", default=DEFAULT_OUT, help="CSV output path")
     ap.add_argument("--no-csv", action="store_true", help="skip writing the CSV")
     ap.add_argument("--upsert", action="store_true",
@@ -186,9 +222,17 @@ def main() -> int:
                     help="recompute the full board old vs new (heavy)")
     args = ap.parse_args()
 
-    old_rows = _read_existing_rows(args.from_json)
+    old_rows = _read_existing_rows(args.from_json, args.from_csv)
+    ha_rows = [] if args.no_homeadvisor else _read_homeadvisor_rows(args.homeadvisor)
+    if ha_rows:
+        print(f"loaded {len(ha_rows)} HomeAdvisor rows -> job-value formula rung on")
+    else:
+        print("no HomeAdvisor CSV -> observed-price-only ladder (no formula rung)")
+    fc = _formula_config()
     new_rows = llv.build_lead_values(
-        old_rows, margin_share=_margin_share())
+        old_rows, margin_share=_margin_share(), homeadvisor_rows=ha_rows,
+        formula_close_rate=fc["close"], formula_cpl_cap=fc["cap"],
+        formula_cpl_floor=fc["floor"])
     if not args.no_csv:
         _write_csv(new_rows, args.out)
         print(f"wrote {len(new_rows)} rows -> {args.out}")
@@ -207,6 +251,24 @@ def _margin_share() -> float:
                              llv.DEFAULT_MARGIN_SHARE))
     except Exception:
         return llv.DEFAULT_MARGIN_SHARE
+
+
+def _formula_config() -> dict:
+    """The formula-rung knobs from config (calibratable), defaulting to the pure
+    module constants so this runs with no config importable (offline)."""
+    try:
+        from config import settings
+        return {
+            "close": float(getattr(settings, "leadoff_formula_close_rate",
+                                   llv.FORMULA_CLOSE_RATE)),
+            "cap": int(getattr(settings, "leadoff_formula_cpl_cap",
+                               llv.FORMULA_CPL_CAP)),
+            "floor": int(getattr(settings, "leadoff_formula_cpl_floor",
+                                 llv.FORMULA_CPL_FLOOR)),
+        }
+    except Exception:
+        return {"close": llv.FORMULA_CLOSE_RATE, "cap": llv.FORMULA_CPL_CAP,
+                "floor": llv.FORMULA_CPL_FLOOR}
 
 
 if __name__ == "__main__":

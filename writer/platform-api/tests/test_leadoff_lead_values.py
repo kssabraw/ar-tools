@@ -92,3 +92,92 @@ def test_summarize_counts_confidence_tiers():
     ])
     tally = llv.summarize(rows)
     assert tally == {"high": 1, "medium": 1, "low": 1}
+
+
+# ── HomeAdvisor rungs (job-value formula + observed lead range) ────────────────
+
+def _ha(url, industry="", avg=None, n=0, lc_lo="", lc_hi=""):
+    return {"url": url, "sub_job_title": "", "industry": industry,
+            "job_value_avg": avg, "job_value_range_low": "", "job_value_range_high": "",
+            "job_value_sample_n": n, "job_value_template": "A",
+            "lead_cost_low": lc_lo, "lead_cost_high": lc_hi, "lead_cost_note": ""}
+
+
+def test_no_homeadvisor_rows_is_byte_identical():
+    # A manual category the formula WOULD ground stays manual when no CSV is passed.
+    manual = _row("Deck builder", "Remodeling/Renovation", 37, 62, 93)
+    without = llv.build_lead_values([manual])[0]
+    with_none = llv.build_lead_values([manual], homeadvisor_rows=None)[0]
+    assert without == with_none
+    assert without["source"] == "manual_estimate" and without["cpl_mid"] == 62
+
+
+def test_observed_lead_range_rung_fence():
+    ha = [_ha("https://x/cost/fencing/privacy-fence/", "Fencing", 4300, 0, "55", "175")]
+    r = llv.build_lead_values(
+        [_row("Fence contractor", "Landscaping/Outdoor", 35, 58, 87)],
+        homeadvisor_rows=ha)[0]
+    assert r["source"] == "homeadvisor_lead_range" and r["confidence"] == "medium"
+    assert r["cpl_low"] == 55 and r["cpl_high"] == 175
+    assert r["cpl_mid"] == round(llv.geomean(55, 175))  # 98
+
+
+def test_job_value_formula_rung_caps_high_ticket():
+    # A big-ticket project trade → formula over-shoots → clamped to the cap.
+    ha = [_ha("https://x/cost/swimming-pools-hot-tubs-and-saunas/build-a-swimming-pool/",
+              "", 41835, 3035)]
+    r = llv.build_lead_values(
+        [_row("Swimming pool contractor", "Pool/Outdoor", 57, 95, 142)],
+        homeadvisor_rows=ha, formula_cpl_cap=150)[0]
+    assert r["source"] == "job_value_formula" and r["confidence"] == "low"
+    assert r["cpl_mid"] == 150                       # clamped to the cap
+    assert r["cpl_low"] == 90 and r["cpl_high"] == 225
+
+
+def test_job_value_formula_rung_floors_low_ticket():
+    ha = [_ha("https://x/cost/cleaning-services/clean-windows/", "", 218, 26006)]
+    r = llv.build_lead_values(
+        [_row("Window cleaning service", "Exterior", 19, 32, 48)],
+        homeadvisor_rows=ha)[0]
+    # 218 × 0.42 × 0.22 ≈ 20 — grounded low, above the floor
+    assert r["source"] == "job_value_formula"
+    assert r["cpl_mid"] == llv.job_value_formula_cpl(218)
+    assert r["cpl_mid"] >= llv.FORMULA_CPL_FLOOR
+
+
+def test_unmapped_manual_stays_manual_even_with_homeadvisor():
+    ha = [_ha("https://x/cost/anything/", "", 5000, 100)]
+    r = llv.build_lead_values(
+        [_row("Piano tuner", "Specialty/Niche", 15, 30, 45)], homeadvisor_rows=ha)[0]
+    assert r["source"] == "manual_estimate" and r["cpl_mid"] == 30
+
+
+def test_job_value_formula_no_match_falls_through_to_manual():
+    # Mapped category but the CSV has no matching sub-job → keep manual (no fabrication).
+    ha = [_ha("https://x/cost/unrelated/thing/", "", 9999, 50)]
+    r = llv.build_lead_values(
+        [_row("Deck builder", "Remodeling/Renovation", 37, 62, 93)],
+        homeadvisor_rows=ha)[0]
+    assert r["source"] == "manual_estimate" and r["cpl_mid"] == 62
+
+
+def test_weighted_job_value_prefers_samples_then_mean():
+    rows = [_ha("a", avg=100, n=900), _ha("b", avg=200, n=100), _ha("c", avg=50, n=0)]
+    # weighted by n>0: (100*900 + 200*100) / 1000 = 110 (the n=0 row is ignored)
+    assert llv.weighted_job_value(rows) == 110
+    # no sampled rows → simple mean of avgs
+    assert llv.weighted_job_value([_ha("a", avg=100, n=0), _ha("b", avg=300, n=0)]) == 200
+    assert llv.weighted_job_value([]) is None
+    assert llv.weighted_job_value([_ha("a", avg=None, n=5)]) is None
+
+
+def test_job_value_formula_cpl_clamp_math():
+    assert llv.job_value_formula_cpl(1000, close_rate=0.42, margin_share=0.22) == 92
+    assert llv.job_value_formula_cpl(999999) == llv.FORMULA_CPL_CAP
+    assert llv.job_value_formula_cpl(10) == llv.FORMULA_CPL_FLOOR
+
+
+def test_observed_range_none_when_industry_has_no_lead_cost():
+    ha = [_ha("https://x/cost/garages/garage-door-prices/", "Garage door", 725, 0)]
+    assert llv.observed_range("Garage door", ha) is None
+    assert llv.observed_range("Nonexistent", ha) is None

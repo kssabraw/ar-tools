@@ -990,3 +990,87 @@ unearned). The exclusive CPL re-anchor + board re-export stay the owner's to run
 **Open (unchanged v2, plan §10):** median home value (a new B25077 backfill) if
 the second demographic signal is wanted; the raw 713-row HomeAdvisor CSV; revenue
 estimation + Enigma (gated on the pilot).
+
+## LeadOff — valuation: HomeAdvisor job-value formula rung (2026-09-19)
+
+**Context.** Plan §10's open item ("the raw 713-row HomeAdvisor CSV → more
+categories off flagged manual") and §8's "sharpen the CPL ladder", owner-picked
+next. The v1 §4 ladder left **45 of 107** `market_scanner.lead_values` categories
+on `manual_estimate`/`low` (hand-guesses) because they had no observed Service
+Direct resale price and no sane cluster-sibling anchor. The raw HomeAdvisor True
+Cost Guide dataset (job value per sub-job) is the input that grounds the project
+trades among them.
+
+**Finding (recorded honestly).** There is **no separate `homeadvisor_true_cost_guide_full.csv`
+in Drive** — the spec references it as a "source file alongside this doc" but it
+lives on the owner's machine. The owner shared it this session as a Google Sheet
+(`combined_job_value_and_lead_cost`, 713 rows). Downloaded via the Drive connector
+and committed to the repo as
+`writer/platform-api/scripts/homeadvisor_true_cost_guide_full.csv` (the durable
+build input, next to the output CSV). Schema: `url, sub_job_title, industry,
+job_value_avg, job_value_range_low/high, job_value_sample_n, job_value_template,
+lead_cost_low/high, lead_cost_note`. The spec's §2 *vertical-weighted* job values
+were already in v1's `JOB_VALUE` dict; the raw CSV's value is the **per-sub-job
+granularity** the vertical average couldn't carry.
+
+**DECIDED + BUILT (this session).** Two new ladder rungs in the pure
+`services/leadoff_lead_values.py`, running only when `homeadvisor_rows` is passed
+(so `homeadvisor_rows=None` is **byte-identical to v1** — no behaviour change; the
+17-case `tests/test_leadoff_lead_values.py` pins it):
+- **Rung 3.5 — observed HomeAdvisor lead range** (`homeadvisor_lead_range`,
+  `medium`): a previously-manual category whose GENUINE trade carries a published
+  Service Direct resale range in the CSV → `mid = geomean(low, high)`. Only two
+  qualify: **Fence contractor** ($55–175 → $98) and **Solar energy contractor**
+  ($100). The `industry` on a cross-mapped row (a chimney page filed under HVAC)
+  is deliberately NOT trusted as that trade's price.
+- **Rung 3.6 — HomeAdvisor job-value formula** (`job_value_formula`, `low`): a
+  previously-manual *project* trade with a real job value but no observed price →
+  `CPL = weighted_job_value × close_rate(0.42) × margin_share(0.22)`, **clamped to
+  [20, 150]**. `weighted_job_value` (pure, sample-weighted over `n>0` rows, plain
+  mean fallback) reuses the spec §4 "vertical-weighted, not a flagship sub-job"
+  rule. A conservative, explicit `_CATEGORY_JOB_MATCH` maps 24 categories to
+  url-slug patterns.
+- **The cap is the load-bearing guardrail (and the key judgment call):** the raw
+  formula over-shoots high-ticket trades (a $40k pool at ~9% ≈ $3,600, absurd for
+  a resale CPL), because **CPL decouples from job value at the top** — roofing's
+  $7,696 job resells at $85–550, not thousands. So the cap = the observed
+  GC/remodel lead-range high (~$150, spec §1), the empirical local-project CPL
+  ceiling. High-ticket remodeling-class trades (cabinet, deck, countertop,
+  masonry, stucco, stair, pool, interior design, asphalt/paving) correctly cluster
+  there; mid/low-ticket trades (drywall $91, awning $72, wallpaper $48, cleaning
+  $20–23, inspection/consulting $29–56, chimney sweep $23) differentiate below it.
+  All three knobs (`leadoff_formula_close_rate` / `_cpl_cap` / `_cpl_floor`) are
+  config-calibratable — the owner tunes them from the printed before→after.
+
+**Result.** **27 of 45** manual categories moved onto grounded data (18 remain
+manual). Confidence tiers: 25 high / 29 medium / 53 low. Direction is honest and
+two-way: 19 lifted (the high-ticket project trades, 1.5–3.1×), and a handful
+grounded DOWN where the manual guess was high (Solar 170→100, building
+inspector 60→29, cleaning trades → ~$20–23) — grounded > guess, consistent with
+v1 lowering handyman/carpet.
+
+**Deliberate exclusions (nothing fabricated).** Moving (spec §5 — zero lead-price
+signal, CPC-proxy is v2), piano tuning, furniture repair, upholstery, ponds,
+fountains, sprinklers, snow removal (no CSV match) → **stay flagged manual**.
+**Tile contractor** is deliberately NOT mapped: the CSV's only tile pages are
+grout/repair (a tile INSTALLER's job value is flooring-class, uncaptured), so a
+formula off them would *under*-value it — better to keep the manual estimate.
+**Chimney services** excludes the rare `chimney-rebuild` ($9k, n=0) so an outlier
+can't pin a small-repair lead to the cap.
+
+**Delivered as** `scripts/leadoff_lead_values.csv` regenerated (the owner's
+`inputs/lead_values.csv` source of truth) via `build_lead_values.py` — now loads
+the committed HomeAdvisor CSV, threads the formula knobs, and gained `--from-csv`
+(offline regen from a prior CSV, no DB egress) + `--no-homeadvisor`. Deliberately
+prose-only for the pure module (no I/O; the CSV is read in the script and passed
+in). **The `formula_cpl` raw cross-check is preserved** (a NEW clamped
+`job_value_formula_cpl` wraps it — the existing test's positional call is
+unchanged).
+
+**Guardrails held (unchanged from v1).** Nothing auto-applies. The regenerated
+CSV + the `--upsert` mirror + the board re-export are **owner-run after reviewing
+the before→after** (the plan's "never blind-swap"); shipping the code does not
+push these CPLs live. Every rung-3.6 row is flagged `low` confidence.
+
+**Open (v2, plan §10, unchanged):** median home value (B25077 backfill); revenue
+estimation + Enigma top-down + affordability ceiling (gated on the un-run pilot).

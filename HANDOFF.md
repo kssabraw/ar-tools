@@ -1,5 +1,23 @@
 # AR Tools — Handoff
 
+## ⏩ Update — 2026-09-19 · **LeadOff — Market Valuation: HomeAdvisor job-value formula rung BUILT (draft PR): 27 of 45 flagged-manual CPLs re-grounded.**
+
+Plan §10's open item ("the raw 713-row HomeAdvisor CSV → more categories off flagged manual") + §8's "sharpen the CPL ladder", owner-picked next. The v1 §4 ladder left **45 of 107** `lead_values` categories on hand-guessed `manual_estimate`; this grounds the project trades among them from real HomeAdvisor True Cost Guide job values.
+
+**The finding first:** there is **no `homeadvisor_true_cost_guide_full.csv` in Drive** — the spec references it but it lives on the owner's machine. The owner shared it this session as a Google Sheet (`combined_job_value_and_lead_cost`, 713 rows); downloaded via the Drive connector and **committed to the repo as `writer/platform-api/scripts/homeadvisor_true_cost_guide_full.csv`** (the durable build input, next to the output CSV). The spec's §2 *vertical-weighted* job values were already in v1's code — the raw CSV's value is per-sub-job granularity.
+
+**Built — two pure ladder rungs** (`services/leadoff_lead_values.py`), firing only when `homeadvisor_rows` is passed (so `None` ⇒ **byte-identical to v1**, pinned by tests):
+- **Observed lead range** (`homeadvisor_lead_range`, medium): Fence → $55–175 ($98 geomean), Solar → $100. The only two manual categories with a genuine same-trade published Service Direct price.
+- **Job-value formula** (`job_value_formula`, low): `CPL = weighted_job_value × close(0.42) × margin(0.22)`, **clamped [20, 150]**. `weighted_job_value` (pure, sample-weighted, spec §4 "vertical-weighted not flagship"); 24 categories mapped conservatively by url-slug. **The cap (= observed GC/remodel lead-range high, spec §1) is the load-bearing guardrail** — the raw formula over-shoots high-ticket trades because CPL decouples from job value at the top (roofing's $7,696 job resells at $85–550, not thousands). All three knobs config-calibratable (`leadoff_formula_close_rate`/`_cpl_cap`/`_cpl_floor`).
+
+**Result:** **27 of 45** manual categories re-grounded (18 stay manual). Tiers now 25 high / 29 medium / 53 low. 19 lifted 1.5–3.1× (the high-ticket project trades cluster at the $150 cap); a few grounded DOWN where the manual guess was high (Solar 170→100, building inspector 60→29, cleaning ~$20–23) — grounded > guess, as v1 lowered handyman/carpet. **Deliberate exclusions (nothing fabricated):** moving (spec §5 gap), piano/furniture/upholstery/ponds/fountains/sprinklers/snow (no match), **Tile** (CSV only has grout/repair — a tile installer's value is flooring-class, uncaptured → keep manual), and chimney-rebuild dropped from Chimney services (n=0 outlier).
+
+**Verified:** 17/17 `tests/test_leadoff_lead_values.py` (8 existing + 9 new — observed rung, formula cap/floor, byte-identical-when-no-CSV, weighted-job-value math, no-match→manual, unmapped→manual); ruff (CI select E9,F63,F7,F82 + default) clean; config loads. `build_lead_values.py` now loads the committed CSV, threads the knobs, gained `--from-csv` (offline regen, no DB) + `--no-homeadvisor`; the raw `formula_cpl` cross-check preserved (a new clamped `job_value_formula_cpl` wraps it, existing test untouched).
+
+**Guardrails held (unchanged):** nothing auto-applies — the regenerated `scripts/leadoff_lead_values.csv` + `--upsert` mirror + board re-export are **owner-run after reviewing the before→after** (the plan's "never blind-swap"); shipping the code does NOT push these CPLs to the live `lead_values` table. Every formula row flagged `low`. **Open (v2, plan §10, unchanged):** median home value (B25077); revenue estimation + Enigma (gated on the un-run pilot).
+
+---
+
 ## ⏩ Update — 2026-09-18 · **LeadOff — Market Valuation v1.5 BUILT (draft PR): income folded into the CPL local modifier (composes with the v1 CPC modifier).**
 
 Plan §8's v1.5 step, owner-picked next (v2 stays blocked on the un-run Enigma pilot). Folds per-city **median household income** into the CPL `local_modifier` as a second bounded signal that BLENDS with the v1 CPC modifier — a market **above** the national median household income gets a premium (up to +20%), **below** a discount (down to −15%), the `income ÷ national_median` ratio clamped. Bidirectional (the owner's ask), conservative, flag-gated, calibratable.
