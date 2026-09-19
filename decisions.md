@@ -1028,7 +1028,7 @@ granularity** the vertical average couldn't carry.
   `CPL = weighted_job_value × close_rate(0.42) × margin_share(0.22)`, **clamped to
   [20, 150]**. `weighted_job_value` (pure, sample-weighted over `n>0` rows, plain
   mean fallback) reuses the spec §4 "vertical-weighted, not a flagship sub-job"
-  rule. A conservative, explicit `_CATEGORY_JOB_MATCH` maps 24 categories to
+  rule. A conservative, explicit `_CATEGORY_JOB_MATCH` maps 25 categories to
   url-slug patterns.
 - **The cap is the load-bearing guardrail (and the key judgment call):** the raw
   formula over-shoots high-ticket trades (a $40k pool at ~9% ≈ $3,600, absurd for
