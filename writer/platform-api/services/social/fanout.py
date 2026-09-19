@@ -66,9 +66,13 @@ def resolve_platforms(requested: list[str], available: list[str]) -> list[str]:
     return out
 
 
-def build_source_ref(source_type: str, source_id: Optional[str], url: Optional[str]) -> dict:
+def build_source_ref(
+    source_type: str, source_id: Optional[str], url: Optional[str], text: Optional[str] = None
+) -> dict:
     """The stored Source reference for a Draft (matches creator.load_source's
-    shape), built without loading the source. Pure."""
+    shape), built without loading the source. Pure. A topic ref carries its ``text`` when
+    provided so the autonomy source cooldown can key on the topic (a topicless call is
+    unchanged)."""
     st = (source_type or "topic").lower()
     if st == "url":
         return {"type": "url", "url": (url or "").strip()}
@@ -76,7 +80,10 @@ def build_source_ref(source_type: str, source_id: Optional[str], url: Optional[s
         return {"type": "blog_run", "run_id": (source_id or "").strip()}
     if st == "local_seo_page":
         return {"type": "local_seo_page", "page_id": (source_id or "").strip()}
-    return {"type": "topic"}
+    ref = {"type": "topic"}
+    if (text or "").strip():
+        ref["text"] = text.strip()
+    return ref
 
 
 def draft_status(
@@ -138,7 +145,7 @@ def enqueue_fanout(client_id: str, req, user_id: Optional[str] = None) -> dict:
 
     angle_set_id = str(uuid4())
     fmt = req.format or "feed"
-    source_ref = build_source_ref(req.source_type, req.source_id, req.url)
+    source_ref = build_source_ref(req.source_type, req.source_id, req.url, getattr(req, "text", None))
     angle_title = (getattr(req, "angle_title", None) or angle)[:120]
 
     rows = [
@@ -162,6 +169,11 @@ def enqueue_fanout(client_id: str, req, user_id: Optional[str] = None) -> dict:
                     "slides": getattr(req, "slides", None),
                     "source_type": req.source_type, "source_id": req.source_id, "url": req.url,
                     "text": req.text, "user_id": user_id,
+                    # P4 Social Manager (autonomy loop): stamp provenance so the drafts are
+                    # counted for the weekly rate cap + badged, and auto-queue the ready ones
+                    # (tier 2) so P3's drip can pick them up. Absent → manual behavior.
+                    "produced_by": getattr(req, "produced_by", None),
+                    "auto_queue": bool(getattr(req, "auto_queue", False)),
                 },
             }).execute()
         ).data[0]
@@ -302,6 +314,9 @@ async def run_fanout_job(job: dict) -> None:
     include_image = bool(payload.get("include_image"))
     include_hashtags = bool(payload.get("include_hashtags", True))
     user_id = payload.get("user_id")
+    # P4 autonomy provenance + auto-queue (absent for a manual fan-out).
+    produced_by = payload.get("produced_by")
+    auto_queue = bool(payload.get("auto_queue"))
     # Load the client's image-prompt template ONCE (reused for every platform's image).
     policy_template = None
     if include_image:
@@ -388,6 +403,13 @@ async def run_fanout_job(job: dict) -> None:
                 board_required_missing=board_missing,
             )
 
+        # P4 autonomy: at tier 2 the loop auto-queues its OWN drafts (machine-approval)
+        # so P3's drip can publish them — but ONLY a fully-ready draft (a needs_image /
+        # needs_board draft is never silently queued). Publishing still needs the
+        # platform's auto_fill + the global auto-publish switch (P3), so tier 2 alone
+        # only reaches the queue.
+        if auto_queue and status == "ready":
+            status = "queued"
         update.update({
             "copy": copy, "media": media,
             "image_urls": image_urls,
@@ -395,6 +417,12 @@ async def run_fanout_job(job: dict) -> None:
             "spec_verdict": {"warnings": spec_warnings},
             "status": status,
         })
+        # Stamp autonomy provenance so the draft is counted for the weekly rate cap,
+        # rotated by the source cooldown, and badged in the UI (merges, never clobbers).
+        if produced_by:
+            meta = dict(draft.get("platform_metadata") or {})
+            meta["produced_by"] = produced_by
+            update["platform_metadata"] = meta
         sb.table("social_drafts").update(update).eq("id", draft["id"]).execute()
         ready += 1
 

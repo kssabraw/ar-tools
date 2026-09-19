@@ -923,6 +923,10 @@ async def _process_job(job: dict) -> None:
         from services.social import fanout as social_fanout
 
         await social_fanout.run_fanout_job(job)
+    elif job_type == "social_autonomy_run":
+        from services.social import manager as social_manager
+
+        await social_manager.run_social_autonomy_job(job)
     elif job_type == "social_profile_provision":
         await asyncio.to_thread(social_publish.run_profile_provision_job, job)
     elif job_type == "social_competitor_research":

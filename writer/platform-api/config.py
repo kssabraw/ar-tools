@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     # (auto-publish without auto_fill) is out of scope this build.
     social_autonomy_enabled: bool = False   # SOCIAL_AUTONOMY_ENABLED — the loop's kill switch
     social_autonomy_cap_tier: int = 2       # effective-tier ceiling for the social loop
+    social_autonomy_weekly_weekday: int = 2   # weekly baseline pass day (Wed; Mon=0)
+    social_autonomy_target_queue: int = 2     # desired queued-draft depth per platform
+    social_autonomy_max_per_week: int = 14    # rate cap on autonomy-produced drafts / client / week
+    social_autonomy_source_cooldown_days: int = 30  # don't re-repurpose a source within this window
     social_credit_usd: float = 0.0085   # est. USD per PostPeer credit (budget metering)
     social_max_upload_mb: float = 200.0   # server multipart upload cap (video-sized)
     # Big-video direct-to-R2 (queue #4): videos over social_max_upload_mb are PUT

@@ -696,6 +696,7 @@ async def gsc_scheduler() -> None:
 
     from services.strategist import enqueue_due_monthly_plan_reviews, enqueue_due_strategy_reviews
     from services.autonomy_executor import enqueue_due_autonomy_runs
+    from services.social.manager import enqueue_due_social_autonomy_runs
     from services.director.reconcile import run_daily as run_director_reconcile
     from services.director.digest import run_weekly as run_ops_digest
     from services.board_reports import run_weekly_board_reports
@@ -1049,6 +1050,9 @@ async def gsc_scheduler() -> None:
                 # Autonomous SEO agent — weekly per-client executor pass (the
                 # day after the strategist). No-ops until autonomy_enabled.
                 _safe("autonomy_runs", enqueue_due_autonomy_runs, now.weekday())
+                # Social Manager — weekly per-client generative pass (self-gated on
+                # its own weekday). No-ops until social_autonomy_enabled.
+                _safe("social_autonomy_runs", enqueue_due_social_autonomy_runs, now.weekday())
                 last_strategist_date = now.date()
                 save_marker("strategist_daily", last_strategist_date.isoformat())
             # Weekly Organic Rank Analysis reports (per keyword with a snapshot),

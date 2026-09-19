@@ -237,18 +237,28 @@ mass-produce.
 
 ## Build phases (each a fresh branch off latest `main` + a draft PR)
 
-**A — Policy planning fields + tier plumbing (foundation).** Open the `social_policy` write
-path to `autonomy_tier`/`allowed_topics`/`blocked_topics`/`tone_prefs`/`competitor_focus`/
-`qa_gate` (`policy.py` `_EDITABLE` + validation) + the Settings-tab UI. Add the three
-`ACTION_TIERS` entries + the `social_autonomy_enabled`/cap config. Migration: `autonomy_runs.domain`
-+ the `social_autonomy_run` async-job type. No loop yet. Pure + wiring tests.
+**A — Policy planning fields + tier plumbing (foundation). ✅ BUILT (PR #1240).** Opened the
+`social_policy` write path to `autonomy_tier`/`allowed_topics`/`blocked_topics`/`tone_prefs`/
+`competitor_focus` (`policy.py` `_EDITABLE` + validation) + the Settings-tab UI. Added the three
+`ACTION_TIERS` entries + the `social_autonomy_enabled`/cap config. Migration `20260919120000`:
+`autonomy_runs.domain` + the `social_autonomy_run` async-job type. (`qa_gate` deferred to Phase C
+with the rubric that consumes it.) No loop. Pure + wiring tests.
 
-**B — The orchestrator loop.** `services/social/manager.py` (pure `plan_period` + `select_source`
-+ `decide`; impure shell dispatching the built fan-out, auto-queue at tier 2, budget/freeze/
-veto gates, ledger + digest). Both triggers: `enqueue_due_social_autonomy_runs` on the
-scheduler + the empty-queue top-up folded into the P3 sweep. `social_autonomy_run` job +
-`job_worker` dispatch. Ships dark behind `social_autonomy_enabled`. Pure-core unit tests (plan,
-source rotation, decision matrix, auto-queue ladder).
+**B — The orchestrator loop. ✅ BUILT (PR #1240).** `services/social/manager.py` (pure
+`plan_batches` + `platform_deficits` + `select_source` + `filter_candidates` + `compose_angle`;
+impure shell dispatching the built fan-out, auto-queue at tier 2, budget-advisory/freeze gates,
+shared `autonomy_runs` ledger + digest). Both triggers: `enqueue_due_social_autonomy_runs` on the
+scheduler weekly + the empty-queue top-up folded into the P3 sweep's `empty` branch (deduped via
+`_in_flight_run`). `auto_queue`/`produced_by` threaded into the fan-out job (additive; default
+off = manual behavior). `social_autonomy_run` job + `job_worker` dispatch. Ships dark behind
+`social_autonomy_enabled`. Pure-core + gate/decision + fan-out-wiring unit tests.
+
+> **Deviation (deliberate):** the **DORA pre-flight veto is NOT wired** in v1. It's
+> keyword-collision-based (`director_veto.preflight_conflict` matches a candidate's *keyword*
+> against in-flight jobs/tasks/interventions); a social generate candidate carries no keyword
+> target, so the veto is a guaranteed no-op. Wiring it would be a guard that does nothing —
+> deferred until social candidates gain a target. (The plan listed it as a reused primitive;
+> the other primitives — `classify`, the fail-closed budget meter, freeze — are all wired.)
 
 **C — QA rubric.** `RUBRIC_SOCIAL` + `review_social_draft` + the `qa_gate` opt-in + the block
 on auto-queue. Deterministic-check tests.
