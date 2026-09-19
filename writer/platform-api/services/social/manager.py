@@ -46,6 +46,7 @@ from typing import Optional
 from config import settings
 from services import autonomy_policy
 from services.social import budget, policy as social_policy
+from services.social.storyboard import STORYBOARD_PLATFORMS
 
 logger = logging.getLogger(__name__)
 
@@ -138,11 +139,19 @@ def activity_item(row: dict) -> dict:
     decisions = row.get("decisions") or []
     produced = len(row.get("actions_taken") or [])
     proposed = 0
+    storyboards = 0
+    sb_platforms: set[str] = set()
     for d in decisions:
-        if isinstance(d, dict) and d.get("proposed_batches"):
+        if not isinstance(d, dict):
+            continue
+        if d.get("proposed_batches"):
             proposed += len(d["proposed_batches"])
+        if d.get("action") == "propose_social_storyboard" and d.get("outcome") == "propose":
+            storyboards += 1
+            if d.get("platform"):
+                sb_platforms.add(str(d["platform"]).lower())
     deficits = snap.get("deficits") if isinstance(snap, dict) else None
-    platforms = sorted(deficits.keys()) if isinstance(deficits, dict) else []
+    platforms = sorted(set(deficits.keys() if isinstance(deficits, dict) else []) | sb_platforms)
     return {
         "id": row.get("id"),
         "trigger": row.get("trigger"),
@@ -150,6 +159,7 @@ def activity_item(row: dict) -> dict:
         "produced": produced,
         "auto_queued": bool(snap.get("auto_queue")),
         "proposed": proposed,
+        "storyboards": storyboards,
         "platforms": platforms,
         "cost_usd": row.get("cost_usd"),
         "at": row.get("created_at"),
@@ -178,6 +188,30 @@ def select_source(
         if k not in used_keys:
             return {"source_type": "topic", "source_id": None, "text": tt, "title": tt, "key": k}
     return None
+
+
+def gather_storyboard_proposals(
+    active_platforms: list[str], recent_platforms: set[str], max_proposals: int
+) -> list[dict]:
+    """Which active-cadence VIDEO platforms to nudge for a storyboard (owner Q4 = the P4
+    loop may PROPOSE a video brief, never auto-generate video). Pure. A platform qualifies
+    when it's a ``STORYBOARD_PLATFORMS`` member (IG/FB Reels + YouTube Shorts) AND has no
+    recent non-archived storyboard. Order follows ``active_platforms``; capped at
+    ``max_proposals``; ``format`` = 'short' for youtube, else 'reel'."""
+    out: list[dict] = []
+    cap = max(0, int(max_proposals))
+    for p in active_platforms:
+        if len(out) >= cap:
+            break
+        pl = (p or "").lower()
+        if pl not in STORYBOARD_PLATFORMS or pl in recent_platforms:
+            continue
+        out.append({
+            "platform": pl,
+            "format": "short" if pl == "youtube" else "reel",
+            "reason": "no recent video storyboard for this platform",
+        })
+    return out
 
 
 def _per_draft_image_cost() -> float:
@@ -315,6 +349,55 @@ def _autonomy_drafts_this_week(client_id: str) -> int:
     return n
 
 
+def _platforms_with_recent_storyboard(client_id: str, cooldown_days: int) -> set[str]:
+    """Platforms that already have a non-archived storyboard created within the cooldown
+    window — so the loop doesn't re-propose a video brief for them until a human has made
+    one and it's aged out. Best-effort → set() on any read error (a miss just re-proposes)."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max(0, int(cooldown_days)))).isoformat()
+        rows = (
+            _sb().table("social_storyboards").select("platform")
+            .eq("client_id", client_id).neq("status", "archived")
+            .gte("created_at", cutoff).execute()
+        ).data or []
+    except Exception as exc:  # noqa: BLE001 — best-effort; a read failure just re-proposes
+        logger.warning("social.storyboard_recent_read_failed",
+                       extra={"client_id": client_id, "error": str(exc)[:200]})
+        return set()
+    return {(r.get("platform") or "").lower() for r in rows if r.get("platform")}
+
+
+def _storyboard_proposal_decisions(client_id: str, active: list[str], tier: int) -> list[dict]:
+    """Video-storyboard PROPOSE decisions (owner Q4 = "may propose"): for each active-cadence
+    video platform with no recent storyboard, a ``requires="approval"`` candidate — which
+    ``autonomy_policy.classify`` deterministically returns ``propose`` for (never ``auto``,
+    whatever the tier/budget). This generates + spends NOTHING (no LLM, no thumbnail, no
+    video) — a human makes the video from the Storyboard tab. DORA's ``prov_autonomy`` counts
+    these domain='social' ``propose`` decisions automatically (no DORA change). Gated on
+    ``social_autonomy_storyboard_proposals`` and capped; returns [] when off."""
+    if not settings.social_autonomy_storyboard_proposals:
+        return []
+    recent = _platforms_with_recent_storyboard(
+        client_id, int(settings.social_autonomy_storyboard_cooldown_days)
+    )
+    props = gather_storyboard_proposals(
+        active, recent, int(settings.social_autonomy_storyboard_max_per_run)
+    )
+    decisions: list[dict] = []
+    for prop in props:
+        # requires="approval" → classify short-circuits to PROPOSE before any tier/budget
+        # check (freeze already handled upstream). It can never be auto.
+        d = autonomy_policy.classify(
+            {"action": "propose_social_storyboard", "requires": "approval"},
+            client_tier=tier, budget_left=None, freeze=False,
+        )
+        decisions.append({
+            "action": "propose_social_storyboard", "outcome": d.outcome, "reason": d.reason,
+            "platform": prop["platform"], "format": prop["format"],
+        })
+    return decisions
+
+
 def _in_flight_run(client_id: str) -> bool:
     """True if a social_autonomy_run job for this client is already pending/running — so a
     burst of due empty slots can't stack duplicate runs."""
@@ -420,11 +503,24 @@ async def run_social_autonomy_for_client(
     allowed_topics = social_policy.clean_str_list(prow.get("allowed_topics"))
     blocked_topics = social_policy.clean_str_list(prow.get("blocked_topics"))
 
+    # Owner Q4 seam: the loop MAY PROPOSE a video storyboard (never auto-generate video).
+    # Computed once; folded into whichever exit fires so it's surfaced even when draft
+    # queues are full. requires="approval" ⇒ classify always returns "propose" (never auto).
+    sb_decisions = _storyboard_proposal_decisions(client_id, active, tier)
+    n_sb = len(sb_decisions)
+
     deficits = platform_deficits(active, _queued_counts(client_id), settings.social_autonomy_target_queue)
     produced_this_week = _autonomy_drafts_this_week(client_id)
     weekly_remaining = max(0, int(settings.social_autonomy_max_per_week) - produced_this_week)
     batches = plan_batches(deficits, weekly_remaining)
     if not batches:
+        # Draft queues are full / capped — but a storyboard proposal is still worth surfacing.
+        if sb_decisions:
+            _write_ledger(client_id, trigger, tier, deficits, sb_decisions, dispatched=[], auto_queue=False)
+            _emit_digest(client_id, trigger, produced=0, queued=False, batches=[],
+                         proposed=True, storyboards=n_sb)
+            return {"status": "proposed", "tier": tier, "batches": 0, "storyboards": n_sb,
+                    "reason": "storyboard proposals only"}
         return {"status": "noop", "reason": "queues full or weekly cap reached",
                 "deficits": deficits, "weekly_remaining": weekly_remaining}
 
@@ -455,9 +551,12 @@ async def run_social_autonomy_for_client(
         # Surface what WOULD have been generated as proposals (out of tier / over budget /
         # rate-capped) — recorded + digested for a human, never run.
         decisions.append({"proposed_batches": batches, "auto_queue": auto_queue})
+        decisions.extend(sb_decisions)
         _write_ledger(client_id, trigger, tier, deficits, decisions, dispatched=[], auto_queue=auto_queue)
-        _emit_digest(client_id, trigger, produced=0, queued=auto_queue, batches=batches, proposed=True)
-        return {"status": "proposed", "tier": tier, "batches": len(batches), "reason": gen.reason}
+        _emit_digest(client_id, trigger, produced=0, queued=auto_queue, batches=batches,
+                     proposed=True, storyboards=n_sb)
+        return {"status": "proposed", "tier": tier, "batches": len(batches),
+                "storyboards": n_sb, "reason": gen.reason}
 
     # AUTO: dispatch one fan-out job per batch, each with a fresh rotated source + angle.
     used_keys = _recent_source_keys(client_id, int(settings.social_autonomy_source_cooldown_days))
@@ -475,9 +574,10 @@ async def run_social_autonomy_for_client(
             dispatched.append({"angle_set_id": angle_set_id, "platforms": batch,
                                "source_key": src["key"], "angle": angle_title})
 
+    decisions.extend(sb_decisions)
     _write_ledger(client_id, trigger, tier, deficits, decisions, dispatched, auto_queue)
     _emit_digest(client_id, trigger, produced=len(dispatched), queued=auto_queue,
-                 batches=[d["platforms"] for d in dispatched], proposed=False)
+                 batches=[d["platforms"] for d in dispatched], proposed=False, storyboards=n_sb)
     # PACE hand-off (Phase D): when the drafts land awaiting human approval
     # (tier 1 — not auto-queued), file a "review the generated drafts" task so
     # the work is owned on the board, not just a notification. A tier-2
@@ -516,23 +616,29 @@ def _file_pace_review_task(client_id: str, count: int) -> None:
                        extra={"client_id": client_id, "error": str(exc)[:200]})
 
 
-def _emit_digest(client_id, trigger, *, produced, queued, batches, proposed) -> None:
-    if not batches:
+def _emit_digest(client_id, trigger, *, produced, queued, batches, proposed, storyboards=0) -> None:
+    if not batches and not storyboards:
         return
     try:
         from services import notifications
 
-        n_platforms = len({p for b in batches for p in b})
-        if proposed:
-            summary = (f"Would generate {len(batches)} social draft batch(es) across "
-                       f"{n_platforms} platform(s) — awaiting approval (out of tier / budget).")
-        else:
-            verb = "generated + auto-queued" if queued else "generated (awaiting your approval)"
-            summary = f"{produced} social draft batch(es) {verb} across {n_platforms} platform(s)."
+        parts: list[str] = []
+        if batches:
+            n_platforms = len({p for b in batches for p in b})
+            if proposed:
+                parts.append(f"Would generate {len(batches)} social draft batch(es) across "
+                             f"{n_platforms} platform(s) — awaiting approval (out of tier / budget).")
+            else:
+                verb = "generated + auto-queued" if queued else "generated (awaiting your approval)"
+                parts.append(f"{produced} social draft batch(es) {verb} across {n_platforms} platform(s).")
+        if storyboards:
+            parts.append(f"{storyboards} video storyboard(s) proposed — review + shoot from the "
+                         "Storyboard tab.")
         notifications.emit(
             client_id, "social_autonomy_run", "Social Manager run",
-            summary=summary, severity="info",
-            payload={"trigger": trigger, "produced": produced, "auto_queue": queued},
+            summary=" ".join(parts), severity="info",
+            payload={"trigger": trigger, "produced": produced, "auto_queue": queued,
+                     "storyboards": int(storyboards)},
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("social.autonomy_digest_failed", extra={"error": str(exc)[:200]})

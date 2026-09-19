@@ -52,6 +52,7 @@ from models.social import (
     SocialScheduleUpsertRequest,
     SocialSchedulesResponse,
     SocialSetCredentialRequest,
+    SocialStoryboardExportResponse,
     SocialStoryboardRequest,
     SocialStoryboardResponse,
     SocialStoryboardUpdateRequest,
@@ -555,5 +556,21 @@ async def generate_social_storyboard_thumbnail(
     social_publish._assert_enabled()
     assert_not_frozen(str(client_id))
     return await social_storyboard.generate_thumbnail(
+        str(client_id), str(storyboard_id), user_id=auth.get("user_id")
+    )
+
+
+@router.post(
+    "/clients/{client_id}/social/storyboards/{storyboard_id}/export-doc",
+    response_model=SocialStoryboardExportResponse,
+)
+async def export_social_storyboard_doc(
+    client_id: UUID, storyboard_id: UUID, auth: dict = Depends(require_staff)
+):
+    """Export a storyboard as a Google Doc in the client's Drive folder (a shoot-ready
+    brief). Reuses the shared Apps Script webhook; not freeze-gated (spends nothing,
+    publishes nothing to a platform)."""
+    social_publish._assert_enabled()
+    return await social_storyboard.export_storyboard_doc(
         str(client_id), str(storyboard_id), user_id=auth.get("user_id")
     )

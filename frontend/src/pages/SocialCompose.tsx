@@ -854,6 +854,7 @@ interface AutonomyRun {
   produced: number
   auto_queued: boolean
   proposed: number
+  storyboards?: number
   platforms: string[]
   cost_usd: number | null
   at: string | null
@@ -886,7 +887,8 @@ function AutonomyActivity({ clientId }: { clientId: string }) {
             {typeof r.tier === 'number' && <span style={{ color: '#94a3b8' }}>tier {r.tier}</span>}
             {r.produced > 0 && <span style={{ color: '#047857', fontWeight: 600 }}>generated {r.produced}{r.auto_queued ? ' → queued' : ''}</span>}
             {r.proposed > 0 && <span style={{ color: '#c2410c', fontWeight: 600 }}>proposed {r.proposed}</span>}
-            {r.produced === 0 && r.proposed === 0 && <span style={{ color: '#94a3b8' }}>no action</span>}
+            {(r.storyboards ?? 0) > 0 && <span style={{ color: '#7c3aed', fontWeight: 600 }}>{r.storyboards} storyboard{r.storyboards === 1 ? '' : 's'} proposed</span>}
+            {r.produced === 0 && r.proposed === 0 && (r.storyboards ?? 0) === 0 && <span style={{ color: '#94a3b8' }}>no action</span>}
             {r.platforms.length > 0 && <span style={{ color: '#94a3b8' }}>· {r.platforms.join(', ')}</span>}
           </div>
         ))}
@@ -1831,6 +1833,7 @@ interface Storyboard {
   title?: string | null
   storyboard: StoryboardBody
   thumbnail_url?: string | null
+  doc_url?: string | null
   voice_warnings?: string[] | null
   status: string
   created_at?: string | null
@@ -1845,21 +1848,55 @@ function StoryboardCard({ clientId, sb, onChanged }: {
 }) {
   const [editing, setEditing] = useState(false)
   const [title, setTitle] = useState(sb.title ?? '')
+  const [hook, setHook] = useState(sb.storyboard?.hook ?? '')
+  const [duration, setDuration] = useState(sb.storyboard?.duration_seconds != null ? String(sb.storyboard.duration_seconds) : '')
+  const [music, setMusic] = useState(sb.storyboard?.music ?? '')
   const [caption, setCaption] = useState(sb.storyboard?.caption ?? '')
   const [cta, setCta] = useState(sb.storyboard?.cta ?? '')
   const [hashtags, setHashtags] = useState((sb.storyboard?.hashtags ?? []).join(' '))
+  const [editShots, setEditShots] = useState<StoryboardShot[]>(() => (sb.storyboard?.shots ?? []).map((s) => ({ ...s })))
   const [error, setError] = useState<string | null>(null)
   const body = sb.storyboard ?? {}
   const shots = body.shots ?? []
 
+  const patchShot = (i: number, patch: Partial<StoryboardShot>) =>
+    setEditShots((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)))
+  const moveShot = (i: number, dir: -1 | 1) =>
+    setEditShots((prev) => {
+      const j = i + dir
+      if (j < 0 || j >= prev.length) return prev
+      const next = [...prev]
+      ;[next[i], next[j]] = [next[j], next[i]]
+      return next
+    })
+  const deleteShot = (i: number) => setEditShots((prev) => prev.filter((_, idx) => idx !== i))
+  const addShot = () => setEditShots((prev) => [...prev, { visual: '' }])
+
   const saveMut = useMutation({
     mutationFn: () => {
       setError(null)
+      const dur = duration.trim() ? parseInt(duration, 10) : null
+      const cleanShots: StoryboardShot[] = editShots
+        .filter((s) => (s.visual ?? '').trim())
+        .map((s, idx) => {
+          const sd = s.duration_seconds != null ? Number(s.duration_seconds) : NaN
+          return {
+            n: idx + 1,
+            visual: (s.visual ?? '').trim(),
+            on_screen_text: (s.on_screen_text ?? '').trim() || null,
+            voiceover: (s.voiceover ?? '').trim() || null,
+            duration_seconds: Number.isFinite(sd) && sd > 0 ? sd : null,
+            b_roll: s.b_roll ?? null,
+          }
+        })
       const nextBody: StoryboardBody = {
-        ...body,
+        hook: hook.trim(),
+        duration_seconds: dur != null && Number.isFinite(dur) && dur > 0 ? dur : null,
+        shots: cleanShots,
+        music: music.trim() || null,
         caption: caption.trim() || null,
-        cta: cta.trim() || null,
         hashtags: hashtags.split(/\s+/).map((h) => h.replace(/^#/, '').trim()).filter(Boolean),
+        cta: cta.trim() || null,
       }
       return api.patch<Storyboard>(`/social/storyboards/${sb.id}`, { title: title.trim() || null, storyboard: nextBody })
     },
@@ -1870,6 +1907,11 @@ function StoryboardCard({ clientId, sb, onChanged }: {
     mutationFn: () => { setError(null); return api.post<Storyboard>(`/clients/${clientId}/social/storyboards/${sb.id}/thumbnail`, {}) },
     onSuccess: () => onChanged(),
     onError: (e) => setError(e instanceof Error ? e.message : 'social_image_generation_failed'),
+  })
+  const exportMut = useMutation({
+    mutationFn: () => { setError(null); return api.post<{ doc_url?: string | null }>(`/clients/${clientId}/social/storyboards/${sb.id}/export-doc`, {}) },
+    onSuccess: (r) => { if (r?.doc_url) window.open(r.doc_url, '_blank', 'noopener'); onChanged() },
+    onError: (e) => setError(e instanceof Error ? e.message : 'social_storyboard_export_failed'),
   })
   const archiveMut = useMutation({
     mutationFn: () => api.delete(`/social/storyboards/${sb.id}`),
@@ -1920,6 +1962,38 @@ function StoryboardCard({ clientId, sb, onChanged }: {
       {editing ? (
         <div style={{ marginTop: 12, display: 'grid', gap: 8 }}>
           <div><label style={label}>Working title</label><input style={input} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ flex: 1 }}><label style={label}>Hook (first ~3s)</label><textarea style={{ ...input, minHeight: 44, resize: 'vertical' }} value={hook} onChange={(e) => setHook(e.target.value)} /></div>
+            <div style={{ width: 120 }}><label style={label}>Length (s)</label><input style={input} type="number" min={0} value={duration} onChange={(e) => setDuration(e.target.value)} /></div>
+          </div>
+          <div>
+            <label style={label}>Shots</label>
+            <div style={{ display: 'grid', gap: 8 }}>
+              {editShots.map((s, i) => (
+                <div key={i} style={{ border: '1px solid #e2e8f0', borderRadius: 8, padding: 8, background: '#f8fafc' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b' }}>Shot {i + 1}</span>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button type="button" title="Move up" disabled={i === 0} onClick={() => moveShot(i, -1)} style={{ ...btn('#eef2ff', '#4f46e5'), padding: '2px 8px', fontSize: 12 }}>↑</button>
+                      <button type="button" title="Move down" disabled={i === editShots.length - 1} onClick={() => moveShot(i, 1)} style={{ ...btn('#eef2ff', '#4f46e5'), padding: '2px 8px', fontSize: 12 }}>↓</button>
+                      <button type="button" title="Delete shot" onClick={() => deleteShot(i)} style={{ ...btn('#fef2f2', '#dc2626'), padding: '2px 8px', fontSize: 12 }}><X size={12} /></button>
+                    </div>
+                  </div>
+                  <textarea style={{ ...input, minHeight: 40, resize: 'vertical' }} placeholder="Visual — what the shot shows (required)" value={s.visual ?? ''} onChange={(e) => patchShot(i, { visual: e.target.value })} />
+                  <input style={{ ...input, marginTop: 6 }} placeholder="On-screen text" value={s.on_screen_text ?? ''} onChange={(e) => patchShot(i, { on_screen_text: e.target.value })} />
+                  <input style={{ ...input, marginTop: 6 }} placeholder="Voiceover / script line" value={s.voiceover ?? ''} onChange={(e) => patchShot(i, { voiceover: e.target.value })} />
+                  <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginTop: 6 }}>
+                    <input style={{ ...input, width: 110 }} type="number" min={0} placeholder="Seconds" value={s.duration_seconds != null ? String(s.duration_seconds) : ''} onChange={(e) => patchShot(i, { duration_seconds: e.target.value.trim() ? Number(e.target.value) : null })} />
+                    <label style={{ fontSize: 12, color: '#475569', display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <input type="checkbox" checked={Boolean(s.b_roll)} onChange={(e) => patchShot(i, { b_roll: e.target.checked })} /> B-roll
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <button type="button" onClick={addShot} style={{ ...btn('#eef2ff', '#4f46e5'), padding: '5px 10px', fontSize: 12, marginTop: 8 }}>+ Add shot</button>
+          </div>
+          <div><label style={label}>Music / audio</label><input style={input} value={music} onChange={(e) => setMusic(e.target.value)} /></div>
           <div><label style={label}>Caption</label><textarea style={{ ...input, minHeight: 60, resize: 'vertical' }} value={caption} onChange={(e) => setCaption(e.target.value)} /></div>
           <div><label style={label}>Hashtags (space-separated)</label><input style={input} value={hashtags} onChange={(e) => setHashtags(e.target.value)} /></div>
           <div><label style={label}>Call to action</label><input style={input} value={cta} onChange={(e) => setCta(e.target.value)} /></div>
@@ -1943,13 +2017,24 @@ function StoryboardCard({ clientId, sb, onChanged }: {
         </p>
       )}
 
-      <div style={{ marginTop: 12 }}>
+      <div style={{ marginTop: 12, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {!sb.thumbnail_url && (
           <button disabled={thumbMut.isPending} onClick={() => thumbMut.mutate()}
             style={{ ...btn('#7c3aed'), padding: '6px 12px', fontSize: 12 }}>
             {thumbMut.isPending ? <Loader2 size={13} className="spin" /> : <ImageIcon size={13} />}
             {thumbMut.isPending ? 'Generating…' : 'Generate thumbnail'}
           </button>
+        )}
+        <button disabled={exportMut.isPending} onClick={() => exportMut.mutate()}
+          style={{ ...btn('#eef2ff', '#4f46e5'), padding: '6px 12px', fontSize: 12 }}>
+          {exportMut.isPending ? <Loader2 size={13} className="spin" /> : <ExternalLink size={13} />}
+          {exportMut.isPending ? 'Exporting…' : sb.doc_url ? 'Re-export to Google Doc' : 'Export to Google Doc'}
+        </button>
+        {sb.doc_url && (
+          <a href={sb.doc_url} target="_blank" rel="noopener noreferrer"
+            style={{ fontSize: 12, color: '#4f46e5', fontWeight: 600, display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <ExternalLink size={12} /> Open Doc
+          </a>
         )}
       </div>
       {error && <div style={{ marginTop: 10 }}><ErrorDetails message={error} /></div>}

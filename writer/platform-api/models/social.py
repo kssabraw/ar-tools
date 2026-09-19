@@ -325,6 +325,7 @@ class SocialAutonomyRunResponse(BaseModel):
     produced: int = 0
     auto_queued: bool = False
     proposed: int = 0
+    storyboards: int = 0
     platforms: list[str] = Field(default_factory=list)
     cost_usd: Optional[float] = None
     at: Optional[datetime] = None
@@ -414,6 +415,7 @@ class SocialStoryboardResponse(BaseModel):
     title: Optional[str] = None
     storyboard: dict = Field(default_factory=dict)
     thumbnail_url: Optional[str] = None
+    doc_url: Optional[str] = None
     voice_warnings: Optional[list[str]] = None
     status: str
     created_at: Optional[datetime] = None
@@ -427,3 +429,10 @@ class SocialStoryboardUpdateRequest(BaseModel):
     title: Optional[str] = None
     storyboard: Optional[SocialStoryboardBody] = None
     thumbnail_url: Optional[str] = None
+
+
+class SocialStoryboardExportResponse(BaseModel):
+    """Result of exporting a storyboard to a Google Doc in the client's Drive folder."""
+    doc_id: Optional[str] = None
+    doc_url: Optional[str] = None
+    reused: bool = False

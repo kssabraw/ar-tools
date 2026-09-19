@@ -310,10 +310,17 @@ Creator exists.
   2026-09-19: Q1=storyboard-only / Q2=defer-vendor / Q3=Reels+Shorts, Compose-first / Q4=autonomy
   may-propose): a shoot-ready shot-by-shot **brief** (NO rendered video, no new vendor) —
   `services/social/storyboard.py` + `social_storyboards` table + a Storyboard tab. Scope/plan:
-  `p5-video-scope-v1_0.md` / `p5-video-plan-v1_0.md`. **Still deferred (separate owner decisions):**
-  phase (b) deterministic assembled short-form (stills + captions + owned clips via ffmpeg, no AI
-  video model) + phase (c) true AI text/image-to-video generation (needs a NEW vendor — none chosen;
-  the scope doc has the vendor map) + cobalt self-host.
+  `p5-video-scope-v1_0.md` / `p5-video-plan-v1_0.md`. **Slice (a.1) follow-ups BUILT** (owner
+  chose all three via AskUserQuestion 2026-09-19; plan `p5-storyboard-followups-plan-v1_0.md`):
+  the **autonomy-PROPOSE seam** (the P4 loop surfaces a storyboard as a `requires="approval"`
+  proposal — never auto-generate video / auto-publish; DORA counts it via the existing
+  `prov_autonomy`), a **Google-Doc export** (`…/storyboards/{id}/export-doc` → `google_docs`;
+  migration `20260919160000` adds `social_storyboards.doc_url`), and **shot-level UI editing**
+  (add/reorder/delete/edit shots in `SocialCompose.tsx`). See `HANDOFF.md` 2026-09-19 a.1 entry.
+  **Still deferred (separate owner decisions):** phase (b) deterministic assembled short-form
+  (stills + captions + owned clips via ffmpeg, no AI video model) + phase (c) true AI
+  text/image-to-video generation (needs a NEW vendor — none chosen; the scope doc has the
+  vendor map) + cobalt self-host.
 
 ## Things NOT to do (module-specific)
 

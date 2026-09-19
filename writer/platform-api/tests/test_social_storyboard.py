@@ -259,3 +259,108 @@ def test_delete_storyboard_archives(monkeypatch):
     assert storyboard.delete_storyboard("s1") == {"ok": True}
     updates = [f for t, f in store["updates"] if t == "social_storyboards"]
     assert updates and updates[0]["status"] == "archived"
+
+
+# ── pure: render_storyboard_markdown (slice a.1 — Doc export) ──────────────────
+
+def test_render_storyboard_markdown_full():
+    row = {
+        "platform": "instagram", "format": "reel", "title": "Roof in 30s", "angle": "myth-bust",
+        "source_title": "Roof 101",
+        "voice_warnings": ["forbidden_term:cheapest"],
+        "storyboard": {
+            "hook": "Your roof is older than you think", "duration_seconds": 30,
+            "shots": [
+                {"visual": "Drone shot", "on_screen_text": "Before", "duration_seconds": 3, "b_roll": True},
+                {"visual": "Owner to camera", "voiceover": "We restore, not replace."},
+                {"visual": ""},   # empty → skipped
+            ],
+            "music": "upbeat acoustic", "caption": "See the restore.",
+            "hashtags": ["roofing", "#RoofRestoration"], "cta": "Book a free inspection",
+        },
+    }
+    title, md = storyboard.render_storyboard_markdown(row)
+    assert title == "Roof in 30s"
+    assert md.startswith("# Roof in 30s")
+    assert "**Instagram · Reel · ~30s**" in md
+    assert "_Angle: myth-bust_" in md
+    assert "## Hook" in md and "older than you think" in md
+    assert "1. **Drone shot** (b-roll, ~3s)" in md
+    assert "   - On-screen text: Before" in md
+    assert "2. **Owner to camera**" in md
+    assert "   - Voiceover: We restore, not replace." in md
+    assert "Owner to camera**\n" in md  # the empty-visual shot was dropped (only 2 shots)
+    assert "## Music / audio" in md and "upbeat acoustic" in md
+    assert "## Caption" in md and "See the restore." in md
+    assert "#roofing #RoofRestoration" in md          # leading # normalized, both present
+    assert "**Call to action:** Book a free inspection" in md
+    assert "_Source: Roof 101_" in md
+    assert "Brand-voice advisory:" in md and "forbidden_term:cheapest" in md
+
+
+def test_render_storyboard_markdown_minimal_omits_empty_sections():
+    title, md = storyboard.render_storyboard_markdown(
+        {"platform": "youtube", "format": "short",
+         "storyboard": {"hook": "Hook only", "shots": [{"visual": "Just one shot"}]}}
+    )
+    assert title == "Video storyboard"          # no title/source_title → default
+    assert "## Hook" in md and "## Shot list" in md
+    assert "## Music" not in md and "## Caption" not in md
+    assert "Call to action:" not in md and "Brand-voice advisory:" not in md
+
+
+# ── impure: export_storyboard_doc ─────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_export_storyboard_doc_happy_path(monkeypatch):
+    import services.google_docs as gd
+
+    store = {"rows": {
+        "social_storyboards": [{"id": "s1", "client_id": "c1", "platform": "instagram",
+                                "format": "reel", "title": "T",
+                                "storyboard": {"hook": "H", "shots": [{"visual": "V"}]}}],
+        "clients": [{"id": "c1", "name": "Acme", "google_drive_folder_id": "folder-1",
+                     "drive_folders": None}],
+    }}
+    monkeypatch.setattr(settings, "social_enabled", True)
+    monkeypatch.setattr(storyboard, "_sb", lambda: _fake_sb(store))
+
+    calls = {}
+
+    async def _fake_create(folder_id, doc_title, content, **kw):
+        calls.update(folder_id=folder_id, title=doc_title, content=content, kw=kw)
+        return {"doc_id": "d1", "doc_url": "https://docs/x", "reused": False}
+
+    monkeypatch.setattr(gd, "create_google_doc", _fake_create)
+
+    out = await storyboard.export_storyboard_doc("c1", "s1")
+    assert out == {"doc_id": "d1", "doc_url": "https://docs/x", "reused": False}
+    assert calls["folder_id"] == "folder-1"
+    assert calls["kw"]["content_format"] == "markdown" and calls["kw"]["dedupe_by_name"] is True
+    assert "# T" in calls["content"]
+    updates = [f for t, f in store["updates"] if t == "social_storyboards"]
+    assert updates and updates[0]["doc_url"] == "https://docs/x"
+
+
+@pytest.mark.asyncio
+async def test_export_storyboard_doc_missing_folder_422(monkeypatch):
+    store = {"rows": {
+        "social_storyboards": [{"id": "s1", "client_id": "c1", "storyboard": {"hook": "H", "shots": []}}],
+        "clients": [{"id": "c1", "name": "Acme", "google_drive_folder_id": None, "drive_folders": None}],
+    }}
+    monkeypatch.setattr(settings, "social_enabled", True)
+    monkeypatch.setattr(storyboard, "_sb", lambda: _fake_sb(store))
+    with pytest.raises(HTTPException) as ei:
+        await storyboard.export_storyboard_doc("c1", "s1")
+    assert ei.value.status_code == 422 and ei.value.detail == "missing_google_drive_folder_id"
+
+
+@pytest.mark.asyncio
+async def test_export_storyboard_doc_client_mismatch_404(monkeypatch):
+    store = {"rows": {"social_storyboards": [{"id": "s1", "client_id": "OTHER",
+                                              "storyboard": {"hook": "H", "shots": []}}]}}
+    monkeypatch.setattr(settings, "social_enabled", True)
+    monkeypatch.setattr(storyboard, "_sb", lambda: _fake_sb(store))
+    with pytest.raises(HTTPException) as ei:
+        await storyboard.export_storyboard_doc("c1", "s1")
+    assert ei.value.status_code == 404
